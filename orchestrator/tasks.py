@@ -18,8 +18,6 @@ from orchestrator import state as st
 UNKNOWN_TASK_EXECUTOR = "unknown_task_executor"
 INVALID_TASK_REQUEST = "invalid_task_request"
 TASK_UNAVAILABLE = "task_unavailable"
-TASK_SELECTION_FROZEN = "task_selection_frozen"
-TASK_UPDATE_BUSY = "task_update_busy"
 
 PRODUCER_TASK_KINDS = (
     contracts.KIND_DRAFT_SLICE_NOTE,
@@ -318,12 +316,7 @@ def _validate_producer_selection(value, context, stored=False):
 
 
 def validate_producer_selection(value, context="producer selection"):
-    """Read one recorded prospective choice without freezing defaults.
-
-    Both callers project an already-stored `slice_producer_updated` event, so a
-    retired id reads under its current name.  The write body has its own
-    validator and keeps refusing it.
-    """
+    """Read one stored plan choice without freezing catalogue defaults."""
     try:
         return _validate_producer_selection(value, context, stored=True)
     except (ContractError, TypeError, ValueError) as exc:
@@ -394,46 +387,6 @@ def effective_slice_plan(slices):
     return checked
 
 
-def operator_producer_overrides(state):
-    """Project current-plan operator choices from append-only history."""
-    events = state.get("events", [])
-    latest_plan_update = max(
-        (
-            index
-            for index, event in enumerate(events)
-            if isinstance(event, dict) and event.get("type") == "slices_updated"
-        ),
-        default=-1,
-    )
-    overrides = {}
-    for index, event in enumerate(events):
-        if index <= latest_plan_update:
-            continue
-        if not isinstance(event, dict) or event.get("type") != (
-            "slice_producer_updated"
-        ):
-            continue
-        slice_id = event.get("slice_id")
-        task_kind = event.get("task_kind")
-        if type(slice_id) is not int or task_kind not in PRODUCER_TASK_KINDS:
-            raise TaskRequestError(
-                INVALID_TASK_REQUEST,
-                "slice producer event %d has invalid identity" % index,
-            )
-        overrides[(slice_id, task_kind)] = validate_producer_selection(
-            event.get("selection"),
-            "slice producer event %d.selection" % index,
-        )
-    return [
-        {
-            "slice_id": slice_id,
-            "task_kind": task_kind,
-            "selection": _json_copy(selection, "operator producer override"),
-        }
-        for (slice_id, task_kind), selection in sorted(overrides.items())
-    ]
-
-
 def producer_order(slice_plan, task_kind, request):
     """Build one prospective production order from the current slice choice."""
     if task_kind not in PRODUCER_TASK_KINDS:
@@ -455,208 +408,6 @@ def producer_order(slice_plan, task_kind, request):
             selection["configuration"], "producer configuration"
         )
     return order
-
-
-def validate_producer_override(value):
-    """Validate the closed slice-producer write body."""
-    try:
-        _exact_keys(
-            value,
-            ("task_kind", "task_executor"),
-            ("configuration",),
-            "producer override",
-        )
-        task_kind = value["task_kind"]
-        if task_kind not in PRODUCER_TASK_KINDS:
-            raise ContractError(
-                "task_kind must be one of %s" % (list(PRODUCER_TASK_KINDS),)
-            )
-        selection = _validate_producer_selection(
-            {
-                key: value[key]
-                for key in ("task_executor", "configuration")
-                if key in value
-            },
-            "producer override",
-        )
-        return {"task_kind": task_kind, **selection}
-    except (ContractError, TypeError, ValueError) as exc:
-        _request_error(exc)
-
-
-def _producer_selection_frozen(state, slice_id, task_kind):
-    unit_kind = {
-        contracts.KIND_DRAFT_SLICE_NOTE: st.UNIT_SLICE_DOC,
-        contracts.KIND_IMPLEMENT: st.UNIT_SLICE_IMPL,
-    }[task_kind]
-    for unit in state.get("units", []):
-        if (
-            unit.get("kind") != unit_kind
-            or unit.get("slice_id") != slice_id
-        ):
-            continue
-        draft = unit.get("draft")
-        if isinstance(draft, dict) and draft.get("kind") == task_kind:
-            return True
-        reference = unit.get("active_task")
-        if not isinstance(reference, dict) or reference.get("kind") != task_kind:
-            continue
-        record = task_record(state, reference.get("id"))
-        result = record.get("result")
-        if result is None or result.get("status") == "success":
-            return True
-    return False
-
-
-def update_slice_producer(state, slice_id, value):
-    """Change one still-prospective selection in loaded milestone state."""
-    checked = validate_producer_override(value)
-    if type(slice_id) is not int:
-        raise TaskRequestError(INVALID_TASK_REQUEST, "slice id must be an integer")
-    slices = (state.get("milestone") or {}).get("slices")
-    if not isinstance(slices, list):
-        raise TaskRequestError(INVALID_TASK_REQUEST, "slice plan is unavailable")
-    slice_plan = next(
-        (candidate for candidate in slices if candidate.get("id") == slice_id),
-        None,
-    )
-    if slice_plan is None:
-        raise TaskRequestError(
-            INVALID_TASK_REQUEST, "unknown slice id %r" % slice_id
-        )
-    task_kind = checked["task_kind"]
-    if _producer_selection_frozen(state, slice_id, task_kind):
-        raise TaskRequestError(
-            TASK_SELECTION_FROZEN,
-            "%s producer selection is already frozen" % task_kind,
-        )
-
-    raw = slice_plan.get("producer_task_executor", _MISSING)
-    if raw is _MISSING:
-        producer_map = {}
-    else:
-        # Check the stored map, then carry its own bytes forward: a retired id
-        # recorded on the sibling kind keeps reading as its current name and is
-        # not rewritten by an override of the other kind.
-        validate_producer_map(raw)
-        producer_map = _json_copy(raw, "producer_task_executor")
-    selection = {
-        key: checked[key]
-        for key in ("task_executor", "configuration")
-        if key in checked
-    }
-    producer_map[task_kind] = selection
-    slice_plan["producer_task_executor"] = producer_map
-    st.append_event(
-        state,
-        "slice_producer_updated",
-        slice_id=slice_id,
-        task_kind=task_kind,
-        selection=_json_copy(selection, "producer selection"),
-    )
-    return effective_slice_producers(slice_plan)
-
-
-def validate_material_override(value):
-    """Validate the closed slice-material write body.
-
-    Exactly `{"material": <string>}` or `{"material": null}`: a string
-    replaces the slice's proposal, ``None`` withdraws it. Nothing is checked
-    against the document's live catalogue — a name it does not carry is the
-    router's business and already degrades there, so a renamed material can
-    never refuse a write.
-    """
-    try:
-        _exact_keys(value, ("material",), (), "material override")
-        material = value["material"]
-        if material is not None and not isinstance(material, str):
-            raise ContractError(
-                "material must be a string, or null to clear it"
-            )
-        return {"material": material}
-    except (ContractError, TypeError, ValueError) as exc:
-        _request_error(exc)
-
-
-def update_slice_material(state, slice_id, value):
-    """Change one slice's still-prospective material in loaded state.
-
-    Prospective, and prospective ONLY: unlike a producer choice, this write
-    is never frozen by an admitted task, because it does not decide which
-    executor runs the work. Each production task took the material in force
-    when it was admitted and keeps it; this write governs the next one.
-    """
-    checked = validate_material_override(value)
-    if type(slice_id) is not int:
-        raise TaskRequestError(
-            INVALID_TASK_REQUEST, "slice id must be an integer"
-        )
-    slices = (state.get("milestone") or {}).get("slices")
-    if not isinstance(slices, list):
-        raise TaskRequestError(INVALID_TASK_REQUEST, "slice plan is unavailable")
-    slice_plan = next(
-        (candidate for candidate in slices if candidate.get("id") == slice_id),
-        None,
-    )
-    if slice_plan is None:
-        raise TaskRequestError(
-            INVALID_TASK_REQUEST, "unknown slice id %r" % slice_id
-        )
-    material = checked["material"]
-    if material is None:
-        # Clearing REMOVES the key. A plan that never carried one and a plan
-        # whose proposal was withdrawn read the same way, so no reader has to
-        # learn a second spelling for "no material".
-        slice_plan.pop("material", None)
-    else:
-        slice_plan["material"] = material
-    st.append_event(
-        state,
-        "slice_material_updated",
-        slice_id=slice_id,
-        material=material,
-    )
-    return slice_material(slice_plan)
-
-
-def operator_material_overrides(state):
-    """Project current-plan explicit material writes from append-only history.
-
-    The same cutoff the producer projection uses: a later authorized complete
-    slice plan replaces the proposals wholesale, so writes made before it no
-    longer describe the plan a reviewer is reading.
-    """
-    events = state.get("events", [])
-    latest_plan_update = max(
-        (
-            index
-            for index, event in enumerate(events)
-            if isinstance(event, dict) and event.get("type") == "slices_updated"
-        ),
-        default=-1,
-    )
-    overrides = {}
-    for index, event in enumerate(events):
-        if index <= latest_plan_update:
-            continue
-        if not isinstance(event, dict) or event.get("type") != (
-            "slice_material_updated"
-        ):
-            continue
-        slice_id = event.get("slice_id")
-        material = event.get("material")
-        if type(slice_id) is not int or (
-            material is not None and not isinstance(material, str)
-        ):
-            raise TaskRequestError(
-                INVALID_TASK_REQUEST,
-                "slice material event %d has invalid identity" % index,
-            )
-        overrides[slice_id] = material
-    return [
-        {"slice_id": slice_id, "material": material}
-        for slice_id, material in sorted(overrides.items())
-    ]
 
 
 def _order_staffing_session(value):

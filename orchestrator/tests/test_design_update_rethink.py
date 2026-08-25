@@ -98,7 +98,6 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         driver.config = self._config(modern=modern, git=git)
         driver.workspace = self.workspace
         driver.state_path = os.path.join(self.workspace, "state.json")
-        driver._allow_producer_handoff = False
         return driver
 
     @staticmethod

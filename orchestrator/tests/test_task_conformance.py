@@ -179,7 +179,7 @@ class TaskConformanceTest(unittest.TestCase):
                 self.assertTrue(summary["work_token_usage_partial"])
                 self.assertTrue(summary["work_cost_partial"])
 
-    def test_mixed_producer_successors_freeze_independently_without_spillover(self):
+    def test_mixed_producer_paths_remain_independent_without_spillover(self):
         self._assert_existing_cases(
             (
                 production_cases.BrainstormingSliceProductionTest,
@@ -188,14 +188,6 @@ class TaskConformanceTest(unittest.TestCase):
             (
                 production_cases.BrainstormingSliceProductionTest,
                 "test_worker_note_then_target_free_brainstorming_implementation",
-            ),
-            (
-                producer_cases.ProducerSelectionTest,
-                "test_admission_freezes_only_matching_choice",
-            ),
-            (
-                producer_cases.ProducerSelectionTest,
-                "test_terminal_failure_allows_distinct_successor_selection",
             ),
             (
                 producer_cases.ProducerSelectionTest,

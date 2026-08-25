@@ -494,20 +494,6 @@ class ProducerSelectionTest(unittest.TestCase):
                 body = exc.read()
         return status, json.loads(body.decode("utf-8"))
 
-    def _raw(self, path, data):
-        """POST bytes the transport may not be able to read as JSON."""
-        request = urllib.request.Request(
-            self.base + path, data=data, method="POST"
-        )
-        request.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                status, body = response.status, response.read()
-        except urllib.error.HTTPError as exc:
-            with exc:
-                status, body = exc.code, exc.read()
-        return status, json.loads(body.decode("utf-8"))
-
     def _planned_run(self, label="run", slices=None):
         workspace = os.path.join(self.tmp.name, label)
         os.makedirs(workspace)
@@ -541,9 +527,56 @@ class ProducerSelectionTest(unittest.TestCase):
         service._evict_summary(entry["state_path"])
         return run_id, entry, workspace
 
-    @staticmethod
-    def _route(run_id):
-        return "/api/runs/%s/slices/1/producer" % run_id
+    def test_legacy_plan_controls_are_absent_while_projection_and_tasks_remain(
+        self,
+    ):
+        planned = [{
+            "id": 1,
+            "title": "Canonical projection",
+            "material": "code",
+            "producer_task_executor": {
+                "draft_slice_note": {"task_executor": "agent_call"},
+                "implement": {"task_executor": "agent_call"},
+            },
+        }]
+        run_id, entry, workspace = self._planned_run("retired-controls", planned)
+        before = st.load(entry["state_path"])
+
+        for suffix, payload in (
+            ("producer", {
+                "task_kind": "implement",
+                "task_executor": "brainstorming",
+            }),
+            ("material", {"material": "research"}),
+        ):
+            with self.subTest(suffix=suffix):
+                status, response = self._json(
+                    "POST",
+                    "/api/runs/%s/slices/1/%s" % (run_id, suffix),
+                    payload,
+                )
+                self.assertEqual(status, 404, response)
+                self.assertEqual(response["error"], "not found")
+                self.assertEqual(st.load(entry["state_path"]), before)
+
+        status, detail = self._json("GET", "/api/runs/%s" % run_id)
+        self.assertEqual(status, 200, detail)
+        self.assertEqual(detail["summary"]["slices"], planned)
+        order = tasks.producer_order(
+            planned[0],
+            contracts.KIND_IMPLEMENT,
+            _request(workspace, contracts.KIND_IMPLEMENT, "slice_impl-01"),
+        )
+        self.assertEqual(order["task_executor"], "agent_call")
+        self.assertEqual(order["staffing_material"], "code")
+        for owner, name in (
+            (service, "set_slice_producer"),
+            (service, "set_slice_material"),
+            (tasks, "update_slice_producer"),
+            (tasks, "update_slice_material"),
+            (drv.Driver, "_adopt_live_producer_updates"),
+        ):
+            self.assertFalse(hasattr(owner, name), name)
 
     def test_planner_uses_shared_catalogue_and_validates_supplied_maps(self):
         catalogue = tasks.task_executor_catalogue()
@@ -753,120 +786,8 @@ class ProducerSelectionTest(unittest.TestCase):
         self.assertEqual(st.summary(state)["slices"], effective)
         self.assertEqual(state["milestone"]["slices"], before)
 
-    def test_route_writes_each_choice_independently_and_projects_it(self):
-        run_id, entry, _workspace = self._planned_run("independent")
-        route = self._route(run_id)
-        status, first = self._json(
-            "POST",
-            route,
-            {
-                "task_kind": "draft_slice_note",
-                "task_executor": "brainstorming",
-                "configuration": {"max_rounds": 24},
-            },
-        )
-        self.assertEqual(status, 200, first)
-        self.assertEqual(
-            first["producer_task_executor"]["implement"],
-            {"task_executor": "agent_call"},
-        )
-        status, second = self._json(
-            "POST",
-            route,
-            {
-                "task_kind": "implement",
-                "task_executor": "brainstorming",
-                "configuration": {"closure_policy": "majority"},
-            },
-        )
-        self.assertEqual(status, 200, second)
-        self.assertEqual(
-            second["producer_task_executor"]["draft_slice_note"],
-            first["producer_task_executor"]["draft_slice_note"],
-        )
-
-        status, detail = self._json("GET", "/api/runs/%s" % run_id)
-        self.assertEqual(status, 200, detail)
-        projected = detail["summary"]["slices"][0]
-        self.assertEqual(projected["producer_task_executor"], second["producer_task_executor"])
-        self.assertEqual((projected["id"], projected["title"]), (1, "Independent producers"))
-        raw = st.load(entry["state_path"])["milestone"]["slices"][0]
-        self.assertEqual(
-            raw["producer_task_executor"]["implement"]["configuration"],
-            {"closure_policy": "majority"},
-        )
-
     @unittest.skipIf(st.fcntl is None, "fcntl unavailable on this platform")
-    def test_busy_run_refuses_override_without_queuing_a_driver_collision(self):
-        run_id, entry, _workspace = self._planned_run("busy-override")
-        before = st.load(entry["state_path"])
-        with st.exclusive_mutation(entry["state_path"]):
-            status, response = self._json(
-                "POST",
-                self._route(run_id),
-                {"task_kind": "implement", "task_executor": "agent_call"},
-            )
-        self.assertEqual((status, response["error"]), (409, tasks.TASK_UPDATE_BUSY))
-        self.assertEqual(st.load(entry["state_path"]), before)
-
-    @unittest.skipIf(st.fcntl is None, "fcntl unavailable on this platform")
-    def test_accepted_override_at_run_lock_handoff_does_not_stop_driver(self):
-        run_id, entry, _workspace = self._planned_run("override-handoff")
-        loaded = drv.Driver(
-            entry["state_path"], runner=runners.MockRunner([])
-        )
-        writer_inside_lock = threading.Event()
-        release_writer = threading.Event()
-        writer_result = []
-        original_update = tasks.update_slice_producer
-
-        def gated_update(state, slice_id, value):
-            if threading.current_thread().name == "producer-writer":
-                writer_inside_lock.set()
-                self.assertTrue(release_writer.wait(timeout=2))
-            return original_update(state, slice_id, value)
-
-        def write_override():
-            try:
-                writer_result.append(service.set_slice_producer(
-                    self.home,
-                    run_id,
-                    1,
-                    {
-                        "task_kind": "implement",
-                        "task_executor": "brainstorming",
-                    },
-                ))
-            except Exception as exc:  # surfaced by the assertion below
-                writer_result.append(exc)
-
-        with mock.patch.object(
-            tasks, "update_slice_producer", side_effect=gated_update
-        ):
-            writer = threading.Thread(
-                target=write_override, name="producer-writer"
-            )
-            writer.start()
-            self.assertTrue(writer_inside_lock.wait(timeout=2))
-            timer = threading.Timer(0.05, release_writer.set)
-            timer.start()
-            try:
-                self.assertEqual(loaded.run(max_steps=0), 3)
-            finally:
-                release_writer.set()
-                writer.join(timeout=2)
-                timer.cancel()
-
-        self.assertEqual(len(writer_result), 1)
-        self.assertNotIsInstance(writer_result[0], Exception)
-        self.assertEqual(
-            loaded.state["milestone"]["slices"][0]
-            ["producer_task_executor"]["implement"],
-            {"task_executor": "brainstorming"},
-        )
-
-    @unittest.skipIf(st.fcntl is None, "fcntl unavailable on this platform")
-    def test_run_handoff_still_refuses_a_non_producer_state_change(self):
+    def test_run_refuses_a_concurrent_state_change(self):
         _run_id, entry, _workspace = self._planned_run("foreign-handoff")
         loaded = drv.Driver(
             entry["state_path"], runner=runners.MockRunner([])
@@ -895,86 +816,18 @@ class ProducerSelectionTest(unittest.TestCase):
             holder.join(timeout=2)
             timer.cancel()
 
-    def test_loaded_driver_adopts_successful_live_override(self):
-        initial = [{
+    def test_every_review_covering_skeleton_receives_operative_plan(self):
+        _run_id, entry, _workspace = self._planned_run("review-plan", [{
             "id": 1,
             "title": "Independent producers",
             "producer_task_executor": {
+                "draft_slice_note": {"task_executor": "agent_call"},
                 "implement": {
                     "task_executor": "brainstorming",
-                    "configuration": {"max_rounds": 3},
-                }
+                    "configuration": {"max_rounds": 22},
+                },
             },
-        }]
-        run_id, entry, workspace = self._planned_run(
-            "live-override", initial
-        )
-        loaded = drv.Driver(
-            entry["state_path"], runner=runners.MockRunner([])
-        )
-
-        status, response = self._json(
-            "POST",
-            self._route(run_id),
-            {"task_kind": "implement", "task_executor": "agent_call"},
-        )
-        self.assertEqual(status, 200, response)
-        with loaded._exclusive():
-            loaded._assert_not_stale()
-
-        self.assertEqual(loaded.state, st.load(entry["state_path"]))
-        selected = tasks.producer_order(
-            loaded.state["milestone"]["slices"][0],
-            contracts.KIND_IMPLEMENT,
-            _request(workspace, contracts.KIND_IMPLEMENT, "slice_impl-01"),
-        )
-        self.assertEqual(selected["task_executor"], "agent_call")
-
-    def test_loaded_driver_adopts_override_after_changed_plan_installation(self):
-        run_id, entry, _workspace = self._planned_run("replacement-live-override")
-        loaded = drv.Driver(
-            entry["state_path"], runner=runners.MockRunner([])
-        )
-        skeleton = next(
-            unit for unit in loaded.state["units"]
-            if unit["kind"] == st.UNIT_SKELETON
-        )
-        loaded._maybe_update_slices(
-            skeleton,
-            {"slices": [{"id": 1, "title": "Replaced plan"}]},
-        )
-        loaded._save()
-        replacement_event = copy.deepcopy(loaded.state["events"][-1])
-
-        status, response = self._json(
-            "POST",
-            self._route(run_id),
-            {"task_kind": "implement", "task_executor": "brainstorming"},
-        )
-        self.assertEqual(status, 200, response)
-        with loaded._exclusive():
-            loaded._assert_not_stale()
-
-        self.assertEqual(loaded.state, st.load(entry["state_path"]))
-        self.assertEqual(loaded.state["events"][-2], replacement_event)
-        self.assertEqual(
-            loaded.state["milestone"]["slices"][0]
-            ["producer_task_executor"]["implement"],
-            {"task_executor": "brainstorming"},
-        )
-
-    def test_every_review_covering_skeleton_receives_operative_plan(self):
-        run_id, entry, _workspace = self._planned_run("review-plan")
-        status, _response = self._json(
-            "POST",
-            self._route(run_id),
-            {
-                "task_kind": "implement",
-                "task_executor": "brainstorming",
-                "configuration": {"max_rounds": 22},
-            },
-        )
-        self.assertEqual(status, 200)
+        }])
         driver = drv.Driver(entry["state_path"], runner=runners.MockRunner([]))
         skeleton = next(
             unit for unit in driver.state["units"]
@@ -986,17 +839,7 @@ class ProducerSelectionTest(unittest.TestCase):
             ["producer_task_executor"]["implement"]["task_executor"],
             "brainstorming",
         )
-        self.assertEqual(
-            context["explicit_operator_overrides"],
-            [{
-                "slice_id": 1,
-                "task_kind": "implement",
-                "selection": {
-                    "task_executor": "brainstorming",
-                    "configuration": {"max_rounds": 22},
-                },
-            }],
-        )
+        self.assertEqual(set(context), {"producer_task_executor_by_slice"})
         expected = json.dumps(
             context, ensure_ascii=False, sort_keys=True, indent=2
         )
@@ -1013,11 +856,7 @@ class ProducerSelectionTest(unittest.TestCase):
             self.assertIn(expected, prompt)
             self.assertIn("A missing or malformed choice", prompt)
             self.assertIn("is always a finding", prompt)
-            self.assertIn("A value mismatch is not a finding only", prompt)
-            self.assertIn(
-                "override never excuses missing or malformed structure",
-                prompt,
-            )
+            self.assertIn("directly with this canonical projection", prompt)
 
         doc = next(
             unit for unit in driver.state["units"]
@@ -1028,82 +867,6 @@ class ProducerSelectionTest(unittest.TestCase):
             "changed_paths": [skeleton["artifact"]],
         }
         self.assertEqual(driver._producer_review_context(doc), context)
-
-    def test_plan_replacement_drops_prior_override_authority(self):
-        run_id, entry, _workspace = self._planned_run("plan-replacement")
-        status, _response = self._json(
-            "POST",
-            self._route(run_id),
-            {
-                "task_kind": "implement",
-                "task_executor": "brainstorming",
-                "configuration": {"max_rounds": 3},
-            },
-        )
-        self.assertEqual(status, 200)
-        driver = drv.Driver(entry["state_path"], runner=runners.MockRunner([]))
-        skeleton = next(
-            unit for unit in driver.state["units"]
-            if unit["kind"] == st.UNIT_SKELETON
-        )
-        driver._maybe_update_slices(
-            skeleton,
-            {
-                "slices": [
-                    {
-                        "id": 1,
-                        "title": "Repaired title",
-                        "producer_task_executor": {
-                            "draft_slice_note": {
-                                "task_executor": "brainstorming",
-                                "configuration": {"closure_policy": "majority"},
-                            },
-                            "implement": {"task_executor": "agent_call"},
-                        },
-                    },
-                    {"id": 2, "title": "New planned slice"},
-                ]
-            },
-        )
-        repaired = driver.state["milestone"]["slices"]
-        self.assertEqual(repaired[0]["title"], "Repaired title")
-        self.assertEqual(
-            repaired[0]["producer_task_executor"]["draft_slice_note"]
-            ["task_executor"],
-            "brainstorming",
-        )
-        self.assertEqual(
-            repaired[0]["producer_task_executor"]["implement"],
-            {"task_executor": "agent_call"},
-        )
-        self.assertNotIn("producer_task_executor", repaired[1])
-        self.assertEqual(tasks.operator_producer_overrides(driver.state), [])
-
-        events_before = copy.deepcopy(driver.state["events"])
-        driver._maybe_update_slices(skeleton, {"slices": repaired})
-        self.assertEqual(driver.state["events"], events_before)
-
-    def test_equal_plan_response_keeps_current_override_authority(self):
-        run_id, entry, _workspace = self._planned_run("plan-no-op")
-        status, _response = self._json(
-            "POST",
-            self._route(run_id),
-            {"task_kind": "implement", "task_executor": "brainstorming"},
-        )
-        self.assertEqual(status, 200)
-        driver = drv.Driver(entry["state_path"], runner=runners.MockRunner([]))
-        skeleton = next(
-            unit for unit in driver.state["units"]
-            if unit["kind"] == st.UNIT_SKELETON
-        )
-        installed = copy.deepcopy(driver.state["milestone"]["slices"])
-        events_before = copy.deepcopy(driver.state["events"])
-        driver._maybe_update_slices(skeleton, {"slices": installed})
-        self.assertEqual(driver.state["events"], events_before)
-        self.assertEqual(
-            tasks.operator_producer_overrides(driver.state)[0]["task_kind"],
-            contracts.KIND_IMPLEMENT,
-        )
 
     def test_worker_adapter_does_not_claim_a_brainstorming_choice(self):
         initial = [{
@@ -1180,7 +943,7 @@ class ProducerSelectionTest(unittest.TestCase):
             ["producer_task_executor"]["implement"],
             {"task_executor": "brainstorming"},
         )
-        self.assertEqual(context["explicit_operator_overrides"], [])
+        self.assertEqual(set(context), {"producer_task_executor_by_slice"})
         prompt = prompts.build_review_round(
             "codex", "/workspace", "goal", "slice note", "docs/slice.md",
             [], producer_review_context=context,
@@ -1306,7 +1069,7 @@ class ProducerSelectionTest(unittest.TestCase):
                 )
 
     def test_retired_producer_id_projects_without_rewriting_its_plan(self):
-        """A plan written before the rename projects, overrides, and keeps."""
+        """A plan written before the rename projects without mutation."""
         stored = [{
             "id": 1,
             "title": "Planned before the rename",
@@ -1327,18 +1090,6 @@ class ProducerSelectionTest(unittest.TestCase):
         self.assertEqual(
             st.load(entry["state_path"])["milestone"]["slices"], stored
         )
-
-        status, written = self._json(
-            "POST",
-            self._route(run_id),
-            {"task_kind": "implement", "task_executor": "brainstorming"},
-        )
-        self.assertEqual(status, 200, written)
-        self.assertEqual(
-            written["producer_task_executor"]["draft_slice_note"], agent_call
-        )
-        # The override touched its own kind only: the sibling keeps the bytes
-        # it was stored with and goes on reading as the current id.
         durable = st.load(entry["state_path"])["milestone"]["slices"][0]
         self.assertEqual(
             durable["producer_task_executor"]["draft_slice_note"],
@@ -1348,393 +1099,6 @@ class ProducerSelectionTest(unittest.TestCase):
             tasks.effective_slice_producers(durable)["draft_slice_note"],
             agent_call,
         )
-
-    def test_retired_producer_event_projects_as_an_operator_override(self):
-        """The planner's override block reads pre-rename history unchanged."""
-        state = st.new_state("goal", "/workspace", {"families_order": ["codex"]})
-        state["milestone"]["slices"] = [{"id": 1, "title": "one"}]
-        st.append_event(
-            state,
-            "slice_producer_updated",
-            slice_id=1,
-            task_kind="implement",
-            selection={"task_executor": "worker"},
-        )
-        self.assertEqual(
-            tasks.operator_producer_overrides(state),
-            [{
-                "slice_id": 1,
-                "task_kind": "implement",
-                "selection": {"task_executor": "agent_call"},
-            }],
-        )
-        self.assertEqual(
-            state["events"][-1]["selection"], {"task_executor": "worker"}
-        )
-
-    def test_rejected_route_bodies_leave_state_unchanged(self):
-        run_id, entry, _workspace = self._planned_run("rejected")
-        route = self._route(run_id)
-        cases = (
-            ({"task_executor": "agent_call"}, 400, tasks.INVALID_TASK_REQUEST),
-            (
-                {"task_kind": "review_round", "task_executor": "agent_call"},
-                400,
-                tasks.INVALID_TASK_REQUEST,
-            ),
-            (
-                {"task_kind": "implement", "task_executor": "missing"},
-                400,
-                tasks.UNKNOWN_TASK_EXECUTOR,
-            ),
-            (
-                # The retired spelling reads from storage but never enters
-                # through the front door.
-                {"task_kind": "implement", "task_executor": "worker"},
-                400,
-                tasks.UNKNOWN_TASK_EXECUTOR,
-            ),
-            (
-                {
-                    "task_kind": "implement",
-                    "task_executor": "brainstorming",
-                    "configuration": {"closure_policy": "plurality"},
-                },
-                400,
-                tasks.INVALID_TASK_REQUEST,
-            ),
-            (
-                {
-                    "task_kind": "implement",
-                    "task_executor": "agent_call",
-                    "extra": 1,
-                },
-                400,
-                tasks.INVALID_TASK_REQUEST,
-            ),
-        )
-        for payload, expected_status, expected_error in cases:
-            before = st.load(entry["state_path"])
-            status, response = self._json("POST", route, payload)
-            self.assertEqual(status, expected_status, response)
-            self.assertEqual(response["error"], expected_error)
-            self.assertEqual(st.load(entry["state_path"]), before)
-
-    def test_admission_freezes_only_matching_choice(self):
-        run_id, entry, workspace = self._planned_run("freeze")
-        route = self._route(run_id)
-        status, _response = self._json(
-            "POST",
-            route,
-            {
-                "task_kind": "draft_slice_note",
-                "task_executor": "brainstorming",
-                "configuration": {"max_rounds": 24},
-            },
-        )
-        self.assertEqual(status, 200)
-        state = st.load(entry["state_path"])
-        slice_plan = state["milestone"]["slices"][0]
-        doc = next(u for u in state["units"] if u["kind"] == st.UNIT_SLICE_DOC)
-        order = tasks.producer_order(
-            slice_plan,
-            contracts.KIND_DRAFT_SLICE_NOTE,
-            _request(workspace, contracts.KIND_DRAFT_SLICE_NOTE, st.unit_key(doc)),
-        )
-        admitted = tasks.admit_task(
-            state, order, {"seats": ["initial", "contrary", "dante"]}, workspace
-        )
-        doc["active_task"] = {
-            "id": admitted["id"],
-            "kind": contracts.KIND_DRAFT_SLICE_NOTE,
-        }
-        st.save(entry["state_path"], state)
-
-        status, frozen = self._json(
-            "POST",
-            route,
-            {"task_kind": "draft_slice_note", "task_executor": "agent_call"},
-        )
-        self.assertEqual((status, frozen["error"]), (409, tasks.TASK_SELECTION_FROZEN))
-        status, sibling = self._json(
-            "POST",
-            route,
-            {
-                "task_kind": "implement",
-                "task_executor": "brainstorming",
-                "configuration": {"closure_policy": "majority"},
-            },
-        )
-        self.assertEqual(status, 200, sibling)
-        durable = tasks.task_record(st.load(entry["state_path"]), admitted["id"])
-        self.assertEqual(durable, admitted)
-        self.assertEqual(
-            durable["order"]["configuration"],
-            {"max_rounds": 24, "closure_policy": "unanimity"},
-        )
-
-    @staticmethod
-    def _material_route(run_id, slice_id=1):
-        return "/api/runs/%s/slices/%d/material" % (run_id, slice_id)
-
-    def test_material_route_sets_clears_and_respects_task_boundary(self):
-        run_id, entry, workspace = self._planned_run("material")
-        route = self._material_route(run_id)
-
-        # A name the document carries, and a name it does not: both are
-        # accepted verbatim. Membership is the router's business.
-        for material in ("research", "", "no-such-material"):
-            status, response = self._json(
-                "POST", route, {"material": material}
-            )
-            self.assertEqual((status, response), (200, {
-                "ok": True, "material": material,
-            }))
-            status, detail = self._json("GET", "/api/runs/%s" % run_id)
-            self.assertEqual(status, 200, detail)
-            self.assertEqual(
-                detail["summary"]["slices"][0]["material"], material
-            )
-
-        # A later reviewer of the plan sees the write as an explicit
-        # override of whatever the reviewed document's column says.
-        loaded = drv.Driver(
-            entry["state_path"], runner=runners.MockRunner([])
-        )
-        skeleton = next(
-            unit for unit in loaded.state["units"]
-            if unit["kind"] == st.UNIT_SKELETON
-        )
-        context = loaded._producer_review_context(skeleton)
-        self.assertEqual(
-            context["explicit_operator_material_overrides"],
-            [{"slice_id": 1, "material": "no-such-material"}],
-        )
-        self.assertEqual(
-            context["producer_task_executor_by_slice"][0]["material"],
-            "no-such-material",
-        )
-
-        # null CLEARS: the key leaves the stored plan entirely, so an
-        # withdrawn proposal reads exactly like one never made.
-        status, cleared = self._json("POST", route, {"material": None})
-        self.assertEqual((status, cleared), (200, {
-            "ok": True, "material": None,
-        }))
-        stored = st.load(entry["state_path"])["milestone"]["slices"][0]
-        self.assertNotIn("material", stored)
-
-        # Malformed writes change nothing.
-        before = st.load(entry["state_path"])
-        for payload in (
-            {},
-            {"material": 3},
-            {"material": True},
-            {"material": ["research"]},
-            {"material": {"name": "research"}},
-            {"material": "research", "task_kind": "implement"},
-        ):
-            with self.subTest(payload=payload):
-                status, response = self._json("POST", route, payload)
-                self.assertEqual(
-                    (status, response["error"]),
-                    (400, tasks.INVALID_TASK_REQUEST),
-                )
-                self.assertEqual(st.load(entry["state_path"]), before)
-        # Shape is not the whole of writability. JSON admits an escaped
-        # unpaired surrogate and the plan would keep it verbatim, but no
-        # UTF-8 response or state file can carry one, so it is this
-        # route's own invalid input rather than an unstable failure.
-        status, response = self._json(
-            "POST", route, {"material": "bad\ud800name"}
-        )
-        self.assertEqual(
-            (status, response["error"]), (400, tasks.INVALID_TASK_REQUEST)
-        )
-        self.assertEqual(st.load(entry["state_path"]), before)
-
-        # A body the transport itself cannot read is malformed input to
-        # THIS route, so it answers in this route's own vocabulary rather
-        # than a second one a caller would have to string-match.
-        status, response = self._json("POST", route, [])
-        self.assertEqual(
-            (status, response["error"]), (400, tasks.INVALID_TASK_REQUEST)
-        )
-        self.assertEqual(st.load(entry["state_path"]), before)
-        for raw in (
-            b"{",
-            b'"research"',
-            b"null",
-            b"\xff\xfe",
-            # Nested deeper than the decoder can descend: still a body this
-            # route could not read, so it answers in this route's own
-            # vocabulary rather than as a fault in serving the request.
-            b'{"material":' + b"[" * 20000 + b"]" * 20000 + b"}",
-        ):
-            with self.subTest(raw=raw):
-                status, response = self._raw(route, raw)
-                self.assertEqual(
-                    (status, response["error"]),
-                    (400, tasks.INVALID_TASK_REQUEST),
-                )
-                self.assertEqual(st.load(entry["state_path"]), before)
-        status, unknown = self._json(
-            "POST", self._material_route(run_id, 99), {"material": "research"}
-        )
-        self.assertEqual(
-            (status, unknown["error"]), (400, tasks.INVALID_TASK_REQUEST)
-        )
-        self.assertEqual(st.load(entry["state_path"]), before)
-
-        # An admitted production task freezes NOTHING about the material:
-        # the task already took its own value, so the write still lands.
-        state = st.load(entry["state_path"])
-        doc = next(u for u in state["units"] if u["kind"] == st.UNIT_SLICE_DOC)
-        admitted = tasks.admit_task(
-            state,
-            tasks.producer_order(
-                state["milestone"]["slices"][0],
-                contracts.KIND_DRAFT_SLICE_NOTE,
-                _request(
-                    workspace,
-                    contracts.KIND_DRAFT_SLICE_NOTE,
-                    st.unit_key(doc),
-                ),
-            ),
-            {"agent_call": {"agent": "codex"}},
-            workspace,
-        )
-        doc["active_task"] = {
-            "id": admitted["id"],
-            "kind": contracts.KIND_DRAFT_SLICE_NOTE,
-        }
-        st.save(entry["state_path"], state)
-        status, after = self._json("POST", route, {"material": "plumbing"})
-        self.assertEqual((status, after), (200, {
-            "ok": True, "material": "plumbing",
-        }))
-        self.assertEqual(
-            tasks.task_record(st.load(entry["state_path"]), admitted["id"]),
-            admitted,
-        )
-
-        # An already loaded driver ADOPTS the write between two steps, the
-        # producer choice's own handoff: an authorized write governs the next
-        # admission instead of stopping the run it was made on.
-        loaded = drv.Driver(
-            entry["state_path"], runner=runners.MockRunner([])
-        )
-        # The middle one is the surrogate PAIR: `_json` puts it on the wire
-        # as the same two escapes the refusal above uses, and it decodes to
-        # the single scalar U+10000. Storable, so stored — the rule reads the
-        # decoded value, never the spelling that carried it.
-        paired = json.loads('"re\\ud800\\udc00search"')
-        for written, expected in (
-            ("research", "research"),
-            (paired, paired),
-            (None, None),
-        ):
-            status, response = self._json("POST", route, {"material": written})
-            self.assertEqual((status, response), (200, {
-                "ok": True, "material": written,
-            }))
-            with loaded._exclusive():
-                loaded._assert_not_stale()
-            self.assertEqual(loaded.state, st.load(entry["state_path"]))
-            self.assertEqual(
-                tasks.slice_material(loaded.state["milestone"]["slices"][0]),
-                expected,
-            )
-
-        # A complete authorized plan replacement cuts off earlier write
-        # authority, exactly as it does for a producer choice.
-        state = st.load(entry["state_path"])
-        state["milestone"]["slices"] = [{"id": 1, "title": "Replanned"}]
-        st.append_event(
-            state, "slices_updated", slices=[{"id": 1, "title": "Replanned"}]
-        )
-        st.save(entry["state_path"], state)
-        self.assertEqual(tasks.operator_material_overrides(st.load(
-            entry["state_path"])), [])
-
-    @unittest.skipIf(st.fcntl is None, "fcntl unavailable on this platform")
-    def test_busy_run_refuses_a_material_write_without_queuing_it(self):
-        run_id, entry, _workspace = self._planned_run("busy-material")
-        before = st.load(entry["state_path"])
-        requests = []
-        real_post = self._json
-
-        def counted(method, path, payload=None):
-            if path.endswith("/material"):
-                requests.append(payload)
-            return real_post(method, path, payload)
-
-        with st.exclusive_mutation(entry["state_path"]):
-            status, response = counted(
-                "POST", self._material_route(run_id), {"material": "research"}
-            )
-        self.assertEqual(
-            (status, response["error"]), (409, tasks.TASK_UPDATE_BUSY)
-        )
-        self.assertEqual(st.load(entry["state_path"]), before)
-        # Refused once, and never sent again: no queue, no retry.
-        self.assertEqual(requests, [{"material": "research"}])
-
-    def test_terminal_failure_allows_distinct_successor_selection(self):
-        run_id, entry, workspace = self._planned_run("successor")
-        route = self._route(run_id)
-        state = st.load(entry["state_path"])
-        doc = next(u for u in state["units"] if u["kind"] == st.UNIT_SLICE_DOC)
-        predecessor = tasks.admit_task(
-            state,
-            tasks.producer_order(
-                state["milestone"]["slices"][0],
-                contracts.KIND_DRAFT_SLICE_NOTE,
-                _request(workspace, contracts.KIND_DRAFT_SLICE_NOTE, st.unit_key(doc)),
-            ),
-            {"agent_call": {"agent": "codex"}},
-            workspace,
-        )
-        doc["active_task"] = {
-            "id": predecessor["id"],
-            "kind": contracts.KIND_DRAFT_SLICE_NOTE,
-        }
-        st.save(entry["state_path"], state)
-        state = st.load(entry["state_path"])
-        doc = next(u for u in state["units"] if u["kind"] == st.UNIT_SLICE_DOC)
-        terminal = tasks.record_task_result(
-            state, predecessor["id"], _failure()
-        )
-        doc.pop("active_task")
-        st.fail_run(state, "producer failed", unit=doc)
-        st.save(entry["state_path"], state)
-
-        status, response = self._json(
-            "POST",
-            route,
-            {
-                "task_kind": "draft_slice_note",
-                "task_executor": "brainstorming",
-                "configuration": {"max_rounds": 22},
-            },
-        )
-        self.assertEqual(status, 200, response)
-        state = st.load(entry["state_path"])
-        self.assertEqual(tasks.task_record(state, predecessor["id"]), terminal)
-        st.resume_run(state)
-        successor = tasks.admit_task(
-            state,
-            tasks.producer_order(
-                state["milestone"]["slices"][0],
-                contracts.KIND_DRAFT_SLICE_NOTE,
-                _request(workspace, contracts.KIND_DRAFT_SLICE_NOTE, st.unit_key(doc)),
-            ),
-            {"seats": ["initial", "contrary", "dante"]},
-            workspace,
-        )
-        self.assertNotEqual(successor["id"], predecessor["id"])
-        self.assertEqual(successor["order"]["task_executor"], "brainstorming")
-        self.assertEqual(successor["order"]["configuration"]["max_rounds"], 22)
 
     def test_review_and_fixer_orders_remain_worker_only(self):
         selected = {

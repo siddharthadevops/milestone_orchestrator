@@ -766,7 +766,7 @@ class StandaloneStaffingHandoff(PanelSourceMixin, StaffingApiTestCase):
         # The Agent-call role is still the catalogue's own control, built
         # from the returned schema and from no list written in the browser.
         task_ui = self.panel.split(
-            "/* ---- task ordering and slice producer selection", 1
+            "/* ---- standalone task ordering", 1
         )[1].split("/* ---- ", 1)[0]
         self.assertIn('api("/api/task-executors")', task_ui)
         self.assertIn("entry.configuration_schema", task_ui)

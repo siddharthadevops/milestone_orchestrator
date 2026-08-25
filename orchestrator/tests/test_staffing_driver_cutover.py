@@ -404,10 +404,9 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
             tasks.order_staffing_material(admitted["order"]), "removed"
         )
 
-        # The prospective plan moves on, while the admitted order does not.
-        tasks.update_slice_material(
-            subject.state, 1, {"material": "later"}
-        )
+        # A later canonical projection moves on, while the admitted order
+        # retains the material frozen at admission.
+        subject.state["milestone"]["slices"][0]["material"] = "later"
         subject._save()
 
         # The admitted name then disappears from the live document. Existing

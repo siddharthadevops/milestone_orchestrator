@@ -1,4 +1,4 @@
-"""Focused static contract checks for the Slice 8-9 task panel."""
+"""Focused static contract checks for task ordering and plan display."""
 
 import re
 import unittest
@@ -12,7 +12,7 @@ class TaskPanelTests(unittest.TestCase):
             Path(__file__).resolve().parents[1] / "static" / "panel.html"
         ).read_text(encoding="utf-8")
         cls.task_ui = cls.panel.split(
-            "/* ---- task ordering and slice producer selection", 1
+            "/* ---- standalone task ordering", 1
         )[1].split("/* ---- new brainstorming:", 1)[0]
 
     def test_one_catalogue_drives_description_and_configuration(self):
@@ -36,7 +36,7 @@ class TaskPanelTests(unittest.TestCase):
 
     def test_direct_order_preserves_closed_project_bound_request(self):
         body = re.search(
-            r"const requestDoc = \{(.*?)\n    \};", self.task_ui, re.S
+            r"const requestDoc = \{(.*?)\n  \};", self.task_ui, re.S
         ).group(1)
         self.assertRegex(
             body,
@@ -50,135 +50,17 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn("`Task accepted · ${data.task.id}`", self.task_ui)
         self.assertEqual(self.task_ui.count("await postJSON(path, payload)"), 1)
 
-    def test_each_slice_producer_is_confirmed_independently(self):
-        self.assertEqual(self.task_ui.count("onclick=\"openProducerTask("), 2)
-        self.assertIn("'draft_slice_note'", self.task_ui)
-        self.assertIn("'implement'", self.task_ui)
-        self.assertIn("payload.task_kind = producerTarget.taskKind", self.task_ui)
-        self.assertIn(
-            "/slices/${producerTarget.sliceId}/producer", self.task_ui
-        )
-        self.assertIn("data.producer_task_executor", self.task_ui)
-        self.assertIn("applyConfirmedProducerMap", self.task_ui)
-        self.assertIn("visibleProducerRunId !== selected", self.task_ui)
-
-    def test_each_slice_material_is_visible_settable_and_clearable(self):
-        # One control, beside the two producer choices, on the same row.
-        controls = re.search(
-            r"function producerControls\(sliceId, producerMap, material\) \{"
-            r"(.*?)\n\}",
-            self.task_ui,
-            re.S,
-        ).group(1)
-        self.assertIn("openProducerTask(${sliceId},'draft_slice_note')", controls)
-        self.assertIn("openProducerTask(${sliceId},'implement')", controls)
-        self.assertIn("openSliceMaterial(${sliceId})", controls)
-        self.assertIn("sliceMaterialLabel(material)", controls)
-        self.assertEqual(self.task_ui.count("onclick=\"openSliceMaterial("), 1)
-        # The current value comes from confirmed state. Only ABSENCE reads
-        # as the session's default; JSON string syntax distinguishes every
-        # present string, including empty, literal "session default", CR/LF.
-        self.assertIn(
-            'if (sliceMaterialAbsent(material)) return "session default";',
-            self.task_ui,
-        )
-        self.assertIn("return JSON.stringify(material);", self.task_ui)
-        self.assertIn("material === null || material === undefined",
-                      self.task_ui)
-        self.assertIn("slice.id, slice.material,", self.panel)
-        self.assertIn(
-            'sliceMaterialAbsent(stored) ? "" : JSON.stringify(stored)',
-            self.task_ui,
-        )
-        self.assertIn("visibleSliceMaterials.get(sliceId)", self.task_ui)
-        self.assertIn("visibleProducerRunId !== selected", self.task_ui)
-
-        # Set decodes the box's lossless JSON string representation; clear
-        # is its own deliberate act.
-        set_ = re.search(
-            r"function saveSliceMaterial\(\) \{(.*?)\n\}",
-            self.task_ui,
-            re.S,
-        ).group(1)
-        self.assertIn("material = JSON.parse(box)", set_)
-        self.assertIn('typeof material !== "string"', set_)
-        self.assertIn("writeSliceMaterial(material)", set_)
-        self.assertNotIn("trim()", set_)
-        self.assertNotIn("|| null", set_)
-        # An untouched box posts the STORED string. Actual input is tracked
-        # separately because blank means untouched absence while the JSON
-        # spelling `""` is the valid explicit empty string.
-        self.assertIn("!target.edited", set_)
-        self.assertIn("writeSliceMaterial(target.stored)", set_)
-        # The same untouched box on a slice that proposes NOTHING writes
-        # nothing at all: `""` would author a proposal nobody typed and
-        # null would record a withdrawal nobody asked for, and either one
-        # would then read as an explicit operator write in plan review.
-        # The absent branch closes the dialog ahead of every write call.
-        absent = set_.split("if (sliceMaterialAbsent(target.stored))")[1]
-        self.assertIn('getElementById("slicematerialdlg").close()',
-                      absent.split("return writeSliceMaterial")[0])
-        self.assertNotIn(
-            "writeSliceMaterial",
-            set_.split("if (sliceMaterialAbsent(target.stored))")[0],
-        )
-        opener = re.search(
-            r"function openSliceMaterial\(sliceId\) \{(.*?)\n\}",
-            self.task_ui,
-            re.S,
-        ).group(1)
-        self.assertIn(
-            "sliceMaterialTarget = {runId: selected, sliceId, stored, "
-            "edited: false}",
-            opener,
-        )
-        self.assertIn("box.value = sliceMaterialAbsent(stored)", opener)
-        self.assertIn('oninput="markSliceMaterialEdited()"', self.panel)
-        edited = re.search(
-            r"function markSliceMaterialEdited\(\) \{(.*?)\n\}",
-            self.task_ui,
-            re.S,
-        ).group(1)
-        self.assertIn("sliceMaterialTarget.edited = true", edited)
-        clear = re.search(
-            r"function clearSliceMaterial\(\) \{(.*?)\n\}",
-            self.task_ui,
-            re.S,
-        ).group(1)
-        self.assertIn("writeSliceMaterial(null)", clear)
-
-        save = re.search(
-            r"async function writeSliceMaterial\(material\) \{(.*?)\n\}",
-            self.task_ui,
-            re.S,
-        ).group(1)
-        # Exactly the material route, exactly one request, set or clear.
-        self.assertIn("/slices/${\n        target.sliceId}/material", save)
-        self.assertEqual(save.count("await postJSON("), 1)
-        self.assertIn("{material: material}", save)
-        self.assertNotIn("trim()", save)
-        # Success renders CONFIRMED state; a refusal renders verbatim.
-        self.assertIn("applyConfirmedSliceMaterial(target.sliceId, data.material)",
-                      save)
-        self.assertIn("error.textContent = e.message; return;", save)
-        for forbidden in ("setTimeout", "setInterval", "retry",
-                          "/api/staffing/sessions", "skeleton"):
-            self.assertNotIn(forbidden, save)
-
-        dialog = re.search(
-            r'<dialog id="slicematerialdlg">(.*?)</dialog>', self.panel, re.S
-        ).group(1)
-        self.assertIn('id="sm_material"', dialog)
-        self.assertIn('id="sm_error"', dialog)
-        self.assertIn("saveSliceMaterial()", dialog)
-        self.assertIn("clearSliceMaterial()", dialog)
-        self.assertIn("Enter the kind of work as a JSON string", dialog)
-        self.assertIn("preserve line breaks exactly", dialog)
-        self.assertIn("Save writes the decoded\n      string unchanged", dialog)
-        self.assertIn("leaves an untouched box's stored name exactly as it",
-                      dialog)
-        self.assertIn("a slice proposing nothing keeps none, and no save of"
-                      " its own\n      creates one", dialog)
+    def test_slice_plan_values_are_visible_and_read_only(self):
+        self.assertIn("function slicePlanSummary(producerMap, material)",
+                      self.panel)
+        self.assertIn("choices.draft_slice_note", self.panel)
+        self.assertIn("choices.implement", self.panel)
+        self.assertIn("JSON.stringify(material)", self.panel)
+        for retired in (
+            "openProducerTask", "openSliceMaterial", "writeSliceMaterial",
+            "slicematerialdlg", "/slices/${", "taskProducerTarget",
+        ):
+            self.assertNotIn(retired, self.panel)
 
     def test_writes_disable_once_and_surface_refusals_verbatim(self):
         self.assertIn("taskSubmitPending = true", self.task_ui)

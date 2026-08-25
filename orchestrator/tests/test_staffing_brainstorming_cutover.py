@@ -670,7 +670,8 @@ class BrainstormingCutoverTest(unittest.TestCase):
         )
         resolver_owner = types.SimpleNamespace()
         resolver_owner._staffing_resolution = (
-            lambda role, index=1, round=1, material=None: staffing.resolve(
+            lambda role, index=1, round=1, material=None,
+            episode_unit=None: staffing.resolve(
                 self.home,
                 self.session,
                 role,
@@ -778,11 +779,8 @@ class BrainstormingCutoverTest(unittest.TestCase):
             lead.prepare_dispatch(1)
             first = (lead.model_family, lead.model, lead.effort)
 
-            # Prospective edit: the admitted discussion remains on analysis.
-            task_state = {"milestone": {"slices": [plan]}, "events": []}
-            tasks.tasks.update_slice_material(
-                task_state, 1, {"material": "delivery"}
-            )
+            # A later plan projection cannot retarget the admitted discussion.
+            plan["material"] = "delivery"
             lead.prepare_dispatch(1)
             self.assertEqual(
                 (lead.model_family, lead.model, lead.effort), first

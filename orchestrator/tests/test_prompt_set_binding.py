@@ -304,8 +304,10 @@ class PromptSetBindingTests(unittest.TestCase):
         self.assertIn("(sum.slices || []).forEach(sl =>", panel)
         self.assertNotIn("sort((a, b) => a.id - b.id)", panel)
         self.assertNotIn("^[A-Za-z0-9_-]+$", panel)
-        self.assertIn("openProducerTask(${sliceId},'draft_slice_note')", panel)
-        self.assertIn("openSliceMaterial(${sliceId})", panel)
+        self.assertIn("slicePlanSummary(sl.producer_task_executor, sl.material)",
+                      panel)
+        self.assertNotIn("openProducerTask", panel)
+        self.assertNotIn("openSliceMaterial", panel)
 
 
 if __name__ == "__main__":

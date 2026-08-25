@@ -373,13 +373,11 @@
     border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
     font: inherit; background: #fff; }
   .task-accepted { color: var(--ok); font-size: 12px; margin-bottom: 10px; }
-  .producer-choices { display: inline-flex; flex-wrap: wrap; gap: 5px;
+  .plan-values { display: inline-flex; flex-wrap: wrap; gap: 5px;
     margin-left: 10px; vertical-align: middle; }
-  .producer-choice { border: 1px solid var(--line); border-radius: 9px;
+  .plan-value { border: 1px solid var(--line); border-radius: 9px;
     background: #fff; color: #52525b; padding: 2px 7px; font: inherit;
-    font-size: 10.5px; font-weight: 500; cursor: pointer; }
-  .producer-choice:hover { color: var(--accent); border-color: #c3d4fb;
-    background: var(--accent-soft); }
+    font-size: 10.5px; font-weight: 500; }
   #strategyprofilesdlg, #strategyprofileeditor {
     width: min(760px, 92vw); max-height: 90vh; overflow-y: auto; }
   .strategy-decisions { border: 1px solid var(--line); border-radius: 8px;
@@ -805,7 +803,6 @@
           onclick="browseTaskOutputDirectory()">Browse…</button>
       </div></div>
   </div>
-  <div id="task_producer_context" class="executor-meta" style="display:none"></div>
   <div class="field"><label>TaskExecutor *</label>
     <select id="t_executor" onchange="onTaskExecutorChange()"></select></div>
   <div id="task_executor_details"></div>
@@ -818,29 +815,6 @@
     <button class="btn" id="task_close"
       onclick="document.getElementById('taskform').close()">Close</button>
     <button class="btn primary" id="task_submit" onclick="submitTaskForm()">Order task</button>
-  </div>
-</dialog>
-
-<dialog id="slicematerialdlg">
-  <h2 id="sm_title">Slice material</h2>
-  <div class="field"><label>Material (optional)</label>
-    <input id="sm_material" class="mono" placeholder='"material name"'
-      oninput="markSliceMaterialEdited()">
-    <div class="hint">Enter the kind of work as a JSON string, in the staffing
-      document's own vocabulary. Quoted escapes such as <code>\r</code> and
-      <code>\n</code> preserve line breaks exactly. Save writes the decoded
-      string unchanged and leaves an untouched box's stored name exactly as it
-      is &mdash; a slice proposing nothing keeps none, and no save of its own
-      creates one; Clear removes the proposal and leaves the session's default
-      material in force. It applies to the next note-drafting or implementation
-      task ordered for this slice; a task already ordered keeps the material it
-      was ordered with.</div></div>
-  <div class="formrow">
-    <span id="sm_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
-    <button class="btn"
-      onclick="document.getElementById('slicematerialdlg').close()">Cancel</button>
-    <button class="btn" onclick="clearSliceMaterial()">Clear</button>
-    <button class="btn primary" onclick="saveSliceMaterial()">Save</button>
   </div>
 </dialog>
 
@@ -3832,20 +3806,10 @@ async function refreshDetail() {
       </div>`;
     }  // end of the settings page's cards
     if (runView !== "edit" && sum) {
-      visibleProducerRunId = runId;
-      visibleSliceProducers = new Map((sum.slices || []).map(slice => [
-        slice.id, slice.producer_task_executor || {},
-      ]));
-      // The summary omits the key entirely when no proposal stands, so an
-      // absent material stays absent here instead of collapsing into the
-      // empty string a planner may deliberately have written.
-      visibleSliceMaterials = new Map((sum.slices || []).map(slice => [
-        slice.id, slice.material,
-      ]));
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>${
-          producerControls(sl.id, sl.producer_task_executor, sl.material)}
+          slicePlanSummary(sl.producer_task_executor, sl.material)}
           <span class="slice-intent">${esc(sl.intent)}</span>` : "";
       };
       const catRow = (label, title, stat, duration, tokens,
@@ -5508,13 +5472,7 @@ async function stopSelectedTask() {
   refreshTaskPage();
 }
 
-/* ---- task ordering and slice producer selection (tasks-2 slice 8), plus
-       task activity (slice 9): one catalogue-driven editor serves both writes.
-       It owns only transient form
-       state; the service owns admission, validation, freezing, and the latest
-       effective producer map. ---- */
-let taskFormMode = "direct";
-let taskProducerTarget = null;
+/* ---- standalone task ordering and task activity ---- */
 let taskProjects = [];
 let taskReferences = [];
 let taskExecutorCatalogue = [];
@@ -5523,10 +5481,6 @@ let taskExecutorDrafts = {};
 let taskCatalogueSeq = 0;
 let taskDialogSeq = 0;
 let taskSubmitPending = false;
-let visibleSliceProducers = new Map();
-let visibleSliceMaterials = new Map();
-let sliceMaterialTarget = null;
-let visibleProducerRunId = null;
 // Canonical task responses are the only source for chips. A failed refresh
 // leaves this last good view alone; no task is inferred from milestone prose.
 // Per-run task records used to be polled here every tick (one list GET
@@ -5543,27 +5497,21 @@ function syncTaskSubmitDisabled() {
     taskSubmitPending || !taskExecutorSelected;
   document.getElementById("task_close").disabled = taskSubmitPending;
 }
-function resetTaskDialog(mode) {
+function resetTaskDialog() {
   taskDialogSeq += 1;
-  taskFormMode = mode;
   taskExecutorDrafts = {};
   taskExecutorSelected = "";
   document.getElementById("task_error").textContent = "";
   document.getElementById("task_error").style.display = "";
   setTaskMessage("task_accepted", "");
   setTaskMessage("task_catalogue_error", "");
-  const direct = mode === "direct";
-  document.getElementById("task_direct_fields").style.display = direct ? "" : "none";
-  document.getElementById("task_producer_context").style.display = direct ? "none" : "";
-  // A producer choice orders no call: it records which executor a future
-  // unit uses, and that unit is staffed by its own run's session.
-  document.getElementById("task_staffing").style.display = direct ? "" : "none";
-  document.getElementById("task_submit").textContent = direct ? "Order task" : "Save producer";
+  document.getElementById("task_direct_fields").style.display = "";
+  document.getElementById("task_staffing").style.display = "";
+  document.getElementById("task_submit").textContent = "Order task";
   syncTaskSubmitDisabled();
 }
 function openDirectTaskForm(preselect) {
-  resetTaskDialog("direct");
-  taskProducerTarget = null;
+  resetTaskDialog();
   taskReferences = [];
   for (const id of ["t_request", "t_context", "t_ref_input", "t_output"])
     document.getElementById(id).value = "";
@@ -5583,7 +5531,7 @@ async function loadTaskProjects(preselect) {
     const data = await api("/api/projects");
     projects = data.projects || [];
   } catch (e) { fault = "projects unavailable: " + e.message; }
-  if (dialogSeq !== taskDialogSeq || taskFormMode !== "direct") return;
+  if (dialogSeq !== taskDialogSeq) return;
   taskProjects = projects;
   const select = document.getElementById("t_project");
   select.innerHTML = projectOptions(
@@ -5789,10 +5737,7 @@ function currentTaskConfiguration() {
   }
   return {configuration, present: Object.keys(schema).length > 0};
 }
-function taskKindLabel(kind) {
-  return kind === "draft_slice_note" ? "Note drafting" : "Implementation";
-}
-function producerSelectionLabel(selection) {
+function planSelectionLabel(selection) {
   if (!selection || !selection.task_executor) return "unavailable";
   const values = selection.configuration
     ? Object.entries(selection.configuration).map(([key, value]) =>
@@ -5800,154 +5745,18 @@ function producerSelectionLabel(selection) {
     : [];
   return selection.task_executor + (values.length ? ` · ${values.join(", ")}` : "");
 }
-function producerControls(sliceId, producerMap, material) {
+function slicePlanSummary(producerMap, material) {
   const choices = producerMap || {};
-  return `<span class="producer-choices">
-    <button class="producer-choice" type="button"
-      onclick="openProducerTask(${sliceId},'draft_slice_note')">Note · <span id="producer-${sliceId}-draft_slice_note">${esc(producerSelectionLabel(choices.draft_slice_note))}</span></button>
-    <button class="producer-choice" type="button"
-      onclick="openProducerTask(${sliceId},'implement')">Implementation · <span id="producer-${sliceId}-implement">${esc(producerSelectionLabel(choices.implement))}</span></button>
-    <button class="producer-choice" type="button"
-      onclick="openSliceMaterial(${sliceId})">Material · <span id="material-${sliceId}">${esc(sliceMaterialLabel(material))}</span></button>
+  const materialLabel = material === null || material === undefined
+    ? "session default" : JSON.stringify(material);
+  return `<span class="plan-values">
+    <span class="plan-value">Note · ${esc(planSelectionLabel(choices.draft_slice_note))}</span>
+    <span class="plan-value">Implementation · ${esc(planSelectionLabel(choices.implement))}</span>
+    <span class="plan-value">Material · ${esc(materialLabel)}</span>
   </span>`;
-}
-/* The material is one prospective string beside the two producer choices,
-   and nothing more: it never edits the skeleton artifact, the staffing
-   document, or the session's own default material, and the router still
-   decides the agent, the model and the effort behind every call. */
-function sliceMaterialAbsent(material) {
-  return material === null || material === undefined;
-}
-function sliceMaterialLabel(material) {
-  /* Absence is the only thing that means "the session's default stands".
-     JSON string syntax makes every present value distinguishable from it,
-     including the empty string, the literal "session default", and strings
-     containing line breaks. */
-  if (sliceMaterialAbsent(material)) return "session default";
-  return JSON.stringify(material);
-}
-function openSliceMaterial(sliceId) {
-  if (!selected || visibleProducerRunId !== selected) {
-    refreshDetail();
-    return;
-  }
-  const stored = visibleSliceMaterials.get(sliceId);
-  const box = document.getElementById("sm_material");
-  document.getElementById("sm_title").textContent =
-    `Slice ${String(sliceId).padStart(2, "0")} · material`;
-  document.getElementById("sm_error").textContent = "";
-  box.value = sliceMaterialAbsent(stored) ? "" : JSON.stringify(stored);
-  /* JSON string syntax keeps the single-line editor lossless for every
-     storable string, including CR and LF. Track actual input separately:
-     an untouched blank still means absence, while typing "\"\"" proposes
-     the explicit empty string. */
-  sliceMaterialTarget = {runId: selected, sliceId, stored, edited: false};
-  document.getElementById("slicematerialdlg").showModal();
-}
-function markSliceMaterialEdited() {
-  if (sliceMaterialTarget) sliceMaterialTarget.edited = true;
-}
-function applyConfirmedSliceMaterial(sliceId, material) {
-  visibleSliceMaterials.set(sliceId, material);
-  const el = document.getElementById(`material-${sliceId}`);
-  if (el) el.textContent = sliceMaterialLabel(material);
-}
-function saveSliceMaterial() {
-  /* Decode the exact string represented in the box. Trimming or folding an
-     emptied box into a clear would rewrite the operator's own word: a name
-     the document cannot carry resolves to the session default today, and
-     silently repairing it into one the document DOES carry would restaff
-     the next production task nobody asked to restaff. */
-  const box = document.getElementById("sm_material").value;
-  const target = sliceMaterialTarget;
-  if (target && !target.edited) {
-    /* A slice with no proposal shows the same empty box as one proposing
-       the empty string, so the untouched rule has to cover ABSENCE too,
-       and absence is the one state no request can express: posting the
-       box would author a `""` nobody typed, and posting null would record
-       a withdrawal nobody asked for. Both are explicit operator writes a
-       later plan review reads as settled, so an untouched box on such a
-       slice sends nothing at all and simply closes. */
-    if (sliceMaterialAbsent(target.stored)) {
-      document.getElementById("slicematerialdlg").close();
-      return;
-    }
-    return writeSliceMaterial(target.stored);
-  }
-  let material;
-  try {
-    material = JSON.parse(box);
-  } catch (_error) {
-    document.getElementById("sm_error").textContent =
-      "Enter a valid JSON string.";
-    return;
-  }
-  if (typeof material !== "string") {
-    document.getElementById("sm_error").textContent =
-      "Material must be a JSON string.";
-    return;
-  }
-  return writeSliceMaterial(material);
-}
-function clearSliceMaterial() {
-  /* Removing the proposal is its own deliberate act, never a side effect
-     of an emptied box. */
-  return writeSliceMaterial(null);
-}
-async function writeSliceMaterial(material) {
-  if (!sliceMaterialTarget) return;
-  const target = Object.assign({}, sliceMaterialTarget);
-  const materialViewSeq = detailSeq;
-  const error = document.getElementById("sm_error");
-  error.textContent = "";
-  let data;
-  try {
-    // One request, sent once: a refusal is rendered exactly as the
-    // service worded it and nothing is queued or resent.
-    data = await postJSON(
-      `/api/runs/${encodeURIComponent(target.runId)}/slices/${
-        target.sliceId}/material`,
-      {material: material});
-  } catch (e) { error.textContent = e.message; return; }
-  if (materialViewSeq === detailSeq)
-    applyConfirmedSliceMaterial(target.sliceId, data.material);
-  document.getElementById("slicematerialdlg").close();
-  refreshDetail();
-}
-function openProducerTask(sliceId, taskKind) {
-  if (!selected || visibleProducerRunId !== selected) {
-    refreshDetail();
-    return;
-  }
-  const producerMap = visibleSliceProducers.get(sliceId) || {};
-  const selection = producerMap[taskKind];
-  resetTaskDialog("producer");
-  taskProducerTarget = {runId: selected, sliceId, taskKind};
-  document.getElementById("task_title").textContent =
-    `Slice ${String(sliceId).padStart(2, "0")} · ${taskKindLabel(taskKind)} producer`;
-  document.getElementById("task_producer_context").textContent =
-    `Change only the ${taskKindLabel(taskKind).toLowerCase()} choice while it remains prospective.`;
-  if (selection && selection.task_executor) {
-    taskExecutorSelected = selection.task_executor;
-    taskExecutorDrafts[selection.task_executor] =
-      Object.assign({}, selection.configuration || {});
-  }
-  document.getElementById("taskform").showModal();
-  loadTaskExecutorCatalogue(taskExecutorSelected);
-}
-function applyConfirmedProducerMap(sliceId, producerMap) {
-  visibleSliceProducers.set(sliceId, producerMap);
-  for (const kind of ["draft_slice_note", "implement"]) {
-    const el = document.getElementById(`producer-${sliceId}-${kind}`);
-    if (el) el.textContent = producerSelectionLabel(producerMap[kind]);
-  }
 }
 async function submitTaskForm() {
   const dialogSeq = taskDialogSeq;
-  const mode = taskFormMode;
-  const producerTarget = taskProducerTarget
-    ? Object.assign({}, taskProducerTarget) : null;
-  const producerViewSeq = detailSeq;
   const error = document.getElementById("task_error");
   error.textContent = "";
   error.style.display = "";
@@ -5957,52 +5766,34 @@ async function submitTaskForm() {
   catch (e) { error.textContent = e.message; return; }
   const payload = {task_executor: taskExecutorSelected};
   if (resolved.present) payload.configuration = resolved.configuration;
-  let path;
-  let binding = null;
-  let families = null;
-  if (mode === "producer") {
-    payload.task_kind = producerTarget.taskKind;
-    path = `/api/runs/${encodeURIComponent(producerTarget.runId)}/slices/${producerTarget.sliceId}/producer`;
-  } else {
-    binding = taskBinding();
-    if (!binding) {
-      error.textContent = "choose a project and work area";
-      return;
-    }
-    families = taskProjects[
-      +document.getElementById("t_project").value].families_order;
-    const request = document.getElementById("t_request").value;
-    if (!request.trim()) { error.textContent = "request is required"; return; }
-    const requestDoc = {
-      work_area: binding,
-      request,
-      context: document.getElementById("t_context").value,
-      reference_documents: taskReferences.slice(),
-    };
-    const output = document.getElementById("t_output").value.trim();
-    if (output) requestDoc.output_directory = output;
-    payload.request = requestDoc;
-    path = "/api/tasks";
+  const binding = taskBinding();
+  if (!binding) {
+    error.textContent = "choose a project and work area";
+    return;
   }
+  const families = taskProjects[
+    +document.getElementById("t_project").value].families_order;
+  const request = document.getElementById("t_request").value;
+  if (!request.trim()) { error.textContent = "request is required"; return; }
+  const requestDoc = {
+    work_area: binding,
+    request,
+    context: document.getElementById("t_context").value,
+    reference_documents: taskReferences.slice(),
+  };
+  const output = document.getElementById("t_output").value.trim();
+  if (output) requestDoc.output_directory = output;
+  payload.request = requestDoc;
+  const path = "/api/tasks";
   taskSubmitPending = true;
   syncTaskSubmitDisabled();
   try {
-    if (mode !== "producer")
-      // First request. It either yields the id this order carries, or the
-      // order is never sent — including when the fact the session must
-      // record could not be read for the chosen project.
-      payload.staffing_session = await standaloneStaffingSession(
-        "task", binding, families);
+    // First request. It either yields the id this order carries, or the order
+    // is never sent, including when its staffing session cannot be read.
+    payload.staffing_session = await standaloneStaffingSession(
+      "task", binding, families);
     const data = await postJSON(path, payload);
-    if (mode === "producer") {
-      if (dialogSeq === taskDialogSeq && producerViewSeq === detailSeq)
-        applyConfirmedProducerMap(
-          producerTarget.sliceId, data.producer_task_executor
-        );
-      const dialog = document.getElementById("taskform");
-      if (dialogSeq === taskDialogSeq && dialog.open) dialog.close();
-      refreshDetail();
-    } else if (dialogSeq === taskDialogSeq) {
+    if (dialogSeq === taskDialogSeq) {
       setTaskMessage("task_accepted", `Task accepted · ${data.task.id}`);
     }
   } catch (e) {

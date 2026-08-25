@@ -48,11 +48,6 @@ from . import state as st
 
 IMPLEMENTATION_SIZE_ACK = "IMPLEMENTATION_SIZE_CUTOFF_ACK"
 FULL_VERIFICATION_SLICE_INTERVAL = 4
-# A producer write owns only a local state-file critical section.  Give that
-# handoff enough time to finish without turning unrelated driver contention
-# into a queued invocation.
-PRODUCER_HANDOFF_GRACE_S = 1.0
-PRODUCER_HANDOFF_POLL_S = 0.01
 
 
 class _NoIndependentReclassifier(runners.RunnerError):
@@ -916,7 +911,6 @@ class Driver(object):
         self._validate_billing()
         self.workspace = self.state["workspace"]
         self._busy_lock = threading.RLock()
-        self._allow_producer_handoff = False
         self.runner = runner or runners.SubprocessRunner(
             self.config["commands"], self.config.get("timeouts", {}),
             stall_window_s=self.config.get("worker_stall_window_s"),
@@ -1460,145 +1454,32 @@ class Driver(object):
         return runners.snapshot_changes(before_entries, after_entries)
 
     @contextlib.contextmanager
-    def _exclusive(self, adopt_producer_handoff=None):
+    def _exclusive(self):
         """Advisory inter-process lock on <state>.lock for one step. Two
         concurrent invocations on the same state would each run
         side-effectful worker calls; without this, the divergence would be
-        detected only afterwards, at save time, as HistoryRewriteError.
-
-        A continuous driver may briefly lose the between-step handoff to a
-        prospective slice write.  It retries only long enough for that local
-        write to finish and proceeds only if the resulting state is unchanged
-        or exactly an adoptable slice-write delta.  Direct steps and every
-        unrelated durable change retain the ordinary non-blocking refusal."""
-        if adopt_producer_handoff is None:
-            adopt_producer_handoff = self._allow_producer_handoff
-
-        def collision_error():
-            return ConcurrentRunError(
+        detected only afterwards, at save time, as HistoryRewriteError."""
+        try:
+            with st.exclusive_mutation(self.state_path):
+                yield
+        except st.ConcurrentStateMutation as exc:
+            raise ConcurrentRunError(
                 "another orchestrator invocation is active on %s "
                 "(advisory lock %s is held)"
                 % (self.state_path, self.state_path + ".lock")
-            )
-
-        collision = None
-        deadline = None
-        lock = None
-        while lock is None:
-            candidate = contextlib.ExitStack()
-            try:
-                candidate.enter_context(st.exclusive_mutation(self.state_path))
-            except st.ConcurrentStateMutation as exc:
-                candidate.close()
-                if not adopt_producer_handoff:
-                    raise collision_error() from exc
-                if collision is None:
-                    collision = collision_error()
-                    deadline = time.monotonic() + PRODUCER_HANDOFF_GRACE_S
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise collision from exc
-                time.sleep(min(PRODUCER_HANDOFF_POLL_S, remaining))
-            else:
-                lock = candidate
-
-        try:
-            if collision is not None:
-                disk = st.load(self.state_path)
-                if disk != self.state and not self._adopt_live_producer_updates(
-                    disk
-                ):
-                    raise collision
-            yield
-        finally:
-            lock.close()
+            ) from exc
 
     def _assert_not_stale(self):
-        """Adopt authorized prospective slice writes; refuse every other stale
-        state."""
+        """Refuse stale in-memory state before any worker call."""
         if not os.path.exists(self.state_path):
             return
         disk = st.load(self.state_path)
         if disk.get("events") != self.state.get("events"):
-            if self._adopt_live_producer_updates(disk):
-                return
             raise ConcurrentRunError(
                 "state file %s changed on disk since this driver loaded it "
                 "(another invocation ran); start a new driver to continue"
                 % self.state_path
             )
-
-    def _adopt_live_producer_updates(self, disk):
-        """Refresh only when disk is exactly this state plus prospective
-        slice writes: a producer choice, or a slice material. Both come
-        through the same route family and the same exclusive mutation, so a
-        loaded driver adopts either one rather than refusing the run over a
-        write it authorized itself."""
-        current_events = self.state.get("events")
-        disk_events = disk.get("events")
-        if not isinstance(current_events, list) or not isinstance(
-            disk_events, list
-        ):
-            return False
-        if (
-            len(disk_events) <= len(current_events)
-            or disk_events[:len(current_events)] != current_events
-        ):
-            return False
-        candidate = copy.deepcopy(self.state)
-        for index, event in enumerate(
-            disk_events[len(current_events):], start=len(current_events)
-        ):
-            if not isinstance(event, dict) or event.get("seq") != index:
-                return False
-            if not self._replay_prospective_slice_write(candidate, event):
-                return False
-            candidate["events"][-1] = copy.deepcopy(event)
-        if candidate != disk:
-            return False
-        self.state = disk
-        return True
-
-    @staticmethod
-    def _replay_prospective_slice_write(candidate, event):
-        """Apply one recorded prospective slice write to *candidate* state.
-
-        Replayed through the very writers the route used, so an event this
-        driver cannot reproduce exactly is refused rather than guessed at;
-        the caller then keeps the ordinary stale-state refusal."""
-        kind = event.get("type")
-        try:
-            if kind == "slice_producer_updated":
-                selection = event.get("selection")
-                if not isinstance(selection, dict):
-                    return False
-                checked = tasks.validate_producer_selection(
-                    selection, "live producer update"
-                )
-                tasks.update_slice_producer(
-                    candidate,
-                    event.get("slice_id"),
-                    {
-                        "task_kind": event.get("task_kind"),
-                        **checked,
-                    },
-                )
-            elif kind == "slice_material_updated":
-                # A cleared material is recorded as an explicit null, so the
-                # key must be PRESENT: an event missing it is not a write
-                # this driver can replay.
-                if "material" not in event:
-                    return False
-                tasks.update_slice_material(
-                    candidate,
-                    event.get("slice_id"),
-                    {"material": event["material"]},
-                )
-            else:
-                return False
-        except tasks.TaskRequestError:
-            return False
-        return True
 
     def _fix_family(self):
         return self.config.get("fix_family") or self.config["families_order"][0]
@@ -7900,22 +7781,17 @@ class Driver(object):
             waiting = bool(unit and unit.get("brainstorming_wait"))
             waiting_session = self._brainstorming_wait_session()
             if steps >= max_steps and not waiting:
-                with self._exclusive(adopt_producer_handoff=True):
+                with self._exclusive():
                     self._assert_not_stale()
                     action, _note = self._decide_at_strategy_boundary()
                 if action.type not in (A_DONE, A_FAILED):
                     return 3
             else:
                 sealed_before = self._sealed_keys()
-                previous_handoff = self._allow_producer_handoff
-                self._allow_producer_handoff = True
-                try:
-                    action, _note = self.step()
-                finally:
-                    self._allow_producer_handoff = previous_handoff
+                action, _note = self.step()
             if action.type == A_DONE:
                 if st.current_unit(self.state) is None:
-                    with self._exclusive(adopt_producer_handoff=True):
+                    with self._exclusive():
                         self._assert_not_stale()
                         st.maybe_close_milestone(self.state)
                         self._save()
@@ -7936,7 +7812,7 @@ class Driver(object):
                 # so stopping here leaves the repo committed and clean for
                 # an out-of-band build. One-shot: the flag clears on
                 # honoring; a plain start resumes exactly where paused.
-                with self._exclusive(adopt_producer_handoff=True):
+                with self._exclusive():
                     self._assert_not_stale()
                     st.append_event(
                         self.state, "paused_after_seal",
@@ -8023,16 +7899,6 @@ class Driver(object):
         return {
             "producer_task_executor_by_slice": tasks.effective_slice_plan(
                 self.state["milestone"]["slices"]
-            ),
-            "explicit_operator_overrides": (
-                tasks.operator_producer_overrides(self.state)
-            ),
-            # The material an authorized caller wrote after the current plan
-            # was installed. Same rule as a producer override and the same
-            # cutoff: it supersedes the document's own column without
-            # requiring the reviewed artifact to be rewritten.
-            "explicit_operator_material_overrides": (
-                tasks.operator_material_overrides(self.state)
             ),
         }
 

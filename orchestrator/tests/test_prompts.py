@@ -1840,14 +1840,11 @@ class TestPlannerMaterialChannel(unittest.TestCase):
                     {"id": 1, "title": "core", "material": "research",
                      "producer_task_executor": {}},
                 ],
-                "explicit_operator_overrides": [],
-                "explicit_operator_material_overrides": [
-                    {"slice_id": 1, "material": "research"},
-                ],
             },
         )
-        self.assertIn("explicit_operator_material_overrides", prompt)
-        self.assertIn("A material names a KIND OF\nWORK", prompt)
+        self.assertNotIn("explicit_operator", prompt)
+        self.assertIn("directly with this canonical projection", prompt)
+        self.assertIn("A material\nnames a KIND OF WORK", prompt)
 
 
 class TestPromptCompression(unittest.TestCase):
