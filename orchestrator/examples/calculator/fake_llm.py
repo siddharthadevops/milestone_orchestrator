@@ -200,6 +200,33 @@ if __name__ == "__main__":
     unittest.main()
 '''
 
+AUTHOR_QUESTIONS = {
+    "draft_skeleton": (
+        "due_diligence_count",
+        "machinery_trust",
+        "environment_fit",
+        "human_scale",
+    ),
+    "draft_slice_note": (
+        "due_diligence_count",
+        "machinery_trust",
+        "environment_fit",
+        "human_scale",
+    ),
+    "implement": (
+        "machinery_trust",
+        "environment_fit",
+        "human_scale",
+    ),
+}
+
+
+def author_questions(kind):
+    return [
+        {"id": question_id, "answer": "Checked by the calculator fixture."}
+        for question_id in AUTHOR_QUESTIONS[kind]
+    ]
+
 
 def ok(kind, **extra):
     payload = {"status": "ok", "kind": kind}
@@ -226,13 +253,19 @@ def respond(kind, family, workspace, count, prompt):
             workspace,
             "docs/skeleton.md",
             "# Calculator milestone\n\nGoal: CLI calculator with tests.\n\n"
-            "## Slices\n\n1. Calculator core\n",
+            "## Canonical slice plan\n```json\n"
+            '{"slices":[{"id":1,"title":"Calculator core",'
+            '"intent":"Implement and test add, subtract, multiply, and '
+            'divide operations.","producer_task_executor":{'
+            '"draft_slice_note":"agent_call",'
+            '"implement":"agent_call"}}]}\n'
+            "```\n",
         )
         write(workspace, "run_checks.py", RUN_CHECKS)
         return ok(
             kind,
             artifact="docs/skeleton.md",
-            slices=[{"id": 1, "title": "Calculator core"}],
+            questions=author_questions(kind),
         )
 
     if kind == "draft_slice_note":
@@ -243,12 +276,20 @@ def respond(kind, family, workspace, count, prompt):
             "correct over floats; CLI prints the result.\nTests: unittest "
             "suite pins all four operations.\n",
         )
-        return ok(kind, artifact="docs/slice-01.md")
+        return ok(
+            kind,
+            artifact="docs/slice-01.md",
+            questions=author_questions(kind),
+        )
 
     if kind == "implement":
         write(workspace, "calculator.py", CALC_BUGGY)
         write(workspace, "test_calculator.py", TESTS)
-        return ok(kind, files_changed=["calculator.py", "test_calculator.py"])
+        return ok(
+            kind,
+            files_changed=["calculator.py", "test_calculator.py"],
+            questions=author_questions(kind),
+        )
 
     # ---- report-only reviews --------------------------------------------
     if kind == "review_round" and family == "codex":

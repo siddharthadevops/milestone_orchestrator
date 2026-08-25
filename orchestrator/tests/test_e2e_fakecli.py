@@ -214,6 +214,10 @@ class TestCalculatorE2E(unittest.TestCase):
             [{
                 "id": 1,
                 "title": "Calculator core",
+                "intent": (
+                    "Implement and test add, subtract, multiply, and divide "
+                    "operations."
+                ),
                 "producer_task_executor": {
                     "draft_slice_note": {"task_executor": "agent_call"},
                     "implement": {"task_executor": "agent_call"},
