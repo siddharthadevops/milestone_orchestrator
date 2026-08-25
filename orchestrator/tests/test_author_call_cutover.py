@@ -3,11 +3,15 @@
 import copy
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
-from orchestrator import author_calls, contracts, prompt_sets, runners
+from orchestrator import author_calls, canonical_plan, contracts
+from orchestrator import driver, ledgers
+from orchestrator import prompt_sets, runners, staffing, state, tasks
 from orchestrator import verifiers
 
 
@@ -592,6 +596,1314 @@ class AuthorCallPreparationTest(unittest.TestCase):
             ValueError, "not a direct milestone author charge"
         ):
             self.prepare(job="review_round@slice_impl")
+
+
+class DriverAuthorActivationTest(unittest.TestCase):
+    def test_skeleton_dispatch_uses_router_and_persists_plan_adoption(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-driver-") as ws, \
+                tempfile.TemporaryDirectory(prefix="orch-author-home-") as home:
+            subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=ws, check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test"],
+                cwd=ws, check=True,
+            )
+            with open(os.path.join(ws, "README"), "w", encoding="utf-8") as fh:
+                fh.write("seed\n")
+            subprocess.run(["git", "add", "README"], cwd=ws, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "seed"], cwd=ws, check=True
+            )
+            config = driver.load_config(None)
+            driver.merge_config(config, {
+                "git": {"enabled": True}, "docs_dir": "milestone",
+            })
+            state_path = driver.init_run(
+                "Build one slice.", ws, config=config,
+                model_profiles_home=home,
+                prompt_set="missing",
+            )
+            skeleton_path = ledgers.skeleton_path(state.load(state_path))
+
+            def write_plan(workspace):
+                path = os.path.join(workspace, skeleton_path)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                payload = {"slices": [{
+                    "id": 1, "title": "One", "intent": "Build one thing.",
+                    "producer_task_executor": {
+                        "draft_slice_note": "agent_call",
+                        "implement": "agent_call",
+                    },
+                }]}
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(
+                        "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                        % json.dumps(payload)
+                    )
+
+            reply = {
+                "status": "ok", "kind": "draft_skeleton",
+                "artifact": skeleton_path,
+                "questions": [
+                    {"id": name, "answer": "Checked."}
+                    for name in (
+                        "due_diligence_count", "machinery_trust",
+                        "environment_fit", "human_scale",
+                    )
+                ],
+            }
+            runner = runners.MockRunner([{
+                "expect_kind": "draft_skeleton",
+                "side_effect": write_plan,
+                "response": reply,
+            }])
+            driver.Driver(
+                state_path, runner=runner, model_profiles_home=home
+            ).step()
+
+            persisted = state.load(state_path)
+            self.assertEqual(runner.calls[0][2].splitlines()[:2], [
+                "KIND: draft_skeleton", "WORKSPACE: %s" % ws,
+            ])
+            self.assertNotIn("FAMILY:", runner.calls[0][2])
+            self.assertEqual(
+                [item["id"] for item in persisted["milestone"]["slices"]],
+                [1],
+            )
+            self.assertIn("canonical_plan_anchor", persisted["milestone"])
+            fallback = prompt_sets.PROMPT_SET_FALLBACK_DEFAULT
+            self.assertEqual(
+                persisted["units"][0]["draft"]["prompt_set_fallback"],
+                fallback,
+            )
+            self.assertEqual(
+                persisted["tasks"][0]["result"]["prompt_set_fallback"],
+                fallback,
+            )
+            draft_event = next(
+                event for event in persisted["events"]
+                if event["type"] == "draft_recorded"
+            )
+            self.assertEqual(draft_event["prompt_set_fallback"], fallback)
+            projected = state.summary(persisted)["units"][0]
+            self.assertEqual(
+                projected["draft"]["prompt_set_fallback"], fallback
+            )
+            self.assertEqual(
+                projected["drafts"][0]["prompt_set_fallback"], fallback
+            )
+
+    def test_first_anchor_reselects_before_dispatching_a_stale_unit(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-order-") as ws, \
+                tempfile.TemporaryDirectory(prefix="orch-author-home-") as home:
+            subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=ws,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test"],
+                cwd=ws,
+                check=True,
+            )
+            config = driver.load_config(None)
+            driver.merge_config(config, {
+                "git": {"enabled": True}, "docs_dir": "milestone",
+            })
+            state_path = driver.init_run(
+                "Build two slices.", ws, config=config,
+                model_profiles_home=home,
+            )
+            persisted = state.load(state_path)
+            skeleton_path = ledgers.skeleton_path(persisted)
+            plan = {
+                "slices": [
+                    {
+                        "id": slice_id,
+                        "title": "Slice %d" % slice_id,
+                        "intent": "Build slice %d." % slice_id,
+                        "producer_task_executor": {
+                            "draft_slice_note": "agent_call",
+                            "implement": "agent_call",
+                        },
+                    }
+                    for slice_id in (1, 2)
+                ]
+            }
+            path = os.path.join(ws, skeleton_path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                    % json.dumps(plan)
+                )
+            subprocess.run(
+                ["git", "add", skeleton_path], cwd=ws, check=True
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "reviewed skeleton"],
+                cwd=ws,
+                check=True,
+            )
+
+            persisted["milestone"]["slices"] = [plan["slices"][1]]
+            skeleton = persisted["units"][0]
+            skeleton["status"] = state.U_SEALED
+            skeleton["artifact"] = skeleton_path
+            state.ensure_next_unit(persisted)
+            state.save(state_path, persisted)
+
+            runner = runners.MockRunner([])
+            action, note = driver.Driver(
+                state_path, runner=runner, model_profiles_home=home
+            ).step()
+
+            self.assertEqual(action.type, driver.A_DRAFT)
+            self.assertEqual(
+                note, "canonical plan established; work order refreshed"
+            )
+            reloaded = state.load(state_path)
+            self.assertEqual(runner.calls, [])
+            self.assertEqual(
+                state.unit_identity(state.current_unit(reloaded)),
+                (state.UNIT_SLICE_DOC, 1, None),
+            )
+            self.assertEqual(reloaded.get("tasks", []), [])
+
+    def test_plan_drift_blocks_before_dispatch_without_worker_classification(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-drift-") as ws, \
+                tempfile.TemporaryDirectory(prefix="orch-author-home-") as home:
+            subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=ws,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test"],
+                cwd=ws,
+                check=True,
+            )
+            config = driver.load_config(None)
+            driver.merge_config(config, {
+                "git": {"enabled": True}, "docs_dir": "milestone",
+            })
+            state_path = driver.init_run(
+                "Build one slice.", ws, config=config,
+                model_profiles_home=home,
+            )
+            persisted = state.load(state_path)
+            skeleton_path = ledgers.skeleton_path(persisted)
+
+            def write_plan(title):
+                payload = {"slices": [{
+                    "id": 1,
+                    "title": title,
+                    "intent": "Build one thing.",
+                    "producer_task_executor": {
+                        "draft_slice_note": "agent_call",
+                        "implement": "agent_call",
+                    },
+                }]}
+                path = os.path.join(ws, skeleton_path)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(
+                        "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                        % json.dumps(payload)
+                    )
+
+            write_plan("Anchored")
+            subprocess.run(
+                ["git", "add", skeleton_path], cwd=ws, check=True
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "anchor plan"], cwd=ws, check=True
+            )
+            canonical_plan.establish_current_plan(persisted, skeleton_path)
+            state.save(state_path, persisted)
+            write_plan("Drifted")
+
+            runner = runners.MockRunner([])
+            active = driver.Driver(
+                state_path, runner=runner, model_profiles_home=home
+            )
+
+            def unexpected_classifier(*_args, **_kwargs):
+                self.fail("pre-dispatch plan drift reached failure classification")
+
+            active._classify_failure = unexpected_classifier
+            action, _note = active.step()
+
+            self.assertEqual(action.type, driver.A_DRAFT)
+            reloaded = state.load(state_path)
+            self.assertEqual(runner.calls, [])
+            self.assertEqual(
+                reloaded["failure"]["type"], "canonical_plan_boundary"
+            )
+            self.assertFalse(any(
+                event["type"] in (
+                    "worker_malformed", "error_classifier_call"
+                )
+                for event in reloaded["events"]
+            ))
+            self.assertIsNone(reloaded["tasks"][0]["result"])
+
+    def test_plan_deletion_resumes_originating_author_episode_after_restart(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-delete-") as ws, \
+                tempfile.TemporaryDirectory(prefix="orch-author-home-") as home:
+            subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=ws,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test"],
+                cwd=ws,
+                check=True,
+            )
+            config = driver.load_config(None)
+            driver.merge_config(config, {
+                "git": {"enabled": True},
+                "docs_dir": "milestone",
+                "error_classifier": False,
+                "infra_retry_backoff_s": [],
+            })
+            state_path = driver.init_run(
+                "Build two slices.",
+                ws,
+                config=config,
+                model_profiles_home=home,
+                prompt_set="missing",
+            )
+            persisted = state.load(state_path)
+            skeleton_path = ledgers.skeleton_path(persisted)
+            skeleton_file = os.path.join(ws, skeleton_path)
+            os.makedirs(os.path.dirname(skeleton_file), exist_ok=True)
+
+            def document(slices):
+                return (
+                    "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                    % json.dumps({"slices": slices})
+                )
+
+            def slice_plan(slice_id, title):
+                return {
+                    "id": slice_id,
+                    "title": title,
+                    "intent": "Build %s." % title,
+                    "producer_task_executor": {
+                        "draft_slice_note": "agent_call",
+                        "implement": "agent_call",
+                    },
+                }
+
+            original = [
+                slice_plan(1, "Originating slice"),
+                slice_plan(2, "Remaining slice"),
+            ]
+            with open(skeleton_file, "w", encoding="utf-8") as handle:
+                handle.write(document(original))
+            subprocess.run(
+                ["git", "add", skeleton_path], cwd=ws, check=True
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "reviewed skeleton"],
+                cwd=ws,
+                check=True,
+            )
+            gate = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ws, text=True
+            ).strip()
+            canonical_plan.establish_current_plan(persisted, skeleton_path)
+            persisted["units"][0].update({
+                "status": state.U_SEALED,
+                "artifact": skeleton_path,
+                "gate_commit": gate,
+            })
+            state.ensure_next_unit(persisted)
+            state.save(state_path, persisted)
+
+            subject = driver.Driver(
+                state_path,
+                runner=runners.MockRunner([]),
+                model_profiles_home=home,
+            )
+            unit = state.current_unit(subject.state)
+            kind = contracts.KIND_DRAFT_SLICE_NOTE
+            authority = subject._worker_episode_authority(unit, kind)
+            prepared = subject._prepare_author_package(
+                unit, kind, "document", authority
+            )
+            note_path = ledgers.slice_note_path(subject.state, 1)
+            valid_reply = {
+                "status": "ok",
+                "kind": kind,
+                "artifact": note_path,
+                "questions": answered(prepared.bound),
+            }
+
+            def delete_originating_slice(workspace):
+                with open(skeleton_file, "w", encoding="utf-8") as handle:
+                    handle.write(document([original[1]]))
+                note_file = os.path.join(workspace, note_path)
+                os.makedirs(os.path.dirname(note_file), exist_ok=True)
+                with open(note_file, "w", encoding="utf-8") as handle:
+                    handle.write("# Originating slice note\n")
+
+            subject.runner = runners.MockRunner([{
+                "expect_kind": kind,
+                "side_effect": delete_originating_slice,
+                "response": {},
+            }])
+            author_prepare_call = subject._author_prepare_call
+
+            def interrupt_before_contract_repair(*args, **kwargs):
+                prepare = author_prepare_call(*args, **kwargs)
+
+                def interrupted(repair_error):
+                    if repair_error is not None:
+                        raise KeyboardInterrupt(
+                            "simulated stop after persisted plan adoption"
+                        )
+                    return prepare(repair_error)
+
+                return interrupted
+
+            with mock.patch.object(
+                subject,
+                "_author_prepare_call",
+                side_effect=interrupt_before_contract_repair,
+            ), self.assertRaises(KeyboardInterrupt):
+                subject.step()
+
+            interrupted = state.load(state_path)
+            self.assertEqual(
+                [item["id"] for item in interrupted["milestone"]["slices"]],
+                [2],
+            )
+            origin = next(
+                candidate for candidate in interrupted["units"]
+                if state.unit_identity(candidate)
+                == (state.UNIT_SLICE_DOC, 1, None)
+            )
+            task_id = origin["active_task"]["id"]
+            self.assertIsNone(tasks.task_record(interrupted, task_id)["result"])
+
+            resumed_runner = runners.MockRunner([{
+                "expect_kind": kind,
+                "response": valid_reply,
+            }])
+            restarted = driver.Driver(
+                state_path,
+                runner=resumed_runner,
+                model_profiles_home=home,
+            )
+            interrupted_calls = [
+                event for event in restarted.state["events"]
+                if event["type"] == "worker_interrupted"
+            ]
+            self.assertEqual(len(interrupted_calls), 1)
+            self.assertEqual(
+                interrupted_calls[0]["unit"], state.unit_key(origin)
+            )
+            self.assertEqual(interrupted_calls[0]["task_id"], task_id)
+            self.assertEqual(
+                interrupted_calls[0]["prompt_set_fallback"],
+                prompt_sets.PROMPT_SET_FALLBACK_DEFAULT,
+            )
+            restarted.step()
+
+            reloaded = state.load(state_path)
+            self.assertEqual(len(subject.runner.calls), 1)
+            self.assertEqual(len(resumed_runner.calls), 1)
+            self.assertIn("Originating slice", resumed_runner.calls[0][2])
+            self.assertIn("RESUMED AUTHOR EPISODE", resumed_runner.calls[0][2])
+            self.assertEqual(
+                [item["id"] for item in reloaded["milestone"]["slices"]],
+                [2],
+            )
+            coordinates = tasks.task_record(reloaded, task_id)["order"][
+                "request"
+            ]["context"]["author_coordinates"]
+            self.assertEqual(coordinates, {
+                "slice_id": 1,
+                "slice_title": "Originating slice",
+                "slice_note_path": note_path,
+            })
+            self.assertEqual(
+                tasks.task_record(reloaded, task_id)["result"]["status"],
+                "success",
+            )
+            resumed_origin = next(
+                candidate for candidate in reloaded["units"]
+                if state.unit_identity(candidate)
+                == (state.UNIT_SLICE_DOC, 1, None)
+            )
+            self.assertNotIn("active_task", resumed_origin)
+            self.assertTrue(
+                resumed_origin[state.AUTHOR_PLAN_REVIEW_KEY]
+            )
+            self.assertEqual(
+                resumed_origin["status"], state.U_PRE_REVIEW_VERIFY
+            )
+            self.assertIs(state.current_unit(reloaded), resumed_origin)
+            self.assertFalse(state.maybe_close_milestone(reloaded))
+            self.assertEqual(
+                reloaded["milestone"]["status"], state.M_OPEN
+            )
+
+    def test_sealed_guard_keeps_an_accepted_author_plan_delta(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-plan-") as ws, \
+                tempfile.TemporaryDirectory(prefix="orch-author-home-") as home:
+            subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=ws,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test"],
+                cwd=ws,
+                check=True,
+            )
+            config = driver.load_config(None)
+            driver.merge_config(config, {
+                "git": {"enabled": True},
+                "docs_dir": "milestone",
+                "error_classifier": False,
+                "infra_retry_backoff_s": [],
+            })
+            state_path = driver.init_run(
+                "Build one slice.",
+                ws,
+                config=config,
+                model_profiles_home=home,
+                prompt_set="missing",
+            )
+            persisted = state.load(state_path)
+            skeleton_path = ledgers.skeleton_path(persisted)
+            skeleton_file = os.path.join(ws, skeleton_path)
+            os.makedirs(os.path.dirname(skeleton_file), exist_ok=True)
+
+            def document(title, prose, slice_ids=(1,)):
+                plan = {"slices": [{
+                    "id": slice_id,
+                    "title": title if index == 0 else "Old",
+                    "intent": "Build one thing.",
+                    "producer_task_executor": {
+                        "draft_slice_note": "agent_call",
+                        "implement": "agent_call",
+                    },
+                } for index, slice_id in enumerate(slice_ids)]}
+                return (
+                    "%s\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                    % (prose, json.dumps(plan))
+                )
+
+            with open(skeleton_file, "w", encoding="utf-8") as handle:
+                handle.write(document("Old", "SEALED PROSE"))
+            subprocess.run(
+                ["git", "add", skeleton_path], cwd=ws, check=True
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "reviewed skeleton"],
+                cwd=ws,
+                check=True,
+            )
+            gate = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=ws, text=True
+            ).strip()
+            canonical_plan.establish_current_plan(persisted, skeleton_path)
+            skeleton = persisted["units"][0]
+            skeleton.update({
+                "status": state.U_SEALED,
+                "artifact": skeleton_path,
+                "gate_commit": gate,
+            })
+            state.ensure_next_unit(persisted)
+            state.save(state_path, persisted)
+
+            subject = driver.Driver(
+                state_path,
+                runner=runners.MockRunner([]),
+                model_profiles_home=home,
+            )
+            unit = state.current_unit(subject.state)
+            kind = contracts.KIND_DRAFT_SLICE_NOTE
+            authority = subject._worker_episode_authority(unit, kind)
+            prepared = subject._prepare_author_package(
+                unit, kind, "document", authority
+            )
+            note_path = ledgers.slice_note_path(subject.state, 1)
+            reply = {
+                "status": "ok",
+                "kind": kind,
+                "artifact": note_path,
+                "questions": answered(prepared.bound),
+            }
+
+            def edit_plan(workspace):
+                with open(skeleton_file, "w", encoding="utf-8") as handle:
+                    handle.write(document(
+                        "New", "UNAUTHORIZED PROSE", slice_ids=(2, 1)
+                    ))
+                note_file = os.path.join(workspace, note_path)
+                os.makedirs(os.path.dirname(note_file), exist_ok=True)
+                with open(note_file, "w", encoding="utf-8") as handle:
+                    handle.write("# Slice note\n")
+
+            subject.runner = runners.MockRunner([{
+                "expect_kind": kind,
+                "side_effect": edit_plan,
+                "response": reply,
+            }])
+            subject.step()
+
+            reloaded = state.load(state_path)
+            with open(skeleton_file, "rb") as handle:
+                surviving = handle.read()
+            self.assertIn(b"SEALED PROSE", surviving)
+            self.assertNotIn(b"UNAUTHORIZED PROSE", surviving)
+            self.assertEqual(
+                canonical_plan.canonical_block_bytes(surviving),
+                canonical_plan.canonical_block_bytes(document(
+                    "New", "x", slice_ids=(2, 1)
+                )),
+            )
+            self.assertEqual(
+                reloaded["milestone"]["slices"][0]["title"], "New"
+            )
+            self.assertEqual(
+                state.unit_identity(state.current_unit(reloaded)),
+                (state.UNIT_SLICE_DOC, 2, None),
+            )
+            canonical_plan.guarded_dispatch(reloaded, lambda: None)
+
+            unit = state.current_unit(subject.state)
+            self.assertEqual(
+                state.unit_identity(unit),
+                (state.UNIT_SLICE_DOC, 2, None),
+            )
+            note_path = ledgers.slice_note_path(subject.state, 2)
+            reply = {
+                **reply,
+                "artifact": note_path,
+            }
+
+            def edit_plan_before_rejected_reply(workspace):
+                with open(skeleton_file, "w", encoding="utf-8") as handle:
+                    handle.write(document(
+                        "Newest", "SECOND UNAUTHORIZED PROSE",
+                        slice_ids=(3, 2, 1),
+                    ))
+
+            subject.runner = runners.MockRunner([{
+                "expect_kind": kind,
+                "side_effect": edit_plan_before_rejected_reply,
+                "response": reply,
+            }])
+            prepare_package = subject._prepare_author_package
+
+            def package_with_safeguard_failure(*args, **kwargs):
+                prepared = prepare_package(*args, **kwargs)
+
+                def reject_after_dispatch(_reply):
+                    raise verifiers.OperationalError(
+                        "safeguard source became unavailable"
+                    )
+
+                return prepared._replace(validate=reject_after_dispatch)
+
+            raw_name = "sealed-validation-failure"
+            with mock.patch.object(
+                subject,
+                "_prepare_author_package",
+                side_effect=package_with_safeguard_failure,
+            ), self.assertRaises(driver.StopStep):
+                subject._call(
+                    "codex",
+                    "legacy prompt",
+                    kind,
+                    raw_name,
+                    prepare_call=subject._author_prepare_call(
+                        unit, kind, "document", raw_name
+                    ),
+                    episode_unit=unit,
+                )
+
+            rejected = state.load(state_path)
+            with open(skeleton_file, "rb") as handle:
+                surviving = handle.read()
+            self.assertIn(b"SEALED PROSE", surviving)
+            self.assertNotIn(b"SECOND UNAUTHORIZED PROSE", surviving)
+            self.assertEqual(
+                canonical_plan.canonical_block_bytes(surviving),
+                canonical_plan.canonical_block_bytes(
+                    document("Newest", "ignored", slice_ids=(3, 2, 1))
+                ),
+            )
+            self.assertEqual(
+                rejected["milestone"]["slices"][0]["title"], "Newest"
+            )
+            unaccepted = next(
+                event for event in reversed(rejected["events"])
+                if event["type"] == "worker_unaccepted"
+            )
+            self.assertEqual(unaccepted["unit"], state.unit_key(unit))
+            self.assertEqual(
+                unaccepted["prompt_set_fallback"],
+                prompt_sets.PROMPT_SET_FALLBACK_DEFAULT,
+            )
+            self.assertEqual(
+                rejected["failure"]["unit"], state.unit_key(unit)
+            )
+            inserted = next(
+                candidate for candidate in rejected["units"]
+                if state.unit_identity(candidate)
+                == (state.UNIT_SLICE_DOC, 3, None)
+            )
+            self.assertEqual(inserted["status"], state.U_PENDING)
+
+
+class DriverAuthorFindingRegressionTest(unittest.TestCase):
+    @staticmethod
+    def _projected_slice(slice_id, intent="Exercise attribution."):
+        return {
+            "id": slice_id,
+            "title": "Slice %d" % slice_id,
+            "intent": intent,
+            "producer_task_executor": {
+                "draft_slice_note": {"task_executor": "agent_call"},
+                "implement": {"task_executor": "agent_call"},
+            },
+        }
+
+    def _subject(self, workspace, runner):
+        config = driver.load_config(None)
+        driver.merge_config(config, {
+            "git": {"enabled": False},
+            "error_classifier": False,
+            "infra_retry_backoff_s": [],
+        })
+        state_path = driver.init_run(
+            "Exercise one author call.", workspace, config=config
+        )
+        return state_path, driver.Driver(state_path, runner=runner)
+
+    def test_repaired_and_failed_attempts_persist_each_fallback(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-fallback-") as ws:
+            repaired_runner = runners.MockRunner([
+                {"expect_kind": "implement", "response": {"attempt": 1}},
+                {"expect_kind": "implement", "response": {"attempt": 2}},
+            ])
+            _path, subject = self._subject(ws, repaired_runner)
+            attempts = []
+
+            def prepare_repair(_error):
+                attempt = len(attempts) + 1
+                attempts.append(attempt)
+
+                def validate(reply):
+                    if reply.get("attempt") != 2:
+                        raise contracts.ContractError("repair required")
+                    return reply
+
+                return author_calls.PreparedAuthorCall(
+                    "KIND: implement\nATTEMPT: %d\n" % attempt,
+                    validate,
+                    "rung-%d" % attempt,
+                    None,
+                )
+
+            _output, result, _raw_path = subject._call(
+                "codex",
+                "legacy prompt",
+                contracts.KIND_IMPLEMENT,
+                "repair-fallback",
+                prepare_call=prepare_repair,
+            )
+            repaired = next(
+                event for event in subject.state["events"]
+                if event["type"] == "worker_malformed"
+            )
+            self.assertEqual(repaired["prompt_set_fallback"], "rung-1")
+            self.assertEqual(result.prompt_set_fallback, "rung-2")
+            self.assertEqual(
+                subject._read_busy()["prompt_set_fallback"], "rung-2"
+            )
+            subject._clear_busy()
+
+        with tempfile.TemporaryDirectory(prefix="orch-author-fatal-") as ws:
+            failed_runner = runners.MockRunner([
+                {"expect_kind": "implement", "response": {"attempt": 1}},
+                {"expect_kind": "implement", "response": {"attempt": 2}},
+            ])
+            _path, subject = self._subject(ws, failed_runner)
+            attempts = []
+
+            def prepare_failure(_error):
+                attempt = len(attempts) + 1
+                attempts.append(attempt)
+                return author_calls.PreparedAuthorCall(
+                    "KIND: implement\nATTEMPT: %d\n" % attempt,
+                    lambda _reply: (_ for _ in ()).throw(
+                        contracts.ContractError("invalid attempt")
+                    ),
+                    "rung-%d" % attempt,
+                    None,
+                )
+
+            subject._classify_failure = lambda *_args, **_kwargs: (
+                "protocol", None, "deterministic test classification"
+            )
+            with self.assertRaises(driver.StopStep):
+                subject._call(
+                    "codex",
+                    "legacy prompt",
+                    contracts.KIND_IMPLEMENT,
+                    "fatal-fallback",
+                    prepare_call=prepare_failure,
+                )
+            fatal = next(
+                event for event in subject.state["events"]
+                if event["type"] == "worker_malformed" and event["fatal"]
+            )
+            self.assertEqual(
+                [
+                    dispatch["prompt_set_fallback"]
+                    for dispatch in fatal["physical_dispatches"]
+                ],
+                ["rung-1", "rung-2"],
+            )
+
+    def test_rejected_plan_boundary_cannot_enter_infrastructure_retry(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-boundary-") as ws:
+            runner = runners.MockRunner([
+                {
+                    "expect_kind": "implement",
+                    "response": {"status": "ok", "note": "network error"},
+                },
+                {
+                    "expect_kind": "implement",
+                    "response": {"status": "ok", "note": "network error"},
+                },
+            ])
+            _path, subject = self._subject(ws, runner)
+            subject.config["infra_retry_backoff_s"] = [0]
+
+            def reject_plan():
+                raise canonical_plan.CanonicalPlanError(
+                    "invalid canonical block"
+                )
+
+            prepared = author_calls.PreparedAuthorCall(
+                "KIND: implement\nROUTED\n",
+                lambda reply: reply,
+                "rung-1",
+                None,
+                reject_plan,
+            )
+
+            with self.assertRaises(driver.StopStep):
+                subject._call(
+                    "codex",
+                    "legacy prompt",
+                    contracts.KIND_IMPLEMENT,
+                    "rejected-plan-boundary",
+                    prepare_call=lambda _error: prepared,
+                )
+
+            self.assertEqual(len(runner.calls), 1)
+            self.assertEqual(
+                subject.state["failure"]["type"], "canonical_plan_boundary"
+            )
+            self.assertIsNone(subject.state["failure"].get("resume_at"))
+            self.assertFalse(any(
+                event["type"] in ("infra_retry", "error_classifier_call")
+                for event in subject.state["events"]
+            ))
+
+    def test_rejected_plan_boundary_overrides_accepted_size_interruption(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-boundary-") as ws:
+            interruptions = []
+            persisted = []
+
+            class InterruptedRunner(object):
+                def __init__(self):
+                    self.calls = 0
+
+                def call(
+                    self, _family, _prompt, _workspace, model=None,
+                    effort=None, active_control=None,
+                ):
+                    del model, effort
+                    self.calls += 1
+                    active_control._bind(
+                        lambda _text: True,
+                        lambda _reason: True,
+                    )
+                    self.assert_interrupted = active_control.interrupt(
+                        "implementation hard limit reached"
+                    )
+                    active_control._close()
+                    return runners.RunnerResult(
+                        '{"status":"ok"}', 0, 0.01
+                    )
+
+            runner = InterruptedRunner()
+            _path, subject = self._subject(ws, runner)
+            unit = state.current_unit(subject.state)
+            cutoff_marker = {
+                "episode_id": "rejected-plan-cutoff",
+                "soft_lines": 500,
+                "hard_lines": 750,
+            }
+
+            def persist_interrupt(reason):
+                interruptions.append(reason)
+                subject._persist_implementation_stabilization(
+                    cutoff_marker,
+                    interrupt_reason=reason,
+                    unit=unit,
+                )
+                persisted.append("implementation_stabilization" in unit)
+
+            control = runners.ActiveCallControl(
+                on_interrupt=persist_interrupt
+            )
+
+            def reject_plan():
+                raise canonical_plan.CanonicalPlanError(
+                    "invalid canonical block"
+                )
+
+            prepared = author_calls.PreparedAuthorCall(
+                "KIND: implement\nROUTED\n",
+                lambda reply: reply,
+                "rung-1",
+                None,
+                reject_plan,
+            )
+
+            with self.assertRaises(driver.StopStep):
+                subject._call(
+                    "codex",
+                    "legacy prompt",
+                    contracts.KIND_IMPLEMENT,
+                    "interrupted-rejected-plan-boundary",
+                    active_control=control,
+                    prepare_call=lambda _error: prepared,
+                    episode_unit=unit,
+                    cutoff_marker=cutoff_marker,
+                )
+
+            self.assertTrue(runner.assert_interrupted)
+            self.assertEqual(interruptions, [
+                "implementation hard limit reached"
+            ])
+            self.assertEqual(persisted, [True])
+            self.assertEqual(runner.calls, 1)
+            self.assertEqual(
+                subject.state["failure"]["type"], "canonical_plan_boundary"
+            )
+            self.assertNotIn("implementation_stabilization", unit)
+            self.assertFalse(any(
+                event.get("controlled_interruption")
+                for event in subject.state["events"]
+            ))
+
+    def test_inserted_unit_does_not_inherit_author_failure_history(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-owner-") as ws:
+            runner = runners.MockRunner([
+                {"expect_kind": "implement", "response": {"attempt": 1}},
+                {"expect_kind": "implement", "response": {"attempt": 2}},
+            ])
+            _path, subject = self._subject(ws, runner)
+
+            skeleton = state.current_unit(subject.state)
+            skeleton["status"] = state.U_SEALED
+            subject.state["milestone"]["slices"] = [self._projected_slice(2)]
+            origin = state.ensure_next_unit(subject.state)
+            subject.state["milestone"]["slices"] = [
+                self._projected_slice(3), self._projected_slice(2),
+            ]
+            inserted = state.ensure_due_unit(subject.state)
+            self.assertIs(state.current_unit(subject.state), inserted)
+
+            prepared = author_calls.PreparedAuthorCall(
+                "KIND: implement\nROUTED\n",
+                lambda _reply: (_ for _ in ()).throw(
+                    contracts.ContractError("invalid attempt")
+                ),
+                "rung",
+                None,
+            )
+            subject._classify_failure = lambda *_args, **_kwargs: (
+                "protocol", None, "deterministic test classification"
+            )
+
+            with self.assertRaises(driver.StopStep):
+                subject._call(
+                    "codex",
+                    "legacy prompt",
+                    contracts.KIND_IMPLEMENT,
+                    "inserted-owner",
+                    prepare_call=lambda _error: prepared,
+                    episode_unit=origin,
+                )
+
+            fatal = next(
+                event for event in reversed(subject.state["events"])
+                if event["type"] == "worker_malformed" and event["fatal"]
+            )
+            self.assertEqual(fatal["unit"], state.unit_key(origin))
+            self.assertEqual(
+                subject.state["failure"]["unit"], state.unit_key(origin)
+            )
+            self.assertEqual(origin["status"], state.U_FAILED)
+            self.assertEqual(inserted["status"], state.U_PENDING)
+
+    def test_accounted_author_marker_keeps_owner_after_plan_reorder(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-owner-") as ws:
+            state_path, subject = self._subject(ws, runners.MockRunner([]))
+
+            skeleton = state.current_unit(subject.state)
+            skeleton["status"] = state.U_SEALED
+            subject.state["milestone"]["slices"] = [self._projected_slice(
+                2, "Exercise restart attribution."
+            )]
+            origin = state.ensure_next_unit(subject.state)
+            task = subject._admit_worker_task(
+                origin,
+                contracts.KIND_DRAFT_SLICE_NOTE,
+                "frozen author prompt",
+                "codex",
+            )
+            self.assertTrue(subject._mark_busy(
+                "slice_doc-02-draft",
+                contracts.KIND_DRAFT_SLICE_NOTE,
+                "codex",
+                task_id=task["id"],
+            ))
+            subject.state["milestone"]["slices"] = [
+                self._projected_slice(3, "Exercise restart attribution."),
+                self._projected_slice(2, "Exercise restart attribution."),
+            ]
+            inserted = state.ensure_due_unit(subject.state)
+            subject._save()
+            completed = runners.RunnerResult(
+                "{}", 0, 2.5,
+                token_usage={
+                    "input_tokens": 10,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 2,
+                    "total_tokens": 12,
+                },
+            )
+            self.assertTrue(subject._update_busy_accounting(completed))
+
+            restarted = driver.Driver(
+                state_path, runner=runners.MockRunner([])
+            )
+
+            interrupted = next(
+                event for event in restarted.state["events"]
+                if event["type"] == "worker_interrupted"
+            )
+            self.assertEqual(interrupted["unit"], state.unit_key(origin))
+            self.assertEqual(interrupted["task_id"], task["id"])
+            self.assertEqual(interrupted["duration_s"], 2.5)
+            reloaded_origin = next(
+                unit for unit in restarted.state["units"]
+                if state.unit_identity(unit) == state.unit_identity(origin)
+            )
+            reloaded_inserted = next(
+                unit for unit in restarted.state["units"]
+                if state.unit_identity(unit) == state.unit_identity(inserted)
+            )
+            self.assertEqual(reloaded_origin["status"], state.U_PENDING)
+            self.assertEqual(reloaded_inserted["status"], state.U_PENDING)
+
+    def test_durable_failed_author_attempt_is_not_accounted_twice(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-accounted-") as ws:
+            state_path, subject = self._subject(ws, runners.MockRunner([]))
+
+            skeleton = state.current_unit(subject.state)
+            skeleton["status"] = state.U_SEALED
+            subject.state["milestone"]["slices"] = [self._projected_slice(2)]
+            unit = state.ensure_next_unit(subject.state)
+            kind = contracts.KIND_DRAFT_SLICE_NOTE
+            task = subject._admit_worker_task(
+                unit, kind, "frozen author prompt", "codex"
+            )
+            self.assertTrue(subject._mark_busy(
+                "slice_doc-02-draft",
+                kind,
+                "codex",
+                task_id=task["id"],
+            ))
+            completed = runners.RunnerResult(
+                "{}", 0, 2.5,
+                token_usage={
+                    "input_tokens": 10,
+                    "cached_input_tokens": 0,
+                    "output_tokens": 2,
+                    "total_tokens": 12,
+                },
+            )
+            self.assertTrue(subject._update_busy_accounting(completed))
+            state.append_event(
+                subject.state,
+                "worker_malformed",
+                unit=state.unit_key(unit),
+                label="slice_doc-02-draft",
+                kind=kind,
+                family="codex",
+                fatal=False,
+                stabilizer_retry=True,
+                duration_s=completed.duration_s,
+                token_usage=completed.token_usage,
+                token_usage_partial=False,
+                cost=completed.cost,
+                cost_partial=completed.cost_partial,
+                task_id=task["id"],
+            )
+            subject._save()
+
+            restarted = driver.Driver(
+                state_path, runner=runners.MockRunner([])
+            )
+
+            self.assertFalse(any(
+                event["type"] == "worker_interrupted"
+                for event in restarted.state["events"]
+            ))
+            accounting = tasks.task_accounting(restarted.state, task["id"])
+            self.assertEqual(accounting["token_usage"]["total_tokens"], 12)
+            self.assertEqual(accounting["duration_s"], 2.5)
+            self.assertIsNotNone(restarted._active_worker_task(unit, kind))
+
+    def test_author_dispatch_staffing_failure_keeps_episode_owner(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-owner-") as ws, \
+                tempfile.TemporaryDirectory(prefix="orch-author-home-") as home:
+            config = driver.load_config(None)
+            driver.merge_config(config, {
+                "git": {"enabled": False},
+                "error_classifier": False,
+                "infra_retry_backoff_s": [],
+            })
+            state_path = driver.init_run(
+                "Exercise author staffing ownership.",
+                ws,
+                config=config,
+                model_profiles_home=home,
+            )
+            subject = driver.Driver(
+                state_path,
+                runner=runners.MockRunner([]),
+                model_profiles_home=home,
+            )
+
+            skeleton = state.current_unit(subject.state)
+            skeleton["status"] = state.U_SEALED
+            subject.state["milestone"]["slices"] = [self._projected_slice(
+                2, "Exercise staffing attribution."
+            )]
+            origin = state.ensure_next_unit(subject.state)
+            kind = contracts.KIND_DRAFT_SLICE_NOTE
+            subject._admit_worker_task(
+                origin, kind, "frozen author prompt", "codex"
+            )
+            subject.state["milestone"]["slices"] = [
+                self._projected_slice(3, "Exercise staffing attribution."),
+                self._projected_slice(2, "Exercise staffing attribution."),
+            ]
+            inserted = state.ensure_due_unit(subject.state)
+            subject._save()
+            resolver = subject._dispatch_for_worker_kind(origin, kind)
+            condition = staffing.StaffingConditionError(
+                staffing.STAFFING_UNAVAILABLE,
+                "no configured family is available",
+            )
+
+            with mock.patch.object(
+                staffing, "resolve", side_effect=condition
+            ), self.assertRaises(driver.StopStep):
+                resolver()
+
+            reloaded = state.load(state_path)
+            failed_origin = next(
+                unit for unit in reloaded["units"]
+                if state.unit_identity(unit) == state.unit_identity(origin)
+            )
+            pending_inserted = next(
+                unit for unit in reloaded["units"]
+                if state.unit_identity(unit) == state.unit_identity(inserted)
+            )
+            self.assertEqual(
+                reloaded["failure"]["unit"], state.unit_key(origin)
+            )
+            self.assertEqual(failed_origin["status"], state.U_FAILED)
+            self.assertEqual(failed_origin["failed_from"], state.U_PENDING)
+            self.assertEqual(pending_inserted["status"], state.U_PENDING)
+
+    def test_nonfatal_stabilizer_retry_persists_each_fallback(self):
+        with tempfile.TemporaryDirectory(
+            prefix="orch-author-stabilizer-fallback-"
+        ) as workspace:
+            runner = runners.MockRunner([
+                {"expect_kind": "implement", "response": {"attempt": 1}},
+                {"expect_kind": "implement", "response": {"attempt": 2}},
+                {"expect_kind": "implement", "response": {"attempt": 3}},
+            ])
+            _path, subject = self._subject(workspace, runner)
+            attempts = []
+
+            def prepare(_error):
+                attempt = len(attempts) + 1
+                attempts.append(attempt)
+
+                def validate(reply):
+                    if reply.get("attempt") < 3:
+                        raise contracts.ContractError("invalid attempt")
+                    return reply
+
+                return author_calls.PreparedAuthorCall(
+                    "KIND: implement\nATTEMPT: %d\n" % attempt,
+                    validate,
+                    "rung-%d" % attempt,
+                    None,
+                )
+
+            output, result, _raw_path = subject._call(
+                "codex",
+                "legacy prompt",
+                contracts.KIND_IMPLEMENT,
+                "stabilizer-fallback",
+                repeat_protocol=True,
+                prepare_call=prepare,
+            )
+
+            self.assertEqual(output, {"attempt": 3})
+            incident = next(
+                event for event in subject.state["events"]
+                if event.get("stabilizer_retry")
+            )
+            self.assertFalse(incident["fatal"])
+            self.assertEqual(
+                [
+                    dispatch["prompt_set_fallback"]
+                    for dispatch in incident["physical_dispatches"]
+                ],
+                ["rung-1", "rung-2"],
+            )
+            self.assertEqual(result.prompt_set_fallback, "rung-3")
+
+    def test_rethink_origin_persists_its_fallback_sidecar(self):
+        with tempfile.TemporaryDirectory(prefix="orch-author-rethink-") as ws:
+            state_path, subject = self._subject(ws, runners.MockRunner([]))
+            result = runners.RunnerResult("{}", 0, 1.0)
+            result.prompt_set_fallback = "rung-1"
+            result.session_ref = "provider-session"
+            checked = {
+                "status": "need_rethink",
+                "kind": contracts.KIND_IMPLEMENT,
+                "request": "Resolve one bounded question.",
+                "finding": {"id": "F1", "summary": "Question"},
+                "target_path": "proposal.md",
+                "max_rounds": 20,
+                "result_mode": "proposal",
+            }
+            created = {
+                "id": "bs-fallback",
+                "state": {
+                    "completed_turns": [],
+                    "rounds_used": 0,
+                    "recovery_baseline_revision": "baseline",
+                    "accepted_target_revision": None,
+                },
+            }
+            with mock.patch.object(
+                driver.brainstorming_milestone,
+                "validate_origin_signal",
+                return_value=checked,
+            ), mock.patch.object(
+                driver.brainstorming_milestone,
+                "create_session",
+                return_value=created,
+            ):
+                subject._start_rethink(
+                    state.current_unit(subject.state),
+                    contracts.KIND_IMPLEMENT,
+                    "codex",
+                    None,
+                    None,
+                    checked,
+                    result,
+                    "raw/origin.txt",
+                    "origin",
+                )
+
+            reloaded = state.load(state_path)
+            origin = next(
+                event for event in reloaded["events"]
+                if event["type"] == "brainstorming_origin_recorded"
+            )
+            self.assertEqual(origin["prompt_set_fallback"], "rung-1")
+            self.assertEqual(
+                state.current_unit(reloaded)["brainstorming_wait"]["origin"][
+                    "prompt_set_fallback"
+                ],
+                "rung-1",
+            )
+
+    def test_preparation_faults_stop_without_worker_incidents_or_classifier(self):
+        cases = (
+            ("prompt", ValueError("stored prompt is unreadable")),
+            ("standing-law", verifiers.PolicyConfigError("policy collision")),
+        )
+        for label, fault in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory(
+                prefix="orch-author-preparation-"
+            ) as ws:
+                runner = runners.MockRunner([])
+                state_path, subject = self._subject(ws, runner)
+
+                def unexpected_classifier(*_args, **_kwargs):
+                    self.fail("pre-dispatch preparation reached classification")
+
+                subject._classify_failure = unexpected_classifier
+
+                def prepare(_error):
+                    raise fault
+
+                with self.assertRaises(driver.StopStep):
+                    subject._call(
+                        "codex",
+                        "legacy prompt",
+                        contracts.KIND_IMPLEMENT,
+                        "preparation-fault",
+                        prepare_call=prepare,
+                    )
+
+                reloaded = state.load(state_path)
+                self.assertEqual(reloaded["failure"]["type"], "orchestrator")
+                self.assertIn(str(fault), reloaded["failure"]["reason"])
+                self.assertEqual(runner.calls, [])
+                self.assertFalse(any(
+                    event["type"] in (
+                        "worker_malformed",
+                        "worker_unaccepted",
+                        "error_classifier_call",
+                    )
+                    for event in reloaded["events"]
+                ))
 
 
 class PhysicalPreparationTest(unittest.TestCase):

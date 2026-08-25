@@ -53,6 +53,10 @@ CANONICAL_MEMBERS = (
 
 PROMPT_SET_FALLBACK_DEFAULT = "stored_default"
 PROMPT_SET_FALLBACK_SEED = "in_code_seed"
+PROMPT_SET_FALLBACKS = (
+    PROMPT_SET_FALLBACK_DEFAULT,
+    PROMPT_SET_FALLBACK_SEED,
+)
 
 PromptSet = collections.namedtuple("PromptSet", ("name", "documents"))
 Resolution = collections.namedtuple(

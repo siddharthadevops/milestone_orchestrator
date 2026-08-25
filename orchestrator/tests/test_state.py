@@ -493,6 +493,19 @@ class TestPlanOrderNavigation(TempWorkspaceCase):
         self.assertIsNone(st.current_unit(state))
         self.assertTrue(st.maybe_close_milestone(state))
 
+    def test_plan_changing_author_is_reviewed_before_new_plan_navigation(self):
+        state = self._state_with_pre_created_units()
+        author = st.current_unit(state)
+        author[st.AUTHOR_PLAN_REVIEW_KEY] = True
+        state["milestone"]["slices"] = []
+
+        self.assertIs(st.current_unit(state), author)
+        self.assertFalse(st.maybe_close_milestone(state))
+
+        author["status"] = st.U_SEALED
+        self.assertIsNone(st.current_unit(state))
+        self.assertTrue(st.maybe_close_milestone(state))
+
 
 class TestSequentialImplementationParts(TempWorkspaceCase):
     def _pending_impl(self, n_slices=1):

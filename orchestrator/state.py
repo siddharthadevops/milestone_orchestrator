@@ -482,6 +482,7 @@ def append_event(state, etype, **data):
 #: none — never present-null, exactly as `project` is — so a pre-router state
 #: document gains nothing and "is this run bound?" is one key test.
 STAFFING_SESSION_KEY = "staffing_session"
+AUTHOR_PLAN_REVIEW_KEY = "author_plan_review_required"
 
 
 def staffing_session(state):
@@ -517,6 +518,21 @@ def current_unit(state):
     whose slice is no longer in the plan is never current, mirroring
     closure (it does not block the milestone). None when the plan is
     fully sealed."""
+    # A direct author can validly edit the plan so its own unit is no longer
+    # present. Keep that accepted delta on the ordinary review/seal path; an
+    # insertion or reorder still follows the new plan's delivery order.
+    author_review = [
+        unit for unit in state["units"]
+        if unit.get(AUTHOR_PLAN_REVIEW_KEY) is True
+        and unit.get("status") not in (U_SEALED, U_REPAIRING)
+    ]
+    if len(author_review) > 1:
+        raise IllegalTransition(
+            "multiple plan-changing author units require review"
+        )
+    if author_review:
+        return author_review[0]
+
     by_key = {unit_identity(u): u for u in state["units"]}
     for key in planned_execution_units(state):
         unit = by_key.get(key)
@@ -852,12 +868,17 @@ def set_discovered_suite(state, command, replace=False):
 def record_draft(state, unit, kind, result, raw_path=None, family=None,
                  duration=None, model=None, effort=None, token_usage=None,
                  token_usage_partial=False, cost=None, cost_partial=False,
-                 task_id=None):
+                 task_id=None, prompt_set_fallback=None):
     """Write-once record of the unit's draft/implement call."""
     if task_id is not None and (
         not isinstance(task_id, str) or not task_id
     ):
         raise IllegalTransition("task_id must be a non-empty string")
+    if (
+        prompt_set_fallback is not None
+        and prompt_set_fallback not in prompt_sets.PROMPT_SET_FALLBACKS
+    ):
+        raise IllegalTransition("invalid prompt-set fallback")
     if unit["status"] != U_PENDING:
         raise IllegalTransition(
             "unit %s: draft can only be recorded from pending (is %s)"
@@ -897,6 +918,8 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         unit["draft"]["cost_partial"] = True
     if task_id is not None:
         unit["draft"]["task_id"] = task_id
+    if prompt_set_fallback is not None:
+        unit["draft"]["prompt_set_fallback"] = prompt_set_fallback
     unit["artifact"] = result.get("artifact")
     # Keep the lightweight implementation/draft history in the immutable
     # ledger too. A unit can exceptionally be reset to pending after a
@@ -921,6 +944,10 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         ),
         **({"cost": copy.deepcopy(cost)} if cost is not None else {}),
         **({"task_id": task_id} if task_id is not None else {}),
+        **(
+            {"prompt_set_fallback": prompt_set_fallback}
+            if prompt_set_fallback is not None else {}
+        ),
     )
     return unit["draft"]
 
@@ -1390,6 +1417,12 @@ def close_slice(state, unit):
 def maybe_close_milestone(state):
     if state["milestone"]["status"] == M_CLOSED:
         return True  # idempotent: never records milestone_closed twice
+    if any(
+        unit.get(AUTHOR_PLAN_REVIEW_KEY) is True
+        and unit.get("status") not in (U_SEALED, U_REPAIRING)
+        for unit in state["units"]
+    ):
+        return False
     plan = planned_execution_units(state)
     have = {unit_identity(u): u for u in state["units"]}
     for key in plan:
@@ -1942,6 +1975,7 @@ def _draft_history(state, unit):
             "cost_partial": bool(source.get("cost_partial", False)),
             "at": source.get("at"),
             "raw_path": source.get("raw_path"),
+            "prompt_set_fallback": source.get("prompt_set_fallback"),
             "current": is_current,
         })
     if current and not current_matched:
@@ -1960,6 +1994,7 @@ def _draft_history(state, unit):
             "cost_partial": bool(current.get("cost_partial", False)),
             "at": current.get("at"),
             "raw_path": current.get("raw_path"),
+            "prompt_set_fallback": current.get("prompt_set_fallback"),
             "current": True,
         })
     return records
@@ -2603,6 +2638,15 @@ def summary(state, acts_overlay=None, current_review_model=None):
                             and draft.get("task_id")
                             else {}
                         ),
+                        **(
+                            {
+                                "prompt_set_fallback": draft.get(
+                                    "prompt_set_fallback"
+                                )
+                            }
+                            if draft.get("prompt_set_fallback") is not None
+                            else {}
+                        ),
                     }
                     for draft in draft_history
                 ],
@@ -2634,6 +2678,15 @@ def summary(state, acts_overlay=None, current_review_model=None):
                             {"task_id": u["draft"].get("task_id")}
                             if isinstance(u["draft"].get("task_id"), str)
                             and u["draft"].get("task_id")
+                            else {}
+                        ),
+                        **(
+                            {
+                                "prompt_set_fallback": u["draft"].get(
+                                    "prompt_set_fallback"
+                                )
+                            }
+                            if u["draft"].get("prompt_set_fallback") is not None
                             else {}
                         ),
                     }

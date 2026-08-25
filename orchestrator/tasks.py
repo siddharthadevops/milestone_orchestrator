@@ -10,7 +10,8 @@ import math
 import os
 import uuid
 
-from orchestrator import brainstorming, contracts, kvstore, staffing
+from orchestrator import brainstorming, contracts, kvstore, prompt_sets
+from orchestrator import staffing
 from orchestrator import state as st
 
 
@@ -1020,7 +1021,14 @@ def task_accounting(state, task_id):
     }
 
 
-def worker_result(state, task_id, native_result, status="success", reason=None):
+def worker_result(
+    state,
+    task_id,
+    native_result,
+    status="success",
+    reason=None,
+    prompt_set_fallback=None,
+):
     """Build a terminal Worker envelope from its existing linked evidence."""
     accounting = task_accounting(state, task_id)
     result = {
@@ -1032,6 +1040,8 @@ def worker_result(state, task_id, native_result, status="success", reason=None):
         result["reason"] = reason
     elif reason is not None:
         raise ContractError("a successful Worker task cannot carry a reason")
+    if prompt_set_fallback is not None:
+        result["prompt_set_fallback"] = prompt_set_fallback
     return validate_result(result)
 
 
@@ -1079,7 +1089,7 @@ def validate_result(result):
             "cost_partial",
             "native_result",
         ),
-        ("reason",),
+        ("reason", "prompt_set_fallback"),
         "task result",
     )
     status = result["status"]
@@ -1133,6 +1143,11 @@ def validate_result(result):
             result["native_result"], "task result.native_result"
         ),
     }
+    fallback = result.get("prompt_set_fallback")
+    if fallback is not None:
+        if fallback not in prompt_sets.PROMPT_SET_FALLBACKS:
+            raise ContractError("task result.prompt_set_fallback is invalid")
+        checked["prompt_set_fallback"] = fallback
     if status == "failure":
         checked["reason"] = reason
     return _json_copy(checked, "task result")

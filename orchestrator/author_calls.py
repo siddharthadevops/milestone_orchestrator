@@ -93,6 +93,14 @@ def prepare(
         charge_values["implementation_scope"] = (
             implementation_scope.rstrip("\n")
         )
+    amendments_block = charge_values.get("operator_amendments")
+    if amendments_block is not None and (
+        not isinstance(amendments_block, str)
+        or not amendments_block.strip()
+    ):
+        raise prompt_router.PromptRouterError(
+            "operator_amendments must be a non-empty block"
+        )
     frozen_extensions = ()
     frozen_roots = ()
     authority_body = None
@@ -164,6 +172,13 @@ def prepare(
         if implementation_scope is None and scope_is_mounted:
             raise prompt_sets.PromptSetError(
                 "routed implementation prompt invents a current part scope"
+            )
+        if (
+            amendments_block is not None
+            and amendments_block not in rendered_prompt
+        ):
+            raise prompt_sets.PromptSetError(
+                "routed author prompt omits current operator authority"
             )
         if (
             frozen_extensions

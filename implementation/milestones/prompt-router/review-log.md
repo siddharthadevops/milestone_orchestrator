@@ -397,3 +397,55 @@
 - `codex-S05B-CODEX-002` (raised codex, cleared codex): The amended source goal still prescribes two B1-retired compatibility lanes. — The goal states both retired behaviors incorrectly, but the skeleton repeatedly and explicitly supersedes them, making silent adoption by the named builder unlikely; if adopted, removing the resulting routes and legacy-resume handling is bounded rework caught during their owning slices.
 - `codex-codex-S05B-CODEX-003` (raised codex, cleared codex): Reviewed notes cite obsolete source ranges — The stale ranges are navigation metadata, while the pinned guarantees remain correct; a capable builder will immediately find the named resolver or stop, and correction only requires locally re-pinning the citations.
 
+## slice_impl-05-c (Milestone author-call cutover)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-c-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-codex-r1.txt` |
+| slice_impl-05-c-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix1.txt` |
+| slice_impl-05-c-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta1.txt` |
+| slice_impl-05-c-codex-r4 | review_round | codex | 3 | 3 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-codex-r2.txt` |
+| slice_impl-05-c-codex-r5 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix2.txt` |
+| slice_impl-05-c-codex-r6 | delta_review | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta2.txt` |
+| slice_impl-05-c-codex-r7 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix3.txt` |
+| slice_impl-05-c-codex-r8 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta3.txt` |
+| slice_impl-05-c-codex-r9 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix4.txt` |
+| slice_impl-05-c-codex-r10 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta4.txt` |
+| slice_impl-05-c-codex-r11 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix5.txt` |
+| slice_impl-05-c-codex-r12 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta5.txt` |
+| slice_impl-05-c-codex-r13 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-codex-r3.txt` |
+| slice_impl-05-c-codex-r14 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix6.txt` |
+| slice_impl-05-c-codex-r15 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta6.txt` |
+| slice_impl-05-c-codex-r16 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix7.txt` |
+| slice_impl-05-c-codex-r17 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta7.txt` |
+| slice_impl-05-c-codex-r18 | review_round | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-codex-r4.txt` |
+| slice_impl-05-c-codex-r19 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix8.txt` |
+| slice_impl-05-c-codex-r20 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta8.txt` |
+| slice_impl-05-c-codex-r21 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix9.txt` |
+| slice_impl-05-c-codex-r22 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta9.txt` |
+| slice_impl-05-c-codex-r23 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix10.txt` |
+| slice_impl-05-c-codex-r24 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta10.txt` |
+| slice_impl-05-c-codex-r25 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix11.txt` |
+| slice_impl-05-c-codex-r26 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta11.txt` |
+| slice_impl-05-c-codex-r27 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-codex-r5.txt` |
+| slice_impl-05-c-codex-r28 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix12.txt` |
+| slice_impl-05-c-codex-r29 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta12.txt` |
+| slice_impl-05-c-codex-r30 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix13.txt` |
+| slice_impl-05-c-codex-r31 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta13.txt` |
+| slice_impl-05-c-codex-r32 | review_round | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-codex-r6.txt` |
+| slice_impl-05-c-codex-r33 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix14.txt` |
+| slice_impl-05-c-codex-r34 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta14.txt` |
+| slice_impl-05-c-codex-r35 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix15.txt` |
+| slice_impl-05-c-codex-r36 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta15.txt` |
+| slice_impl-05-c-codex-r37 | review_round | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-codex-r7.txt` |
+| slice_impl-05-c-codex-r38 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-fix16.txt` |
+| slice_impl-05-c-codex-r39 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-delta16.txt` |
+| slice_impl-05-c-codex-r40 | review_round | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-c-codex-r8.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-c-codex-r40`
+

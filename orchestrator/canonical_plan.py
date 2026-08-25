@@ -3,7 +3,6 @@
 This module is deliberately not a Markdown parser.  It recognizes the one
 reviewed heading/fence form, validates the closed JSON contract, projects it
 through the existing TaskExecutor catalogue, and anchors accepted bytes to Git.
-Live callers adopt the boundary in later slices.
 """
 
 from __future__ import annotations
@@ -124,16 +123,27 @@ def _extract(document):
     )
     if close is None:
         raise CanonicalPlanError("canonical-plan JSON fence is not closed")
+    block = b"".join(lines[heading:close + 1])
+    start = sum(len(line) for line in lines[:heading])
     return (
-        b"".join(lines[heading:close + 1]),
+        block,
         b"".join(lines[heading + 2:close]),
+        (start, start + len(block)),
     )
 
 
 def canonical_block_bytes(document):
     """Return the exact authoritative heading, fence, and payload bytes."""
-    block, _payload = _extract(document)
+    block, _payload, _span = _extract(document)
     return block
+
+
+def preserve_canonical_block(baseline_document, accepted_document):
+    """Return sealed baseline bytes carrying only the accepted plan block."""
+    baseline = _document_bytes(baseline_document)
+    _baseline_block, _payload, (start, end) = _extract(baseline)
+    accepted_block = canonical_block_bytes(accepted_document)
+    return baseline[:start] + accepted_block + baseline[end:]
 
 
 def _pairs(pairs):
@@ -257,11 +267,13 @@ def validate_canonical_plan(document, anchored_document=None):
     A retired executor spelling is readable only when it is byte-for-byte the
     spelling for the same slice id and producer in the anchored prior block.
     """
-    block, payload = _extract(document)
+    block, payload, _span = _extract(document)
     slices = _shape(payload)
     anchored_slices = None
     if anchored_document is not None:
-        _anchored_block, anchored_payload = _extract(anchored_document)
+        _anchored_block, anchored_payload, _anchored_span = _extract(
+            anchored_document
+        )
         anchored_slices = _shape(anchored_payload)
     return {
         "block": block,
@@ -540,47 +552,53 @@ def complete_author_call(state, snapshot, *, message="canonical plan accepted"):
     return {"changed": True, "anchor": copy.deepcopy(anchor)}
 
 
-def anchor_current_plan(state_path, skeleton_path):
-    """Atomically project and Git-anchor the plan committed at current HEAD."""
+def establish_current_plan(state, skeleton_path):
+    """Project and Git-anchor the plan committed at current HEAD."""
     skeleton_path = _relative_path(skeleton_path)
+    workspace = state.get("workspace")
+    if not isinstance(workspace, str) or not workspace:
+        raise CanonicalPlanError("run state has no workspace")
+    revision = gitops.head_full_sha(workspace)
+    if gitops.show_file_mode(
+        workspace, revision, skeleton_path
+    ) not in ("100644", "100755"):
+        raise CanonicalPlanError(
+            "current Git revision does not contain a regular skeleton file"
+        )
+    document = gitops.show_file(workspace, revision, skeleton_path)
+    if document is None:
+        raise CanonicalPlanError(
+            "current Git revision does not contain the canonical skeleton"
+        )
+    previous = _anchor(state)
+    anchored_document = None
+    if previous is not None:
+        if previous["path"] != skeleton_path:
+            raise CanonicalPlanError("canonical-plan anchor path cannot change")
+        anchored_document = _anchored_document(state, previous)
+        if canonical_block_bytes(document) == canonical_block_bytes(
+            anchored_document
+        ):
+            gitops.pin_canonical_plan_commit(
+                workspace, skeleton_path, previous["revision"]
+            )
+            return copy.deepcopy(previous)
+
+    plan = validate_canonical_plan(document, anchored_document)
+    anchor = {"path": skeleton_path, "revision": revision}
+    gitops.pin_canonical_plan_commit(workspace, skeleton_path, revision)
+    state["milestone"]["slices"] = plan["projection"]
+    state["milestone"][ANCHOR_KEY] = anchor
+    return copy.deepcopy(anchor)
+
+
+def anchor_current_plan(state_path, skeleton_path):
+    """Atomically establish the current committed canonical plan."""
     with st.exclusive_mutation(state_path, wait=True):
         state = st.load(state_path)
-        workspace = state.get("workspace")
-        if not isinstance(workspace, str) or not workspace:
-            raise CanonicalPlanError("run state has no workspace")
-        revision = gitops.head_full_sha(workspace)
-        if gitops.show_file_mode(
-            workspace, revision, skeleton_path
-        ) not in ("100644", "100755"):
-            raise CanonicalPlanError(
-                "current Git revision does not contain a regular skeleton file"
-            )
-        document = gitops.show_file(workspace, revision, skeleton_path)
-        if document is None:
-            raise CanonicalPlanError(
-                "current Git revision does not contain the canonical skeleton"
-            )
-        previous = _anchor(state)
-        anchored_document = None
-        if previous is not None:
-            if previous["path"] != skeleton_path:
-                raise CanonicalPlanError("canonical-plan anchor path cannot change")
-            anchored_document = _anchored_document(state, previous)
-            if canonical_block_bytes(document) == canonical_block_bytes(
-                anchored_document
-            ):
-                gitops.pin_canonical_plan_commit(
-                    workspace, skeleton_path, previous["revision"]
-                )
-                return copy.deepcopy(previous)
-
-        plan = validate_canonical_plan(document, anchored_document)
-        anchor = {"path": skeleton_path, "revision": revision}
-        gitops.pin_canonical_plan_commit(workspace, skeleton_path, revision)
-        state["milestone"]["slices"] = plan["projection"]
-        state["milestone"][ANCHOR_KEY] = anchor
+        anchor = establish_current_plan(state, skeleton_path)
         st.save(state_path, state)
-        return copy.deepcopy(anchor)
+        return anchor
 
 
 def guarded_dispatch(

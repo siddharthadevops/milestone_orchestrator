@@ -381,18 +381,19 @@ verification is the direct `suite_checkpoint` call instead.
 
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
-| skeleton | reviewed | 2 | satisfied | 9b129a7 |
+| skeleton | reviewed | 2 | satisfied | 345c6f4 |
 | slice_doc-01 (Prompt-set store and seed fallback) | reviewed | 2 | satisfied | 9b129a7 |
 | slice_impl-01-a (Prompt-set store and seed fallback) | reviewed | 13 | satisfied | 68e70a8 |
 | slice_impl-01-b (Prompt-set store and seed fallback) | reviewed | 2 | satisfied | 266e27e |
 | slice_doc-02 (Charge resolver and assembled JSON) | reviewed | 9 | satisfied | 9b129a7 |
 | slice_impl-02-a (Charge resolver and assembled JSON) | reviewed | 6 | satisfied | d4f1214 |
 | slice_impl-02-b (Charge resolver and assembled JSON) | reviewed | 1 | satisfied | 922859b |
-| slice_doc-03 (Registered contracts and QUESTIONS) | reviewed | 1 | satisfied | ad8976c |
+| slice_doc-03 (Registered contracts and QUESTIONS) | reviewed | 1 | satisfied | 345c6f4 |
 | slice_impl-03-a (Registered contracts and QUESTIONS) | reviewed | 19 | satisfied | aa2e8bb |
 | slice_impl-03-b (Registered contracts and QUESTIONS) | reviewed | 4 | satisfied | 5cd2006 |
 | slice_doc-04 (Prompt-set binding and operator surface) | reviewed | 1 | satisfied | 7094ec9 |
 | slice_impl-04 (Prompt-set binding and operator surface) | reviewed | 4 | satisfied | 0f0466e |
-| slice_doc-05 (Milestone author-call cutover) | reviewed | 9 | satisfied | 3715307 |
+| slice_doc-05 (Milestone author-call cutover) | reviewed | 9 | satisfied | 345c6f4 |
 | slice_impl-05-a (Milestone author-call cutover) | reviewed | 37 | satisfied | 929a86f |
-| slice_impl-05-b (Milestone author-call cutover) | reviewed | 50 | satisfied | - |
+| slice_impl-05-b (Milestone author-call cutover) | reviewed | 50 | satisfied | 345c6f4 |
+| slice_impl-05-c (Milestone author-call cutover) | reviewed | 40 | satisfied | - |

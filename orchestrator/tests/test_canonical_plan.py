@@ -55,6 +55,27 @@ def changed(source, operation):
 
 
 class CanonicalPlanContractTest(unittest.TestCase):
+    def test_block_preservation_replaces_only_the_authoritative_span(self):
+        old = document([slice_plan(title="Old")])
+        new = document([slice_plan(title="New")])
+        inert_example = (
+            b"````markdown\n"
+            + canonical_plan.canonical_block_bytes(old)
+            + b"\n````\n\n"
+        )
+        baseline = inert_example + old
+        accepted = inert_example + new
+
+        preserved = canonical_plan.preserve_canonical_block(
+            baseline, accepted
+        )
+
+        self.assertEqual(preserved, inert_example + new)
+        self.assertEqual(
+            canonical_plan.canonical_block_bytes(preserved),
+            canonical_plan.canonical_block_bytes(new),
+        )
+
     def test_canonical_plan_block_and_closed_schema(self):
         slices = [slice_plan()]
         valid = document(slices)

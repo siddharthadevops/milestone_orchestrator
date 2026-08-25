@@ -4,6 +4,30 @@ from pathlib import Path
 import tempfile
 import unittest
 from orchestrator import contracts, prompt_contracts, prompt_router, prompt_sets
+
+
+def validation_values(prompt_set):
+    names = set()
+    fixed = {"kind", "role"}
+
+    def walk(value):
+        if isinstance(value, dict):
+            for item in value.get("variables", ()):
+                if isinstance(item, dict) and isinstance(item.get("name"), str):
+                    names.add(item["name"])
+            defaults = value.get("defaults")
+            if isinstance(defaults, dict):
+                fixed.update(defaults)
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(prompt_set.documents)
+    return {name: "validation value" for name in names - fixed}
+
+
 def section(section_id):
     return {"id": section_id, "text": ["Contract %s" % section_id],
             "variables": []}
@@ -294,7 +318,7 @@ class PromptContractsTest(unittest.TestCase):
 
     def test_mounted_questions_are_present_in_every_reply(self):
         seed = prompt_sets.default_seed()
-        values = prompt_router._validation_values(seed)
+        values = validation_values(seed)
         values.pop("task_executor_catalogue", None)
         charges = (
             {"job": "implement@slice_impl", "executor": "agent_call"},
@@ -343,7 +367,7 @@ class PromptContractsTest(unittest.TestCase):
 
     def test_reclassify_mounted_questions_are_mandatory(self):
         seed = prompt_sets.default_seed()
-        values = prompt_router._validation_values(seed)
+        values = validation_values(seed)
         values.pop("task_executor_catalogue", None)
         assembled = prompt_router.assemble(
             seed,

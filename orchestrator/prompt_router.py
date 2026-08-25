@@ -386,114 +386,25 @@ def _assemble(
     }
 
 
-def _validation_values(prompt_set):
-    names = set()
-    fixed = {"kind", "role"}
-
-    def walk(value):
-        if isinstance(value, dict):
-            for item in value.get("variables", ()):
-                if isinstance(item, dict) and isinstance(item.get("name"), str):
-                    names.add(item["name"])
-            defaults = value.get("defaults")
-            if isinstance(defaults, dict):
-                fixed.update(defaults)
-            for item in value.values():
-                walk(item)
-        elif isinstance(value, list):
-            for item in value:
-                walk(item)
-
-    walk(prompt_set.documents)
+def _validate_mounted_route(prompt):
+    """Reject retired controls only when the selected route mounts them."""
+    names = {
+        declaration.get("name")
+        for unit in prompt["instructions"] + prompt["output_contract"]
+        for declaration in unit["variables"]
+    }
     forbidden = sorted(names & _FORBIDDEN_VALUES)
     if forbidden:
-        raise prompt_sets.PromptSetError(
-            "prompt set declares caller-forbidden variable %r" % forbidden[0]
-        )
-    return {name: "validation value" for name in names - fixed}
-
-
-def _validate_part_mounts(document, routes, ctx):
-    for section, key in (
-        ("instructions", "parts"),
-        ("output_contract", "sections"),
-    ):
-        for index, part in enumerate(document[section][key]):
-            if "mount" not in part:
-                continue
-            if not any(_mounted(part, route.mount_tags) for route in routes):
-                raise prompt_sets.PromptSetError(
-                    "%s.%s.%s[%d].mount cannot match a canonical route"
-                    % (ctx, section, key, index)
-                )
-
-
-def _validate_mount_reachability(prompt_set, charges):
-    routes_by_kind = collections.defaultdict(list)
-    routes_by_job = collections.defaultdict(list)
-    for job, route, _role in charges:
-        routes_by_kind[route.kind].append(route)
-        routes_by_job[job].append(route)
-
-    for member in prompt_sets.CANONICAL_MEMBERS[1:]:
-        kind = member.rsplit("/", 1)[1][:-5]
-        _validate_part_mounts(
-            prompt_set.documents[member], routes_by_kind[kind], member
+        raise PromptRouterError(
+            "mounted route declares caller-forbidden variable %r"
+            % forbidden[0]
         )
 
-    layers = prompt_set.documents["shared/shared.json"]["material_layers"]
-    for job, materials in layers.items():
-        for material, layer in materials.items():
-            _validate_part_mounts(
-                layer,
-                routes_by_job[job],
-                "shared/shared.json.material_layers.%s.%s" % (job, material),
-            )
 
-
-def _validate_routable(prompt_set):
-    values = _validation_values(prompt_set)
-    layers = prompt_set.documents["shared/shared.json"]["material_layers"]
-    known_jobs = set(DIRECT_ROUTES) | set(SESSION_JOBS)
-    unknown_jobs = sorted(set(layers) - known_jobs)
-    if unknown_jobs:
-        raise prompt_sets.PromptSetError(
-            "material layers name unknown job %r" % unknown_jobs[0]
-        )
-    try:
-        charges = []
-        for job in DIRECT_ROUTES:
-            route = _route(
-                job, "agent_call", "validation-material", None, None, None
-            )
-            charges.append((job, route, None))
-        for job, declared_target in SESSION_JOBS.items():
-            targets = (
-                ("document", "implementation")
-                if declared_target is None else (None,)
-            )
-            for artifact_type in targets:
-                for role, lead in SEATS:
-                    route = _route(
-                        job, "brainstorming", "validation-material", role,
-                        lead, artifact_type,
-                    )
-                    charges.append((job, route, role))
-
-        _validate_mount_reachability(prompt_set, charges)
-        for job, route, role in charges:
-            route_values = dict(values)
-            if job != "draft_skeleton@skeleton":
-                route_values.pop("task_executor_catalogue", None)
-            materials = {"validation-material"} | set(layers.get(job, {}))
-            for material in materials:
-                _assemble(
-                    prompt_set, route, job, material, route_values, role
-                )
-    except (KeyError, TypeError, PromptRouterError) as exc:
-        raise prompt_sets.PromptSetError(
-            "prompt set cannot assemble every canonical route: %s" % exc
-        ) from exc
+def _assemble_mounted_route(prompt_set, route, job, material, values, role):
+    prompt = _assemble(prompt_set, route, job, material, values, role)
+    _validate_mounted_route(prompt)
+    return prompt
 
 
 def assemble(prompt_set, *, job, executor, material, values, role=None,
@@ -501,8 +412,9 @@ def assemble(prompt_set, *, job, executor, material, values, role=None,
     """Assemble one already selected prompt set without reading storage."""
     route = _route(job, executor, material, role, lead, artifact_type)
     values = _values_for(job, values)
-    _validate_routable(prompt_set)
-    return _assemble(prompt_set, route, job, material, values, role)
+    return _assemble_mounted_route(
+        prompt_set, route, job, material, values, role
+    )
 
 
 def resolve(home, *, job, executor, material, values, prompt_set="default",
@@ -512,26 +424,33 @@ def resolve(home, *, job, executor, material, values, prompt_set="default",
     values = _values_for(job, values)
 
     def validate_selected(candidate):
-        _validate_routable(candidate)
+        defaulted_variables = set()
+        try:
+            prompt = _assemble(
+                candidate,
+                route,
+                job,
+                material,
+                values,
+                role,
+                defaulted_variables,
+            )
+            _validate_mounted_route(prompt)
+        except (KeyError, TypeError, PromptRouterError) as exc:
+            raise prompt_sets.PromptSetError(
+                "prompt set cannot assemble the mounted canonical route: %s"
+                % exc
+            ) from exc
         if prompt_validator is not None:
-            defaulted_variables = set()
             prompt_validator(
-                _assemble(
-                    candidate,
-                    route,
-                    job,
-                    material,
-                    values,
-                    role,
-                    defaulted_variables,
-                ),
+                prompt,
                 frozenset(defaulted_variables),
             )
 
     selected = prompt_sets.resolve(
         home, prompt_set, validator=validate_selected
     )
-    prompt = _assemble(
+    prompt = _assemble_mounted_route(
         selected.prompt_set, route, job, material, values, role
     )
     return Resolution(prompt, selected.prompt_set_fallback)
@@ -627,6 +546,3 @@ def render(prompt, values):
     if not blocks:
         raise PromptRouterError("assembled prompt rendered no text")
     return "\n\n".join(blocks) + "\n"
-
-
-_validate_routable(prompt_sets.default_seed())

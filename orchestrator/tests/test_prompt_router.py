@@ -32,12 +32,35 @@ EXPECTED_GOLDENS = frozenset((
 ))
 
 
+def validation_values(prompt_set):
+    """Supply opaque fixture values for every declaration in the seed."""
+    names = set()
+    fixed = {"kind", "role"}
+
+    def walk(value):
+        if isinstance(value, dict):
+            for item in value.get("variables", ()):
+                if isinstance(item, dict) and isinstance(item.get("name"), str):
+                    names.add(item["name"])
+            defaults = value.get("defaults")
+            if isinstance(defaults, dict):
+                fixed.update(defaults)
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(prompt_set.documents)
+    return {name: "validation value" for name in names - fixed}
+
+
 class PromptRouterTest(unittest.TestCase):
     def setUp(self):
         self.prompt_set = prompt_sets.default_seed()
 
     def values(self, job):
-        values = prompt_router._validation_values(self.prompt_set)
+        values = validation_values(self.prompt_set)
         if job != "draft_skeleton@skeleton":
             values.pop("task_executor_catalogue", None)
         return values
@@ -520,12 +543,6 @@ class PromptRouterTest(unittest.TestCase):
         })
         defects["conditional_catalogue_variable"] = conditional_catalogue
 
-        unreachable_mount = copy.deepcopy(self.prompt_set.documents)
-        unreachable_mount["milestone/implement.json"]["instructions"][
-            "parts"
-        ][0]["mount"] = ["role:initial_position"]
-        defects["document_specific_unreachable_mount"] = unreachable_mount
-
         for defect, documents in defects.items():
             with self.subTest(defect=defect):
                 with tempfile.TemporaryDirectory(
@@ -552,11 +569,6 @@ class PromptRouterTest(unittest.TestCase):
                     self.assertEqual(resolution.prompt["kind"], "implement")
 
     def test_routing_and_layer_defects_fall_named_to_default_to_seed(self):
-        def malformed_selector(documents):
-            del documents["brainstorming/discussion_turn.json"]["variants"][
-                "role_stance"
-            ]["contrary_position"]
-
         def malformed_layer(documents):
             documents["shared/shared.json"]["material_layers"][
                 "implement@slice_impl"
@@ -575,7 +587,6 @@ class PromptRouterTest(unittest.TestCase):
             ] = "implement_result"
 
         defects = {
-            "missing_canonical_selector": malformed_selector,
             "malformed_layer": malformed_layer,
             "duplicate_question_id": duplicate_question_id,
             "duplicate_contract_id": duplicate_contract_id,
@@ -655,6 +666,41 @@ class PromptRouterTest(unittest.TestCase):
                     self.assertNotIn(
                         "prompt_set_fallback", json.dumps(selected.prompt)
                     )
+
+    def test_unrelated_route_defaults_do_not_replace_the_named_rung(self):
+        named_marker = "[[named-implement]]"
+        documents = self.marked_documents(named_marker)
+        documents["shared/shared.json"]["units"]["unrelated_route_tone"] = {
+            "text": ["Route tone: {{route_tone}}"],
+            "variables": [{"name": "route_tone", "required": True}],
+        }
+        documents["milestone/review_round.json"]["instructions"][
+            "parts"
+        ].append({
+            "ref": "unrelated_route_tone",
+            "defaults": {"route_tone": "measured"},
+        })
+        documents["milestone/suite_checkpoint.json"]["instructions"][
+            "parts"
+        ].append({"ref": "unrelated_route_tone"})
+
+        with tempfile.TemporaryDirectory(
+            prefix="orch-prompt-router-mounted-route-"
+        ) as home:
+            prompt_sets.ensure_default(home)
+            self.write_set(home, "operator", documents)
+
+            selected = prompt_router.resolve(
+                home,
+                prompt_set="operator",
+                job="implement@slice_impl",
+                executor="agent_call",
+                material="code",
+                values=self.values("implement@slice_impl"),
+            )
+
+        self.assertIsNone(selected.prompt_set_fallback)
+        self.assert_prompt_marked(selected.prompt, named_marker)
 
     def test_resolution_reads_completed_edits_fresh_and_freezes_answers(self):
         job = "implement@slice_impl"

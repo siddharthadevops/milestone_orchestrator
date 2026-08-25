@@ -66,6 +66,10 @@ class RunnerError(RuntimeError):
     with no usable output)."""
 
 
+class PromptPreparationError(RunnerError):
+    """A routed call could not be prepared before provider dispatch."""
+
+
 class ProviderResponseError(RunnerError):
     """The CLI returned a structured provider failure, not an answer."""
 
@@ -2947,24 +2951,28 @@ def call_worker(runner, family, prompt, kind, workspace,
             exc.provider_dispatch_started = False
             raise
         except Exception as exc:
-            error = RunnerError("worker prompt preparation failed: %s" % exc)
+            error = PromptPreparationError(
+                "worker prompt preparation failed: %s" % exc
+            )
             error.provider_dispatch_started = False
             error.call_boundary_failure = bool(
                 getattr(exc, "call_boundary_failure", False)
             )
             raise error from exc
         if not isinstance(call_prompt, str) or not call_prompt.strip():
-            error = RunnerError("worker prompt preparation returned no text")
+            error = PromptPreparationError(
+                "worker prompt preparation returned no text"
+            )
             error.provider_dispatch_started = False
             raise error
         if not callable(call_validate):
-            error = RunnerError(
+            error = PromptPreparationError(
                 "worker prompt preparation returned no validator"
             )
             error.provider_dispatch_started = False
             raise error
         if complete is not None and not callable(complete):
-            error = RunnerError(
+            error = PromptPreparationError(
                 "worker prompt preparation returned no completion boundary"
             )
             error.provider_dispatch_started = False
@@ -3110,7 +3118,8 @@ def call_worker(runner, family, prompt, kind, workspace,
 
     def invoke(call_prompt, continuation_ref=None,
                call_control=active_control,
-               continuation_bound_family=continuation_family):
+               continuation_bound_family=continuation_family,
+               prompt_set_fallback=None):
         call_family, call_model, call_effort = family, model, effort
         if resolve_dispatch is not None:
             try:
@@ -3132,7 +3141,12 @@ def call_worker(runner, family, prompt, kind, workspace,
             call_prompt = current_family_prompt(call_prompt, call_family)
         if on_dispatch is not None:
             try:
-                on_dispatch(call_family, call_model, call_effort)
+                on_dispatch(
+                    call_family,
+                    call_model,
+                    call_effort,
+                    prompt_set_fallback,
+                )
             except Exception as exc:
                 error = RunnerError(
                     "provider dispatch could not update its call marker: %s"
@@ -3239,7 +3253,12 @@ def call_worker(runner, family, prompt, kind, workspace,
     )
     try:
         result = attach_preparation(
-            invoke(first_prompt, continuation_ref=session_ref), first_fallback
+            invoke(
+                first_prompt,
+                continuation_ref=session_ref,
+                prompt_set_fallback=first_fallback,
+            ),
+            first_fallback,
         )
         complete_attempt(first_complete, result)
     except RunnerError as exc:
@@ -3294,6 +3313,7 @@ def call_worker(runner, family, prompt, kind, workspace,
                 continuation_bound_family=getattr(
                     result, "resolved_family", family
                 ),
+                prompt_set_fallback=repair_fallback,
             ),
             repair_fallback,
         )
