@@ -1237,6 +1237,9 @@ KIND_OUTPUT_KEYS = {
             "retry_reason", "brainstorming_application",
         }
     ),
+    KIND_RECLASSIFY: frozenset(
+        {"drift_risk", "drift_damage", "reason", "questions"}
+    ),
 }
 
 

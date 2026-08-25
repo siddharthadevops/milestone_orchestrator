@@ -368,7 +368,11 @@ def _questions(obj, bound, options, ctx):
                 "%s: duplicate question id %r" % (actx, question_id)
             )
         seen.add(question_id)
-        _text(answer, "answer", actx)
+        text = _text(answer, "answer", actx)
+        if len(text) > 300:
+            raise contracts.ContractError(
+                "%s.answer must be at most 300 characters" % actx
+            )
     missing = [question_id for question_id in expected if question_id not in seen]
     if missing:
         raise contracts.ContractError(
@@ -707,13 +711,13 @@ def _allowed_fields(bound, obj):
     return allowed
 
 
-def _validate_fields(bound, obj):
+def _validate_fields(bound, obj, extension_fields=()):
     mounted = set(bound.registered_section_ids)
     if not mounted.intersection(_FIELD_CONTRACT_SECTIONS):
         return
     allowed = _allowed_fields(bound, obj)
     if mounted.intersection(_STRICT_FIELD_SECTIONS):
-        unexpected = set(obj) - allowed
+        unexpected = set(obj) - allowed - set(extension_fields)
     else:
         unexpected = (set(obj) & _PROTOCOL_FIELDS) - allowed
     if unexpected:
@@ -810,7 +814,7 @@ def bind(prompt, consumer_sections=()):
 
 def validate(bound, obj, *, queued_findings=None,
              configured_suite_commands=None, workspace=None,
-             expected_artifact=None):
+             expected_artifact=None, extension_fields=()):
     """Validate one parsed reply against one previously bound prompt."""
     if not isinstance(bound, BoundContract):
         raise contracts.ContractError("bound must be a BoundContract")
@@ -830,5 +834,12 @@ def validate(bound, obj, *, queued_findings=None,
         bound.registered_section_ids
     ):
         _questions(obj, bound, options, "reply[questions_output]")
-    _validate_fields(bound, obj)
+    if isinstance(extension_fields, (str, bytes, dict)) or any(
+        not isinstance(field, str) or not field
+        for field in extension_fields
+    ):
+        raise contracts.ContractError(
+            "extension_fields must be a sequence of non-empty strings"
+        )
+    _validate_fields(bound, obj, extension_fields)
     return obj

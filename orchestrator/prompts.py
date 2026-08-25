@@ -634,17 +634,6 @@ EXHAUSTIVE_SENTENCE = (
 )
 
 
-PROJECT_CONTEXT_TEXT_CLIP = 2000
-
-
-def _clip_operator_text(text):
-    """Bound project-context prose while preserving its operator authority."""
-    text = str(text)
-    if len(text) > PROJECT_CONTEXT_TEXT_CLIP:
-        return text[: PROJECT_CONTEXT_TEXT_CLIP - 3] + "..."
-    return text
-
-
 def project_context_body(project_context):
     """Render the body of standing project law for a project-bound run.
 
@@ -689,7 +678,7 @@ def project_context_body(project_context):
         lines += [
             "",
             "SAFEGUARD %s v%s" % (policy.get("id"), policy.get("version")),
-            _clip_operator_text(policy.get("prompt")),
+            str(policy.get("prompt")),
             "REQUIRED OUTPUT FIELD %r: your JSON output must carry this"
             % contract.get("field"),
             "field as a list of entry objects, each with exactly these"

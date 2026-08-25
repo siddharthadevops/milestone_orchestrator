@@ -4,12 +4,21 @@ WORKSPACE: /Users/siddhartha/Development/source/milestone_orchestrator_impl
 TASK: rate ONE finding's drift risk. REPORT ONLY — you edit
 nothing and review nothing else.
 
+TRUSTED REPORT-ONLY REPOSITORY BOUNDARY
+Do not create, edit, delete, stage, or commit any file; leave the work tree, index, and HEAD unchanged.
+
 PROJECT CONTEXT (standing project law; binding)
 - PRIMARY ROOT /Users/siddhartha/Development/source/milestone_orchestrator_impl — the repo you execute in.
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/agent_99 — a READ-ONLY grant: you may read it for evidence; never edit it.
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/tutor — a READ-ONLY grant: you may read it for evidence; never edit it.
+
+OPERATOR AMENDMENTS (binding; they refine the MANDATE)
+A violation of any amendment in the reviewed artifact is a finding.
+[A1] Ladders are ordered by capability. A family's models ladder runs from the least to the most capable model, as the operator judges it; price is not the criterion, even where it happens to coincide. step_up exists to add intelligence when work is stuck - first more effort, then a more capable model - never to change cost. The initial conversion writes today's order (luna < terra < sol; sonnet < opus < fable) as operator data in the document, and only the operator reorders it.
+[A2] Old runs: default and move on. A run that resumes without a staffing session gets one that points at the document with its selected profile name (the converted profiles keep their names) at its selected rigor, or at the default document when that name does not exist. Nothing else is derived: live act overrides (acts.json literals) are NOT carried into the session; the document's own numbers apply from the next call, the marker shows what ran, and the operator edits the session if he wants something else. Resume is never failed or blocked for compatibility. This is the whole compatibility rule - one level, no strict/best-effort split about carried overrides, no census of old runs, no exception clauses, no machinery to represent old literals. Stop discussing it.
+[A3] Session overrides are explicit configuration written by any authorized session owner - the operator, or a calling product - through the store, the API, or the panel. Nothing in the router restricts the author beyond the caller identity and project access the service already enforces. A2 forbids only deriving overrides at resume; it says nothing about who may write one. Do not write 'operator only' anywhere.
 
 Rate the finding below against implementation/milestones/staffing-router/slices/slice-10.md as it is — read
 the artifact; do not take the summary on trust.
@@ -70,4 +79,4 @@ no markdown fences:
  "drift_damage": "low" | "medium" | "high" | "xhigh",
  "reason": "<one sentence: the concrete basis for BOTH ratings>",
  "questions": [{"id": "<id>", "answer": "<one short sentence>"}, ...]}
-  (one entry per QUESTIONS id above; the check is presence, nothing more)
+  (one entry per QUESTIONS id above; each answer must be non-empty and at most 300 characters; substance is not machine-judged)

@@ -11,6 +11,9 @@
         "one_of": "target_frame"
       },
       {
+        "ref": "trusted_judgment_read_only"
+      },
+      {
         "ref": "project_context"
       },
       {

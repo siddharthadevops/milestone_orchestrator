@@ -15,7 +15,13 @@
         "variables": []
       },
       {
+        "ref": "trusted_judgment_read_only"
+      },
+      {
         "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_review"
       },
       {
         "text": [
@@ -135,7 +141,7 @@
           " \"drift_damage\": \"low\" | \"medium\" | \"high\" | \"xhigh\",",
           " \"reason\": \"<one sentence: the concrete basis for BOTH ratings>\",",
           " \"questions\": [{\"id\": \"<id>\", \"answer\": \"<one short sentence>\"}, ...]}",
-          "  (one entry per QUESTIONS id above; the check is presence, nothing more)"
+          "  (one entry per QUESTIONS id above; each answer must be non-empty and at most 300 characters; substance is not machine-judged)"
         ],
         "variables": []
       }

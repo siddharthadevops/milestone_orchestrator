@@ -492,6 +492,13 @@
         }
       ]
     },
+    "trusted_judgment_read_only": {
+      "text": [
+        "TRUSTED REPORT-ONLY REPOSITORY BOUNDARY",
+        "Do not create, edit, delete, stage, or commit any file; leave the work tree, index, and HEAD unchanged."
+      ],
+      "variables": []
+    },
     "bs_workarea": {
       "text": [
         "WORK AREA",
@@ -602,7 +609,7 @@
         "\"questions\": [{\"id\": \"<id>\", \"answer\": \"<the answer, backed by a brief description; at most 300 characters>\"}, ...]",
         "  (one entry per QUESTIONS id above, in EVERY reply whatever its status;",
         "   each entry ANSWERS its question and briefly describes the work behind",
-        "   it — the machine check is presence, nothing more)"
+        "   it — the machine requires one non-empty answer per mounted id and at most 300 characters; it does not judge substance)"
       ],
       "variables": []
     },

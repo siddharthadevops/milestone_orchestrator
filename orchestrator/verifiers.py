@@ -395,7 +395,7 @@ def _resolve_dir_listing_root(check, ext, roots):
     return resolved
 
 
-def _preflight_operator_roots(extensions, roots):
+def preflight_operator_roots(extensions, roots):
     """Validate operator-authored filesystem inputs before ok-output shape.
 
     A bad dir_listing_matches root cannot be repaired by changing the
@@ -554,7 +554,7 @@ def validate_merged_output(obj, kind, extensions, roots,
                     )
         return obj
     if extensions:
-        _preflight_operator_roots(extensions, roots)
+        preflight_operator_roots(extensions, roots)
     validate_base()
     if not extensions:
         return obj

@@ -184,6 +184,7 @@ RUNS = {
                   'material': 'document'},
         'values': {'kind': 'reclassify', 'workspace': WS,
                    'project': 'orchestrators', 'work_area': 'implementation', 'ecosystem_map': ECOSYSTEM,
+                   'operator_amendments': AMENDMENTS_A,
                    'artifact_path': NOTE10,
                    'builders': 'slice docs drafted by codex (gpt-5.6-sol, max effort); implementation built by codex (gpt-5.6-sol, max effort)',
                    'finding_severity': 'P2', 'finding_id': 'S10-CLAUDE-001',

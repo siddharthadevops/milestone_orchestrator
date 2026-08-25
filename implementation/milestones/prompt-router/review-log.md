@@ -536,3 +536,57 @@
 - `codex-codex-S06-CODEX-008` (raised codex, cleared codex): The all-physical-attempt guarantee lacks retry and resume traversal proof — The slice correctly requires every physical attempt to use the shared preparation boundary, so the gap is only missing traversal proof for existing retry/resume paths, making silent misimplementation unlikely and correction a local wiring/test change.
 - `codex-codex-S06-CODEX-009` (raised codex, cleared codex): Accepted design authority can disappear without failing the amendment tests — The artifact preserves append-only accepted design authority but never tests it alongside a valid empty mutable set, creating a real silent coverage gap that a capable builder will likely infer from the existing combined-authority seam, while correction is a local authority-assembly fix plus one foc
 
+## slice_impl-06-a (Milestone judgment-call cutover)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-codex-r1.txt` |
+| slice_impl-06-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix1.txt` |
+| slice_impl-06-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta1.txt` |
+| slice_impl-06-codex-r4 | review_round | codex | 4 | 4 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-codex-r2.txt` |
+| slice_impl-06-codex-r5 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix2.txt` |
+| slice_impl-06-codex-r6 | delta_review | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta2.txt` |
+| slice_impl-06-codex-r7 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix3.txt` |
+| slice_impl-06-codex-r8 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta3.txt` |
+| slice_impl-06-codex-r9 | review_round | codex | 3 | 3 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-codex-r3.txt` |
+| slice_impl-06-codex-r10 | fix_findings | codex | 3 | 3 fixed (1 consulted) | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix4-rethink-return.txt` |
+| slice_impl-06-codex-r11 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta4.txt` |
+| slice_impl-06-codex-r12 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix5.txt` |
+| slice_impl-06-codex-r13 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta5.txt` |
+| slice_impl-06-codex-r14 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-codex-r4.txt` |
+| slice_impl-06-codex-r15 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix6.txt` |
+| slice_impl-06-codex-r16 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta6.txt` |
+| slice_impl-06-codex-r17 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix7.txt` |
+| slice_impl-06-codex-r18 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta7.txt` |
+| slice_impl-06-codex-r19 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix8.txt` |
+| slice_impl-06-codex-r20 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta8.txt` |
+| slice_impl-06-codex-r21 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-codex-r5.txt` |
+| slice_impl-06-codex-r22 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix9.txt` |
+| slice_impl-06-codex-r23 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta9.txt` |
+| slice_impl-06-codex-r24 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-codex-r6.txt` |
+| slice_impl-06-codex-r25 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix10.txt` |
+| slice_impl-06-codex-r26 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta10.txt` |
+| slice_impl-06-codex-r27 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix11.txt` |
+| slice_impl-06-codex-r28 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta11.txt` |
+| slice_impl-06-codex-r29 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix12.txt` |
+| slice_impl-06-codex-r30 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta12.txt` |
+| slice_impl-06-codex-r31 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix13.txt` |
+| slice_impl-06-codex-r32 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta13.txt` |
+| slice_impl-06-codex-r33 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-codex-r7.txt` |
+| slice_impl-06-codex-r34 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix14.txt` |
+| slice_impl-06-codex-r35 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta14.txt` |
+| slice_impl-06-codex-r36 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-codex-r8.txt` |
+| slice_impl-06-codex-r37 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-fix15.txt` |
+| slice_impl-06-codex-r38 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-delta15.txt` |
+| slice_impl-06-codex-r39 | review_round | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-06-codex-r9.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-codex-r39`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S06A-004` (raised codex, cleared codex): Some retired planning controls still pass judgment validation — This is a silent behavior-and-test gap: the shared judgment validator accepts omitted retired controls, so later units can trust a falsely closed contract, but correction is a local forbidden-field and focused-test update.
+

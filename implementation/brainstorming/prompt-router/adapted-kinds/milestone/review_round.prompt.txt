@@ -6,6 +6,9 @@ BASELINE: the current reviewed skeleton at implementation/milestones/staffing-ro
 TARGET: (workspace) (plus any code/tests it governs)
 STANDARD: implementation/milestones/staffing-router/slices/slice-10.md — the reviewed contract this target must satisfy. A defect you newly find in the standard itself is a finding too, never grounds for blocked.
 
+TRUSTED REPORT-ONLY REPOSITORY BOUNDARY
+Do not create, edit, delete, stage, or commit any file; leave the work tree, index, and HEAD unchanged.
+
 PROJECT CONTEXT (standing project law; binding)
 - PRIMARY ROOT /Users/siddhartha/Development/source/milestone_orchestrator_impl — the repo you execute in.
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.
@@ -137,4 +140,4 @@ No proposed direction; beyond these, return no other fields with
 "questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
   (one entry per QUESTIONS id above, in EVERY reply whatever its status;
    each entry ANSWERS its question and briefly describes the work behind
-   it — the machine check is presence, nothing more)
+   it — the machine requires one non-empty answer per mounted id and at most 300 characters; it does not judge substance)

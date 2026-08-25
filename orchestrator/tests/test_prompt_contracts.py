@@ -349,7 +349,10 @@ class PromptContractsTest(unittest.TestCase):
                                                        "questions": answers})
             long_answers = copy.deepcopy(answers)
             long_answers[0]["answer"] = "x" * 301
-            prompt_contracts.validate(bound, {"questions": long_answers})
+            with self.assertRaises(contracts.ContractError):
+                prompt_contracts.validate(
+                    bound, {"questions": long_answers}
+                )
             bad = [
                 {}, {"questions": answers[:-1]},
                 {"questions": answers + [copy.deepcopy(answers[0])]},

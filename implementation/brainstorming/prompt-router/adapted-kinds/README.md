@@ -47,7 +47,8 @@ captured evidence it was pruned from.
 - **Units per kind.** `instructions` (ordered `parts`), `questions` (the NEW
   output-answered battery: `intro` lines + `items` of `{id, text}`; renders as
   a QUESTIONS block before the contract and lands in the output's `questions`
-  array, presence-checked only; kinds without authored items stay blank), and
+  array, checked for one non-empty answer per mounted id with a 300-character
+  maximum; kinds without authored items stay blank), and
   `output_contract` (ordered `sections`).
 - **Refs can pin per-kind constants.** `{"ref": "common_fields", "defaults":
   {"status_vocabulary": "…"}}` fixes a shared unit's variable to a kind-level
@@ -78,8 +79,8 @@ captured evidence it was pruned from.
   are **task description**, named **DUE DILIGENCE**: they live inside
   `instructions` and are answered in the DOCUMENT only. **QUESTIONS** is the
   separate first-class battery answered in the output JSON (`questions`
-  array, short bounded sentences, presence-checked) — the two never share a
-  name.
+  array, short bounded sentences, with exact ids, non-emptiness, and the
+  300-character maximum machine-checked) — the two never share a name.
 
 ## Deliberate adaptation decisions (vs the captures — veto any of these)
 
@@ -88,10 +89,10 @@ captured evidence it was pruned from.
    this; the author kinds shipped a 187-line union.)
 2. **`draft_skeleton` loses `need_rethink` and `retry` text** — the contract
    itself says neither status is eligible for that kind.
-3. **`reclassify` no longer receives operator/design amendments** — its capture
-   carried them framed "for authors and fixers / reviewers"; the rater is
-   neither, edits nothing, and files no findings. It keeps project context
-   (read grants), its own briefing, the finding, and process authority.
+3. **`reclassify` receives the complete current amendment set** — Slice 06 and
+   operator amendment A4 supersede the earlier omission decision. The rater is
+   report-only, but mutable operator authority still reaches every physical
+   judgment attempt alongside project context, its finding, and process law.
 4. **`review_round` / `delta_review` share one contract** (the captures were
    already byte-identical) and share the judgment rubric / severity battery.
 5. Conversational artifacts inside amendment PROSE (e.g. "Stop discussing it.")
@@ -450,7 +451,8 @@ captured evidence it was pruned from.
     SET binding (named set at launch, default fallback beside the answer)
     and evicts the word "family" from prompts — the header is KIND +
     WORKSPACE (F5); "proves inspection" softened to explicit-and-auditable
-    with presence as the machine check (F6); the conventions' payload list
+    with exact id coverage, non-emptiness, and the 300-character maximum as
+    the machine check (F6); the conventions' payload list
     dropped the retired design amendments (F7); the rationale's §3 core
     realigned to the corpus (F8).
 
@@ -459,9 +461,10 @@ captured evidence it was pruned from.
     its one-word escape hatch ("none"/"matched"/"proportionate") — and a
     bare description is not enough either: each entry ANSWERS its question
     and backs it with a brief description of the work behind it, bounded
-    at 300 characters. Describing forces doing; answering forces deciding. The machine check remains
-    presence-only BY DESIGN: external actors will later inject their own
-    questions, which no content machinery could verify.
+    at 300 characters. Describing forces doing; answering forces deciding. The
+    machine checks exact id coverage, non-emptiness, and the 300-character
+    maximum; it does not judge substance, including for externally injected
+    questions.
 
 53. **No prompt goes out without its QUESTIONS; ready is just a field**
     (operator ruling on round-3 F2, 2026-08-23): the charge job's battery
@@ -569,7 +572,8 @@ captured evidence it was pruned from.
 62. **Round-7 mechanicals** (operator go, 2026-08-23): the Contrary seat
     mounts the `evidence` lens (its core judge law remains its ROLE
     stance) (F4); the rationale's fixer bullets speak primary-target, not
-    jail (F5); presence is defined present-AND-non-empty (F6); the
+    jail (F5); an answer is present, non-empty, and at most 300 characters
+    (F6); the
     every-reply questions rule binds kinds that define or mount a battery
     — merge_repair, defining none, owes none (F7); malformed prompt
     documents count as unreadable and fall down the ladder (F8); the last

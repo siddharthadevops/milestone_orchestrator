@@ -1048,6 +1048,22 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                'one '
                                                                                                'per '
                                                                                                'line.'}]},
+                                  'trusted_judgment_read_only': {'text': ['TRUSTED '
+                                                                          'REPORT-ONLY '
+                                                                          'REPOSITORY '
+                                                                          'BOUNDARY',
+                                                                          'Do not '
+                                                                          'create, '
+                                                                          'edit, '
+                                                                          'delete, '
+                                                                          'stage, or '
+                                                                          'commit any '
+                                                                          'file; leave '
+                                                                          'the work '
+                                                                          'tree, index, '
+                                                                          'and HEAD '
+                                                                          'unchanged.'],
+                                                                   'variables': []},
                                   'bs_workarea': {'text': ['WORK AREA',
                                                            "- This is the project's "
                                                            'git repository. The '
@@ -1421,10 +1437,18 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             '   it — '
                                                                             'the '
                                                                             'machine '
-                                                                            'check is '
-                                                                            'presence, '
-                                                                            'nothing '
-                                                                            'more)'],
+                                                                            'requires '
+                                                                            'one '
+                                                                            'non-empty '
+                                                                            'answer '
+                                                                            'per '
+                                                                            'mounted '
+                                                                            'id and at '
+                                                                            'most 300 '
+                                                                            'characters; '
+                                                                            'it does '
+                                                                            'not judge '
+                                                                            'substance)'],
                                                                    'variables': []},
                                               'implement_result': {'text': ['Kind '
                                                                             'implement '
@@ -2482,6 +2506,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                 'governs.',
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'one_of': 'target_frame'},
+                                                            {'ref': 'trusted_judgment_read_only'},
                                                             {'ref': 'project_context'},
                                                             {'ref': 'operator_amendments_review'},
                                                             {'ref': 'verification_boundary'},
@@ -2763,6 +2788,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                 'base revision.',
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'one_of': 'target_frame'},
+                                                            {'ref': 'trusted_judgment_read_only'},
                                                             {'ref': 'project_context'},
                                                             {'ref': 'operator_amendments_review'},
                                                             {'ref': 'verification_boundary'},
@@ -3049,8 +3075,10 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                     'nothing and '
                                                                     'review nothing '
                                                                     'else.'],
-                                                           'variables': []},
+                                                          'variables': []},
+                                                          {'ref': 'trusted_judgment_read_only'},
                                                           {'ref': 'project_context'},
+                                                          {'ref': 'operator_amendments_review'},
                                                           {'text': ['Rate the finding '
                                                                     'below against '
                                                                     '{{artifact_path}} '
@@ -3322,11 +3350,15 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           'entry per '
                                                                           'QUESTIONS '
                                                                           'id above; '
-                                                                          'the check '
-                                                                          'is '
-                                                                          'presence, '
-                                                                          'nothing '
-                                                                          'more)'],
+                                                                          'each answer '
+                                                                          'must be '
+                                                                          'non-empty '
+                                                                          'and at most '
+                                                                          '300 '
+                                                                          'characters; '
+                                                                          'substance '
+                                                                          'is not '
+                                                                          'machine-judged)'],
                                                                  'variables': []}]}},
  'milestone/fix_findings.json': {'kind': 'fix_findings',
                                  'process': 'milestone',
