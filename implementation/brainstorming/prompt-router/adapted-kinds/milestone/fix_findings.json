@@ -11,6 +11,18 @@
         "one_of": "target_frame"
       },
       {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "fixer_recovery"
+      },
+      {
+        "ref": "implementation_scope",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
         "ref": "project_context"
       },
       {
@@ -162,7 +174,7 @@
           {
             "name": "scratch_path",
             "required": true,
-            "description": "Driver-provided legal directory for consultation transcripts (never inside .orchestrator/)."
+            "description": "Driver-provided ignored runtime scratch directory for consultation transcripts."
           }
         ]
       }

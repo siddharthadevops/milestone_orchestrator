@@ -819,6 +819,51 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                          'sequential '
                                                                                          'implementation-part '
                                                                                          'assignment.'}]},
+                                  'contract_correction': {'text': ['CONTRACT '
+                                                                   'CORRECTION',
+                                                                   'The previous reply '
+                                                                   'was rejected by '
+                                                                   'the served '
+                                                                   'structural '
+                                                                   'contract:',
+                                                                   '{{contract_correction}}',
+                                                                   'Return a fresh '
+                                                                   'reply satisfying '
+                                                                   'this contract.'],
+                                                          'variables': [{'name': 'contract_correction',
+                                                                         'required': False,
+                                                                         'drop_unit_if_absent': True,
+                                                                         'description': 'Opaque '
+                                                                                        'diagnostic '
+                                                                                        'from '
+                                                                                        'the '
+                                                                                        'previous '
+                                                                                        'rejected '
+                                                                                        'reply.'}]},
+                                  'fixer_recovery': {'text': ['FIXER RECOVERY',
+                                                              'Recovery state: '
+                                                              '{{fixer_recovery_state}}.',
+                                                              'The pending delta may '
+                                                              'contain partial work '
+                                                              'from an earlier fixer '
+                                                              'attempt.',
+                                                              'Inspect it first; '
+                                                              'complete, correct, or '
+                                                              'remove that work so the '
+                                                              'final',
+                                                              'delta is coherent.'],
+                                                     'variables': [{'name': 'fixer_recovery_state',
+                                                                    'required': False,
+                                                                    'drop_unit_if_absent': True,
+                                                                    'description': 'Driver-owned '
+                                                                                   'machine '
+                                                                                   'state '
+                                                                                   'for '
+                                                                                   'a '
+                                                                                   'retained '
+                                                                                   'partial '
+                                                                                   'fixer '
+                                                                                   'delta.'}]},
                                   'author_recovery': {'text': ['{{author_recovery}}'],
                                                       'variables': [{'name': 'author_recovery',
                                                                      'required': False,
@@ -1060,10 +1105,11 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           'commit any '
                                                                           'file; leave '
                                                                           'the work '
-                                                                          'tree, index, '
-                                                                          'and HEAD '
+                                                                          'tree, '
+                                                                          'index, and '
+                                                                          'HEAD '
                                                                           'unchanged.'],
-                                                                   'variables': []},
+                                                                 'variables': []},
                                   'bs_workarea': {'text': ['WORK AREA',
                                                            "- This is the project's "
                                                            'git repository. The '
@@ -1244,6 +1290,15 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                'finding '
                                                                                'alone.'],
                                                                       'variables': []},
+                                              'design_correction_verdict': {'text': ['A provisional '
+                                                                                    'design-correction '
+                                                                                    'delta supplies its '
+                                                                                    'complete retained '
+                                                                                    'context here and '
+                                                                                    'requires '
+                                                                                    'design_correction_verdict={decision, '
+                                                                                    'reason}.'],
+                                                                            'variables': []},
                                               'review_contract': {'text': ['Clean or '
                                                                            'findings:',
                                                                            '{"status":"ok","kind":"<echo '
@@ -2506,6 +2561,9 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                 'governs.',
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'one_of': 'target_frame'},
+                                                            {'ref': 'contract_correction'},
+                                                            {'ref': 'implementation_scope',
+                                                             'mount': ['target:implementation']},
                                                             {'ref': 'trusted_judgment_read_only'},
                                                             {'ref': 'project_context'},
                                                             {'ref': 'operator_amendments_review'},
@@ -2788,6 +2846,9 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                 'base revision.',
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'one_of': 'target_frame'},
+                                                            {'ref': 'contract_correction'},
+                                                            {'ref': 'implementation_scope',
+                                                             'mount': ['target:implementation']},
                                                             {'ref': 'trusted_judgment_read_only'},
                                                             {'ref': 'project_context'},
                                                             {'ref': 'operator_amendments_review'},
@@ -3075,7 +3136,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                     'nothing and '
                                                                     'review nothing '
                                                                     'else.'],
-                                                          'variables': []},
+                                                           'variables': []},
+                                                          {'ref': 'contract_correction'},
                                                           {'ref': 'trusted_judgment_read_only'},
                                                           {'ref': 'project_context'},
                                                           {'ref': 'operator_amendments_review'},
@@ -3367,6 +3429,10 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                 'each with evidence.',
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'one_of': 'target_frame'},
+                                                            {'ref': 'contract_correction'},
+                                                            {'ref': 'fixer_recovery'},
+                                                            {'ref': 'implementation_scope',
+                                                             'mount': ['target:implementation']},
                                                             {'ref': 'project_context'},
                                                             {'ref': 'design_contradiction_fixer'},
                                                             {'ref': 'operator_amendments_author'},
@@ -3724,14 +3790,13 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                            {'name': 'scratch_path',
                                                                             'required': True,
                                                                             'description': 'Driver-provided '
-                                                                                           'legal '
+                                                                                           'ignored '
+                                                                                           'runtime '
+                                                                                           'scratch '
                                                                                            'directory '
                                                                                            'for '
                                                                                            'consultation '
-                                                                                           'transcripts '
-                                                                                           '(never '
-                                                                                           'inside '
-                                                                                           '.orchestrator/).'}]}]},
+                                                                                           'transcripts.'}]}]},
                                  'questions': {'items': [{'id': 'environment_fit',
                                                           'text': 'What standard does '
                                                                   'the surrounding '

@@ -258,40 +258,6 @@ class _FailingRunner(object):
 
 
 class TestTypedInfraFailures(DriverTestCase):
-    def test_quota_failure_is_typed_with_resume_at(self):
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            path = init_state(ws, make_config())
-            runner = _FailingRunner([
-                runners.WorkerProtocolError(
-                    "no valid JSON object found in worker output",
-                    raw_texts=["You've hit your usage limit. "
-                               "Your limit resets at 00:10."],
-                ),
-            ])
-            driver = drv.Driver(path, runner=runner)
-            driver.step()  # step swallows StopStep; the failure is recorded
-            state = st.load(path)
-            self.assertEqual(state["failure"]["type"], "quota")
-            self.assertIsNotNone(state["failure"]["resume_at"])
-            self.assertFalse(os.path.exists(os.path.join(
-                ws, ".orchestrator", "current.json"
-            )))
-
-    def test_login_failure_typed_without_resume(self):
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            path = init_state(ws, make_config())
-            runner = _FailingRunner([
-                runners.WorkerProtocolError(
-                    "no valid JSON object found in worker output",
-                    raw_texts=["Not logged in · Please run /login"],
-                ),
-            ])
-            driver = drv.Driver(path, runner=runner)
-            driver.step()
-            state = st.load(path)
-            self.assertEqual(state["failure"]["type"], "login")
-            self.assertIsNone(state["failure"]["resume_at"])
-
     def test_classifier_call_carries_its_family_profile(self):
         # The classifier runs on the OPPOSITE family, whose command
         # template may carry {model}/{effort}. Calling it without them

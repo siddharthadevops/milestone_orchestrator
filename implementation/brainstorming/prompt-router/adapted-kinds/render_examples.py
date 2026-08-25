@@ -205,7 +205,7 @@ RUNS = {
                    'queued_findings': QUEUED,
                    'deferred_debt': DEBT, 'adjudicated_rejections': ADJUDICATIONS,
                    'consultation_family': 'claude', 'consultation_command': CONSULT_CMD,
-                   'scratch_path': '/Users/siddhartha/Development/source/milestone_orchestrator_impl/.consultations/',
+                   'scratch_path': '/Users/siddhartha/Development/source/milestone_orchestrator_impl/.orchestrator/scratch/',
                    'brainstorming_max_rounds': ROUNDS},
         'options': {'altitude_fix': True},  # doc target
     },

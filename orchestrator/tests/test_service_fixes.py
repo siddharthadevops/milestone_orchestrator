@@ -692,22 +692,36 @@ class TestSummaryCache(ServiceFixesTestCase):
 class TestDeletePurgesStateClaim(ServiceFixesTestCase):
     def test_delete_run_purge_removes_state_file_and_lock(self):
         ws = self.workspace("ws-purge")
+        launch = {
+            "workspace": ws,
+            "goal": "purge me",
+            "autostart": False,
+            "config": {"docs_dir": "docs"},
+        }
         entry = service.create_run(
-            self.home, {"workspace": ws, "goal": "purge me", "autostart": False}
+            self.home, launch
         )
         run_id = entry["id"]
         state_path = self._entry(run_id)["state_path"]
+        amendments_path = os.path.join(
+            os.path.dirname(state_path), "amendments.json"
+        )
         self.assertTrue(os.path.exists(state_path))
+        self.assertTrue(os.path.exists(amendments_path))
         open(state_path + ".lock", "a").close()  # a past driver's lock
         result = service.delete_run(self.home, run_id, purge=True)
         self.assertEqual(result["deleted"], run_id)
         self.assertIn(state_path, result["purged"])
+        self.assertIn(amendments_path, result["purged"])
         self.assertFalse(os.path.exists(state_path))
         self.assertFalse(os.path.exists(state_path + ".lock"))
+        self.assertFalse(os.path.exists(amendments_path))
         # The user-facing point: the same workspace launches fresh again.
+        launch["goal"] = "fresh"
         entry2 = service.create_run(
-            self.home, {"workspace": ws, "goal": "fresh", "autostart": False}
+            self.home, launch
         )
+        self.assertEqual(entry2["state_path"], state_path)
         self.assertTrue(os.path.exists(entry2["state_path"]))
 
     def test_delete_run_without_purge_keeps_workspace_files(self):

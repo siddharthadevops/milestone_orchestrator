@@ -11,6 +11,15 @@
         "one_of": "target_frame"
       },
       {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "implementation_scope",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
         "ref": "trusted_judgment_read_only"
       },
       {

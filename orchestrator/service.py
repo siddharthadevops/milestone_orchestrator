@@ -2699,15 +2699,17 @@ def _claim_retained_state_locked(home, state_path, summ):
 
 def _purge_state_files(state_path):
     """Best-effort removal of a discarded run's on-disk state claim — the
-    state file, its driver lock, and its current model-profile settings — so a
-    fresh launch can re-claim the same workspace path without inheriting the
-    discarded run's selection or act overrides. Only these exact files;
+    state file, its driver lock, required amendment authority, and its current
+    model-profile settings — so a fresh launch can re-claim the same workspace
+    path without inheriting the discarded run's authority, selection, or act
+    overrides. Only these exact files;
     nothing else in the workspace is touched."""
     purged, errors = [], []
     runtime_dir = os.path.dirname(os.path.abspath(state_path))
     for path in (
         state_path,
         state_path + ".lock",
+        os.path.join(runtime_dir, "amendments.json"),
         os.path.join(runtime_dir, "model_profile.json"),
         os.path.join(runtime_dir, "acts.json"),
     ):

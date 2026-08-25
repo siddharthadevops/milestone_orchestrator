@@ -553,6 +553,66 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
             os.path.exists(os.path.join(self.workspace, "worker-only.txt"))
         )
 
+    def test_trusted_observer_projects_a_valid_block_without_policing_bytes(self):
+        slices, head, _anchor = self.establish()
+        state = st.load(self.state_path)
+        snapshot = canonical_plan.begin_observed_call(state, self.skeleton)
+        changed_slices = slices + [slice_plan(3)]
+        self.write_skeleton(document(changed_slices))
+        unrelated = os.path.join(self.workspace, "trusted-output.txt")
+        with open(unrelated, "w", encoding="utf-8") as handle:
+            handle.write("left by the trusted judgment\n")
+
+        result = canonical_plan.complete_observed_call(state, snapshot)
+
+        self.assertTrue(result["changed"])
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertTrue(os.path.exists(unrelated))
+        self.assertEqual(
+            [item["id"] for item in state["milestone"]["slices"]],
+            [2, 1, 3],
+        )
+
+    def test_unchanged_trusted_observer_reads_only_the_canonical_document(self):
+        _slices, _head, anchor = self.establish()
+        state = st.load(self.state_path)
+        snapshot = canonical_plan.begin_observed_call(state, self.skeleton)
+
+        with mock.patch.object(
+            gitops,
+            "snapshot_worktree_tree",
+            side_effect=AssertionError("trusted observation staged the worktree"),
+        ):
+            result = canonical_plan.complete_observed_call(state, snapshot)
+
+        self.assertFalse(result["changed"])
+        self.assertEqual(result["anchor"], anchor)
+
+    def test_trusted_observer_leaves_invalid_worker_state_untouched(self):
+        _slices, head, anchor = self.establish()
+        state = st.load(self.state_path)
+        snapshot = canonical_plan.begin_observed_call(state, self.skeleton)
+        invalid = framed('{"slices":[')
+        self.write_skeleton(invalid)
+        unrelated = os.path.join(self.workspace, "trusted-output.txt")
+        with open(unrelated, "w", encoding="utf-8") as handle:
+            handle.write("not restored\n")
+
+        with self.assertRaisesRegex(
+            canonical_plan.CanonicalPlanError, "invalid canonical plan"
+        ):
+            canonical_plan.complete_observed_call(state, snapshot)
+
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(
+            state["milestone"][canonical_plan.ANCHOR_KEY], anchor
+        )
+        with open(
+            os.path.join(self.workspace, self.skeleton), "rb"
+        ) as handle:
+            self.assertEqual(handle.read(), invalid)
+        self.assertTrue(os.path.exists(unrelated))
+
 
 if __name__ == "__main__":
     unittest.main()

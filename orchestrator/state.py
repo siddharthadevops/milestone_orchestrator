@@ -42,6 +42,10 @@ except ImportError:  # pragma: no cover - non-POSIX keeps existing fallback
     fcntl = None
 
 SCHEMA_VERSION = 2
+# Slice 14 activates the canonical prompt runtime by assigning this version to
+# SCHEMA_VERSION.  Until then schema-2 runs retain their pre-activation
+# compatibility posture.
+PROMPT_ROUTER_ACTIVATION_SCHEMA_VERSION = 3
 
 # Unit kinds
 UNIT_SKELETON = "skeleton"
@@ -482,7 +486,11 @@ def append_event(state, etype, **data):
 #: none — never present-null, exactly as `project` is — so a pre-router state
 #: document gains nothing and "is this run bound?" is one key test.
 STAFFING_SESSION_KEY = "staffing_session"
-AUTHOR_PLAN_REVIEW_KEY = "author_plan_review_required"
+# Historical persisted spelling; the marker now applies source-neutrally to
+# any accepted plan-changing call whose originating unit left the plan.
+PLAN_FOLLOWUP_KEY = "author_plan_review_required"
+AUTHOR_PLAN_REVIEW_KEY = PLAN_FOLLOWUP_KEY
+PLAN_FOLLOWUP_MATERIAL_KEY = "plan_followup_material"
 
 
 def staffing_session(state):
@@ -515,23 +523,22 @@ def current_unit(state):
     fresh records land at the END of the list — list order would run the
     very slices that depend on the inserted one first (seen live:
     certification-llm ran slice 13 before the slice 19 it needs). A unit
-    whose slice is no longer in the plan is never current, mirroring
-    closure (it does not block the milestone). None when the plan is
-    fully sealed."""
-    # A direct author can validly edit the plan so its own unit is no longer
-    # present. Keep that accepted delta on the ordinary review/seal path; an
-    # insertion or reorder still follows the new plan's delivery order.
-    author_review = [
+    whose slice is no longer in the plan is never current unless it carries
+    an accepted plan-change follow-up. None when the plan is fully sealed."""
+    # A physical call can validly edit the plan so its originating unit is no
+    # longer present. Keep its accepted follow-up on the ordinary lifecycle;
+    # an insertion or reorder still follows the new plan's delivery order.
+    plan_followup = [
         unit for unit in state["units"]
-        if unit.get(AUTHOR_PLAN_REVIEW_KEY) is True
+        if unit.get(PLAN_FOLLOWUP_KEY) is True
         and unit.get("status") not in (U_SEALED, U_REPAIRING)
     ]
-    if len(author_review) > 1:
+    if len(plan_followup) > 1:
         raise IllegalTransition(
-            "multiple plan-changing author units require review"
+            "multiple plan-changing units require follow-up"
         )
-    if author_review:
-        return author_review[0]
+    if plan_followup:
+        return plan_followup[0]
 
     by_key = {unit_identity(u): u for u in state["units"]}
     for key in planned_execution_units(state):
@@ -1207,7 +1214,9 @@ def seal_predicate_reviews(unit, families, current_fingerprint=None):
     whole-artifact review is clean (or clean-with-deferred-debt) AND on the
     CURRENT bytes and immutable execution plan — or None when it is not
     satisfied (a family never reviewed in the current cycle, its latest look
-    is dirty, or its evidence fingerprint is stale).
+    is dirty, or the cycle's current evidence fingerprint is stale). Individual
+    round fingerprints remain audit evidence; trusted reviewer mutations may
+    legitimately rebind the cycle after an earlier family has completed.
 
     New states persist ``review_cycle_start`` when accepted edits change the
     candidate. For an older state without that marker, retain the conservative
@@ -1236,10 +1245,6 @@ def seal_predicate_reviews(unit, families, current_fingerprint=None):
             return None
         _idx, last = revs[-1]
         if not _round_effectively_clean(last):
-            return None
-        if (current_fingerprint is not None
-                and last.get("evidence_fingerprint")
-                != current_fingerprint):
             return None
         cite.append(last["id"])
     return cite
@@ -1418,7 +1423,7 @@ def maybe_close_milestone(state):
     if state["milestone"]["status"] == M_CLOSED:
         return True  # idempotent: never records milestone_closed twice
     if any(
-        unit.get(AUTHOR_PLAN_REVIEW_KEY) is True
+        unit.get(PLAN_FOLLOWUP_KEY) is True
         and unit.get("status") not in (U_SEALED, U_REPAIRING)
         for unit in state["units"]
     ):

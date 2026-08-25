@@ -24,6 +24,7 @@ import json
 import math
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -38,7 +39,8 @@ except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
 
 from . import author_calls, brainstorming, brainstorming_lifecycle
 from . import brainstorming_milestone, canonical_plan
-from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
+from . import contracts, errclass, gitops, interpreter, judgment_calls
+from . import kvstore, ledgers
 from . import model_profiles, pricing, profiles, projects, prompt_sets, prompts
 from . import registry, runners
 from . import staffing
@@ -1782,15 +1784,192 @@ class Driver(object):
                     if st.unit_identity(unit) in st.planned_execution_units(
                         self.state
                     ):
-                        unit.pop(st.AUTHOR_PLAN_REVIEW_KEY, None)
+                        unit.pop(st.PLAN_FOLLOWUP_KEY, None)
+                        unit.pop(st.PLAN_FOLLOWUP_MATERIAL_KEY, None)
                     else:
-                        unit[st.AUTHOR_PLAN_REVIEW_KEY] = True
+                        unit[st.PLAN_FOLLOWUP_KEY] = True
+                        unit[st.PLAN_FOLLOWUP_MATERIAL_KEY] = material
                     st.ensure_due_unit(self.state)
                 self._enforce_sealed_artifacts(
                     raw_name,
                     editable_sealed=self._editable_design_paths(unit),
                     preserve_canonical_plan=True,
                 )
+                self._save()
+
+            return prepared._replace(complete=complete)
+
+        return prepare
+
+    def _judgment_job(self, unit, kind):
+        if kind == contracts.KIND_RECLASSIFY:
+            return "reclassify@doc"
+        target = {
+            st.UNIT_SKELETON: "skeleton",
+            st.UNIT_SLICE_DOC: "slice_doc",
+            st.UNIT_SLICE_IMPL: "slice_impl",
+        }.get(unit.get("kind"))
+        if target is None:
+            raise st.IllegalTransition("unsupported judgment unit kind")
+        return "%s@%s" % (kind, target)
+
+    def _judgment_material(self, unit):
+        if unit["kind"] == st.UNIT_SKELETON:
+            return "document"
+        if st.PLAN_FOLLOWUP_MATERIAL_KEY in unit:
+            return unit[st.PLAN_FOLLOWUP_MATERIAL_KEY]
+        material = tasks.slice_material(self._slice_info(unit["slice_id"]))
+        if material:
+            return material
+        return "code" if unit["kind"] == st.UNIT_SLICE_IMPL else "document"
+
+    def _judgment_values(self, unit, kind, context):
+        self._ensure_goal_ledger()
+        skeleton = self._skeleton_artifact()
+        values = {
+            "kind": kind,
+            "workspace": self.workspace,
+            "goal_path": ledgers.goal_path(self.state),
+            "skeleton_path": skeleton,
+        }
+        if (
+            unit["kind"] == st.UNIT_SLICE_IMPL
+            and kind in (
+                contracts.KIND_REVIEW_ROUND,
+                contracts.KIND_DELTA_REVIEW,
+                contracts.KIND_FIX_FINDINGS,
+            )
+        ):
+            implementation_scope = self._implementation_scope(unit)
+            if implementation_scope is not None:
+                values["implementation_scope"] = implementation_scope
+        if kind == contracts.KIND_REVIEW_ROUND:
+            values["task"] = "full review round of %s" % self._unit_desc(unit)
+            if unit["kind"] != st.UNIT_SKELETON:
+                values["target"] = self._artifact(unit)
+                values["reference_path"] = (
+                    skeleton if unit["kind"] == st.UNIT_SLICE_DOC
+                    else self._slice_note_artifact(unit["slice_id"])
+                )
+        elif kind == contracts.KIND_DELTA_REVIEW:
+            values["delta_base_revision"] = context["delta_base_revision"]
+            if unit["kind"] != st.UNIT_SKELETON:
+                values["reference_path"] = (
+                    skeleton if unit["kind"] == st.UNIT_SLICE_DOC
+                    else self._slice_note_artifact(unit["slice_id"])
+                )
+        elif kind == contracts.KIND_FIX_FINDINGS:
+            values.update({
+                "consultation_family": context["consultation_family"],
+                "consultation_command": shlex.join(
+                    context["consultation_command"]
+                ),
+                "scratch_path": os.path.join(
+                    self.workspace, ".orchestrator", "scratch"
+                ) + os.sep,
+            })
+            if unit["kind"] != st.UNIT_SKELETON:
+                values.update({
+                    "task_subject": self._unit_desc(unit),
+                    "editable_path": self._artifact(unit),
+                })
+        else:
+            finding = context["finding"]
+            values = {
+                "kind": kind,
+                "workspace": self.workspace,
+                "artifact_path": self._artifact(unit),
+                "builders": self._builders_desc(),
+                "finding_severity": finding["severity"],
+                "finding_id": finding["id"],
+                "finding_summary": json.dumps({
+                    "summary": finding["summary"],
+                    "validity": finding.get("validity"),
+                }, ensure_ascii=False, sort_keys=True),
+                "finding_plain": finding["plain"],
+                "finding_example": finding["example"],
+            }
+        registry_entries = self._registry()
+        if registry_entries:
+            values["adjudicated_rejections"] = json.dumps(
+                registry_entries, ensure_ascii=False, sort_keys=True, indent=2
+            )
+        debt_entries = self._debt(unit)
+        if debt_entries:
+            values["deferred_debt"] = json.dumps(
+                debt_entries, ensure_ascii=False, sort_keys=True, indent=2
+            )
+        return values
+
+    def _judgment_prepare_call(
+        self, unit, kind, raw_name, context=None, queued_findings=None
+    ):
+        context = dict(context or {})
+        skeleton_path = self._skeleton_artifact()
+        # The plan observer may validly delete or replace this slice before a
+        # contract correction is prepared.  The correction is a fresh prompt
+        # package for the already-admitted judgment, not a new scheduling
+        # decision, so keep its original route coordinates.
+        job = self._judgment_job(unit, kind)
+        material = self._judgment_material(unit)
+
+        def prepare(repair_error):
+            authority = self._worker_episode_authority(unit, kind)
+            self._activate_worker_episode_authority(authority)
+            prepared = judgment_calls.prepare(
+                self._author_prompt_home(),
+                job=job,
+                material=material,
+                values=self._judgment_values(unit, kind, context),
+                amendments=authority["amendments"],
+                operator_complete=(
+                    authority["operator_complete"]
+                    or self.state.get("schema_version", 0)
+                    < st.PROMPT_ROUTER_ACTIVATION_SCHEMA_VERSION
+                ),
+                prompt_set=self.state.get(
+                    st.PROMPT_SET_KEY, prompt_sets.DEFAULT_SET_NAME
+                ),
+                project_context=authority["project_context"],
+                workspace=self.workspace,
+                queued_findings=queued_findings,
+                correction=repair_error,
+                fixer_recovery_state=context.get("fixer_recovery_state"),
+                design_correction=context.get("design_correction"),
+            )
+            editing = kind == contracts.KIND_FIX_FINDINGS
+            snapshot = (
+                canonical_plan.begin_author_call(self.state, skeleton_path)
+                if editing else
+                canonical_plan.begin_observed_call(self.state, skeleton_path)
+            )
+
+            def complete():
+                completer = (
+                    canonical_plan.complete_author_call if editing
+                    else canonical_plan.complete_observed_call
+                )
+                plan_result = completer(
+                    self.state,
+                    snapshot,
+                    message="canonical plan after %s" % kind,
+                )
+                if editing:
+                    self._enforce_sealed_artifacts(
+                        raw_name,
+                        editable_sealed=self._editable_design_paths(unit),
+                        preserve_canonical_plan=True,
+                    )
+                if plan_result["changed"]:
+                    if st.unit_identity(unit) in st.planned_execution_units(
+                        self.state
+                    ):
+                        unit.pop(st.PLAN_FOLLOWUP_KEY, None)
+                        unit.pop(st.PLAN_FOLLOWUP_MATERIAL_KEY, None)
+                    else:
+                        unit[st.PLAN_FOLLOWUP_KEY] = True
+                        unit[st.PLAN_FOLLOWUP_MATERIAL_KEY] = material
+                    st.ensure_due_unit(self.state)
                 self._save()
 
             return prepared._replace(complete=complete)
@@ -2665,6 +2844,8 @@ class Driver(object):
         - killed fixer mid-loop (legitimate prior fix work is mixed with
           the partial dead work): no destructive action — the next fixer
           gets a KILLED NOTICE instead (killed_fix_notice flag).
+        - trusted report-only judgments: never restore their repository
+          mutations; only preserve their interrupted-call accounting.
         """
         marker = self._read_busy()
         if marker is None:
@@ -2750,11 +2931,22 @@ class Driver(object):
             accounted = True
         if accounted:
             self._save()
+        root_call = calls[0] if calls else marker
+        kind = root_call.get("kind")
+        if kind in (
+            contracts.KIND_REVIEW_ROUND,
+            contracts.KIND_DELTA_REVIEW,
+            contracts.KIND_RECLASSIFY,
+        ):
+            # These report-only prompts are trusted. Their repository bytes
+            # are never subject to the generic interrupted-call restoration,
+            # whether the interrupted physical attempt changed the plan or
+            # only other governed paths.
+            self._clear_busy()
+            return
         if not gitops.enabled(self.config):
             self._clear_busy()
             return
-        root_call = calls[0] if calls else marker
-        kind = root_call.get("kind")
         unit = (
             self._active_task_unit(root_call.get("task_id"))
             or marker_unit
@@ -3879,7 +4071,7 @@ class Driver(object):
               start_session=False, session_ref=None, active_control=None,
               repeat_protocol=False, dispatch_resolver=None,
               continuation_family=None, task_id=None, prepare_call=None,
-              episode_unit=None, cutoff_marker=None):
+              episode_unit=None, cutoff_marker=None, nested=False):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep.
 
@@ -3908,6 +4100,7 @@ class Driver(object):
             if not self._mark_busy(
                 raw_name, kind, call_family,
                 model=call_model, effort=call_effort, task_id=task_id,
+                nested=nested,
                 staffing_fallback=getattr(
                     dispatch_resolver, "staffing_fallback", None
                 ),
@@ -4237,10 +4430,23 @@ class Driver(object):
                         session_ref = None
                         start_session = True
                     continue
-                etype, resume_at, evidence = self._classify_failure(
-                    actual_family, exc, raw_name=raw_name, unit=call_unit
-                )
-                if etype in ("network", "busy") and attempt < len(retries):
+                classifiable = self._errclass_eligible(exc)
+                if classifiable:
+                    etype, resume_at, evidence = self._classify_failure(
+                        actual_family, exc, raw_name=raw_name, unit=call_unit
+                    )
+                else:
+                    etype = (
+                        "worker_protocol"
+                        if isinstance(exc, runners.WorkerProtocolError)
+                        else "orchestrator"
+                    )
+                    resume_at = evidence = None
+                if (
+                    not nested
+                    and etype in ("network", "busy")
+                    and attempt < len(retries)
+                ):
                     # Short in-place retries BEFORE failing: transient
                     # blips should not cost a run failure + resume cycle.
                     incident = {
@@ -4350,6 +4556,17 @@ class Driver(object):
             raw_name, kind, actual_family, result, unit=call_unit
         )
         return output, result, raw_path
+
+    @staticmethod
+    def _errclass_eligible(exc):
+        """Only provider-started runner/transport faults are infrastructure."""
+        return bool(
+            isinstance(exc, runners.RunnerError)
+            and not isinstance(exc, runners.PromptPreparationError)
+            and getattr(exc, "provider_dispatch_started", False)
+            and not getattr(exc, "prepared_completion_attempted", False)
+            and not getattr(exc, "call_boundary_failure", False)
+        )
 
     def _record_repair(self, raw_name, kind, family, result, unit=None):
         """Permanent trace of a repaired first strike: a worker whose first
@@ -10225,7 +10442,7 @@ class Driver(object):
                      model=None, effort=None, dispatch_resolver=None,
                      task_id=None, output_directory=None,
                      project_context=None,
-                     project_safeguards=None):
+                     project_safeguards=None, prepare_call=None):
         """Run a report-only call.
 
         Report-only remains the CONTRACT — reviewers are told not to edit,
@@ -10268,6 +10485,8 @@ class Driver(object):
                 validate_opts=validate_opts,
                 dispatch_resolver=dispatch_resolver,
                 task_id=task_id,
+                prepare_call=prepare_call,
+                episode_unit=unit,
             )
 
         output, result, raw_path = tasks.execute_worker(task, dispatch)
@@ -10324,18 +10543,12 @@ class Driver(object):
             )
             # The prompt names the family the `consult` seat resolves to now;
             # the command line resolves it again when the fixer runs it. An
-            # ALREADY ADMITTED fixer reuses its frozen prompt and builds no
-            # consultation text below, so its call uses no `consult` answer
-            # and none is asked for: a seat no call uses is never resolved,
-            # and a `consult` role this machine cannot split therefore stops
-            # a resumed fixer no more than an unsatisfiable `classify` stops
-            # a failure the classifier never sees.
-            consultation_family = consultation_cmd = None
-            if active_task is None:
-                consultation_family, _cm, _ce = self._staff("consult")
-                consultation_cmd = self._consultation_command(
-                    consultation_family, None
-                )
+            # Routed fixer attempts always mount the current consultation
+            # command, including a resumed admitted task.
+            consultation_family, _cm, _ce = self._staff("consult")
+            consultation_cmd = self._consultation_command(
+                consultation_family, None
+            )
         else:
             if unit["kind"] == st.UNIT_SKELETON:
                 # Skeleton content uses the operator-selected `skeletoner`;
@@ -10489,11 +10702,10 @@ class Driver(object):
         # the worktree-tree handle preserves the candidate, including earlier
         # pending fixes, while excluding scratch written by the gapping call.
         # The wave runs from the sealed base; the candidate is replayed later.
-        pre_refs = pre_sym = pre_head = pre_tree = pre_worktree_tree = None
-        pre_stash = None
+        pre_refs = pre_stash = None
+        pre_sym = pre_head = pre_tree = pre_worktree_tree = None
         if gitops.enabled(self.config):
             try:
-                pre_refs = gitops.snapshot_refs(self.workspace)
                 pre_sym = gitops.head_symbolic_ref(self.workspace)
                 pre_head = gitops.head_full_sha(self.workspace)
                 pre_tree = gitops.snapshot_index_tree(self.workspace)
@@ -10504,11 +10716,10 @@ class Driver(object):
                 pre_worktree_tree = gitops.snapshot_worktree_tree(
                     self.workspace
                 )
-                pre_stash = gitops.snapshot_stash(self.workspace)
             except gitops.GitError:
-                pre_refs = pre_sym = pre_head = pre_tree = None
-                pre_worktree_tree = pre_stash = None
+                pre_sym = pre_head = pre_tree = pre_worktree_tree = None
         raw_name = "%s-fix%d" % (st.unit_key(unit), n_fix)
+        attempt_event_start = len(self.state.get("events") or [])
         fix_workspace_before = self._snapshot()
         resumed = self._take_brainstorming_resume(
             unit, contracts.KIND_FIX_FINDINGS
@@ -10581,6 +10792,35 @@ class Driver(object):
                     start_session=True,
                     dispatch_resolver=dispatch_resolver,
                     task_id=task["id"],
+                    # Suite failure repair and its fresh-checkpoint lifecycle
+                    # remain delegated to the later sequential cut. Until that
+                    # lands, keep its existing empty-findings completion
+                    # contract instead of routing it through the ordinary
+                    # queued-finding judgment envelope.
+                    prepare_call=(
+                        None if verification_repair else
+                        self._judgment_prepare_call(
+                            unit,
+                            contracts.KIND_FIX_FINDINGS,
+                            raw_name,
+                            context={
+                                "consultation_family": consultation_family,
+                                "consultation_command": consultation_cmd,
+                                **(
+                                    {
+                                        "fixer_recovery_state": (
+                                            "pending_partial_delta"
+                                        )
+                                    }
+                                    if killed_notice else {}
+                                ),
+                            },
+                            queued_findings=copy.deepcopy(
+                                unit.get("fix_queue") or []
+                            ),
+                        )
+                    ),
+                    episode_unit=unit,
                 )
 
             output, result, raw_path = tasks.execute_worker(
@@ -10606,10 +10846,27 @@ class Driver(object):
         editable_documents = self._editable_design_paths(unit)
         if editable_note:
             editable_documents.append(editable_note)
-        restored = self._enforce_sealed_artifacts(
+        # The per-physical-attempt completion boundary already restores sealed
+        # artifacts before reply validation.  Keep those durable affected-path
+        # events visible to the result consumer; a second live guard alone sees
+        # clean bytes and must not let a tampering fixer open Brainstorming.
+        restored = []
+        for event in self.state.get("events", [])[attempt_event_start:]:
+            artifact = event.get("artifact")
+            if (
+                event.get("type") == "sealed_artifact_restored"
+                and event.get("during") == raw_name
+                and isinstance(artifact, str)
+                and artifact not in restored
+            ):
+                restored.append(artifact)
+        for artifact in self._enforce_sealed_artifacts(
             raw_name,
             editable_sealed=editable_documents,
-        )
+            preserve_canonical_plan=True,
+        ):
+            if artifact not in restored:
+                restored.append(artifact)
         post_guard_snapshot = self._snapshot()
         fix_workspace_delta = self._snapshot_diff(
             fix_workspace_before, post_guard_snapshot
@@ -10639,7 +10896,6 @@ class Driver(object):
             fix_workspace_changed = bool(fix_workspace_delta)
         if verification_repair and source.get("deferred_candidate_changed"):
             fix_workspace_changed = True
-        folded_commits = None
         self._record_design_changes(unit, fix_workspace_delta)
         if output.get("status") == "need_rethink":
             pending_agreement = self._fixer_brainstorming_agreement(
@@ -10807,45 +11063,6 @@ class Driver(object):
                                     pre_stash=pre_stash,
                                     pre_worktree_tree=pre_worktree_tree,
                                     from_fixer=True)
-        if (
-            gitops.enabled(self.config)
-            and pre_refs is not None
-            and pre_sym is not None
-            and pre_head is not None
-            and pre_tree is not None
-        ):
-            try:
-                folded_commits = gitops.fold_worker_commits_to_delta(
-                    self.workspace,
-                    pre_refs,
-                    pre_sym,
-                    pre_head,
-                    pre_tree,
-                    pre_stash,
-                )
-            except gitops.GitError as exc:
-                reason = "fixer left an unsupported git mutation: %s" % exc
-                self._record_worker_unaccepted(
-                    unit, contracts.KIND_FIX_FINDINGS, family, result, reason
-                )
-                self._fail_worker_task_if_open(
-                    unit, output, result=result, reason=reason
-                )
-                st.fail_run(
-                    self.state, reason, unit=unit,
-                    type_="worker_git_mutation",
-                )
-                self._save()
-                raise StopStep(reason)
-            if folded_commits:
-                st.append_event(
-                    self.state,
-                    "fixer_commits_folded",
-                    unit=st.unit_key(unit),
-                    baseline_head=folded_commits["baseline_head"],
-                    worker_head=folded_commits["worker_head"],
-                    commit_count=folded_commits["commit_count"],
-                )
         self._check_worker_blocked(
             unit, output, contracts.KIND_FIX_FINDINGS, family, result
         )
@@ -11049,6 +11266,10 @@ class Driver(object):
                 "source_round_id": source.get("source_round_id"),
                 "queued": copy.deepcopy(unit.get("fix_queue") or []),
                 **(
+                    {"delta_base_revision": pre_head}
+                    if pre_head is not None else {}
+                ),
+                **(
                     {"model": fix_model, "effort": fix_effort}
                     if (fix_model or fix_effort)
                     else {}
@@ -11178,7 +11399,6 @@ class Driver(object):
         certified_without_touching_tests = (
             verification_repair
             and not bool(output.get("tests_modified"))
-            and not folded_commits
         )
         if certified_without_touching_tests:
             if fix_workspace_changed:
@@ -11372,8 +11592,31 @@ class Driver(object):
         )
         if suite_verification_pending and return_to == st.U_ROUNDS:
             return_to = st.U_PRE_REVIEW_VERIFY
+        fixer_family = None
+        delta_base_revision = None
+        for round_info in reversed(unit["rounds"]):
+            if round_info["kind"] == contracts.KIND_FIX_FINDINGS:
+                fixer_family = round_info["family"]
+                delta_base_revision = (round_info.get("meta") or {}).get(
+                    "delta_base_revision"
+                )
+                break
+        if delta_base_revision is None:
+            try:
+                delta_base_revision = gitops.head_full_sha(self.workspace)
+            except gitops.GitError as exc:
+                st.fail_run(
+                    self.state,
+                    "delta review has no readable base revision: %s" % exc,
+                    unit=unit,
+                    type_="orchestrator",
+                )
+                self._save()
+                raise StopStep(str(exc))
         try:
-            delta = gitops.worktree_diff(self.workspace)
+            delta = gitops.worktree_diff(
+                self.workspace, base_revision=delta_base_revision
+            )
         except gitops.GitError as exc:
             st.fail_run(self.state, "git diff failed: %s" % exc, unit=unit)
             self._save()
@@ -11523,11 +11766,6 @@ class Driver(object):
                 "delta checkpoint after %d fixes; amended (%s); continuing"
                 % (fix_number, sha)
             )
-        fixer_family = None
-        for r in reversed(unit["rounds"]):
-            if r["kind"] == contracts.KIND_FIX_FINDINGS:
-                fixer_family = r["family"]
-                break
         delta_seat = None
         if self.model_profiles_home is not None:
             (
@@ -11577,12 +11815,13 @@ class Driver(object):
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
         )
         self._activate_worker_episode_authority(authority)
+        raw_name = "%s-delta%d" % (st.unit_key(unit), n_delta)
         output, result, raw_path = self._report_call(
             unit,
             family,
             prompt,
             contracts.KIND_DELTA_REVIEW,
-            "%s-delta%d" % (st.unit_key(unit), n_delta),
+            raw_name,
             extensions=extensions,
             roots=roots,
             # Reform runs hard-require plain/example on every finding;
@@ -11610,6 +11849,18 @@ class Driver(object):
             ),
             task_id=(active_task or {}).get("id"),
             project_context=project_context,
+            prepare_call=self._judgment_prepare_call(
+                unit,
+                contracts.KIND_DELTA_REVIEW,
+                raw_name,
+                context={
+                    "delta_base_revision": delta_base_revision,
+                    **(
+                        {"design_correction": review_correction}
+                        if provisional else {}
+                    ),
+                },
+            ),
         )
         family, delta_model, delta_effort = self._result_identity(
             result, family, delta_model, delta_effort
@@ -11624,7 +11875,7 @@ class Driver(object):
                 output,
                 result,
                 raw_path,
-                "%s-delta%d" % (st.unit_key(unit), n_delta),
+                raw_name,
             )
         self._check_worker_blocked(
             unit, output, contracts.KIND_DELTA_REVIEW, family, result
@@ -12041,10 +12292,9 @@ class Driver(object):
         )
         return "verification failed; full-suite repair queued"
 
-    def _preserve_reclassify_parent(self, parent_call, reason):
+    def _preserve_reclassify_parent(self, unit, parent_call, reason):
         """Keep a completed review visible when child admission stops."""
         if parent_call is not None:
-            unit = st.current_unit(self.state)
             self._record_worker_unaccepted(
                 unit,
                 parent_call[0],
@@ -12123,6 +12373,7 @@ class Driver(object):
                         )
                 except StopStep:
                     self._preserve_reclassify_parent(
+                        unit,
                         parent_call,
                         "review completed but current model-profile state "
                         "blocked nested reclassification",
@@ -12155,9 +12406,18 @@ class Driver(object):
                         c if (c.isalnum() or c in "_.-") else "_"
                         for c in str(finding.get("id", ""))
                     )[:64] or "f"
-                    pc, _rx, _rr = self._project_prompt_inputs(
-                        unit, contracts.KIND_RECLASSIFY
-                    )
+                    try:
+                        pc, _rx, _rr = self._project_prompt_inputs(
+                            unit, contracts.KIND_RECLASSIFY
+                        )
+                    except StopStep:
+                        self._preserve_reclassify_parent(
+                            unit,
+                            parent_call,
+                            "review completed but current project authority "
+                            "blocked nested reclassification",
+                        )
+                        raise
                     # Reform runs: the rater judges for the run's REAL
                     # builders and knows their stop-report-repair exit —
                     # the reform's bargain (tolerate more in docs BECAUSE
@@ -12222,67 +12482,30 @@ class Driver(object):
                         dm, de = self._family_defaults(opp)
                         effective_model = rater_model or dm
                         effective_effort = rater_effort or de
-                        if not self._mark_busy(
-                            raw_name,
-                            contracts.KIND_RECLASSIFY,
-                            opp,
-                            model=effective_model,
-                            effort=effective_effort,
-                            nested=True,
-                            staffing_fallback=getattr(
-                                rater_dispatch, "staffing_fallback", None
-                            ),
-                        ):
-                            if parent_call is not None:
-                                self._record_worker_unaccepted(
-                                    unit,
-                                    parent_call[0],
-                                    parent_call[1],
-                                    parent_call[2],
-                                    "review could not complete its nested "
-                                    "reclassification",
-                                )
-                            st.fail_run(
-                                self.state,
-                                "reclassify call could not create its "
-                                "accounting marker",
-                                unit=unit,
-                                type_="orchestrator",
-                            )
-                            self._save()
-                            raise StopStep(
-                                "worker accounting marker unavailable"
-                            )
                         try:
-                            output, result = runners.call_worker(
-                                self.runner, opp, prompt,
+                            output, result, raw_path = self._call(
+                                opp, prompt,
                                 contracts.KIND_RECLASSIFY,
-                                self.workspace,
+                                raw_name,
                                 model=effective_model,
                                 effort=effective_effort,
                                 validate_opts=(
                                     {"require_drift_damage": True}
                                     if effective_gap_backstop else None
                                 ),
-                                resolve_dispatch=resolve_rater,
-                                on_dispatch=lambda f, m, e, prompt_fallback: (
-                                    self._retarget_busy(
-                                        raw_name,
-                                        contracts.KIND_RECLASSIFY,
-                                        f,
-                                        m,
-                                        e,
-                                        staffing_fallback=getattr(
-                                            rater_dispatch,
-                                            "staffing_fallback",
-                                            None,
-                                        ),
-                                        prompt_set_fallback=prompt_fallback,
-                                    )
+                                dispatch_resolver=resolve_rater,
+                                prepare_call=self._judgment_prepare_call(
+                                    unit,
+                                    contracts.KIND_RECLASSIFY,
+                                    raw_name,
+                                    context={"finding": finding},
                                 ),
+                                episode_unit=unit,
+                                nested=True,
                             )
                         except StopStep:
                             self._preserve_reclassify_parent(
+                                unit,
                                 parent_call,
                                 "review completed but current model-profile "
                                 "state blocked nested reclassification",
@@ -12293,14 +12516,6 @@ class Driver(object):
                                 result, opp, effective_model, effective_effort
                             )
                         )
-                        self._require_busy_accounting(
-                            contracts.KIND_RECLASSIFY,
-                            opp,
-                            raw_name,
-                            result,
-                            parent_call=parent_call,
-                        )
-                        self._save_raw(raw_name, result.text)
                         duration_s = result.duration_s
                         token_usage = getattr(result, "token_usage", None)
                         token_usage_partial = bool(
@@ -12313,9 +12528,6 @@ class Driver(object):
                             or call_cost is None
                         )
                         logical_duration_s = self._call_accounting(result)[0]
-                        self._record_repair(
-                            raw_name, contracts.KIND_RECLASSIFY, opp, result
-                        )
                         if output.get("status") == "ok":
                             # The worker only RATES; the deterministic
                             # decision is this comparison against the
@@ -12342,25 +12554,6 @@ class Driver(object):
                         reason = (
                             "no independent reclassifier (single family)"
                         )
-                    except (runners.RunnerError,
-                            runners.WorkerProtocolError) as exc:
-                        opp, effective_model, effective_effort = (
-                            self._result_identity(
-                                exc, opp, effective_model, effective_effort
-                            )
-                        )
-                        self._require_busy_accounting(
-                            contracts.KIND_RECLASSIFY,
-                            opp,
-                            raw_name,
-                            exc,
-                            parent_call=parent_call,
-                        )
-                        self._record_fatal_malformed(
-                            raw_name, contracts.KIND_RECLASSIFY, opp, exc,
-                            self._save_protocol_raws(raw_name, exc),
-                        )
-                        reason = ("reclassify call failed: %s" % exc)[:300]
                 st.append_event(
                     self.state, "reclassify_recorded",
                     unit=st.unit_key(unit),
@@ -12564,12 +12757,13 @@ class Driver(object):
             ]
         )
         self._activate_worker_episode_authority(authority)
+        raw_name = "%s-%s-r%d" % (st.unit_key(unit), family, label_no)
         output, result, raw_path = self._report_call(
             unit,
             family,
             prompt,
             contracts.KIND_REVIEW_ROUND,
-            "%s-%s-r%d" % (st.unit_key(unit), family, label_no),
+            raw_name,
             extensions=extensions,
             roots=roots,
             validate_opts={"require_plain": True} if reform else None,
@@ -12586,6 +12780,9 @@ class Driver(object):
             ),
             task_id=(active_review or {}).get("id"),
             project_context=project_context,
+            prepare_call=self._judgment_prepare_call(
+                unit, contracts.KIND_REVIEW_ROUND, raw_name
+            ),
         )
         family, review_model, review_effort = self._result_identity(
             result, family, review_model, review_effort
@@ -12600,7 +12797,7 @@ class Driver(object):
                 output,
                 result,
                 raw_path,
-                "%s-%s-r%d" % (st.unit_key(unit), family, label_no),
+                raw_name,
             )
         self._check_worker_blocked(
             unit, output, contracts.KIND_REVIEW_ROUND, family, result
@@ -12664,6 +12861,12 @@ class Driver(object):
                     if (f.get("severity") not in defer_scope
                         or f.get("id") in retained_ids)
                 ]
+        # Trusted report-only judgments are consumed even when their call left
+        # repository bytes behind. Rebind the live cycle to the post-call
+        # candidate so that the next family distinguishes those accepted bytes
+        # from a later inter-call edit without discarding earlier judgments.
+        evidence_fingerprint = self._review_evidence_fingerprint(unit)
+        unit["review_evidence_fingerprint"] = evidence_fingerprint
         round_meta = {
             "model": review_model,
             "effort": review_effort,
@@ -13225,6 +13428,27 @@ def _write_creation_acts(state_path, overrides):
     os.replace(tmp, path)
 
 
+def _write_initial_amendments(state_path):
+    """Publish the required empty mutable-authority source atomically."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(state_path)), "amendments.json"
+    )
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = "%s.init-%s" % (path, uuid.uuid4().hex)
+    try:
+        with open(tmp, "x", encoding="utf-8") as handle:
+            json.dump({"amendments": []}, handle, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    return path
+
+
 def _validate_initial_strategy(config):
     """Validate raw retained strategy content before creating run state."""
     if not isinstance(config, dict) or "profile" not in config:
@@ -13368,13 +13592,25 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
             work_area=project_block["work_area"],
         )
     path = state_path or default_state_path(workspace, state.get("docs_dir"))
-    st.save_new(path, state)
+    amendments_path = _write_initial_amendments(path)
+    try:
+        st.save_new(path, state)
+    except BaseException:
+        try:
+            os.unlink(amendments_path)
+        except OSError:
+            pass
+        raise
     if creation_overrides:
         try:
             _write_creation_acts(path, creation_overrides)
         except OSError:
             try:
                 os.unlink(path)
+            except OSError:
+                pass
+            try:
+                os.unlink(amendments_path)
             except OSError:
                 pass
             raise

@@ -452,6 +452,36 @@ def begin_author_call(state, skeleton_path, *, allow_unanchored=False):
     }
 
 
+def begin_observed_call(state, skeleton_path):
+    """Guard one trusted call without snapshotting unrelated repository state."""
+    skeleton_path = _relative_path(skeleton_path)
+    workspace = state.get("workspace")
+    if not isinstance(workspace, str) or not workspace:
+        raise CanonicalPlanError("run state has no workspace")
+    anchor = _anchor(state)
+    if anchor is None:
+        raise CanonicalPlanError("canonical plan has not been anchored")
+    if anchor["path"] != skeleton_path:
+        raise CanonicalPlanError("canonical-plan anchor path cannot change")
+    guarded_dispatch(state, lambda: None)
+    anchored_document = _anchored_document(state, anchor)
+    try:
+        gitops.pin_canonical_plan_commit(
+            workspace, skeleton_path, anchor["revision"]
+        )
+    except gitops.GitError as exc:
+        raise CanonicalPlanError(
+            "canonical-plan anchor could not be made durable: %s" % exc
+        ) from exc
+    return {
+        "workspace": workspace,
+        "path": skeleton_path,
+        "anchor": copy.deepcopy(anchor),
+        "anchored_document": anchored_document,
+        "anchored_block": canonical_block_bytes(anchored_document),
+    }
+
+
 def _reject_author_call(snapshot, cause):
     try:
         restore_author_call(snapshot)
@@ -466,26 +496,26 @@ def _reject_author_call(snapshot, cause):
     ) from cause
 
 
-def complete_author_call(state, snapshot, *, message="canonical plan accepted"):
-    """Compare, validate, project, and mechanically anchor one completed call.
-
-    Byte-identical content is deliberately not revalidated. A changed valid
-    block is stored in an off-ref commit object so the next physical attempt
-    has a committed Git anchor without disturbing the ordinary WIP/review
-    history. Any invalid changed block restores the exact pre-call snapshot.
-    """
+def _complete_call(
+    state, snapshot, message, reject, *, verify_unchanged_git_tree=True
+):
     workspace = snapshot["workspace"]
     path = os.path.join(workspace, snapshot["path"])
     try:
         document = _read_regular_document(path)
         block = canonical_block_bytes(document)
     except (OSError, CanonicalPlanError) as exc:
-        _reject_author_call(snapshot, exc)
+        reject(snapshot, exc)
 
     if (
         snapshot["anchor"] is not None
         and block == snapshot["anchored_block"]
     ):
+        if not verify_unchanged_git_tree:
+            return {
+                "changed": False,
+                "anchor": copy.deepcopy(snapshot["anchor"]),
+            }
         try:
             tree = gitops.snapshot_worktree_tree(workspace)
             tree_document = gitops.show_file(
@@ -508,7 +538,7 @@ def complete_author_call(state, snapshot, *, message="canonical plan accepted"):
                 snapshot["anchor"]["revision"],
             )
         except (CanonicalPlanError, gitops.GitError) as exc:
-            _reject_author_call(snapshot, exc)
+            reject(snapshot, exc)
         return {"changed": False, "anchor": copy.deepcopy(snapshot["anchor"])}
 
     try:
@@ -544,12 +574,35 @@ def complete_author_call(state, snapshot, *, message="canonical plan accepted"):
             workspace, snapshot["path"], revision
         )
     except (CanonicalPlanError, gitops.GitError) as exc:
-        _reject_author_call(snapshot, exc)
+        reject(snapshot, exc)
 
     anchor = {"path": snapshot["path"], "revision": revision}
     state["milestone"]["slices"] = plan["projection"]
     state["milestone"][ANCHOR_KEY] = anchor
     return {"changed": True, "anchor": copy.deepcopy(anchor)}
+
+
+def complete_author_call(state, snapshot, *, message="canonical plan accepted"):
+    """Accept one editing call, restoring its snapshot on an invalid block."""
+    return _complete_call(state, snapshot, message, _reject_author_call)
+
+
+def complete_observed_call(
+    state, snapshot, *, message="canonical plan observed"
+):
+    """Observe one trusted call; invalid plan bytes fail without restoration."""
+    def reject(_snapshot, cause):
+        raise CanonicalPlanError(
+            "trusted call left an invalid canonical plan: %s" % cause
+        ) from cause
+
+    return _complete_call(
+        state,
+        snapshot,
+        message,
+        reject,
+        verify_unchanged_git_tree=False,
+    )
 
 
 def establish_current_plan(state, skeleton_path):

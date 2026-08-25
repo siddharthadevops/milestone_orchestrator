@@ -1050,6 +1050,9 @@ class DriverAuthorActivationTest(unittest.TestCase):
                 resumed_origin[state.AUTHOR_PLAN_REVIEW_KEY]
             )
             self.assertEqual(
+                resumed_origin[state.PLAN_FOLLOWUP_MATERIAL_KEY], "document"
+            )
+            self.assertEqual(
                 resumed_origin["status"], state.U_PRE_REVIEW_VERIFY
             )
             self.assertIs(state.current_unit(reloaded), resumed_origin)

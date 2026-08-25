@@ -2165,6 +2165,63 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
     )
 
 
+def design_correction_verdict_section(design_correction):
+    """Render the retained provisional-correction contract from its source."""
+    authority = design_correction.get("brainstorming_authority")
+    if authority is None:
+        authority_block = "- authority artifact: %s\n" % _oneline(
+            design_correction.get("authority_artifact"), 300
+        )
+    else:
+        authority_block = (
+            "- authority: retained Brainstorming session %s, revision %s\n"
+            "- target ref (informational only): %s\n"
+            "- exact retained authority content (%s, JSON quoted):\n%s\n"
+            % (
+                _oneline(authority.get("session_id"), 300),
+                _oneline(authority.get("accepted_target_revision"), 300),
+                _oneline(design_correction.get("authority_artifact"), 300),
+                design_correction.get(
+                    "retained_authority_encoding", "unknown"
+                ),
+                json.dumps(
+                    design_correction.get("retained_authority_content", ""),
+                    ensure_ascii=False,
+                ),
+            )
+        )
+    text = (
+        "PROVISIONAL OWN-NOTE DESIGN CORRECTION\n"
+        "The implementation fixer used its one-shot permission to amend\n"
+        "only its governing slice note alongside code/tests. Judge the\n"
+        "semantic boundary under this trust model: the fixer is a\n"
+        "cooperative implementer that may be mistaken, not an attacker.\n"
+        "Do not invent repository-sabotage or filesystem threat models.\n"
+        "Ratify only when ONE pre-existing cited artifact uniquely forces\n"
+        "the correction and no goal, skeleton/slice ownership, public\n"
+        "contract, schema, security/payment/integration boundary, or new\n"
+        "machinery changes. Otherwise choose remodel (still in goal) or\n"
+        "needs_operator (goal decision). Use retry only for ordinary\n"
+        "actionable defects in this delta.\n"
+        "- note: %s\n%s"
+        "- contradiction: %s\n- proposed resolution: %s\n"
+        "Return design_correction_verdict={decision, reason}, where\n"
+        "decision is ratify|retry|remodel|needs_operator. Ratify requires\n"
+        "no findings; retry requires findings."
+        % (
+            _oneline(design_correction.get("artifact"), 300),
+            authority_block,
+            _oneline(design_correction.get("contradiction"), 600),
+            _oneline(design_correction.get("resolution"), 600),
+        )
+    )
+    return {
+        "id": "design_correction_verdict",
+        "text": text.splitlines(),
+        "variables": [],
+    }
+
+
 def build_delta_review(family, workspace, goal, unit_desc, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, debt=None, wave_docs=None,
@@ -2195,60 +2252,9 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
         )
     correction_block = ""
     if gap_enabled and design_correction:
-        authority = design_correction.get("brainstorming_authority")
-        if authority is None:
-            authority_block = "- authority artifact: %s\n" % _oneline(
-                design_correction.get("authority_artifact"), 300
-            )
-        else:
-            authority_block = (
-                "- authority: retained Brainstorming session %s, revision %s\n"
-                "- target ref (informational only): %s\n"
-                "- exact retained authority content (%s, JSON quoted):\n%s\n"
-                % (
-                    _oneline(authority.get("session_id"), 300),
-                    _oneline(
-                        authority.get("accepted_target_revision"), 300
-                    ),
-                    _oneline(
-                        design_correction.get("authority_artifact"), 300
-                    ),
-                    design_correction.get(
-                        "retained_authority_encoding", "unknown"
-                    ),
-                    json.dumps(
-                        design_correction.get(
-                            "retained_authority_content", ""
-                        ),
-                        ensure_ascii=False,
-                    ),
-                )
-            )
-        correction_block = (
-            "PROVISIONAL OWN-NOTE DESIGN CORRECTION\n"
-            "The implementation fixer used its one-shot permission to amend\n"
-            "only its governing slice note alongside code/tests. Judge the\n"
-            "semantic boundary under this trust model: the fixer is a\n"
-            "cooperative implementer that may be mistaken, not an attacker.\n"
-            "Do not invent repository-sabotage or filesystem threat models.\n"
-            "Ratify only when ONE pre-existing cited artifact uniquely forces\n"
-            "the correction and no goal, skeleton/slice ownership, public\n"
-            "contract, schema, security/payment/integration boundary, or new\n"
-            "machinery changes. Otherwise choose remodel (still in goal) or\n"
-            "needs_operator (goal decision). Use retry only for ordinary\n"
-            "actionable defects in this delta.\n"
-            "- note: %s\n%s"
-            "- contradiction: %s\n- proposed resolution: %s\n"
-            "Return design_correction_verdict={decision, reason}, where\n"
-            "decision is ratify|retry|remodel|needs_operator. Ratify requires\n"
-            "no findings; retry requires findings.\n\n"
-            % (
-                _oneline(design_correction.get("artifact"), 300),
-                authority_block,
-                _oneline(design_correction.get("contradiction"), 600),
-                _oneline(design_correction.get("resolution"), 600),
-            )
-        )
+        correction_block = "\n".join(
+            design_correction_verdict_section(design_correction)["text"]
+        ) + "\n\n"
     return (
         _header(contracts.KIND_DELTA_REVIEW, family, workspace)
         + "\nTASK: incremental review of the pending fix delta on %s.\n"

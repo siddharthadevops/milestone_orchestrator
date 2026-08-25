@@ -230,6 +230,9 @@ def prepare(
     project_context=None,
     workspace=None,
     queued_findings=None,
+    correction=None,
+    fixer_recovery_state=None,
+    design_correction=None,
 ):
     """Freshly resolve, render, bind, and pair one judgment charge."""
     if job not in JUDGMENT_JOBS:
@@ -240,6 +243,7 @@ def prepare(
         raise prompt_router.PromptRouterError("values must be an object")
     if set(values).intersection((
         "operator_amendments", "ecosystem_map", "queued_findings",
+        "contract_correction", "fixer_recovery_state",
     )):
         raise prompt_router.PromptRouterError(
             "judgment-owned values are adapter-owned"
@@ -258,7 +262,62 @@ def prepare(
     else:
         frozen_queued_findings = None
 
+    if design_correction is None:
+        consumer_sections = ()
+    elif kind != "delta_review" or not isinstance(design_correction, dict) \
+            or not design_correction:
+        raise prompt_router.PromptRouterError(
+            "design_correction requires a non-empty delta-review context"
+        )
+    else:
+        consumer_sections = (
+            prompts.design_correction_verdict_section(
+                copy.deepcopy(design_correction)
+            ),
+        )
+
     charge_values = dict(values)
+    implementation_scope = charge_values.get("implementation_scope")
+    if implementation_scope is None:
+        charge_values.pop("implementation_scope", None)
+    elif not job.endswith("@slice_impl"):
+        raise prompt_router.PromptRouterError(
+            "only slice implementation judgments accept an implementation scope"
+        )
+    elif isinstance(implementation_scope, dict):
+        charge_values["implementation_scope"] = (
+            prompts._implementation_scope_block(implementation_scope).rstrip(
+                "\n"
+            )
+        )
+    elif not isinstance(implementation_scope, str) \
+            or not implementation_scope.strip():
+        raise prompt_router.PromptRouterError(
+            "implementation_scope must be a non-empty string or object"
+        )
+    else:
+        charge_values["implementation_scope"] = (
+            implementation_scope.rstrip("\n")
+        )
+    if correction is None:
+        charge_values.pop("contract_correction", None)
+    elif not isinstance(correction, str) or not correction.strip():
+        raise prompt_router.PromptRouterError(
+            "judgment correction must be non-empty text"
+        )
+    else:
+        charge_values["contract_correction"] = correction.strip()
+    if fixer_recovery_state is None:
+        charge_values.pop("fixer_recovery_state", None)
+    elif (
+        job.split("@", 1)[0] != "fix_findings"
+        or fixer_recovery_state != "pending_partial_delta"
+    ):
+        raise prompt_router.PromptRouterError(
+            "invalid fixer recovery state"
+        )
+    else:
+        charge_values["fixer_recovery_state"] = fixer_recovery_state
     if frozen_queued_findings is not None:
         charge_values["queued_findings"] = json.dumps(
             frozen_queued_findings,
@@ -318,6 +377,24 @@ def prepare(
                 "routed %s prompt defaults required job payload %r"
                 % (kind, defaulted_payloads[0])
             )
+        dynamic_payloads = {
+            "implementation_scope": implementation_scope is not None,
+            "contract_correction": correction is not None,
+            "fixer_recovery_state": fixer_recovery_state is not None,
+        }
+        for variable, supplied in dynamic_payloads.items():
+            declarations = mounted_variable_declarations[variable]
+            substitutions = _mounted_variable_substitutions(prompt, variable)
+            if supplied and (declarations != 1 or substitutions != 1):
+                raise prompt_sets.PromptSetError(
+                    "routed %s prompt must bind exactly one adapter-owned "
+                    "dynamic payload %r" % (kind, variable)
+                )
+            if not supplied and variable in defaulted_variables:
+                raise prompt_sets.PromptSetError(
+                    "routed %s prompt invents adapter-owned dynamic payload %r"
+                    % (kind, variable)
+                )
         authority_variables = ["operator_amendments"]
         if authority_body is not None:
             authority_variables.append("ecosystem_map")
@@ -331,7 +408,9 @@ def prepare(
                     % (kind, variable)
                 )
         try:
-            bound_prompt = prompt_contracts.bind(prompt)
+            bound_prompt = prompt_contracts.bind(
+                prompt, consumer_sections=consumer_sections
+            )
         except contracts.ContractError as exc:
             raise prompt_sets.PromptSetError(
                 "routed judgment prompt cannot bind its served contract: %s"
@@ -350,6 +429,7 @@ def prepare(
             set(bound_prompt.registered_section_ids)
             - _REQUIRED_CONTRACT_SECTIONS[kind]
             - _SHARED_CONTRACT_SECTIONS
+            - {section["id"] for section in consumer_sections}
         )
         if incompatible_sections:
             raise prompt_sets.PromptSetError(
@@ -366,7 +446,9 @@ def prepare(
         prompt_set=prompt_set,
         prompt_validator=validate_judgment_prompt,
     )
-    bound = prompt_contracts.bind(resolution.prompt)
+    bound = prompt_contracts.bind(
+        resolution.prompt, consumer_sections=consumer_sections
+    )
     reserved = prompt_contracts.reserved_output_fields(bound)
     for extension in frozen_extensions:
         if extension.field in reserved:

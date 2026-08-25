@@ -512,7 +512,9 @@ captured evidence it was pruned from.
 56. **Round-5 rulings F2-F5** (operator, 2026-08-23): session delivery
     returns `slices` for ANY charge that planned or re-planned, implement
     included (F2). Consultation transcripts save under a driver-provided
-    `{{scratch_path}}`, never inside .orchestrator/ (F3). The rationale
+    `{{scratch_path}}` (F3). Slice 06-b now binds that value to the existing
+    ignored `.orchestrator/scratch/` runtime area, outside the candidate delta.
+    The rationale
     matches the goal: the charge battery mounts on every lead turn, the
     accounting lands with `ready` (F4). The executor catalogue is a
     required job payload wherever producer planning mounts; the unit

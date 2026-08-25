@@ -2053,6 +2053,11 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             raise RuntimeError("dispatch reached")
 
         with (
+            mock.patch.object(
+                recovered,
+                "_judgment_prepare_call",
+                wraps=recovered._judgment_prepare_call,
+            ) as prepare_call,
             mock.patch.object(recovered, "_call", side_effect=reached),
             self.assertRaisesRegex(RuntimeError, "dispatch reached"),
         ):
@@ -2062,6 +2067,10 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         self.assertIn("KILLED-CALL NOTICE", seen[0])
         self.assertIn("frozen fixer prompt", seen[0])
         self.assertIn("WORKER EPISODE AUTHORITY REFRESH", seen[0])
+        self.assertEqual(
+            prepare_call.call_args.kwargs["context"]["fixer_recovery_state"],
+            "pending_partial_delta",
+        )
         self.assertEqual(
             tasks.task_record(recovered.state, task["id"])["order"]["request"]
             ["request"],

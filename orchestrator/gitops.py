@@ -604,9 +604,9 @@ def reviewable_line_count(workspace, base, bookkeeping_dir=None):
     return total
 
 
-def worktree_diff(workspace, max_chars=DIFF_MAX_CHARS):
-    """The pending (not yet amended) delta: worktree vs HEAD, including new
-    files.
+def worktree_diff(workspace, max_chars=DIFF_MAX_CHARS, base_revision=None):
+    """The pending delta from ``base_revision`` (HEAD by default), including
+    committed fixer work and new files.
 
     `git add -N` (intent-to-add, honors .gitignore) makes untracked files
     appear in `git diff` without treating them as reviewed.
@@ -619,7 +619,10 @@ def worktree_diff(workspace, max_chars=DIFF_MAX_CHARS):
     _assert_workspace_root(workspace)
     _assert_no_embedded_repos(workspace)
     _run(workspace, "add", "-N", "--ignore-removal", ".", check=False)
-    proc = _run(workspace, "diff", "--no-ext-diff", "--no-color", "HEAD")
+    base = "HEAD" if base_revision is None else base_revision
+    if not isinstance(base, str) or not base:
+        raise GitError("worktree diff base revision is invalid")
+    proc = _run(workspace, "diff", "--no-ext-diff", "--no-color", base)
     text = proc.stdout
     if len(text) > max_chars:
         return text[:max_chars] + TRUNCATION_MARKER
@@ -1051,100 +1054,6 @@ def restore_to_snapshot(workspace, refs, sym, head, tree, stash=None):
     # older entries live only in the reflog); rebuild it last.
     if stash is not None:
         _restore_stash(workspace, stash)
-
-
-def fold_worker_commits_to_delta(
-        workspace, refs, sym, head, tree, stash=None):
-    """Turn a fixer's ordinary local commits back into one pending delta.
-
-    Some projects require a clean worktree while their suite runs. A fixer may
-    therefore commit its repair before reporting success. Accept that narrow
-    case without letting the worker take over repository history: HEAD must
-    stay on the same branch and move only through linear descendant commits;
-    every other ref and the stash stack must remain unchanged.
-
-    The candidate bytes are preserved, HEAD returns to the pre-call commit,
-    and the pre-call index is restored. The normal delta-review/amend path can
-    then review and own the repair exactly as if it had never been committed.
-    Returns metadata when commits were folded, otherwise ``None``.
-    """
-    _assert_workspace_root(workspace)
-    current_sym = head_symbolic_ref(workspace)
-    current_head = head_full_sha(workspace)
-    if current_head == head:
-        return None
-    if current_sym != sym:
-        raise GitError("fixer changed the checked-out branch")
-
-    current_refs = snapshot_refs(workspace)
-    allowed_ref = sym or None
-    for refname in set(refs) | set(current_refs):
-        if refname == allowed_ref:
-            continue
-        if refs.get(refname) != current_refs.get(refname):
-            raise GitError("fixer changed ref %s" % refname)
-    if sym:
-        if refs.get(sym) != head or current_refs.get(sym) != current_head:
-            raise GitError("fixer rewrote the active branch unexpectedly")
-    elif current_refs != refs:
-        raise GitError("fixer changed repository refs while HEAD was detached")
-    if stash is not None and snapshot_stash(workspace) != stash:
-        raise GitError("fixer changed the stash stack")
-
-    if _run(
-        workspace, "merge-base", "--is-ancestor", head, current_head,
-        check=False,
-    ).returncode != 0:
-        raise GitError("fixer rewrote history instead of adding commits")
-    merges = _run(
-        workspace, "rev-list", "--merges", "%s..%s" % (head, current_head)
-    ).stdout.strip()
-    if merges:
-        raise GitError("fixer created a merge commit")
-    commit_count = int(_run(
-        workspace, "rev-list", "--count", "%s..%s" % (head, current_head)
-    ).stdout.strip())
-    if commit_count < 1:
-        raise GitError("fixer moved HEAD without adding a linear commit")
-
-    current_index = snapshot_index_tree(workspace)
-    candidate_tree = snapshot_worktree_tree(workspace)
-    moved = False
-    try:
-        if sym:
-            _run(workspace, "update-ref", sym, head, current_head)
-        else:
-            _run(
-                workspace, "update-ref", "--no-deref", "HEAD", head,
-                current_head,
-            )
-        moved = True
-        _run(workspace, "read-tree", tree)
-        if snapshot_worktree_tree(workspace) != candidate_tree:
-            raise GitError("candidate bytes changed while folding fixer commits")
-    except Exception as exc:
-        if moved:
-            try:
-                if sym:
-                    _run(workspace, "update-ref", sym, current_head, head)
-                else:
-                    _run(
-                        workspace, "update-ref", "--no-deref", "HEAD",
-                        current_head, head,
-                    )
-                _run(workspace, "read-tree", current_index)
-            except GitError:
-                pass
-        if isinstance(exc, GitError):
-            raise
-        raise GitError("could not fold fixer commits: %s" % exc)
-
-    return {
-        "baseline_head": head,
-        "worker_head": current_head,
-        "commit_count": commit_count,
-        "candidate_tree": candidate_tree,
-    }
 
 
 def newest_commit(workspace, shas):

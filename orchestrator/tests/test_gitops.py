@@ -961,78 +961,20 @@ class WorktreeDiffTests(GitopsTestCase):
         self.assertEqual(len(delta), limit + len(gitops.TRUNCATION_MARKER))
         self.assertTrue(delta.startswith("diff --git"))
 
-
-class FoldWorkerCommitsTests(GitopsTestCase):
-    def snapshot(self, workspace):
-        return (
-            gitops.snapshot_refs(workspace),
-            gitops.head_symbolic_ref(workspace),
-            gitops.head_full_sha(workspace),
-            gitops.snapshot_index_tree(workspace),
-            gitops.snapshot_stash(workspace),
-        )
-
-    def test_linear_commits_become_one_pending_delta_without_losing_bytes(self):
+    def test_fixed_base_includes_committed_and_uncommitted_changes(self):
         ws = self.make_repo(files={"tracked.txt": "before\n"})
         gitops.ensure_repo(ws)
-        refs, sym, head, tree, stash = self.snapshot(ws)
-
-        _write(os.path.join(ws, "tracked.txt"), "after commit one\n")
+        base = gitops.head_full_sha(ws)
+        _write(os.path.join(ws, "tracked.txt"), "committed\n")
         self.git(ws, "add", "-A")
-        self.git(ws, "commit", "-qm", "fixer commit one")
-        _write(os.path.join(ws, "new.txt"), "committed new file\n")
-        self.git(ws, "add", "-A")
-        self.git(ws, "commit", "-qm", "fixer commit two")
-        _write(os.path.join(ws, "tracked.txt"), "final candidate bytes\n")
-        worker_head = self.git(ws, "rev-parse", "HEAD").strip()
+        self.git(ws, "commit", "-qm", "fixer-owned repair")
+        _write(os.path.join(ws, "new.txt"), "uncommitted\n")
 
-        folded = gitops.fold_worker_commits_to_delta(
-            ws, refs, sym, head, tree, stash
-        )
+        delta = gitops.worktree_diff(ws, base_revision=base)
 
-        self.assertEqual(folded["worker_head"], worker_head)
-        self.assertEqual(folded["commit_count"], 2)
-        self.assertEqual(self.git(ws, "rev-parse", "HEAD").strip(), head)
-        self.assertEqual(_read(os.path.join(ws, "tracked.txt")),
-                         "final candidate bytes\n")
-        self.assertEqual(_read(os.path.join(ws, "new.txt")),
-                         "committed new file\n")
-        delta = gitops.worktree_diff(ws)
-        self.assertIn("final candidate bytes", delta)
-        self.assertIn("committed new file", delta)
-        self.assertNotIn("fixer commit", self.git(ws, "log", "--format=%s"))
-
-    def test_empty_commit_folds_to_an_empty_delta(self):
-        ws = self.make_repo(files={"seed.txt": "seed\n"})
-        gitops.ensure_repo(ws)
-        refs, sym, head, tree, stash = self.snapshot(ws)
-        self.git(ws, "commit", "--allow-empty", "-qm", "empty fixer commit")
-
-        folded = gitops.fold_worker_commits_to_delta(
-            ws, refs, sym, head, tree, stash
-        )
-
-        self.assertEqual(folded["commit_count"], 1)
-        self.assertEqual(self.git(ws, "rev-parse", "HEAD").strip(), head)
-        self.assertEqual(gitops.worktree_diff(ws), "")
-
-    def test_other_ref_mutation_is_rejected_without_rewriting_worker_head(self):
-        ws = self.make_repo(files={"seed.txt": "seed\n"})
-        gitops.ensure_repo(ws)
-        refs, sym, head, tree, stash = self.snapshot(ws)
-        _write(os.path.join(ws, "seed.txt"), "fixed\n")
-        self.git(ws, "add", "-A")
-        self.git(ws, "commit", "-qm", "fixer commit")
-        worker_head = self.git(ws, "rev-parse", "HEAD").strip()
-        self.git(ws, "tag", "fixer-tag")
-
-        with self.assertRaises(gitops.GitError) as ctx:
-            gitops.fold_worker_commits_to_delta(
-                ws, refs, sym, head, tree, stash
-            )
-
-        self.assertIn("changed ref refs/tags/fixer-tag", str(ctx.exception))
-        self.assertEqual(self.git(ws, "rev-parse", "HEAD").strip(), worker_head)
+        self.assertIn("committed", delta)
+        self.assertIn("uncommitted", delta)
+        self.assertIn("fixer-owned repair", self.git(ws, "log", "--format=%s"))
 
 
 class ReviewableLineCountTests(GitopsTestCase):

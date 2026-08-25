@@ -257,6 +257,20 @@ def _review_rethink(obj, bound, options, ctx):
     )
 
 
+def _design_correction_verdict(obj, bound, options, ctx):
+    del options
+    status = _status(
+        obj, bound, ("ok", "blocked", "need_rethink"), ctx,
+        ("delta_review",),
+    )
+    if status == "ok":
+        contracts.validate_design_correction_verdict(
+            _require(obj, "design_correction_verdict", dict, ctx),
+            _require(obj, "findings", list, ctx),
+            ctx,
+        )
+
+
 def _fix_result(obj, bound, options, ctx):
     status = _status(obj, bound, _FIX_STATUSES, ctx, ("fix_findings",))
     if status != "ok":
@@ -596,6 +610,7 @@ REGISTERED_SECTIONS = {
     "questions_output": _questions,
     "review_blocked": _review_blocked,
     "review_contract": _review_result,
+    "design_correction_verdict": _design_correction_verdict,
     "review_need_rethink": _review_rethink,
     "discussion_turn_envelope": _turn("discussion_turn", True),
     "fix_blocked": _fix_blocked,
@@ -663,6 +678,10 @@ def _allowed_fields(bound, obj):
             allowed.update(("status", "kind"))
             if status == "need_rethink":
                 allowed.update(("finding", "target_path"))
+        elif section_id == "design_correction_verdict":
+            allowed.update(("status", "kind"))
+            if status == "ok":
+                allowed.add("design_correction_verdict")
         elif section_id == "fix_results":
             allowed.update(("status", "kind"))
             if status == "ok":

@@ -172,7 +172,7 @@ permitted_baseline, incremental_harm, and exceeds_baseline;
 permitted operation is not damage by itself.
 Command (prompt on stdin):
   /usr/local/bin/python3 /Users/siddhartha/Development/source/milestone_orchestrator/orchestrator/current_model_call.py --state /Users/siddhartha/Development/source/milestone_orchestrator_impl/implementation/milestones/staffing-router/.run/state.json --home /Users/siddhartha/.impl_roadmap --caller-act fixer --caller-origin codex
-Save the transcript under /Users/siddhartha/Development/source/milestone_orchestrator_impl/.consultations/; summarize
+Save the transcript under /Users/siddhartha/Development/source/milestone_orchestrator_impl/.orchestrator/scratch/; summarize
 it in consultation.resolution. Run at most five dialogue rounds,
 stopping earlier on clear agreement. Never reject P0/P1 without a
 clear resolution. If consultation is unavailable or unresolved, do

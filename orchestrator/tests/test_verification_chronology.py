@@ -480,7 +480,7 @@ class TestVerificationChronology(DriverTestCase):
             ]
             self.assertGreater(events[-1]["seq"], review_events[-1]["seq"])
 
-    def test_due_suite_fixer_commit_is_folded_into_reviewed_wip(self):
+    def test_due_suite_fixer_commit_remains_in_reviewed_history(self):
         marker = "suite-green.marker"
         command = (
             "test -f %s && test -z \"$(git status --porcelain)\"" % marker
@@ -512,11 +512,6 @@ class TestVerificationChronology(DriverTestCase):
                 family="codex",
                 side_effect=commit_repair,
             ),
-            step(
-                contracts.KIND_DELTA_REVIEW,
-                report(contracts.KIND_DELTA_REVIEW),
-                family="codex",
-            ),
         ] + _clean_reviews()
         with tempfile.TemporaryDirectory(prefix="orch-verify-commit-fix-") as ws:
             path = init_state(ws, make_config(verification=[command]))
@@ -537,8 +532,7 @@ class TestVerificationChronology(DriverTestCase):
                 for event in state["events"]
                 if event["type"] == "fixer_commits_folded"
             ]
-            self.assertEqual(len(folded), 1)
-            self.assertEqual(folded[0]["commit_count"], 1)
+            self.assertEqual(folded, [])
             impl = self._unit(state, "slice_impl-01")
             reviews = [
                 round_info
@@ -569,7 +563,7 @@ class TestVerificationChronology(DriverTestCase):
                 text=True,
                 timeout=60,
             ).stdout
-            self.assertNotIn("fixer-owned repair", subjects)
+            self.assertIn("fixer-owned repair", subjects)
 
 
 if __name__ == "__main__":

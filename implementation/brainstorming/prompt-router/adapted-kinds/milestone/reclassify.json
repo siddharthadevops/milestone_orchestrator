@@ -15,6 +15,9 @@
         "variables": []
       },
       {
+        "ref": "contract_correction"
+      },
+      {
         "ref": "trusted_judgment_read_only"
       },
       {

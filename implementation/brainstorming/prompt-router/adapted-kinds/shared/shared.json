@@ -371,6 +371,39 @@
         }
       ]
     },
+    "contract_correction": {
+      "text": [
+        "CONTRACT CORRECTION",
+        "The previous reply was rejected by the served structural contract:",
+        "{{contract_correction}}",
+        "Return a fresh reply satisfying this contract."
+      ],
+      "variables": [
+        {
+          "name": "contract_correction",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Opaque diagnostic from the previous rejected reply."
+        }
+      ]
+    },
+    "fixer_recovery": {
+      "text": [
+        "FIXER RECOVERY",
+        "Recovery state: {{fixer_recovery_state}}.",
+        "The pending delta may contain partial work from an earlier fixer attempt.",
+        "Inspect it first; complete, correct, or remove that work so the final",
+        "delta is coherent."
+      ],
+      "variables": [
+        {
+          "name": "fixer_recovery_state",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Driver-owned machine state for a retained partial fixer delta."
+        }
+      ]
+    },
     "author_recovery": {
       "text": [
         "{{author_recovery}}"
@@ -557,6 +590,12 @@
         "   asking for a rethink is only legitimate AFTER asking and answering them)",
         "No proposed direction and no other fields — the orchestrator runs the",
         "session from the finding alone."
+      ],
+      "variables": []
+    },
+    "design_correction_verdict": {
+      "text": [
+        "A provisional design-correction delta supplies its complete retained context here and requires design_correction_verdict={decision, reason}."
       ],
       "variables": []
     },
