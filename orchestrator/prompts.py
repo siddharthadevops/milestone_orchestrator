@@ -1862,6 +1862,59 @@ def _brainstorming_application_override(fixer=False):
     )
 
 
+def build_author_rethink_recovery(
+    handoff, accepted_design_amendment=False, editable_design_paths=None
+):
+    """Routed recovery context for an author returning from Brainstorming."""
+    authority = {
+        "session_id": handoff["session_id"],
+        "accepted_target_revision": handoff[
+            "accepted_target_revision"
+        ],
+    }
+    authority_posture = (
+        "The retained target has also been adopted as a run-scoped design "
+        "amendment and is included in the current authority above.\n\n"
+        if accepted_design_amendment else ""
+    )
+    editable = ""
+    if editable_design_paths:
+        editable = (
+            "ACCEPTED AMENDMENT EDIT SCOPE\n"
+            "Apply the accepted agreement only where needed in these current\n"
+            "milestone design documents:\n"
+            + "".join("  - %s\n" % path for path in editable_design_paths)
+            + "Keep the documentation set coherent. If the canonical plan\n"
+            "changes, edit its repository block directly; do not return a\n"
+            "duplicate plan in the reply.\n\n"
+        )
+    return (
+        "POST-BRAINSTORMING AUTHOR CONTINUATION\n"
+        "The independent Brainstorming session requested by your previous\n"
+        "turn completed successfully. Continue the same author task in this\n"
+        "provider conversation. Use the retained_target content below as the\n"
+        "decision material; do not substitute bytes currently present at its\n"
+        "target_ref.\n"
+        + authority_posture
+        + _brainstorming_application_order()
+        + "BRAINSTORMING HANDOFF\n"
+        + json.dumps(
+            {
+                "authority": authority,
+                "result": handoff["result"],
+                "retained_target": handoff["retained_target"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n\n"
+        + editable
+        + "Finish the original task now under the routed output contract.\n"
+        + _brainstorming_application_override()
+    )
+
+
 def build_rethink_continuation(
     kind,
     family,

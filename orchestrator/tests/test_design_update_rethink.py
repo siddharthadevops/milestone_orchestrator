@@ -184,6 +184,14 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         worker_result = runners.RunnerResult(
             "{}", 0, 0.2, token_usage=usage
         )
+        boundary = object()
+        driver._author_material = mock.Mock(return_value="code")
+        driver._author_coordinates = mock.Mock(return_value={
+            "slice_id": 1,
+            "slice_title": "one",
+            "slice_note_path": "docs/slice-01.md",
+        })
+        driver._author_prepare_call = mock.Mock(return_value=boundary)
         driver._call = mock.Mock(
             return_value=(continued, worker_result, "raw/continued.txt")
         )
@@ -193,6 +201,10 @@ class DesignUpdateRethinkTest(unittest.TestCase):
             brainstorming_milestone, "terminal_handoff", return_value=handoff
         ), mock.patch.object(
             brainstorming_milestone, "prompt_handoff", return_value=handoff
+        ), mock.patch.object(
+            drv.prompts,
+            "build_rethink_continuation",
+            side_effect=AssertionError("author continuation used legacy prompt"),
         ):
             note = driver._do_brainstorming_wait()
 
@@ -205,6 +217,12 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         )
         call = driver._call.call_args
         prompt = call.args[1]
+        self.assertIs(call.kwargs["prepare_call"], boundary)
+        recovery = driver._author_prepare_call.call_args.kwargs["recovery"]
+        self.assertIn("POST-BRAINSTORMING AUTHOR CONTINUATION", recovery)
+        self.assertIn("Use the existing contract consistently.", recovery)
+        self.assertNotIn("SLICE PRODUCER PLANNING", recovery)
+        self.assertNotIn("return the complete updated `slices`", recovery)
         self.assertEqual(call.kwargs["session_ref"], "codex-thread-7")
         self.assertEqual(call.kwargs["model"], "gpt-5.6-sol")
         self.assertEqual(call.kwargs["effort"], "max")
@@ -223,7 +241,7 @@ class DesignUpdateRethinkTest(unittest.TestCase):
             None,
         )
         for path in self.PATHS:
-            self.assertIn(path, prompt)
+            self.assertIn(path, recovery)
         self.assertNotIn("design_correction", prompt)
         self.assertIn("origin conversation continued", note)
         self.assertEqual(

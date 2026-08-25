@@ -2281,14 +2281,12 @@ class Driver(object):
             "omit it. Return the ordinary implement envelope.\n"
         )
 
-    @classmethod
-    def _implementation_stabilizer_prompt(cls, prompt, marker):
-        """Retained for the not-yet-routed Brainstorming return path."""
-        del marker
-        return (
-            prompt.replace(prompts.IMPLEMENTATION_SIZE_GUIDANCE, "")
-            + "\n\n"
-            + cls._implementation_stabilizer_context()
+    @staticmethod
+    def _combined_author_recovery(*parts):
+        """Join independent recovery facts inside one routed charge."""
+        return "\n\n".join(
+            part.strip() for part in parts
+            if isinstance(part, str) and part.strip()
         )
 
     def _implementation_line_count(self, base_tree):
@@ -2363,7 +2361,11 @@ class Driver(object):
                 episode_unit=episode_unit,
                 prepare_call=(
                     prepare_author(
-                        self._implementation_stabilizer_context(), None
+                        self._combined_author_recovery(
+                            author_recovery,
+                            self._implementation_stabilizer_context(),
+                        ),
+                        None,
                     )
                     if prepare_author is not None else None
                 ),
@@ -2561,7 +2563,11 @@ class Driver(object):
             episode_unit=episode_unit,
             prepare_call=(
                 prepare_author(
-                    self._implementation_stabilizer_context(), None
+                    self._combined_author_recovery(
+                        author_recovery,
+                        self._implementation_stabilizer_context(),
+                    ),
+                    None,
                 )
                 if prepare_author is not None else None
             ),
@@ -7224,6 +7230,15 @@ class Driver(object):
                         "application_target_authorization"
                     ] = copy.deepcopy(authorization)
             family = origin["family"]
+            routed_author = kind in (
+                contracts.KIND_DRAFT_SLICE_NOTE,
+                contracts.KIND_IMPLEMENT,
+            )
+            expanded_handoff = brainstorming_milestone.prompt_handoff(
+                self.state,
+                handoff,
+                active_home=self.model_profiles_home,
+            )
             design_context = (
                 self._design_correction_context(unit)
                 if (
@@ -7300,50 +7315,63 @@ class Driver(object):
                 self._verification_commands(unit)
                 if verification_repair and original_request is None else None
             )
-            prompt = prompts.build_rethink_continuation(
-                kind,
-                family,
-                self.workspace,
-                brainstorming_milestone.prompt_handoff(
-                    self.state,
-                    handoff,
-                    active_home=self.model_profiles_home,
-                ),
-                allow_design_correction=bool(
-                    validation.get("allow_design_correction")
-                ),
-                amendments=amendments,
-                project_context=project_context,
-                battery=battery,
-                accepted_design_amendment=amendment_mode,
-                editable_design_paths=(
-                    self._editable_design_paths(unit)
-                    if (
-                        self._modern_design_updates()
-                        and (
-                            amendment_mode
-                            or kind == contracts.KIND_FIX_FINDINGS
-                        )
+            editable_design_paths = (
+                self._editable_design_paths(unit)
+                if (
+                    self._modern_design_updates()
+                    and (
+                        amendment_mode
+                        or kind == contracts.KIND_FIX_FINDINGS
                     )
-                    else None
-                ),
-                verification_repair=verification_repair,
-                verification_commands=verification_commands,
-                verification_signal=(
-                    wait.get("signal", {}).get("finding")
-                    if verification_repair else None
-                ),
-                unit_kind=unit["kind"],
-                gap_enabled=(
-                    self._fixer_gap_enabled(unit)
-                    if verification_repair and original_request is None
-                    else False
-                ),
-                original_request=original_request,
-                episode_authority=episode_authority,
-                producer_planning=self._continuation_may_plan_slices(unit),
-                materials=self._planning_materials(),
+                )
+                else None
             )
+            if routed_author:
+                author_recovery = prompts.build_author_rethink_recovery(
+                    expanded_handoff,
+                    accepted_design_amendment=amendment_mode,
+                    editable_design_paths=editable_design_paths,
+                )
+                material = self._author_material(unit, kind, task)
+                author_coordinates = self._author_coordinates(
+                    unit, kind, task
+                )
+                # The physical attempt always replaces this legacy argument
+                # with a freshly prepared routed charge.
+                prompt = original_request or ""
+            else:
+                author_recovery = None
+                material = author_coordinates = None
+                prompt = prompts.build_rethink_continuation(
+                    kind,
+                    family,
+                    self.workspace,
+                    expanded_handoff,
+                    allow_design_correction=bool(
+                        validation.get("allow_design_correction")
+                    ),
+                    amendments=amendments,
+                    project_context=project_context,
+                    battery=battery,
+                    accepted_design_amendment=amendment_mode,
+                    editable_design_paths=editable_design_paths,
+                    verification_repair=verification_repair,
+                    verification_commands=verification_commands,
+                    verification_signal=(
+                        wait.get("signal", {}).get("finding")
+                        if verification_repair else None
+                    ),
+                    unit_kind=unit["kind"],
+                    gap_enabled=(
+                        self._fixer_gap_enabled(unit)
+                        if verification_repair and original_request is None
+                        else False
+                    ),
+                    original_request=original_request,
+                    episode_authority=episode_authority,
+                    producer_planning=self._continuation_may_plan_slices(unit),
+                    materials=self._planning_materials(),
+                )
             durable_stabilization_size = None
             if kind == contracts.KIND_IMPLEMENT:
                 durable_stabilization = unit.get(
@@ -7374,13 +7402,6 @@ class Driver(object):
                         )
                     self._ensure_implementation_stabilization_events(
                         unit, durable_stabilization_size
-                    )
-                    # The unit marker is current process truth. Brainstorming's
-                    # origin snapshot is retained history and may predate a
-                    # cutoff or a crash; it cannot reopen the size-monitored
-                    # draft or drop the stabilizer's closing instruction.
-                    prompt = self._implementation_stabilizer_prompt(
-                        prompt, durable_stabilization_size
                     )
             self._activate_worker_episode_authority(authority)
             raw_name = "%s-rethink-return" % origin["raw_name"]
@@ -7449,6 +7470,19 @@ class Driver(object):
                             unit, kind, next_prompt
                         )
                     ),
+                    prepare_author=lambda recovery, meter: (
+                        self._author_prepare_call(
+                            unit,
+                            kind,
+                            material,
+                            raw_name,
+                            recovery=recovery,
+                            meter=meter,
+                            author_coordinates=author_coordinates,
+                        )
+                    ),
+                    author_recovery=author_recovery,
+                    episode_unit=unit,
                 )
                 if durable_stabilization_size is not None:
                     implementation_size = durable_stabilization_size
@@ -7474,6 +7508,18 @@ class Driver(object):
                     ),
                     continuation_family=origin["family"],
                     task_id=origin.get("task_id"),
+                    prepare_call=(
+                        self._author_prepare_call(
+                            unit,
+                            kind,
+                            material,
+                            raw_name,
+                            recovery=author_recovery,
+                            author_coordinates=author_coordinates,
+                        )
+                        if routed_author else None
+                    ),
+                    episode_unit=unit if routed_author else None,
                 )
             family, current_model, current_effort = self._result_identity(
                 result,
@@ -7530,6 +7576,7 @@ class Driver(object):
                 self._enforce_sealed_artifacts(
                     raw_name,
                     editable_sealed=self._editable_design_paths(unit),
+                    preserve_canonical_plan=routed_author,
                 )
                 reason = (
                     "%s worker did not complete the accepted Brainstorming "

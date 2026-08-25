@@ -396,4 +396,5 @@ verification is the direct `suite_checkpoint` call instead.
 | slice_doc-05 (Milestone author-call cutover) | reviewed | 9 | satisfied | 345c6f4 |
 | slice_impl-05-a (Milestone author-call cutover) | reviewed | 37 | satisfied | 929a86f |
 | slice_impl-05-b (Milestone author-call cutover) | reviewed | 50 | satisfied | 345c6f4 |
-| slice_impl-05-c (Milestone author-call cutover) | reviewed | 40 | satisfied | - |
+| slice_impl-05-c (Milestone author-call cutover) | reviewed | 40 | satisfied | 438a5ee |
+| slice_impl-05-d (Milestone author-call cutover) | reviewed | 1 | satisfied | - |
