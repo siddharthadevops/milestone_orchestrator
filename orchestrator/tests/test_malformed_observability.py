@@ -20,18 +20,45 @@ from orchestrator import runners
 from orchestrator import state as st
 
 from orchestrator.tests.test_driver_mock import (
-    init_state, make_config, ok, report, step,
+    init_state, make_config, ok, report, step, write_file,
 )
 
 MALFORMED_REVIEW = {"kind": "review_round", "findings": []}   # no "status"
 
 
 def draft():
+    plan = {
+        "slices": [{
+            "id": 1,
+            "title": "Core",
+            "intent": "Exercise malformed review observability.",
+            "producer_task_executor": {
+                "draft_slice_note": "agent_call",
+                "implement": "agent_call",
+            },
+        }],
+    }
     return step(
         "draft_skeleton",
-        ok("draft_skeleton", artifact="docs/skeleton.md",
-           slices=[{"id": 1, "title": "Core"}]),
+        ok(
+            "draft_skeleton",
+            artifact="docs/skeleton.md",
+            questions=[
+                {"id": question, "answer": "Checked the bounded fixture."}
+                for question in (
+                    "due_diligence_count",
+                    "machinery_trust",
+                    "environment_fit",
+                    "human_scale",
+                )
+            ],
+        ),
         family="codex",
+        side_effect=write_file(
+            "docs/skeleton.md",
+            "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+            % json.dumps(plan),
+        ),
     )
 
 
@@ -43,7 +70,7 @@ class MalformedObservabilityTest(unittest.TestCase):
         os.makedirs(self.ws)
 
     def _drive(self, script, stop):
-        path = init_state(self.ws, make_config(git={"enabled": False}))
+        path = init_state(self.ws, make_config(git={"enabled": True}))
         driver = drv.Driver(path, runner=runners.MockRunner(script))
         for _ in range(40):
             state = st.load(path)
@@ -178,7 +205,7 @@ class MalformedObservabilityTest(unittest.TestCase):
 
         path = init_state(
             self.ws,
-            make_config(git={"enabled": False}, infra_retry_backoff_s=[]),
+            make_config(git={"enabled": True}, infra_retry_backoff_s=[]),
         )
         driver = drv.Driver(path, runner=DyingRunner([draft()]))
         for _ in range(10):

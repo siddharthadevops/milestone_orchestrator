@@ -1,15 +1,19 @@
 """Focused compatibility proof for the milestone's Worker task cutover."""
 
 import copy
+import json
 import os
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
 
 from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import brainstorming_milestone as adapter
+from orchestrator import canonical_plan
 from orchestrator import contracts
 from orchestrator import driver as drv
+from orchestrator import gitops
 from orchestrator import profiles
 from orchestrator import prompts
 from orchestrator import runners
@@ -43,15 +47,73 @@ def _rethink(kind, source=None, result_mode="proposal"):
     value = {
         "status": "need_rethink",
         "kind": kind,
-        "request": "Resolve the one bounded design question.",
         "finding": copy.deepcopy(source or {"id": "BUILD", "summary": "choice"}),
         "target_path": "proposals/rethink.md",
+    }
+    if kind in _AUTHOR_QUESTION_IDS:
+        value["questions"] = _author_questions(kind)
+        return value
+    value.update({
+        "request": "Resolve the one bounded design question.",
         "max_rounds": 20,
         "result_mode": result_mode,
-    }
+    })
     if kind in contracts.RETHINK_CONTINUATION_KINDS:
         value["failure_gap"] = failure_gap()
     return value
+
+
+_AUTHOR_QUESTION_IDS = {
+    contracts.KIND_DRAFT_SKELETON: (
+        "due_diligence_count",
+        "machinery_trust",
+        "environment_fit",
+        "human_scale",
+    ),
+    contracts.KIND_DRAFT_SLICE_NOTE: (
+        "due_diligence_count",
+        "machinery_trust",
+        "environment_fit",
+        "human_scale",
+    ),
+    contracts.KIND_IMPLEMENT: (
+        "machinery_trust",
+        "environment_fit",
+        "human_scale",
+    ),
+}
+
+
+def _author_questions(kind):
+    return [
+        {"id": question_id, "answer": "Checked the bounded fixture."}
+        for question_id in _AUTHOR_QUESTION_IDS[kind]
+    ]
+
+
+def _author_ok(kind, **extra):
+    return ok(kind, questions=_author_questions(kind), **extra)
+
+
+def _worker_plan():
+    return {
+        "slices": [{
+            "id": 1,
+            "title": "Worker",
+            "intent": "Exercise the retained worker-task behavior.",
+            "producer_task_executor": {
+                "draft_slice_note": "agent_call",
+                "implement": "agent_call",
+            },
+        }],
+    }
+
+
+def _worker_skeleton():
+    return (
+        "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+        % json.dumps(_worker_plan())
+    )
 
 
 def _created(session_id):
@@ -104,6 +166,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         os.makedirs(os.path.join(workspace, "proposals"))
         config = copy.deepcopy(drv.DEFAULT_CONFIG)
         config.update({
+            "docs_dir": "docs",
             "git": {"enabled": False},
             "verification": [],
             "guarantee_calibration": {"enabled": False},
@@ -112,7 +175,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             "infra_retry_backoff_s": [],
         })
         state = st.new_state("Build the Worker task cutover.", workspace, config)
-        state["milestone"]["slices"] = [{"id": 1, "title": "Worker"}]
+        state["milestone"]["slices"] = copy.deepcopy(_worker_plan()["slices"])
         skeleton = st._new_unit(st.UNIT_SKELETON, None)
         skeleton.update({"status": st.U_SEALED, "artifact": "docs/skeleton.md"})
         note = st._new_unit(st.UNIT_SLICE_DOC, 1)
@@ -139,11 +202,15 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 "return_to": st.U_ROUNDS,
             }
         for relative, text in (
-            ("docs/skeleton.md", "# Skeleton\n"),
+            ("docs/skeleton.md", _worker_skeleton()),
             ("docs/note.md", "# Note\n"),
         ):
             with open(os.path.join(workspace, relative), "w", encoding="utf-8") as fh:
                 fh.write(text)
+        subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+        gitops.ensure_repo(workspace)
+        if unit_kind != st.UNIT_SKELETON:
+            canonical_plan.establish_current_plan(state, "docs/skeleton.md")
         path = drv.default_state_path(workspace)
         st.save(path, state)
         return path
@@ -159,10 +226,9 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         task = driver._admit_worker_task(
             unit, contracts.KIND_DRAFT_SKELETON, "complete prompt", "codex"
         )
-        native = ok(
+        native = _author_ok(
             contracts.KIND_DRAFT_SKELETON,
             artifact="docs/skeleton.md",
-            slices=[],
         )
         os.makedirs(
             os.path.dirname(driver._amendments_path()), exist_ok=True
@@ -365,10 +431,9 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             "reuse_sources": None,
             "safeguards": [policy],
         }
-        incomplete = ok(
+        incomplete = _author_ok(
             contracts.KIND_DRAFT_SKELETON,
             artifact="docs/skeleton.md",
-            slices=[{"id": 1, "title": "Worker"}],
         )
         repaired = copy.deepcopy(incomplete)
         repaired["episode_audit"] = [{"note": "checked live law"}]
@@ -390,10 +455,13 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         ) as live_inputs:
             recovered._do_draft()
 
-        self.assertEqual(live_inputs.call_count, 1)
+        # Admission plus both physical attempts read current policy.  The
+        # repair is a freshly routed charge, not a suffix on a frozen prompt.
+        self.assertEqual(live_inputs.call_count, 3)
         self.assertEqual(len(runner.calls), 2)
-        self.assertIn("SAFEGUARD episode-guard v2", runner.calls[0][2])
-        self.assertTrue(runner.calls[1][2].startswith(runner.calls[0][2]))
+        for call in runner.calls:
+            self.assertIn("SAFEGUARD episode-guard v2", call[2])
+        self.assertIn("CONTRACT CORRECTION", runner.calls[1][2])
         self.assertEqual(
             tasks.task_record(recovered.state, task["id"])["result"]["status"],
             "success",
@@ -413,8 +481,11 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             contracts.KIND_DRAFT_SLICE_NOTE,
             "immutable admitted prompt",
             "codex",
+            author_coordinates=driver._author_coordinates(
+                unit, contracts.KIND_DRAFT_SLICE_NOTE
+            ),
         )
-        native = ok(
+        native = _author_ok(
             contracts.KIND_DRAFT_SLICE_NOTE,
             artifact="docs/note.md",
         )
@@ -517,12 +588,13 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         fixed = fix_ok([triaged("F1", "fixed", severity="P1")])
         cases = (
             (contracts.KIND_DRAFT_SKELETON, st.UNIT_SKELETON, st.U_PENDING,
-             ok(contracts.KIND_DRAFT_SKELETON,
-                artifact="docs/skeleton.md", slices=[{"id": 1, "title": "Worker"}])),
+             _author_ok(contracts.KIND_DRAFT_SKELETON,
+                        artifact="docs/skeleton.md")),
             (contracts.KIND_DRAFT_SLICE_NOTE, st.UNIT_SLICE_DOC, st.U_PENDING,
-             ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact="docs/note.md")),
+             _author_ok(contracts.KIND_DRAFT_SLICE_NOTE,
+                        artifact="docs/note.md")),
             (contracts.KIND_IMPLEMENT, st.UNIT_SLICE_IMPL, st.U_PENDING,
-             ok(contracts.KIND_IMPLEMENT, files_changed=[])),
+             _author_ok(contracts.KIND_IMPLEMENT, files_changed=[])),
             (contracts.KIND_FIX_FINDINGS, st.UNIT_SLICE_IMPL, st.U_FIXING, fixed),
             (contracts.KIND_REVIEW_ROUND, st.UNIT_SLICE_IMPL, st.U_ROUNDS,
              report(contracts.KIND_REVIEW_ROUND)),
@@ -622,9 +694,8 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         runner = runners.MockRunner([
             {"expect_kind": contracts.KIND_DRAFT_SKELETON, "response": "not json"},
             {"expect_kind": contracts.KIND_DRAFT_SKELETON,
-             "response": ok(contracts.KIND_DRAFT_SKELETON,
-                            artifact="docs/skeleton.md",
-                            slices=[{"id": 1, "title": "Worker"}])},
+             "response": _author_ok(contracts.KIND_DRAFT_SKELETON,
+                                    artifact="docs/skeleton.md")},
         ])
         driver = drv.Driver(path, runner=runner)
         unit = st.current_unit(driver.state)
@@ -652,6 +723,13 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 "staffing",
                 dispatch_resolver=resolver,
                 task_id=task["id"],
+                prepare_call=driver._author_prepare_call(
+                    unit,
+                    contracts.KIND_DRAFT_SKELETON,
+                    "document",
+                    "staffing",
+                ),
+                episode_unit=unit,
             ),
         )
         self.assertEqual(frozen["agent_call"]["model"], "model-a")
@@ -664,7 +742,9 @@ class WorkerTaskCutoverTest(unittest.TestCase):
     def test_worker_note_keeps_nondefault_artifact_declaration(self):
         path = self._path("note-path", st.UNIT_SLICE_DOC)
         declared = "design/slices/one.md"
-        response = ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact=declared)
+        response = _author_ok(
+            contracts.KIND_DRAFT_SLICE_NOTE, artifact=declared
+        )
         runner = runners.MockRunner([
             {"expect_kind": contracts.KIND_DRAFT_SLICE_NOTE, "response": response}
         ])
@@ -682,12 +762,15 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             (
                 contracts.KIND_DRAFT_SLICE_NOTE,
                 st.UNIT_SLICE_DOC,
-                ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact="docs/note.md"),
+                _author_ok(
+                    contracts.KIND_DRAFT_SLICE_NOTE,
+                    artifact="docs/note.md",
+                ),
             ),
             (
                 contracts.KIND_IMPLEMENT,
                 st.UNIT_SLICE_IMPL,
-                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
+                _author_ok(contracts.KIND_IMPLEMENT, files_changed=[]),
             ),
         )
         for index, (kind, unit_kind, completed) in enumerate(cases):
@@ -809,11 +892,11 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         )
 
     def test_continuable_worker_abandonments_fail_and_reentry_succeeds_new_task(self):
-        def paused(label, mode="proposal"):
+        def paused(label):
             path = self._path(label)
             runner = runners.MockRunner([{
                 "expect_kind": contracts.KIND_IMPLEMENT,
-                "response": _rethink(contracts.KIND_IMPLEMENT, result_mode=mode),
+                "response": _rethink(contracts.KIND_IMPLEMENT),
             }])
             with mock.patch.object(adapter, "create_session",
                                    return_value=_created(label)):
@@ -832,14 +915,6 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 drv.Driver(path, runner=runners.MockRunner([])).step()
             self.assertEqual(self._task(st.load(path))["result"]["status"], "failure")
 
-        adoption = paused("adoption", "design_amendment")
-        with mock.patch.object(adapter, "terminal_handoff",
-                               return_value=_handoff("adoption")), \
-                mock.patch.object(drv.Driver, "_adopt_brainstorming_design_amendment",
-                                  side_effect=adapter.AdapterError("invalid amendment")):
-            drv.Driver(adoption, runner=runners.MockRunner([])).step()
-        self.assertEqual(self._task(st.load(adoption))["result"]["status"], "failure")
-
         waiting = paused("recoverable")
         with mock.patch.object(adapter, "terminal_handoff", return_value=None):
             drv.Driver(waiting, runner=runners.MockRunner([])).step()
@@ -850,7 +925,9 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             {"expect_kind": contracts.KIND_IMPLEMENT,
              "response": _rethink(contracts.KIND_IMPLEMENT)},
             {"expect_kind": contracts.KIND_IMPLEMENT,
-             "response": ok(contracts.KIND_IMPLEMENT, files_changed=[])},
+             "response": _author_ok(
+                 contracts.KIND_IMPLEMENT, files_changed=[]
+             )},
         ])
         with mock.patch.object(adapter, "create_session",
                                side_effect=adapter.AdapterError("unavailable")):
@@ -875,17 +952,9 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                     "status": "blocked",
                     "kind": contracts.KIND_IMPLEMENT,
                     "blocked_reason": "operator choice required",
-                },
-            ),
-            (
-                "gap",
-                contracts.KIND_IMPLEMENT,
-                st.UNIT_SLICE_IMPL,
-                st.U_PENDING,
-                {
-                    "status": "gap",
-                    "kind": contracts.KIND_IMPLEMENT,
-                    "gaps": [failure_gap()],
+                    "questions": _author_questions(
+                        contracts.KIND_IMPLEMENT
+                    ),
                 },
             ),
             (
@@ -925,10 +994,16 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 failed = st.load(path)
                 task = self._task(failed)
                 self.assertIsNone(task["result"])
-                self.assertEqual(
-                    st.current_unit(failed)["brainstorming_wait"]["signal"],
-                    signal,
-                )
+                durable_signal = st.current_unit(failed)[
+                    "brainstorming_wait"
+                ]["signal"]
+                for key, value in signal.items():
+                    self.assertEqual(durable_signal[key], value)
+                self.assertEqual(durable_signal["max_rounds"], 20)
+                if kind in _AUTHOR_QUESTION_IDS:
+                    self.assertIn(
+                        "supplied source finding", durable_signal["request"]
+                    )
 
     def test_review_rethink_preserves_failed_origin_and_distinct_successor(self):
         for index, (kind, status) in enumerate((
@@ -1035,6 +1110,9 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             contracts.KIND_IMPLEMENT,
             "frozen pre-cutoff prompt",
             "codex",
+            author_coordinates=driver._author_coordinates(
+                unit, contracts.KIND_IMPLEMENT
+            ),
         )
         unit["implementation_stabilization"] = {
             "implementation_size": {
@@ -1055,8 +1133,15 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             )
         seen = []
 
-        def reached(_family, prompt, *_args, **_kwargs):
-            seen.append(prompt)
+        def reached(_family, _prompt, *_args, **kwargs):
+            recovery = driver._combined_author_recovery(
+                kwargs.get("author_recovery"),
+                driver._implementation_stabilizer_context(),
+            )
+            prepare_call = kwargs["prepare_author"](recovery, None)
+            prepared = prepare_call(None)
+            seen.append(prepared.prompt)
+            prepared.complete()
             raise RuntimeError("recovery prompt reached")
 
         with mock.patch.object(
@@ -1071,8 +1156,9 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             "frozen pre-cutoff prompt",
         )
         self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0].startswith("KIND: implement\n"))
+        self.assertNotIn("frozen pre-cutoff prompt", seen[0])
         self.assertIn("FORCED CONTROLLED-CUTOFF RECOVERY", seen[0])
-        self.assertIn("WORKER EPISODE AUTHORITY REFRESH", seen[0])
         self.assertIn("[A-stabilize]", seen[0])
 
     def test_immediate_cutoff_stabilization_takes_a_new_episode_snapshot(self):
@@ -1098,10 +1184,18 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         )
         completed = runners.RunnerResult("{}", 0, 1.0)
         refreshes = []
+        preparations = []
+        prepared_callbacks = []
 
         def refresh(prompt):
             refreshes.append(prompt)
             return prompt + "\nFRESH AUTHORITY", ["new-extension"], ["root"]
+
+        def prepare_author(recovery, meter):
+            callback = object()
+            preparations.append((recovery, meter))
+            prepared_callbacks.append(callback)
+            return callback
 
         with (
             mock.patch.object(
@@ -1141,16 +1235,24 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                     "base-tree",
                     task_id="task-1",
                     episode_refresher=refresh,
+                    prepare_author=prepare_author,
+                    author_recovery="RESUMED AUTHOR EPISODE",
                 )
             )
 
         self.assertTrue(stabilized)
         self.assertEqual(output["status"], "ok")
         self.assertEqual(len(refreshes), 1)
-        self.assertIn("FORCED CONTROLLED-CUTOFF RECOVERY", refreshes[0])
+        self.assertEqual(refreshes[0], "initial episode prompt")
+        self.assertEqual(len(preparations), 2)
+        self.assertEqual(preparations[0][0], "RESUMED AUTHOR EPISODE")
+        self.assertIs(preparations[0][1], marker)
+        self.assertIn("RESUMED AUTHOR EPISODE", preparations[1][0])
+        self.assertIn("FORCED CONTROLLED-CUTOFF RECOVERY", preparations[1][0])
+        self.assertIsNone(preparations[1][1])
         self.assertEqual(worker_call.call_count, 2)
         second = worker_call.call_args_list[1]
-        self.assertIn("FRESH AUTHORITY", second.args[1])
+        self.assertIs(second.kwargs["prepare_call"], prepared_callbacks[1])
         self.assertEqual(second.kwargs["extensions"], ["new-extension"])
 
     def test_recovery_refreshes_authority_without_rewriting_order(self):
@@ -1169,24 +1271,22 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 '{"amendments":[{"id":"A-after","text":'
                 '"Added after admission."}]}'
             )
-        recovered = drv.Driver(path, runner=runners.MockRunner([]))
-        seen = []
+        runner = runners.MockRunner([{
+            "expect_kind": contracts.KIND_DRAFT_SKELETON,
+            "response": _author_ok(
+                contracts.KIND_DRAFT_SKELETON,
+                artifact="docs/skeleton.md",
+            ),
+        }])
+        recovered = drv.Driver(path, runner=runner)
+        recovered._do_draft()
 
-        def reached(_family, prompt, *_args, **_kwargs):
-            seen.append(prompt)
-            raise RuntimeError("dispatch reached")
-
-        with (
-            mock.patch.object(recovered, "_call", side_effect=reached),
-            self.assertRaisesRegex(RuntimeError, "dispatch reached"),
-        ):
-            recovered._do_draft()
-
-        self.assertEqual(len(seen), 1)
-        self.assertTrue(seen[0].startswith("frozen admitted prompt\n\n"))
-        self.assertIn("WORKER EPISODE AUTHORITY REFRESH", seen[0])
-        self.assertIn("MUTABLE OPERATOR AMENDMENTS: COMPLETE", seen[0])
-        self.assertIn("[A-after] Added after admission.", seen[0])
+        self.assertEqual(len(runner.calls), 1)
+        physical_prompt = runner.calls[0][2]
+        self.assertTrue(physical_prompt.startswith("KIND: draft_skeleton\n"))
+        self.assertNotIn("frozen admitted prompt", physical_prompt)
+        self.assertIn("RESUMED AUTHOR EPISODE", physical_prompt)
+        self.assertIn("[A-after] Added after admission.", physical_prompt)
         self.assertEqual(
             tasks.task_record(recovered.state, task["id"])["order"]["request"]
             ["request"],
@@ -1206,6 +1306,9 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             contracts.KIND_IMPLEMENT,
             "frozen implementation prompt",
             "codex",
+            author_coordinates=driver._author_coordinates(
+                st.current_unit(driver.state), contracts.KIND_IMPLEMENT
+            ),
         )
         os.makedirs(
             os.path.dirname(driver._amendments_path()), exist_ok=True
@@ -1217,24 +1320,21 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 '{"amendments":[{"id":"A-implementation","text":'
                 '"Apply to implementation recovery."}]}'
             )
-        seen = []
+        runner = runners.MockRunner([{
+            "expect_kind": contracts.KIND_IMPLEMENT,
+            "response": _author_ok(
+                contracts.KIND_IMPLEMENT, files_changed=[]
+            ),
+        }])
+        driver.runner = runner
+        driver._do_draft()
 
-        def reached(_family, prompt, *_args, **_kwargs):
-            seen.append(prompt)
-            raise RuntimeError("implementation dispatch reached")
-
-        with mock.patch.object(
-            driver, "_call_implementation", side_effect=reached
-        ):
-            with self.assertRaisesRegex(
-                RuntimeError, "implementation dispatch reached"
-            ):
-                driver._do_draft()
-
-        self.assertEqual(len(seen), 1)
-        self.assertTrue(seen[0].startswith("frozen implementation prompt\n\n"))
-        self.assertIn("WORKER EPISODE AUTHORITY REFRESH", seen[0])
-        self.assertIn("[A-implementation]", seen[0])
+        self.assertEqual(len(runner.calls), 1)
+        physical_prompt = runner.calls[0][2]
+        self.assertTrue(physical_prompt.startswith("KIND: implement\n"))
+        self.assertNotIn("frozen implementation prompt", physical_prompt)
+        self.assertIn("RESUMED AUTHOR EPISODE", physical_prompt)
+        self.assertIn("[A-implementation]", physical_prompt)
         self.assertEqual(
             tasks.task_record(driver.state, task["id"])["order"]["request"]
             ["request"],
@@ -1279,6 +1379,10 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                     "frozen strategy-specific prompt",
                     "codex",
                     validate_opts=frozen_opts,
+                    author_coordinates=driver._author_coordinates(
+                        st.current_unit(driver.state),
+                        contracts.KIND_DRAFT_SLICE_NOTE,
+                    ),
                 )
                 current_profile = copy.deepcopy(
                     profiles.SEEDS[current_name]["profile"]
@@ -1299,31 +1403,35 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 )
                 driver._save()
 
-                recovered = drv.Driver(path, runner=runners.MockRunner([]))
-                seen = []
-
-                def reached(_family, prompt, *_args, **kwargs):
-                    seen.append((prompt, kwargs.get("validate_opts")))
-                    raise RuntimeError("strategy recovery dispatch reached")
-
-                with mock.patch.object(recovered, "_call", side_effect=reached):
-                    with self.assertRaisesRegex(
-                        RuntimeError, "strategy recovery dispatch reached"
-                    ):
-                        recovered._do_draft()
+                runner = runners.MockRunner([{
+                    "expect_kind": contracts.KIND_DRAFT_SLICE_NOTE,
+                    "response": _author_ok(
+                        contracts.KIND_DRAFT_SLICE_NOTE,
+                        artifact="docs/note.md",
+                    ),
+                }])
+                recovered = drv.Driver(path, runner=runner)
+                recovered._do_draft()
 
                 expected = copy.deepcopy(frozen_opts)
-                self.assertEqual(len(seen), 1)
-                self.assertTrue(seen[0][0].startswith(
-                    "frozen strategy-specific prompt\n\n"
+                self.assertEqual(len(runner.calls), 1)
+                physical_prompt = runner.calls[0][2]
+                self.assertTrue(physical_prompt.startswith(
+                    "KIND: draft_slice_note\n"
                 ))
-                self.assertIn(
-                    "WORKER EPISODE AUTHORITY REFRESH", seen[0][0]
+                self.assertNotIn(
+                    "frozen strategy-specific prompt", physical_prompt
                 )
-                self.assertEqual(seen[0][1], expected)
+                self.assertIn("RESUMED AUTHOR EPISODE", physical_prompt)
                 self.assertEqual(
                     task["order"]["request"]["context"]["worker_validation"],
                     expected or {},
+                )
+                self.assertEqual(
+                    tasks.task_record(
+                        recovered.state, task["id"]
+                    )["result"]["status"],
+                    "success",
                 )
 
     def test_review_result_routing_uses_admitted_strategy(self):
@@ -1461,7 +1569,14 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 )
                 st.save(path, changed)
 
-                continued = drv.Driver(path, runner=runners.MockRunner([]))
+                continuation_runner = runners.MockRunner([{
+                    "expect_kind": contracts.KIND_DRAFT_SLICE_NOTE,
+                    "response": _author_ok(
+                        contracts.KIND_DRAFT_SLICE_NOTE,
+                        artifact="docs/note.md",
+                    ),
+                }])
+                continued = drv.Driver(path, runner=continuation_runner)
                 os.makedirs(
                     os.path.dirname(continued._amendments_path()),
                     exist_ok=True,
@@ -1473,42 +1588,35 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                         '{"amendments":[{"id":"A-live","text":'
                         '"Use live continuation authority."}]}'
                     )
-                seen = []
-
-                def reached(_family, prompt, *_args, **kwargs):
-                    seen.append((prompt, kwargs.get("validate_opts")))
-                    raise RuntimeError("continuation dispatch reached")
-
                 with (
                     mock.patch.object(
                         adapter,
                         "terminal_handoff",
                         return_value=_handoff(label),
                     ),
-                    mock.patch.object(continued, "_call", side_effect=reached),
-                    self.assertRaisesRegex(
-                        RuntimeError, "continuation dispatch reached"
-                    ),
                 ):
                     continued._do_brainstorming_wait()
 
-                self.assertEqual(len(seen), 1)
-                prompt, actual_opts = seen[0]
-                self.assertEqual(actual_opts, frozen_opts)
-                self.assertTrue(
-                    prompt.startswith(
-                        frozen_prompt.rstrip()
-                        + "\n\nWORKER EPISODE AUTHORITY REFRESH\n"
-                    )
+                self.assertEqual(len(continuation_runner.calls), 1)
+                prompt = continuation_runner.calls[0][2]
+                self.assertTrue(prompt.startswith(
+                    "KIND: draft_slice_note\n"
+                ))
+                self.assertNotIn(frozen_prompt, prompt)
+                self.assertIn(
+                    "[A-live] Use live continuation authority.", prompt
                 )
-                self.assertIn("[A-live] Use live continuation authority.", prompt)
-                self.assertIn("RETHINK CONTINUATION", prompt)
+                self.assertIn(
+                    "POST-BRAINSTORMING AUTHOR CONTINUATION", prompt
+                )
                 self.assertEqual(
-                    "BATTERY OUTPUT (mandatory in this run):" in prompt,
-                    "BATTERY OUTPUT (mandatory in this run):" in frozen_prompt,
+                    tasks.task_record(
+                        continued.state, task["id"]
+                    )["order"]["request"]["context"]["worker_validation"],
+                    frozen_opts or {},
                 )
 
-    def test_legacy_rethink_continuation_gets_revoking_authority_block(self):
+    def test_legacy_rethink_continuation_uses_current_routed_authority(self):
         path = self._path(
             "legacy-continuation-authority", st.UNIT_SLICE_DOC
         )
@@ -1538,7 +1646,15 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         unit["brainstorming_wait"]["origin"].pop("task_id", None)
         st.save(path, legacy)
 
-        resumed = drv.Driver(path, runner=runners.MockRunner([]))
+        continuation_runner = runners.MockRunner([{
+            "expect_kind": contracts.KIND_DRAFT_SLICE_NOTE,
+            "response": _author_ok(
+                contracts.KIND_DRAFT_SLICE_NOTE,
+                artifact="docs/note.md",
+                replacement_ack=[{"note": "checked replacement"}],
+            ),
+        }])
+        resumed = drv.Driver(path, runner=continuation_runner)
         with open(
             resumed._amendments_path(), "w", encoding="utf-8"
         ) as handle:
@@ -1568,12 +1684,6 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             "safeguards": [policy],
         }
         extension = verifiers.compile_policy(policy)
-        seen = []
-
-        def reached(_family, prompt, *_args, **kwargs):
-            seen.append((prompt, kwargs.get("extensions")))
-            raise RuntimeError("legacy continuation dispatch reached")
-
         with (
             mock.patch.object(
                 adapter,
@@ -1585,22 +1695,15 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 "_project_prompt_inputs",
                 return_value=(context, [extension], [resumed.workspace]),
             ),
-            mock.patch.object(resumed, "_call", side_effect=reached),
-            self.assertRaisesRegex(
-                RuntimeError, "legacy continuation dispatch reached"
-            ),
         ):
             resumed._do_brainstorming_wait()
 
-        self.assertEqual(len(seen), 1)
-        prompt, extensions = seen[0]
-        self.assertIn("WORKER EPISODE AUTHORITY REFRESH", prompt)
-        self.assertIn("MUTABLE OPERATOR AMENDMENTS: COMPLETE", prompt)
-        self.assertIn("CURRENT MUTABLE OPERATOR AMENDMENTS: none.", prompt)
+        self.assertEqual(len(continuation_runner.calls), 1)
+        prompt = continuation_runner.calls[0][2]
+        self.assertTrue(prompt.startswith("KIND: draft_slice_note\n"))
         self.assertNotIn("[A-old]", prompt)
-        self.assertIn("PROJECT SAFEGUARDS: COMPLETE AND REPLACING", prompt)
         self.assertIn("SAFEGUARD replacement-guard v2", prompt)
-        self.assertEqual(extensions, [extension])
+        self.assertIn("POST-BRAINSTORMING AUTHOR CONTINUATION", prompt)
 
     def test_delta_recovery_refreshes_authority_without_rewriting_order(self):
         path = self._path("delta-frozen-recovery", status=st.U_DELTA_REVIEW)

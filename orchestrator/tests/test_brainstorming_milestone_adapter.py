@@ -4651,6 +4651,32 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertIn("does not match", error)
 
 
+class AuthorRethinkFindingSignalTest(unittest.TestCase):
+    def test_routed_author_finding_becomes_the_fixed_proposal_request(self):
+        for kind in (
+            contracts.KIND_DRAFT_SLICE_NOTE,
+            contracts.KIND_IMPLEMENT,
+        ):
+            with self.subTest(kind=kind):
+                signal = {
+                    "status": "need_rethink",
+                    "kind": kind,
+                    "finding": {"id": "F1", "summary": "contradiction"},
+                    "target_path": "proposals/rethink.md",
+                    "questions": [],
+                }
+
+                checked = adapter.validate_origin_signal(signal, kind)
+
+                self.assertNotIn("request", signal)
+                self.assertIn("supplied source finding", checked["request"])
+                self.assertEqual(
+                    checked["max_rounds"],
+                    contracts.MILESTONE_BRAINSTORMING_ROUNDS,
+                )
+                self.assertEqual(checked["finding"], signal["finding"])
+
+
 class FixerRethinkFindingMatchTest(unittest.TestCase):
     """The queue's id selects; the queue's body governs."""
 

@@ -78,8 +78,43 @@ def material_document(name, materials):
     return document
 
 
+def canonical_skeleton_step(material=None):
+    planned = {
+        "id": 1,
+        "title": "One",
+        "intent": "Exercise canonical producer selection.",
+        "producer_task_executor": {
+            "draft_slice_note": "agent_call",
+            "implement": "agent_call",
+        },
+    }
+    if material is not None:
+        planned["material"] = material
+    document = (
+        "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+        % json.dumps({"slices": [planned]})
+    )
+    return step(
+        "draft_skeleton",
+        ok(
+            "draft_skeleton",
+            artifact="docs/skeleton.md",
+            questions=[
+                {"id": question, "answer": "Checked the bounded fixture."}
+                for question in (
+                    "due_diligence_count",
+                    "machinery_trust",
+                    "environment_fit",
+                    "human_scale",
+                )
+            ],
+        ),
+        side_effect=write_file("docs/skeleton.md", document),
+    )
+
+
 class PlannerMaterialCatalogueTest(DriverTestCase):
-    """Slice 9: what a plan-authoring prompt shows, read live per prompt."""
+    """The routed skeleton charge has no legacy staffing-material input."""
 
     VOCABULARY = {
         "research": {"examples": ["reading unfamiliar code",
@@ -120,66 +155,21 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
             return None
         return json.JSONDecoder().raw_decode(block[1])[0]
 
-    def test_planning_prompts_and_slice_contract_carry_material_catalogue(self):
+    def test_canonical_plan_material_replaces_the_legacy_prompt_catalogue(self):
         path = self.bound_to(material_document("vocab", self.VOCABULARY))
-        script = [
-            step("draft_skeleton",
-                 ok("draft_skeleton", artifact="docs/skeleton.md",
-                    slices=[{"id": 1, "title": "One", "material": "research"}]),
-                 side_effect=write_file("docs/skeleton.md", "# Skeleton\n")),
-            step("review_round",
-                 report("review_round", [finding("F1", "no non-goals")])),
-            step("fix_findings",
-                 fix_ok([triaged("F1", "fixed", "no non-goals")],
-                        files_changed=["docs/skeleton.md"]),
-                 side_effect=write_file("docs/skeleton.md",
-                                        "# Skeleton\n\n## Non-goals\n")),
-        ]
-        subject = self.driver_for(path, script)
+        subject = self.driver_for(path, [canonical_skeleton_step("research")])
 
-        # The INITIAL plan-authoring prompt: exactly the document's own
-        # names and usage phrases, in the document's own order.
         subject.step()
         drafted = subject.runner.calls[-1]
         self.assertEqual(drafted[1], "draft_skeleton")
+        self.assertIsNone(self.catalogue_in(drafted[2]))
+        self.assertNotIn("reading unfamiliar code", drafted[2])
         self.assertEqual(
-            self.catalogue_in(drafted[2]),
-            {"research": ["reading unfamiliar code",
-                          "tracing an unclear failure"],
-             "plumbing": ["wiring one existing seam"]},
-        )
-        # The planner's proposal survives validation and installation.
-        self.assertEqual(
-            subject.state["milestone"]["slices"],
-            [{"id": 1, "title": "One", "material": "research"}],
+            subject.state["milestone"]["slices"][0]["material"],
+            "research",
         )
 
-        # A COMPLETED document edit reaches the next such prompt; the one
-        # already dispatched keeps what it carried.
-        edited = material_document(
-            "vocab",
-            {"research": {"examples": ["reading unfamiliar code"]},
-             "cleanup": {"examples": ["deleting dead machinery"]}},
-        )
-        stf.save(self.home, edited)
-        for _ in range(12):
-            if any(call[1] == contracts.KIND_FIX_FINDINGS
-                   for call in subject.runner.calls):
-                break
-            subject.step()
-        fixer = next(call for call in subject.runner.calls
-                     if call[1] == contracts.KIND_FIX_FINDINGS)
-        self.assertEqual(
-            self.catalogue_in(fixer[2]),
-            {"research": ["reading unfamiliar code"],
-             "cleanup": ["deleting dead machinery"]},
-        )
-        self.assertEqual(
-            self.catalogue_in(drafted[2])["plumbing"],
-            ["wiring one existing seam"],
-        )
-
-    def test_unreadable_guidance_leaves_the_catalogue_empty(self):
+    def test_unreadable_guidance_does_not_block_the_routed_skeleton(self):
         for repointed in ("no-such-document", None):
             with self.subTest(repointed=repointed):
                 path = self.bound_to(
@@ -199,37 +189,26 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
                     )
                 subject = self.driver_for(
                     path,
-                    [step("draft_skeleton",
-                          ok("draft_skeleton", artifact="docs/skeleton.md",
-                             slices=[{"id": 1, "title": "One"}]),
-                          side_effect=write_file(
-                              "docs/skeleton.md", "# Skeleton\n"))],
+                    [canonical_skeleton_step()],
                 )
                 self.assertEqual(subject._planning_materials(), {})
                 subject.step()
                 drafted = subject.runner.calls[-1]
-                self.assertEqual(self.catalogue_in(drafted[2]), {})
-                # Guidance is not a dispatch: nothing failed and the call ran.
+                self.assertIsNone(self.catalogue_in(drafted[2]))
+                # Staffing guidance is not an author-route dependency.
                 self.assertIsNone(subject.state["failure"])
                 self.assertEqual(drafted[1], "draft_skeleton")
 
-    def test_guidance_a_prompt_must_escape_is_still_carried_exactly(self):
-        # JSON admits an escaped unpaired surrogate; the store keeps it and
-        # hands it back as an ordinary `str`, so this document is valid,
-        # saved and reloaded. No UTF-8 encoder emits one, so a prompt
-        # quoting it RAW would be a request no task order accepts and the
-        # run would stop at admission with nothing dispatched. That is a
-        # question about how to QUOTE the vocabulary, not a licence to
-        # supply less of it: the block falls back to the same ASCII escape
-        # the document's own stored bytes carry, so a readable document
-        # still supplies every name it validated.
+    def test_unencodable_guidance_does_not_enter_the_routed_prompt(self):
+        # The staffing store can represent a surrogate that a UTF-8 provider
+        # prompt cannot. The routed skeleton charge does not consume that
+        # legacy vocabulary, so the ordinary author call remains valid.
         unwritable = material_document(
             "unwritable",
             {"research": {"examples": ["reading \ud800 code"]},
              "plumbing": {"examples": ["wiring one existing seam"]}},
         )
-        # The store really does accept and return it: what is being tested
-        # is this run's quoting, not the document store's validation.
+        # Prove the value really remains present in the independent store.
         stf.save(self.home, unwritable)
         self.assertEqual(
             stf.load(self.home, "unwritable")["materials"]["research"],
@@ -238,10 +217,7 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
         path = self.bound_to(unwritable, name="unwritable")
         subject = self.driver_for(
             path,
-            [step("draft_skeleton",
-                  ok("draft_skeleton", artifact="docs/skeleton.md",
-                     slices=[{"id": 1, "title": "One"}]),
-                  side_effect=write_file("docs/skeleton.md", "# Skeleton\n"))],
+            [canonical_skeleton_step()],
         )
         self.assertEqual(
             subject._planning_materials(), unwritable["materials"]
@@ -249,16 +225,9 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
         subject.step()
         drafted = subject.runner.calls[-1]
         self.assertEqual(drafted[1], "draft_skeleton")
-        # Exactly the validated mapping, never a filtered or empty one: the
-        # ordinary name is not collateral damage of the exotic one, and the
-        # exotic one round-trips to the very string the document holds.
-        self.assertEqual(
-            self.catalogue_in(drafted[2]),
-            {"research": ["reading \ud800 code"],
-             "plumbing": ["wiring one existing seam"]},
-        )
-        self.assertIn("wiring one existing seam", drafted[2])
-        self.assertIn("reading \\ud800 code", drafted[2])
+        self.assertIsNone(self.catalogue_in(drafted[2]))
+        self.assertNotIn("wiring one existing seam", drafted[2])
+        self.assertNotIn("reading \\ud800 code", drafted[2])
         self.assertIsNone(subject.state["failure"])
         # The prompt that actually went out is a request an order accepts.
         drafted[2].encode("utf-8")

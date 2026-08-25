@@ -176,6 +176,22 @@ def stable_references(state, candidates, target_path):
 
 def validate_origin_signal(signal, kind, queued_findings=None):
     """Apply caller-state checks that the common schema cannot know."""
+    if (
+        kind in (
+            contracts.KIND_DRAFT_SLICE_NOTE,
+            contracts.KIND_IMPLEMENT,
+        )
+        and "request" not in signal
+        and "max_rounds" not in signal
+    ):
+        signal = copy.deepcopy(signal)
+        signal.update({
+            "request": (
+                "Resolve the focused design contradiction described in the "
+                "supplied source finding."
+            ),
+            "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
+        })
     contracts.validate_need_rethink(
         signal,
         kind,
