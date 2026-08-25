@@ -400,4 +400,5 @@ verification is the direct `suite_checkpoint` call instead.
 | slice_impl-05-d (Milestone author-call cutover) | reviewed | 1 | satisfied | c4ed57a |
 | slice_impl-05-e (Milestone author-call cutover) | reviewed | 4 | satisfied | 7578147 |
 | slice_impl-05-f (Milestone author-call cutover) | reviewed | 1 | satisfied | 5c5f6f3 |
-| slice_impl-05-g (Milestone author-call cutover) | reviewed | 1 | satisfied | - |
+| slice_impl-05-g (Milestone author-call cutover) | reviewed | 1 | satisfied | 1cd8d92 |
+| slice_doc-06 (Milestone judgment-call cutover) | reviewed | 10 | satisfied | - |

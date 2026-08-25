@@ -504,3 +504,35 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-05-g-codex-r1`
 
+## slice_doc-06 (Milestone judgment-call cutover)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/prompt-router/slices/slice-06.md` (raw: `implementation/milestones/prompt-router/.run/raw/slice_doc-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-06-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-codex-r1.txt` |
+| slice_doc-06-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-fix1.txt` |
+| slice_doc-06-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-delta1.txt` |
+| slice_doc-06-codex-r4 | review_round | codex | 3 | 3 reported | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-codex-r2.txt` |
+| slice_doc-06-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-fix2.txt` |
+| slice_doc-06-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-delta2.txt` |
+| slice_doc-06-codex-r7 | review_round | codex | 3 | 3 reported | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-codex-r3.txt` |
+| slice_doc-06-codex-r8 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-fix3.txt` |
+| slice_doc-06-codex-r9 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-delta3.txt` |
+| slice_doc-06-codex-r10 | review_round | codex | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_doc-06-codex-r4.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-06-codex-r10`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S06-CODEX-001` (raised codex, cleared codex): Question Battery omits amendment-file API consumers — The note explicitly marks panel projection untouched and tests only driver consumption despite A4 requiring passive reads and mutation APIs to error, so the builder would likely omit binding behavior, while correction is a localized API validation change with focused tests.
+- `codex-S06-CODEX-003` (raised codex, cleared codex): Material-routing evidence cites an incompatible helper — The cited author-only helper would incorrectly default document judgments to code, but a careful max-effort builder can resolve that behavioral mismatch from the explicit route matrix, and any mistaken reuse is a small local selection fix exposed by the first named routing test.
+- `codex-codex-S06-REVIEW-002` (raised codex, cleared codex): Read-only plan preservation does not verify the required branch commit — The hard register explicitly requires committing the preserved block, so a careful builder should resolve the test omission, but the named check can silently admit an off-reference or dirty result; correction remains bounded to the read-only boundary and its focused test.
+- `codex-codex-S06-REVIEW-003` (raised codex, cleared codex): Judgment contract correction lacks a routed diagnostic contract — The slice requires a fresh routed correction attempt and tests its freshness but never requires the validation error in that routed charge, so a capable builder might silently repeat the same prompt, while correction is bounded to this unit’s shared prompt seam and focused test and becomes visible o
+- `codex-codex-S06-CODEX-006` (raised codex, cleared codex): Fixer cutover does not retire active generic commit folding — The slice calls generic commit folding only a non-goal/do-not-add constraint and omits a linear-commit regression, so the active behavior can silently survive every named check, while correction is bounded to the fixer completion path and focused tests within this unit.
+- `codex-codex-S06-CODEX-007` (raised codex, cleared codex): The route matrix does not pin each judgment job's owned payload — The payload mapping is under-specified rather than misstated and a capable builder should recover it from the cited required-payload contract or stop, but a silent miss could require bounded adapter and route-test rework across this slice’s judgment consumers.
+- `codex-codex-S06-CODEX-008` (raised codex, cleared codex): The all-physical-attempt guarantee lacks retry and resume traversal proof — The slice correctly requires every physical attempt to use the shared preparation boundary, so the gap is only missing traversal proof for existing retry/resume paths, making silent misimplementation unlikely and correction a local wiring/test change.
+- `codex-codex-S06-CODEX-009` (raised codex, cleared codex): Accepted design authority can disappear without failing the amendment tests — The artifact preserves append-only accepted design authority but never tests it alongside a valid empty mutable set, creating a real silent coverage gap that a capable builder will likely infer from the existing combined-authority seam, while correction is a local authority-assembly fix plus one foc
+
