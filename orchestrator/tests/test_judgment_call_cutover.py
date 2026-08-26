@@ -29,6 +29,12 @@ JOBS = (
     "suite_checkpoint@workspace",
 )
 
+PROPORTIONALITY_QUESTION_IDS = (
+    "guarantee_fit",
+    "cheapest_sufficient",
+    "rare_failure_posture",
+)
+
 
 def values_for(workspace, job):
     kind = job.split("@", 1)[0]
@@ -254,11 +260,15 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             "status": "ok",
             "kind": "merge_repair",
             "files_changed": ["implementation/skeleton.md"],
+            "questions": answers(repair.bound),
         }
         self.assertEqual(
             repair.validate(copy.deepcopy(repair_reply)), repair_reply
         )
-        self.assertEqual(repair.bound.question_ids, ())
+        self.assertEqual(
+            repair.bound.question_ids,
+            PROPORTIONALITY_QUESTION_IDS,
+        )
 
         checkpoint = self.prepare(
             "suite_checkpoint@workspace",
@@ -272,13 +282,17 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             "results": [
                 {"command": "true", "exit_code": 0, "evidence": "done"}
             ],
+            "questions": answers(checkpoint.bound),
         }
         self.assertEqual(
             checkpoint.validate(copy.deepcopy(checkpoint_reply)),
             checkpoint_reply,
         )
         self.assertIn('["true"]', checkpoint.prompt)
-        self.assertEqual(checkpoint.bound.question_ids, ())
+        self.assertEqual(
+            checkpoint.bound.question_ids,
+            PROPORTIONALITY_QUESTION_IDS,
+        )
 
         for field in (
             "slices",
@@ -846,6 +860,7 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             "status": "ok",
             "kind": contracts.KIND_MERGE_REPAIR,
             "files_changed": ["implementation/skeleton.md"],
+            "questions": answers(prepared.bound),
         }
 
         with self.assertRaises(contracts.ContractError):
@@ -876,6 +891,7 @@ class JudgmentCallPreparationTest(unittest.TestCase):
                 "exit_code": 0,
                 "evidence": "green",
             }],
+            "questions": answers(prepared.bound),
         }
         with self.assertRaises(contracts.ContractError):
             prepared.validate(copy.deepcopy(reply))
@@ -1066,6 +1082,18 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
     @staticmethod
     def questions():
         return [
+            {
+                "id": "guarantee_fit",
+                "answer": "The accepted project standard governs this judgment.",
+            },
+            {
+                "id": "cheapest_sufficient",
+                "answer": "The smallest bounded alternative is sufficient.",
+            },
+            {
+                "id": "rare_failure_posture",
+                "answer": "Rare bounded failures can stop for operator action.",
+            },
             {"id": "environment_fit", "answer": "The repository standard."},
             {"id": "human_scale", "answer": "The judgment is proportional."},
         ]

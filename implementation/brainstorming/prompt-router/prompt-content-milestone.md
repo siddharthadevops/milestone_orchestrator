@@ -243,7 +243,9 @@ skeleton frames downstream kinds as **BASELINE** (adapted-kinds decision 20).
   discovery/no-suite calls supply non-empty `{path,basis}` evidence whose
   workspace-relative paths must exist. A later checkpoint resolves afresh.
 - Output: `passed`, `failed`, `no_suite`, or `blocked`, with the fields required
-  by that state. This is a bare technical kind with no QUESTIONS battery.
+  by that state. This remains a bare technical kind with no craft law, while
+  still answering the three universal explanatory QUESTIONS mounted by the
+  shared header.
 - Not here: implementation craft law, reviews, fixes, `suite_command` discovery
   state, or command correction/adoption.
 

@@ -46,7 +46,7 @@ FAKE_LLM = os.path.join(
 )
 GOAL = "Build a small CLI calculator (add/sub/mul/div) with unit tests"
 
-ADJ_ID = "skeleton-claude-r1/F1"
+ADJ_ID = "skeleton-claude-r3/F1"
 
 # The five canonical gate messages, newest first (git log order). Routed
 # canonical-plan calls may leave their own repository-boundary commits between
@@ -84,6 +84,7 @@ class TestCalculatorE2E(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory(prefix="orch-e2e-")
         cls.addClassCleanup(cls.tmp.cleanup)
         cls.work = os.path.join(cls.tmp.name, "work")
+        cls.model_home = os.path.join(cls.tmp.name, "model-home")
         os.makedirs(cls.work)
         # The operator's deliberate ledger repo: ensure_repo no longer
         # auto-inits, so a git-enabled run requires the workspace to
@@ -131,9 +132,16 @@ class TestCalculatorE2E(unittest.TestCase):
         cls.p_init = cls._cli(
             "init", "--goal", GOAL, "--workspace", cls.work,
             "--config", cfg_path,
+            "--model-profiles-home", cls.model_home,
         )
-        cls.p_run = cls._cli("run", "--workspace", cls.work)
-        cls.p_status = cls._cli("status", "--workspace", cls.work, "--json")
+        cls.p_run = cls._cli(
+            "run", "--workspace", cls.work,
+            "--model-profiles-home", cls.model_home,
+        )
+        cls.p_status = cls._cli(
+            "status", "--workspace", cls.work, "--json",
+            "--model-profiles-home", cls.model_home,
+        )
         try:
             cls.parsed_summary = json.loads(cls.p_status.stdout)
         except ValueError:
@@ -309,16 +317,16 @@ class TestCalculatorE2E(unittest.TestCase):
             [(r["id"], r["kind"]) for r in skeleton["rounds"]],
             [
                 ("skeleton-codex-r1", "review_round"),
-                ("skeleton-codex-r2", "fix_findings"),
-                ("skeleton-codex-r3", "delta_review"),
-                ("skeleton-codex-r4", "review_round"),
-                ("skeleton-claude-r1", "review_round"),
-                ("skeleton-codex-r5", "fix_findings"),
-                ("skeleton-codex-r6", "delta_review"),
-                ("skeleton-codex-r7", "review_round"),
-                ("skeleton-claude-r2", "review_round"),
-                ("skeleton-codex-r8", "fix_findings"),
+                ("skeleton-claude-r1", "fix_findings"),
+                ("skeleton-claude-r2", "delta_review"),
+                ("skeleton-codex-r2", "review_round"),
                 ("skeleton-claude-r3", "review_round"),
+                ("skeleton-claude-r4", "fix_findings"),
+                ("skeleton-claude-r5", "delta_review"),
+                ("skeleton-codex-r3", "review_round"),
+                ("skeleton-claude-r6", "review_round"),
+                ("skeleton-claude-r7", "fix_findings"),
+                ("skeleton-claude-r8", "review_round"),
             ],
         )
         # Reviewers report; the last round of each family is clean.
@@ -430,9 +438,9 @@ class TestCalculatorE2E(unittest.TestCase):
                 for r in fixes
             ],
             [
-                ("skeleton-codex-r2", "skeleton-codex-r1", "fixed"),
-                ("skeleton-codex-r5", "skeleton-claude-r1", "rejected"),
-                ("skeleton-codex-r8", "skeleton-claude-r2",
+                ("skeleton-claude-r1", "skeleton-codex-r1", "fixed"),
+                ("skeleton-claude-r4", "skeleton-claude-r3", "rejected"),
+                ("skeleton-claude-r7", "skeleton-claude-r6",
                  "rejected_adjudicated"),
             ],
         )

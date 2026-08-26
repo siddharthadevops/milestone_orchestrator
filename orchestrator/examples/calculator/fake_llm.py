@@ -224,19 +224,31 @@ AUTHOR_QUESTIONS = {
 }
 
 JUDGMENT_QUESTION_IDS = ("environment_fit", "human_scale")
+GLOBAL_QUESTION_IDS = (
+    "guarantee_fit",
+    "cheapest_sufficient",
+    "rare_failure_posture",
+)
+
+
+def global_questions():
+    return [
+        {"id": question_id, "answer": "Checked by the calculator fixture."}
+        for question_id in GLOBAL_QUESTION_IDS
+    ]
 
 
 def author_questions(kind):
     return [
         {"id": question_id, "answer": "Checked by the calculator fixture."}
-        for question_id in AUTHOR_QUESTIONS[kind]
+        for question_id in AUTHOR_QUESTIONS[kind] + GLOBAL_QUESTION_IDS
     ]
 
 
 def judgment_questions():
     return [
         {"id": question_id, "answer": "Checked by the calculator fixture."}
-        for question_id in JUDGMENT_QUESTION_IDS
+        for question_id in JUDGMENT_QUESTION_IDS + GLOBAL_QUESTION_IDS
     ]
 
 
@@ -328,6 +340,7 @@ def respond(kind, family, workspace, count, prompt):
         response = {
             "status": "passed" if completed.returncode == 0 else "failed",
             "kind": kind,
+            "questions": global_questions(),
             "commands": [command],
             "results": [{
                 "command": command,
@@ -489,6 +502,8 @@ def respond(kind, family, workspace, count, prompt):
         blocked["questions"] = author_questions(kind)
     elif kind in ("review_round", "delta_review", "fix_findings", "reclassify"):
         blocked["questions"] = judgment_questions()
+    elif kind == "suite_checkpoint":
+        blocked["questions"] = global_questions()
     return blocked
 
 

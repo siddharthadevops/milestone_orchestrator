@@ -30,6 +30,11 @@ EXPECTED_GOLDENS = frozenset((
     "milestone/review_round.prompt.txt",
     "milestone/suite_checkpoint.prompt.txt",
 ))
+GLOBAL_QUESTION_IDS = (
+    "guarantee_fit",
+    "cheapest_sufficient",
+    "rare_failure_posture",
+)
 
 
 def validation_values(prompt_set):
@@ -244,6 +249,9 @@ class PromptRouterTest(unittest.TestCase):
                     values=self.values(job),
                 )
                 self.assertEqual(prompt["kind"], kind)
+                ids = [item["id"] for item in prompt["questions"]["items"]]
+                for question_id in GLOBAL_QUESTION_IDS:
+                    self.assertEqual(ids.count(question_id), 1)
 
         cases = (
             ("draft_slice_note@slice_doc", None, "initial_position", True,
@@ -270,6 +278,9 @@ class PromptRouterTest(unittest.TestCase):
                 text = self.text(prompt)
                 self.assertIn(present, text)
                 self.assertNotIn(absent, text)
+                ids = [item["id"] for item in prompt["questions"]["items"]]
+                for question_id in GLOBAL_QUESTION_IDS:
+                    self.assertEqual(ids.count(question_id), 1)
         lead = prompt_router.assemble(
             self.prompt_set,
             job="draft_slice_note@slice_doc",

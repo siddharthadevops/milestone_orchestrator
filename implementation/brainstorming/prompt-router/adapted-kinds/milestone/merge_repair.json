@@ -1,7 +1,7 @@
 {
   "kind": "merge_repair",
   "process": "milestone",
-  "description": "Bare technical call: after a computed plan wipe, owns all run-owned repository surgery and the final same-branch commit. No craft law, no battery.",
+  "description": "Bare technical call: after a computed plan wipe, owns all run-owned repository surgery and the final same-branch commit. No craft law; universal explanatory questions still mount.",
   "instructions": {
     "parts": [
       {
@@ -92,7 +92,9 @@
     ]
   },
   "questions": {
-    "status": "bare technical kind — no battery by design (decision 57)",
+    "intro": [
+      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+    ],
     "items": []
   },
   "output_contract": {
@@ -109,6 +111,9 @@
           " \"notes\": \"<optional, short>\"}"
         ],
         "variables": []
+      },
+      {
+        "ref": "questions_output"
       }
     ]
   }

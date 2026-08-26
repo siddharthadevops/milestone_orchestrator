@@ -86,6 +86,9 @@ def canonical_skeleton_step(material=None):
                     "machinery_trust",
                     "environment_fit",
                     "human_scale",
+                    "guarantee_fit",
+                    "cheapest_sufficient",
+                    "rare_failure_posture",
                 )
             ],
         ),

@@ -1022,6 +1022,14 @@ class TestNoPolicyProjectEndToEnd(ProjectRunTestCase):
                 {
                     "status": "no_suite",
                     "kind": "suite_checkpoint",
+                    "questions": [
+                        {"id": question_id, "answer": "Checked."}
+                        for question_id in (
+                            "guarantee_fit",
+                            "cheapest_sufficient",
+                            "rare_failure_posture",
+                        )
+                    ],
                     "commands": [],
                     "results": [],
                     "authority": {

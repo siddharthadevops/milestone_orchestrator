@@ -528,7 +528,8 @@ captured evidence it was pruned from.
     design work; it blocks to the operator only if even that fails. It has
     a router route like everything else: the `merge_repair` kind — header,
     task, project context (so it knows where it stands), the conflict
-    payload, a two-field contract; no battery by design. Its task bakes
+    payload, a two-field contract; no battery by design at that point
+    (superseded by 75; chronology only). Its task bakes
     the corrected preservation rule (round-6 F4): the session's accepted
     range wins ENTIRELY, documents and code alike — only the workspace's
     pre-existing built work from the deleted slice forward is undone.
@@ -576,7 +577,8 @@ captured evidence it was pruned from.
     jail (F5); an answer is present, non-empty, and at most 300 characters
     (F6); the
     every-reply questions rule binds kinds that define or mount a battery
-    — merge_repair, defining none, owes none (F7); malformed prompt
+    — merge_repair, defining none, owes none (F7; superseded by 75;
+    chronology only); malformed prompt
     documents count as unreadable and fall down the ladder (F8); the last
     "family" directory wording became PROCESS (F9).
 
@@ -742,6 +744,19 @@ captured evidence it was pruned from.
     closes without a second repair. This supersedes the merge-repair protocol
     in decisions 57, 61, 67, 69, 71, 72, and 73; those entries remain chronology
     only.
+
+75. **Three explanatory proportionality questions mount on every call**
+    (operator ruling, 2026-08-26): `guarantee_fit`, `cheapest_sufficient`, and
+    `rare_failure_posture` mount exactly once through the shared header, so
+    every assembled direct or Brainstorming route answers them, including
+    `merge_repair` and `suite_checkpoint`. Answers remain ordinary free text:
+    one non-empty value per id, at most 300 characters, with no `none`
+    shortcut, semantic parser, scoring, or content validation. Bare technical
+    still means no craft law; it no longer means no explanatory questions.
+    This supersedes the battery exceptions in decisions 57 and 62 and the
+    corresponding older goal/rationale prose; those statements are chronology
+    only. The current base corpus remains the default future code material;
+    domain-specific material question sets are later work.
 
 ## Content observations left untouched (not adaptation's call)
 

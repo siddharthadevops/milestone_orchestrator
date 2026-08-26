@@ -23,7 +23,52 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                            'path of '
                                                                            'the '
                                                                            'primary '
-                                                                           'workspace.'}]},
+                                                                           'workspace.'}],
+                                             'questions': [{'id': 'guarantee_fit',
+                                                            'text': 'What guarantees '
+                                                                    'govern your work '
+                                                                    'or judgment, what '
+                                                                    'strength do they '
+                                                                    'require, and why? '
+                                                                    'If none apply, '
+                                                                    'explain why no '
+                                                                    'guarantee is '
+                                                                    'needed and how '
+                                                                    'your work still '
+                                                                    'fits the '
+                                                                    'surrounding '
+                                                                    "project's "
+                                                                    'accepted '
+                                                                    'standard.'},
+                                                           {'id': 'cheapest_sufficient',
+                                                            'text': 'What materially '
+                                                                    'simpler '
+                                                                    'alternative did '
+                                                                    'you '
+                                                                    'examine—including '
+                                                                    'tolerating a loud '
+                                                                    'bounded failure '
+                                                                    'or an extremely '
+                                                                    'unlikely edge—and '
+                                                                    'what concrete '
+                                                                    'guarantee makes '
+                                                                    'it insufficient?'},
+                                                           {'id': 'rare_failure_posture',
+                                                            'text': 'What are the '
+                                                                    'realistic '
+                                                                    'probability and '
+                                                                    'damage of the '
+                                                                    'event this work '
+                                                                    'prevents? Would '
+                                                                    'letting that rare '
+                                                                    'case fail closed '
+                                                                    'and surface '
+                                                                    'clearly for retry '
+                                                                    'or operator '
+                                                                    'action be cheaper '
+                                                                    'than preventing '
+                                                                    'it? Explain the '
+                                                                    'trade-off.'}]},
                                   'project_context': {'text': ['PROJECT CONTEXT '
                                                                '(standing project law; '
                                                                'binding)',
@@ -4130,7 +4175,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                     'discovers when necessary and runs '
                                                     'the official complete suite at a '
                                                     'scheduled checkpoint. No craft '
-                                                    'law, no battery.',
+                                                    'law; universal explanatory '
+                                                    'questions still mount.',
                                      'instructions': {'parts': [{'ref': 'header'},
                                                                 {'ref': 'contract_correction'},
                                                                 {'text': ['TASK: '
@@ -4399,8 +4445,11 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           'passed.'],
                                                                  'variables': []},
                                                                 {'ref': 'process_authority'}]},
-                                     'questions': {'status': 'bare technical kind — no '
-                                                             'battery by design',
+                                     'questions': {'intro': ['QUESTIONS (answer each '
+                                                             'in output, backed by a '
+                                                             'brief description; at '
+                                                             'most 300 characters per '
+                                                             'answer)'],
                                                    'items': []},
                                      'output_contract': {'sections': [{'id': 'suite_checkpoint_result',
                                                                        'text': ['OUTPUT '
@@ -4594,14 +4643,16 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                 'a '
                                                                                 'trustworthy '
                                                                                 'execution>"}'],
-                                                                       'variables': []}]}},
+                                                                       'variables': []},
+                                                                      {'ref': 'questions_output'}]}},
  'milestone/merge_repair.json': {'kind': 'merge_repair',
                                  'process': 'milestone',
                                  'description': 'Bare technical call: after a computed '
                                                 'plan wipe, owns all run-owned '
                                                 'repository surgery and the final '
-                                                'same-branch commit. No craft law, no '
-                                                'battery.',
+                                                'same-branch commit. No craft law; '
+                                                'universal explanatory questions still '
+                                                'mount.',
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'text': ['TASK: the '
                                                                       'accepted plan '
@@ -4834,9 +4885,10 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                            'and '
                                                                                            'final '
                                                                                            'commit.'}]}]},
-                                 'questions': {'status': 'bare technical kind — no '
-                                                         'battery by design (decision '
-                                                         '57)',
+                                 'questions': {'intro': ['QUESTIONS (answer each in '
+                                                         'output, backed by a brief '
+                                                         'description; at most 300 '
+                                                         'characters per answer)'],
                                                'items': []},
                                  'output_contract': {'sections': [{'id': 'merge_repair_result',
                                                                    'text': ['OUTPUT '
@@ -4869,7 +4921,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             ' "notes": '
                                                                             '"<optional, '
                                                                             'short>"}'],
-                                                                   'variables': []}]}},
+                                                                   'variables': []},
+                                                                  {'ref': 'questions_output'}]}},
  'brainstorming/discussion_turn.json': {'kind': 'discussion_turn',
                                         'process': 'brainstorming',
                                         'description': "One seat's turn in a live "

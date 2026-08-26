@@ -17,6 +17,20 @@
           "required": true,
           "description": "Absolute path of the primary workspace."
         }
+      ],
+      "questions": [
+        {
+          "id": "guarantee_fit",
+          "text": "What guarantees govern your work or judgment, what strength do they require, and why? If none apply, explain why no guarantee is needed and how your work still fits the surrounding project's accepted standard."
+        },
+        {
+          "id": "cheapest_sufficient",
+          "text": "What materially simpler alternative did you examine—including tolerating a loud bounded failure or an extremely unlikely edge—and what concrete guarantee makes it insufficient?"
+        },
+        {
+          "id": "rare_failure_posture",
+          "text": "What are the realistic probability and damage of the event this work prevents? Would letting that rare case fail closed and surface clearly for retry or operator action be cheaper than preventing it? Explain the trade-off."
+        }
       ]
     },
     "project_context": {

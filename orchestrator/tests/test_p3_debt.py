@@ -42,6 +42,9 @@ def judgment_questions():
     return [
         {"id": "environment_fit", "answer": "Checked."},
         {"id": "human_scale", "answer": "Checked."},
+        {"id": "guarantee_fit", "answer": "Checked."},
+        {"id": "cheapest_sufficient", "answer": "Checked."},
+        {"id": "rare_failure_posture", "answer": "Checked."},
     ]
 
 
@@ -72,6 +75,14 @@ def no_suite_checkpoint():
                     "basis": "No complete suite is configured or declared.",
                 }],
             },
+            "questions": [
+                {"id": question_id, "answer": "Checked."}
+                for question_id in (
+                    "guarantee_fit",
+                    "cheapest_sufficient",
+                    "rare_failure_posture",
+                )
+            ],
         },
         family="codex",
     )
@@ -88,6 +99,9 @@ def draft_step():
             "machinery_trust",
             "environment_fit",
             "human_scale",
+            "guarantee_fit",
+            "cheapest_sufficient",
+            "rare_failure_posture",
         )
     ]
     return dict(
@@ -1376,6 +1390,9 @@ class TestP3Debt(DriverTestCase):
                              {"id": "machinery_trust", "answer": "Checked."},
                              {"id": "environment_fit", "answer": "Checked."},
                              {"id": "human_scale", "answer": "Checked."},
+                             {"id": "guarantee_fit", "answer": "Checked."},
+                             {"id": "cheapest_sufficient", "answer": "Checked."},
+                             {"id": "rare_failure_posture", "answer": "Checked."},
                          ],
                      ),
                      family="codex",
@@ -1425,6 +1442,9 @@ class TestP3Debt(DriverTestCase):
                              {"id": "machinery_trust", "answer": "Checked."},
                              {"id": "environment_fit", "answer": "Checked."},
                              {"id": "human_scale", "answer": "Checked."},
+                             {"id": "guarantee_fit", "answer": "Checked."},
+                             {"id": "cheapest_sufficient", "answer": "Checked."},
+                             {"id": "rare_failure_posture", "answer": "Checked."},
                          ],
                      ),
                      family="codex",
@@ -1463,6 +1483,9 @@ class TestP3Debt(DriverTestCase):
                              {"id": "machinery_trust", "answer": "Checked."},
                              {"id": "environment_fit", "answer": "Checked."},
                              {"id": "human_scale", "answer": "Checked."},
+                             {"id": "guarantee_fit", "answer": "Checked."},
+                             {"id": "cheapest_sufficient", "answer": "Checked."},
+                             {"id": "rare_failure_posture", "answer": "Checked."},
                          ],
                      ),
                      family="codex",

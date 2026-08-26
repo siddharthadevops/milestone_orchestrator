@@ -123,6 +123,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         response = {
             "status": status,
             "kind": "suite_checkpoint",
+            "questions": self._questions(),
             "commands": commands,
             "results": [
                 {
@@ -138,6 +139,17 @@ class SuiteCheckpointCallTest(unittest.TestCase):
             },
         }
         return response
+
+    @staticmethod
+    def _questions():
+        return [
+            {"id": question_id, "answer": "Checked."}
+            for question_id in (
+                "guarantee_fit",
+                "cheapest_sufficient",
+                "rare_failure_posture",
+            )
+        ]
 
     def _subject(self, response, side_effect=None):
         return driver.Driver(
@@ -347,6 +359,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         response = {
             "status": "no_suite",
             "kind": "suite_checkpoint",
+            "questions": self._questions(),
             "commands": [],
             "results": [],
             "authority": {
@@ -377,6 +390,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         response = {
             "status": "failed",
             "kind": "suite_checkpoint",
+            "questions": self._questions(),
             "commands": [self.command],
             "results": [{
                 "command": self.command,

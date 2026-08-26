@@ -66,6 +66,7 @@ def _suite_step(command, status="passed", side_effect=None):
     response = {
         "status": status,
         "kind": "suite_checkpoint",
+        "questions": _questions(contracts.KIND_SUITE_CHECKPOINT),
         "commands": [command],
         "results": [{
             "command": command,
@@ -103,7 +104,21 @@ def _questions(kind):
         contracts.KIND_IMPLEMENT,
     ):
         ids.append("machinery_trust")
-    ids.extend(("environment_fit", "human_scale"))
+    if kind in (
+        contracts.KIND_DRAFT_SKELETON,
+        contracts.KIND_DRAFT_SLICE_NOTE,
+        contracts.KIND_IMPLEMENT,
+        contracts.KIND_REVIEW_ROUND,
+        contracts.KIND_FIX_FINDINGS,
+        contracts.KIND_DELTA_REVIEW,
+        contracts.KIND_RECLASSIFY,
+    ):
+        ids.extend(("environment_fit", "human_scale"))
+    ids.extend((
+        "guarantee_fit",
+        "cheapest_sufficient",
+        "rare_failure_posture",
+    ))
     return [
         {"id": question_id, "answer": "The bounded check is satisfied."}
         for question_id in ids

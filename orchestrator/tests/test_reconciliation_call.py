@@ -181,6 +181,20 @@ class ReconciliationCallTest(unittest.TestCase):
             "status": status,
             "kind": "merge_repair",
             "files_changed": [self.path, "repair.txt"],
+            "questions": [
+                {
+                    "id": "guarantee_fit",
+                    "answer": "The accepted reconciliation contract governs.",
+                },
+                {
+                    "id": "cheapest_sufficient",
+                    "answer": "One bounded repair call is the simplest option.",
+                },
+                {
+                    "id": "rare_failure_posture",
+                    "answer": "A failed repair stops for operator action.",
+                },
+            ],
         }
         if status == "blocked":
             result["blocked_reason"] = "The required repair cannot complete."

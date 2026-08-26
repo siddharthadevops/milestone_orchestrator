@@ -53,6 +53,9 @@ def judgment_questions():
     return [
         {"id": "environment_fit", "answer": "Checked."},
         {"id": "human_scale", "answer": "Checked."},
+        {"id": "guarantee_fit", "answer": "Checked."},
+        {"id": "cheapest_sufficient", "answer": "Checked."},
+        {"id": "rare_failure_posture", "answer": "Checked."},
     ]
 
 
@@ -81,6 +84,9 @@ def draft_step():
                     "machinery_trust",
                     "environment_fit",
                     "human_scale",
+                    "guarantee_fit",
+                    "cheapest_sufficient",
+                    "rare_failure_posture",
                 )
             ],
         ),
@@ -139,6 +145,9 @@ def implement_step():
                 {"id": "machinery_trust", "answer": "Checked."},
                 {"id": "environment_fit", "answer": "Checked."},
                 {"id": "human_scale", "answer": "Checked."},
+                {"id": "guarantee_fit", "answer": "Checked."},
+                {"id": "cheapest_sufficient", "answer": "Checked."},
+                {"id": "rare_failure_posture", "answer": "Checked."},
             ],
         ),
         family="codex",

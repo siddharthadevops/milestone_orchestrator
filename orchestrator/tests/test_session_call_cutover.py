@@ -24,6 +24,11 @@ RETHINK_FINDING = json.dumps(
     {"id": "F1", "summary": "One bounded contradiction."},
     sort_keys=True,
 )
+GLOBAL_QUESTION_IDS = (
+    "guarantee_fit",
+    "cheapest_sufficient",
+    "rare_failure_posture",
+)
 
 
 def repository_context(workspace):
@@ -149,6 +154,10 @@ class SessionCallCutoverTest(unittest.TestCase):
                     if role == "common_sense" else "discussion_turn"
                 )
                 self.assertEqual(prepared.bound.prompt["kind"], expected_kind)
+                for question_id in GLOBAL_QUESTION_IDS:
+                    self.assertEqual(
+                        prepared.bound.question_ids.count(question_id), 1
+                    )
                 reply = {
                     "kind": expected_kind,
                     "markdown": "One bounded intervention.",
@@ -459,7 +468,8 @@ class SessionCallCutoverTest(unittest.TestCase):
         self.assertGreater(len(lead.bound.question_ids), len(contrary.bound.question_ids))
         self.assertEqual(
             set(rethink.bound.question_ids),
-            {"turn_environment_fit", "turn_human_scale"},
+            set(GLOBAL_QUESTION_IDS)
+            | {"turn_environment_fit", "turn_human_scale"},
         )
         self.assertIn("request_focus", dante.bound.question_ids)
         invalid = {
@@ -882,6 +892,18 @@ class SessionCallCutoverTest(unittest.TestCase):
                 {
                     "id": "turn_human_scale",
                     "answer": "Kept the intervention at request scale.",
+                },
+                {
+                    "id": "guarantee_fit",
+                    "answer": "Checked the governing guarantee strength.",
+                },
+                {
+                    "id": "cheapest_sufficient",
+                    "answer": "Checked the cheapest sufficient alternative.",
+                },
+                {
+                    "id": "rare_failure_posture",
+                    "answer": "Priced the rare failure and fail-closed option.",
                 },
             ],
         }

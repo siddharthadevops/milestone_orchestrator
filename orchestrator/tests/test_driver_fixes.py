@@ -153,16 +153,39 @@ def step(kind, response, family=None, side_effect=None):
         "draft_skeleton": (
             "due_diligence_count", "machinery_trust",
             "environment_fit", "human_scale",
+            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
         ),
         "draft_slice_note": (
             "due_diligence_count", "machinery_trust",
             "environment_fit", "human_scale",
+            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
         ),
-        "implement": ("machinery_trust", "environment_fit", "human_scale"),
-        "review_round": ("environment_fit", "human_scale"),
-        "delta_review": ("environment_fit", "human_scale"),
-        "fix_findings": ("environment_fit", "human_scale"),
-        "reclassify": ("environment_fit", "human_scale"),
+        "implement": (
+            "machinery_trust", "environment_fit", "human_scale",
+            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
+        ),
+        "review_round": (
+            "environment_fit", "human_scale", "guarantee_fit",
+            "cheapest_sufficient", "rare_failure_posture",
+        ),
+        "delta_review": (
+            "environment_fit", "human_scale", "guarantee_fit",
+            "cheapest_sufficient", "rare_failure_posture",
+        ),
+        "fix_findings": (
+            "environment_fit", "human_scale", "guarantee_fit",
+            "cheapest_sufficient", "rare_failure_posture",
+        ),
+        "reclassify": (
+            "environment_fit", "human_scale", "guarantee_fit",
+            "cheapest_sufficient", "rare_failure_posture",
+        ),
+        "merge_repair": (
+            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
+        ),
+        "suite_checkpoint": (
+            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
+        ),
     }
     if isinstance(response, dict) and kind in question_ids:
         response = dict(response)

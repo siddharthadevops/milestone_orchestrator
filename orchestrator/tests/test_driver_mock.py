@@ -105,6 +105,13 @@ def init_state(workspace, config, goal=GOAL):
     return path
 
 
+_GLOBAL_QUESTION_IDS = (
+    "guarantee_fit",
+    "cheapest_sufficient",
+    "rare_failure_posture",
+)
+
+
 _QUESTION_IDS = {
     contracts.KIND_DRAFT_SKELETON: (
         "due_diligence_count",
@@ -127,13 +134,17 @@ _QUESTION_IDS = {
     contracts.KIND_FIX_FINDINGS: ("environment_fit", "human_scale"),
     contracts.KIND_DELTA_REVIEW: ("environment_fit", "human_scale"),
     contracts.KIND_RECLASSIFY: ("environment_fit", "human_scale"),
+    contracts.KIND_MERGE_REPAIR: (),
+    contracts.KIND_SUITE_CHECKPOINT: (),
 }
 
 
 def questions(kind):
     return [
         {"id": question_id, "answer": "Checked the bounded fixture."}
-        for question_id in _QUESTION_IDS.get(kind, ())
+        for question_id in (
+            _QUESTION_IDS.get(kind, ()) + _GLOBAL_QUESTION_IDS
+        )
     ]
 
 
@@ -248,6 +259,7 @@ def suite_checkpoint_step(command, status="passed"):
     response = {
         "status": status,
         "kind": contracts.KIND_SUITE_CHECKPOINT,
+        "questions": questions(contracts.KIND_SUITE_CHECKPOINT),
         "commands": [command],
         "results": [{
             "command": command,

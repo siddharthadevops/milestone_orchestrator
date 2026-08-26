@@ -54,6 +54,11 @@ def routed_questions(kind):
     ):
         ids.append("machinery_trust")
     ids.extend(("environment_fit", "human_scale"))
+    ids.extend((
+        "guarantee_fit",
+        "cheapest_sufficient",
+        "rare_failure_posture",
+    ))
     return [
         {"id": question_id, "answer": "The bounded check is satisfied."}
         for question_id in ids
@@ -104,6 +109,14 @@ def suite_checkpoint_response(status, commands):
                 "basis": "No complete suite is configured or declared.",
             }],
         },
+        "questions": [
+            {"id": question_id, "answer": "Checked."}
+            for question_id in (
+                "guarantee_fit",
+                "cheapest_sufficient",
+                "rare_failure_posture",
+            )
+        ],
     }
     return response
 

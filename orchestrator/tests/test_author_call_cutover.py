@@ -641,6 +641,8 @@ class DriverAuthorActivationTest(unittest.TestCase):
                     for name in (
                         "due_diligence_count", "machinery_trust",
                         "environment_fit", "human_scale",
+                        "guarantee_fit", "cheapest_sufficient",
+                        "rare_failure_posture",
                     )
                 ],
             }

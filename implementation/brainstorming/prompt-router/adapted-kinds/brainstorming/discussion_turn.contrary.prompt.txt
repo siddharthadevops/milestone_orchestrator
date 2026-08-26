@@ -83,6 +83,9 @@ ALTITUDE (documentation discipline)
 QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
 - turn_environment_fit: What standard does the surrounding work live at, and does your intervention push beyond it anywhere the request did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found.
 - turn_human_scale: Put your intervention next to the request: would the human who asked see the grain and size they meant — or literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
+- guarantee_fit: What guarantees govern your work or judgment, what strength do they require, and why? If none apply, explain why no guarantee is needed and how your work still fits the surrounding project's accepted standard.
+- cheapest_sufficient: What materially simpler alternative did you examine—including tolerating a loud bounded failure or an extremely unlikely edge—and what concrete guarantee makes it insufficient?
+- rare_failure_posture: What are the realistic probability and damage of the event this work prevents? Would letting that rare case fail closed and surface clearly for retry or operator action be cheaper than preventing it? Explain the trade-off.
 
 OUTPUT CONTRACT
 Return exactly one JSON object with kind "discussion_turn", one non-empty

@@ -207,6 +207,7 @@ def _run_scenario(tmpdir, name, extra_config):
     """Init + run the calculator scenario in its own git workspace under
     tmpdir; return the final on-disk state dict."""
     work = os.path.join(tmpdir, name)
+    model_home = os.path.join(tmpdir, "%s-model-home" % name)
     os.makedirs(work)
     subprocess.run(["git", "-C", work, "init", "-q"], check=True, timeout=60)
     config = _base_config()
@@ -215,9 +216,13 @@ def _run_scenario(tmpdir, name, extra_config):
     with open(cfg_path, "w", encoding="utf-8") as fh:
         json.dump(config, fh, indent=2)
     p_init = _cli("init", "--goal", GOAL, "--workspace", work,
-                  "--config", cfg_path)
+                  "--config", cfg_path,
+                  "--model-profiles-home", model_home)
     assert p_init.returncode == 0, "init failed: %s" % p_init.stderr
-    p_run = _cli("run", "--workspace", work)
+    p_run = _cli(
+        "run", "--workspace", work,
+        "--model-profiles-home", model_home,
+    )
     assert p_run.returncode == 0, "run failed:\n%s\n%s" % (
         p_run.stdout, p_run.stderr)
     return st.load(os.path.join(work, ".orchestrator", "state.json"))

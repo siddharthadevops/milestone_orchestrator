@@ -63,6 +63,9 @@ def _judgment_questions():
     return [
         {"id": "environment_fit", "answer": "Checked."},
         {"id": "human_scale", "answer": "Checked."},
+        {"id": "guarantee_fit", "answer": "Checked."},
+        {"id": "cheapest_sufficient", "answer": "Checked."},
+        {"id": "rare_failure_posture", "answer": "Checked."},
     ]
 
 
@@ -115,17 +118,26 @@ _AUTHOR_QUESTION_IDS = {
         "machinery_trust",
         "environment_fit",
         "human_scale",
+        "guarantee_fit",
+        "cheapest_sufficient",
+        "rare_failure_posture",
     ),
     contracts.KIND_DRAFT_SLICE_NOTE: (
         "due_diligence_count",
         "machinery_trust",
         "environment_fit",
         "human_scale",
+        "guarantee_fit",
+        "cheapest_sufficient",
+        "rare_failure_posture",
     ),
     contracts.KIND_IMPLEMENT: (
         "machinery_trust",
         "environment_fit",
         "human_scale",
+        "guarantee_fit",
+        "cheapest_sufficient",
+        "rare_failure_posture",
     ),
 }
 
