@@ -12,6 +12,7 @@ from . import (
     prompt_router,
     prompt_sets,
     prompts,
+    session_repository,
     verifiers,
 )
 
@@ -23,13 +24,13 @@ SESSION_JOBS = frozenset((
 ))
 _CHARGE_REQUIRED = frozenset((
     "job", "material", "prompt_set", "values", "amendments_path",
-    "accepted_amendments",
+    "accepted_amendments", "repository",
 ))
 _CHARGE_OPTIONAL = frozenset(("artifact_type", "project_context"))
 
 PreparedSessionCall = collections.namedtuple(
     "PreparedSessionCall",
-    ("prompt", "validate", "prompt_set_fallback", "bound"),
+    ("prompt", "validate", "prompt_set_fallback", "bound", "complete"),
 )
 
 
@@ -93,6 +94,7 @@ def validate_charge(charge):
         raise prompt_router.PromptRouterError(
             "milestone session charge.accepted_amendments must be a list"
         )
+    session_repository.validate_context(charge["repository"])
     artifact_type = charge.get("artifact_type")
     if charge["job"] == "rethink":
         if artifact_type not in ("document", "implementation"):
@@ -152,12 +154,8 @@ def prepare_turn(
         raise prompt_router.PromptRouterError(
             "milestone session target authority is unavailable"
         )
-    accepted = state.get("accepted_target_revision")
-    authority = (
-        "accepted revision %s" % accepted
-        if accepted is not None else
-        "unaccepted recovery baseline %s"
-        % state.get("recovery_baseline_revision")
+    authority, target_state, _repository = (
+        session_repository.live_target_authority(state, charge)
     )
     references = state["request"]["context"].get("references") or []
     reference_lines = (
@@ -174,14 +172,12 @@ def prepare_turn(
         "round": str(round_number),
         "target_path": state["request"]["target_path"],
         "target_authority": authority,
-        "target_state": (
-            "present" if target_revision.get("exists") else "absent"
-        ),
+        "target_state": target_state,
     })
     operator = prompt_authority.read_mutable_amendments(
         charge["amendments_path"]
     )
-    return prepare(
+    prepared = prepare(
         home,
         job=charge["job"],
         material=charge["material"],
@@ -195,6 +191,12 @@ def prepare_turn(
         project_context=charge.get("project_context"),
         workspace=state["request"]["workspace_path"],
         correction=correction,
+    )
+    attempt = session_repository.begin_attempt(state, charge, role)
+    return prepared._replace(
+        complete=lambda: session_repository.complete_attempt(
+            attempt, participant["id"], round_number
+        )
     )
 
 
@@ -338,5 +340,5 @@ def prepare(
         )
 
     return PreparedSessionCall(
-        rendered, validate, resolution.prompt_set_fallback, bound
+        rendered, validate, resolution.prompt_set_fallback, bound, None
     )

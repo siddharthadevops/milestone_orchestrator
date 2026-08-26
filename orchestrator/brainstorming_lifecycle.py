@@ -31,7 +31,7 @@ from orchestrator import brainstorming
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_execution as execution
 from orchestrator import driver, errclass, kvstore, pricing, registry
-from orchestrator import runners, session_calls, staffing
+from orchestrator import runners, session_calls, session_repository, staffing
 
 try:
     import fcntl
@@ -3366,6 +3366,11 @@ def _wait_for_external_response(
                         ),
                     )
                 )
+        except session_repository.ReadOnlyTurnInvalidated:
+            store.mark_external_provider_quiescent(
+                record["id"], token
+            )
+            continue
         except BaseException as exc:
             latest = store.read_external_intervention(record["id"])
             if latest is not None and latest["response"] is not None:

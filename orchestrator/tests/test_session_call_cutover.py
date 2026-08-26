@@ -14,14 +14,24 @@ from orchestrator import brainstorming, brainstorming_coordination
 from orchestrator import brainstorming_execution
 from orchestrator import brainstorming_milestone
 from orchestrator import brainstorming_tasks
+from orchestrator import canonical_plan
 from orchestrator import contracts, prompt_authority, prompt_router, prompt_sets
-from orchestrator import driver, ledgers, runners, session_calls, state, tasks
+from orchestrator import driver, ledgers, runners, session_calls
+from orchestrator import session_repository, state, tasks
 
 
 RETHINK_FINDING = json.dumps(
     {"id": "F1", "summary": "One bounded contradiction."},
     sort_keys=True,
 )
+
+
+def repository_context(workspace):
+    return {
+        "state_path": os.path.join(workspace, "state.json"),
+        "skeleton_path": "docs/skeleton.md",
+        "pre_session_commit": "0" * 40,
+    }
 
 
 def turn_values(workspace, role):
@@ -150,6 +160,7 @@ class SessionCallCutoverTest(unittest.TestCase):
             "values": {},
             "amendments_path": str(amendments),
             "accepted_amendments": [],
+            "repository": repository_context(self.workspace),
         }
         request = {
             "work_area": {
@@ -340,7 +351,83 @@ class SessionCallCutoverTest(unittest.TestCase):
         self.assertEqual(
             charge["prompt_set"], subject.state[state.PROMPT_SET_KEY]
         )
+        self.assertEqual(
+            charge["repository"]["state_path"], os.path.abspath(state_path)
+        )
+        self.assertEqual(
+            charge["repository"]["skeleton_path"], skeleton_path
+        )
+        self.assertEqual(
+            charge["repository"]["pre_session_commit"],
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip(),
+        )
         self.assertEqual(current["brainstorming_wait"]["session_id"], "session-1")
+
+        updated_plan = copy.deepcopy(plan)
+        updated_plan["slices"].append({
+            "id": 2,
+            "title": "Two",
+            "intent": "Continue after the session plan edit.",
+            "producer_task_executor": {
+                "draft_slice_note": "agent_call",
+                "implement": "agent_call",
+            },
+        })
+        Path(repository, skeleton_path).write_text(
+            "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+            % json.dumps(updated_plan),
+            encoding="utf-8",
+        )
+        subprocess.run(
+            ["git", "add", skeleton_path], cwd=repository, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-qm", "session plan edit"],
+            cwd=repository,
+            check=True,
+        )
+        new_revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repository, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip()
+        refreshed = state.load(state_path)
+        canonical_plan.establish_current_plan(refreshed, skeleton_path)
+        state.save(state_path, refreshed)
+
+        def finish_reloaded_wait(unit, _wait):
+            unit.pop("brainstorming_wait", None)
+            unit.pop("active_task", None)
+            return "finished reloaded wait"
+
+        with (
+            mock.patch.object(
+                subject,
+                "_apply_profile_swap",
+                return_value=True,
+            ),
+            mock.patch.object(
+                subject,
+                "_do_brainstorming_production_wait",
+                side_effect=finish_reloaded_wait,
+            ),
+        ):
+            subject.step()
+
+        persisted = state.load(state_path)
+        self.assertEqual(
+            persisted["milestone"][canonical_plan.ANCHOR_KEY]["revision"],
+            new_revision,
+        )
+        self.assertEqual(
+            [item["id"] for item in persisted["milestone"]["slices"]],
+            [1, 2],
+        )
 
     def test_session_questions_and_envelopes_are_bound(self):
         lead = self.prepare(
@@ -441,6 +528,7 @@ class SessionCallCutoverTest(unittest.TestCase):
             "amendments_path": str(Path(self.workspace) / "amendments.json"),
             "accepted_amendments": [],
             "artifact_type": "document",
+            "repository": repository_context(self.workspace),
         }
         session_calls.validate_charge(charge)
         missing_finding = copy.deepcopy(charge)
@@ -584,6 +672,7 @@ class SessionCallCutoverTest(unittest.TestCase):
                             "amendments_path": str(amendments),
                             "accepted_amendments": [],
                             "artifact_type": "document",
+                            "repository": repository_context(self.workspace),
                         }
                     },
                 },
@@ -596,16 +685,42 @@ class SessionCallCutoverTest(unittest.TestCase):
             "id": "initial-position", "role": "initial_position"
         }
         target = {"exists": True}
-        first = session_calls.prepare_turn(
-            self.workspace, state, participant, 1, target
-        )
-        amendments.write_text(
-            json.dumps({"amendments": [{"id": "A1", "text": "New law."}]}),
-            encoding="utf-8",
-        )
-        second = session_calls.prepare_turn(
-            self.workspace, state, participant, 1, target
-        )
+        boundary = {
+            "accept_reply": True,
+            "committed": False,
+            "plan_changed": False,
+            "revision": "1" * 40,
+            "anchor": None,
+        }
+        with (
+            mock.patch.object(
+                session_repository,
+                "live_target_authority",
+                return_value=("repository HEAD live", "present", {}),
+            ),
+            mock.patch.object(
+                session_repository,
+                "begin_attempt",
+                return_value=types.SimpleNamespace(),
+            ),
+            mock.patch.object(
+                session_repository,
+                "complete_attempt",
+                return_value=boundary,
+            ),
+        ):
+            first = session_calls.prepare_turn(
+                self.workspace, state, participant, 1, target
+            )
+            amendments.write_text(
+                json.dumps({
+                    "amendments": [{"id": "A1", "text": "New law."}]
+                }),
+                encoding="utf-8",
+            )
+            second = session_calls.prepare_turn(
+                self.workspace, state, participant, 1, target
+            )
         self.assertNotEqual(first.prompt, second.prompt)
         expected_values = {
             "workspace": self.workspace,
@@ -615,7 +730,7 @@ class SessionCallCutoverTest(unittest.TestCase):
             "role": "initial_position",
             "round": "1",
             "target_path": "docs/decision.md",
-            "target_authority": "accepted revision accepted",
+            "target_authority": "repository HEAD live",
             "target_state": "present",
             "rethink_finding": RETHINK_FINDING,
             "operator_amendments": prompt_authority.current_amendments(
@@ -707,6 +822,7 @@ class SessionCallCutoverTest(unittest.TestCase):
             "amendments_path": str(amendments),
             "accepted_amendments": [],
             "artifact_type": "document",
+            "repository": repository_context(root),
         }
         lead = {
             "id": "lead", "role": "initial_position", "delivery": "llm",
@@ -772,10 +888,34 @@ class SessionCallCutoverTest(unittest.TestCase):
                                      correction,
                                  ),
         )
-        with mock.patch.object(
-            brainstorming_coordination,
-            "build_turn_prompt",
-            side_effect=AssertionError("legacy turn builder reached"),
+        boundary = {
+            "accept_reply": True,
+            "committed": False,
+            "plan_changed": False,
+            "revision": "1" * 40,
+            "anchor": None,
+        }
+        with (
+            mock.patch.object(
+                brainstorming_coordination,
+                "build_turn_prompt",
+                side_effect=AssertionError("legacy turn builder reached"),
+            ),
+            mock.patch.object(
+                session_repository,
+                "live_target_authority",
+                return_value=("repository HEAD live", "present", {}),
+            ),
+            mock.patch.object(
+                session_repository,
+                "begin_attempt",
+                return_value=types.SimpleNamespace(),
+            ),
+            mock.patch.object(
+                session_repository,
+                "complete_attempt",
+                return_value=boundary,
+            ),
         ):
             completed = subject.run_next_turn("routed", {})
 

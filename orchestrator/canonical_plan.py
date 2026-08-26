@@ -575,6 +575,151 @@ def complete_observed_call(
     )
 
 
+def _repository_matches_snapshot(snapshot):
+    repository = snapshot["repository"]
+    workspace = repository["workspace"]
+    return (
+        gitops.head_symbolic_ref(workspace) == repository["sym"]
+        and gitops.head_full_sha(workspace) == repository["head"]
+        and gitops.snapshot_index_tree(workspace) == repository["index_tree"]
+        and gitops.snapshot_worktree_tree(workspace)
+        == repository["worktree_tree"]
+    )
+
+
+def _committed_plan(state, snapshot, plan, revision):
+    workspace = snapshot["workspace"]
+    path = snapshot["path"]
+    if gitops.show_file_mode(workspace, revision, path) not in (
+        "100644", "100755"
+    ):
+        raise CanonicalPlanError(
+            "accepted repository revision has no regular canonical skeleton"
+        )
+    committed = gitops.show_file(workspace, revision, path)
+    if committed is None or canonical_block_bytes(committed) != plan["block"]:
+        raise CanonicalPlanError(
+            "accepted repository revision does not contain the validated plan"
+        )
+    anchor = {"path": path, "revision": revision}
+    gitops.pin_canonical_plan_commit(workspace, path, revision)
+    state["milestone"]["slices"] = plan["projection"]
+    state["milestone"][ANCHOR_KEY] = anchor
+    return anchor
+
+
+def complete_repository_editor_call(
+    state, snapshot, *, message="Brainstorming editing turn"
+):
+    """Validate, commit, and observe one real-repository editing attempt."""
+    workspace = snapshot["workspace"]
+    path = os.path.join(workspace, snapshot["path"])
+    try:
+        document = _read_regular_document(path)
+        block = canonical_block_bytes(document)
+        plan = None
+        if (
+            snapshot["anchor"] is None
+            or block != snapshot["anchored_block"]
+        ):
+            plan = validate_canonical_plan(
+                document, snapshot.get("anchored_document")
+            )
+        repository = snapshot["repository"]
+        if (
+            gitops.head_symbolic_ref(workspace) != repository["sym"]
+            or gitops.head_full_sha(workspace) != repository["head"]
+        ):
+            raise CanonicalPlanError(
+                "an editing seat changed HEAD before driver commit"
+            )
+        committed = gitops.commit_plain(workspace, message) is not None
+        revision = gitops.head_full_sha(workspace)
+        anchor = copy.deepcopy(snapshot["anchor"])
+        if plan is not None:
+            anchor = _committed_plan(state, snapshot, plan, revision)
+        elif anchor is not None:
+            gitops.pin_canonical_plan_commit(
+                workspace, anchor["path"], anchor["revision"]
+            )
+    except (OSError, CanonicalPlanError, gitops.GitError) as exc:
+        _reject_author_call(snapshot, exc)
+    return {
+        "accept_reply": True,
+        "committed": committed,
+        "plan_changed": plan is not None,
+        "revision": revision,
+        "anchor": anchor,
+    }
+
+
+def complete_repository_read_only_call(
+    state, snapshot, *, message="Brainstorming plan-only turn"
+):
+    """Restore a read-only attempt, preserving one valid changed plan block."""
+    try:
+        if _repository_matches_snapshot(snapshot):
+            return {
+                "accept_reply": True,
+                "committed": False,
+                "plan_changed": False,
+                "revision": snapshot["repository"]["head"],
+                "anchor": copy.deepcopy(snapshot["anchor"]),
+            }
+        workspace = snapshot["workspace"]
+        live_path = os.path.join(workspace, snapshot["path"])
+        accepted_document = _read_regular_document(live_path)
+        accepted_block = canonical_block_bytes(accepted_document)
+        plan = None
+        if accepted_block != snapshot["anchored_block"]:
+            plan = validate_canonical_plan(
+                accepted_document, snapshot.get("anchored_document")
+            )
+        baseline_document = gitops.show_file(
+            workspace,
+            snapshot["repository"]["worktree_tree"],
+            snapshot["path"],
+        )
+        if baseline_document is None:
+            raise CanonicalPlanError(
+                "the read-only snapshot has no canonical skeleton"
+            )
+        restore_author_call(snapshot)
+        if plan is None:
+            return {
+                "accept_reply": False,
+                "committed": False,
+                "plan_changed": False,
+                "revision": snapshot["repository"]["head"],
+                "anchor": copy.deepcopy(snapshot["anchor"]),
+            }
+        preserved = preserve_canonical_block(
+            baseline_document, accepted_document
+        )
+        path = os.path.join(workspace, snapshot["path"])
+        temporary = path + ".canonical-plan.tmp"
+        baseline_mode = stat.S_IMODE(os.stat(path).st_mode)
+        with open(temporary, "wb") as handle:
+            handle.write(preserved)
+        os.chmod(temporary, baseline_mode)
+        os.replace(temporary, path)
+        if gitops.commit_plain(workspace, message) is None:
+            raise CanonicalPlanError(
+                "a changed read-only plan produced no block-only commit"
+            )
+        revision = gitops.head_full_sha(workspace)
+        anchor = _committed_plan(state, snapshot, plan, revision)
+        return {
+            "accept_reply": False,
+            "committed": True,
+            "plan_changed": True,
+            "revision": revision,
+            "anchor": anchor,
+        }
+    except (OSError, CanonicalPlanError, gitops.GitError) as exc:
+        _reject_author_call(snapshot, exc)
+
+
 def establish_current_plan(state, skeleton_path):
     """Project and Git-anchor the plan committed at current HEAD."""
     skeleton_path = _relative_path(skeleton_path)

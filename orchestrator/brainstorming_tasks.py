@@ -270,22 +270,45 @@ def _private_target(workspace, home, task_id):
     return work_area, target
 
 
+def _repository_target(request):
+    context = request.get("context") or {}
+    target = (
+        context.get("planned_slice_note_path")
+        or (context.get("author_coordinates") or {}).get("slice_note_path")
+    )
+    try:
+        return milestone._candidate_reference(_workspace(request), target)
+    except (KeyError, TypeError):
+        return None
+
+
 def _creation_body(record, participants, target, workspace):
     order = record["order"]
     request = order["request"]
     configuration = order["configuration"]
+    repository_backed = "repository" in (
+        request.get("context", {}).get("session_charge") or {}
+    )
+    brief = (
+        "Work directly in the shared project repository. Initial Position "
+        "implements the requested task there; the other seats inspect it "
+        "without editing. Git is the delivery record."
+        if repository_backed else
+        "Discuss the target-free task and write the complete agreed "
+        "production approach to the private target. During discussion, do "
+        "not treat that private target as a requested task effect. The lead "
+        "applies every requested effect only after agreement."
+    )
     return {
+        "create_target_parents": repository_backed,
         "request": {
             "workspace_path": workspace,
             "target_path": target,
             "request": request["request"],
             "context": {
                 "brief": (
-                    "Discuss the target-free task and write the complete agreed "
-                    "production approach to the private target. During discussion, "
-                    "do not treat that private target as a requested task effect. "
-                    "The lead applies every requested effect only after agreement.\n\n"
-                    "Caller-supplied task context (binding background):\n"
+                    brief
+                    + "\n\nCaller-supplied task context (binding background):\n"
                     + json.dumps(
                         request["context"],
                         ensure_ascii=False,
@@ -539,9 +562,20 @@ def _start_task_exclusive(
     request = record["order"]["request"]
     context = _execution_context(request)
     workspace = context["workspace_path"]
-    work_area, _target_parent, target = _private_target_paths(
-        workspace, home, task_id
+    repository_backed = "repository" in (
+        request.get("context", {}).get("session_charge") or {}
     )
+    if repository_backed:
+        work_area = None
+        target = _repository_target(request)
+        if target is None:
+            raise AdapterError(
+                "repository-backed task has no primary repository target"
+            )
+    else:
+        work_area, _target_parent, target = _private_target_paths(
+            workspace, home, task_id
+        )
     if session_id is not None:
         try:
             projection = lifecycle.inspect_session(
@@ -550,8 +584,9 @@ def _start_task_exclusive(
         except lifecycle.PublicLifecycleError as exc:
             if exc.code != lifecycle.UNKNOWN_SESSION:
                 raise
-            retained = _retained_projection(
-                home, session_id, caller, target
+            retained = (
+                None if repository_backed else
+                _retained_projection(home, session_id, caller, target)
             )
             _fail_lost_session(state, task_id, retained)
             return None
@@ -566,7 +601,9 @@ def _start_task_exclusive(
             authority_failure_reason,
         )
 
-    owned = _owned_projection(home, caller, target)
+    owned = (
+        None if repository_backed else _owned_projection(home, caller, target)
+    )
     if owned is not None:
         recovered_id, projection, registered = owned
         if not registered:
@@ -583,13 +620,16 @@ def _start_task_exclusive(
             authority_failure_reason,
         )
 
-    retained = _retained_owned_projection(home, caller, target)
+    retained = (
+        None if repository_backed else
+        _retained_owned_projection(home, caller, target)
+    )
     if retained is not None:
         _session_id, projection = retained
         _fail_lost_session(state, task_id, projection)
         return None
 
-    if os.path.lexists(work_area):
+    if work_area is not None and os.path.lexists(work_area):
         _fail_lost_session(state, task_id)
         return None
 
@@ -607,12 +647,19 @@ def _start_task_exclusive(
             if staffing_selection is not None
             else _frozen_participants(record)
         )
-        created_work_area, target = _private_target(workspace, home, task_id)
+        if repository_backed:
+            created_work_area = None
+        else:
+            created_work_area, target = _private_target(
+                workspace, home, task_id
+            )
         body = _creation_body(record, participants, target, workspace)
         if context["project"] is not None:
             body["project"] = context["project"]
             body["work_area"] = context["work_area"]
-        kwargs = {"owned_target_path": target}
+        kwargs = (
+            {} if repository_backed else {"owned_target_path": target}
+        )
         if launcher is not None:
             kwargs["launcher"] = launcher
         if staffing_selection is not None:

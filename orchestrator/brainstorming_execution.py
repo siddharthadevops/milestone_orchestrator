@@ -6,7 +6,7 @@ import hashlib
 import os
 import time
 
-from orchestrator import brainstorming, pricing, runners
+from orchestrator import brainstorming, pricing, runners, session_repository
 
 
 class ExecutionRejected(RuntimeError):
@@ -642,6 +642,30 @@ class ParticipantExecution:
             prepare_call=prepare_call,
         )
 
+    @staticmethod
+    def _complete_prepared_attempt(prepared, result):
+        complete = getattr(prepared, "complete", None)
+        if complete is None:
+            return None
+        if not callable(complete):
+            raise ExecutionRejected(
+                "prepared repository completion is not callable"
+            )
+        outcome = complete()
+        if not isinstance(outcome, dict) or "accept_reply" not in outcome:
+            raise ExecutionRejected(
+                "prepared repository completion returned no disposition"
+            )
+        result.repository_turn = outcome
+        if not outcome["accept_reply"]:
+            error = session_repository.ReadOnlyTurnInvalidated(
+                "read-only repository mutation restored; repeat the seat"
+            )
+            error.repository_turn = outcome
+            error.raw_texts = [getattr(result, "text", "")]
+            raise error
+        return outcome
+
     def exchange_control_quiescent(
         self,
         session_id,
@@ -808,6 +832,7 @@ class ParticipantExecution:
                     pass
                 raise
         else:
+            prepared = None
             executor.prompt_set_fallback = None
         brainstorming._text(prompt, "prompt")
         if not callable(validator):
@@ -883,6 +908,17 @@ class ParticipantExecution:
                 )
                 raise
 
+        if prepared is not None:
+            try:
+                self._complete_prepared_attempt(prepared, result)
+            except BaseException as exc:
+                self._record_activity(
+                    session_id, participant, executor, started_at,
+                    result=result, status="failed",
+                    failure_type="acceptance", error=exc,
+                )
+                raise
+
         try:
             envelope = self._parse(result, validator)
             if fresh_each_call:
@@ -953,13 +989,14 @@ class ParticipantExecution:
         if prepare_call is None:
             repair_prompt = prompt + (runners.REPAIR_SUFFIX % first_error)
             repair_validator = validator
+            repair_prepared = None
         else:
             try:
-                prepared = prepare_call(first_error)
-                repair_prompt = prepared.prompt
-                repair_validator = prepared.validate
+                repair_prepared = prepare_call(first_error)
+                repair_prompt = repair_prepared.prompt
+                repair_validator = repair_prepared.validate
                 executor.prompt_set_fallback = (
-                    prepared.prompt_set_fallback
+                    repair_prepared.prompt_set_fallback
                 )
             except BaseException as exc:
                 try:
@@ -1002,6 +1039,16 @@ class ParticipantExecution:
                 failure_type="execution", error=exc,
             )
             raise
+        if repair_prepared is not None:
+            try:
+                self._complete_prepared_attempt(repair_prepared, result2)
+            except BaseException as exc:
+                self._record_activity(
+                    session_id, participant, executor, started_at2,
+                    result=result2, status="failed",
+                    failure_type="acceptance", error=exc,
+                )
+                raise
         try:
             envelope = self._parse(result2, repair_validator)
             if fresh_each_call:

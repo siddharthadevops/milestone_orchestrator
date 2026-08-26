@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 
-from orchestrator import brainstorming, runners
+from orchestrator import brainstorming, runners, session_repository
 
 try:
     import fcntl
@@ -1003,6 +1003,31 @@ class BrainstormingCoordinator:
         )
 
     @staticmethod
+    def _repository_session(state):
+        return session_repository.context_from_state(state) is not None
+
+    def _prepare_repository_session(self, session_id):
+        while True:
+            snapshot = self._require_running(self.store.read(session_id))
+            if brainstorming.coordination_projection(snapshot.state) is not None:
+                if self.store.read_turn_attempt(session_id) is not None:
+                    raise CoordinationRejected(
+                        "repository session has an incomplete prior attempt"
+                    )
+                return snapshot
+            if self.store.read_turn_attempt(session_id) is not None:
+                raise CoordinationRejected(
+                    "repository session has an attempt before initialization"
+                )
+            baseline = brainstorming.make_target_revision(False, b"", None)
+            try:
+                return self.store.initialize_coordination(
+                    session_id, snapshot.revision, baseline
+                )
+            except brainstorming.RevisionConflict:
+                continue
+
+    @staticmethod
     def _external_input(state):
         request = state["request"]
         return {
@@ -1380,6 +1405,12 @@ class BrainstormingCoordinator:
     def prepare(self, session_id, cancel_operational_retry=False):
         """Initialize target versioning and reconcile before any turn."""
         snapshot = self._require_running(self.store.read(session_id))
+        if self._repository_session(snapshot.state):
+            if cancel_operational_retry:
+                raise CoordinationRejected(
+                    "repository sessions have no operational retry lane"
+                )
+            return self._prepare_repository_session(session_id)
         path = resolve_target_path(snapshot.state["request"])
         try:
             with _exclusive_target_turn(
@@ -1768,6 +1799,10 @@ class BrainstormingCoordinator:
         """Run and atomically accept exactly the next ordered turn."""
         while True:
             claimed = self._require_running(self.store.read(session_id))
+            if self._repository_session(claimed.state):
+                return self._run_next_repository_turn(
+                    session_id, execution_context
+                )
             path = resolve_target_path(claimed.state["request"])
             try:
                 with _exclusive_target_turn(
@@ -1803,6 +1838,140 @@ class BrainstormingCoordinator:
                 continue
             except TargetMutationFailed as failed:
                 return failed.snapshot
+
+    def _run_next_repository_turn(self, session_id, execution_context):
+        starting = self._prepare_repository_session(session_id)
+        state = starting.state
+        if self._clear_consumed_external_turn(session_id, state):
+            starting = self._require_running(self.store.read(session_id))
+            state = starting.state
+        participants = state["run_config"]["participants"]
+        turn_index = len(state["completed_turns"])
+        if turn_index >= state["request"]["max_rounds"] * len(participants):
+            raise RoundLimitReached("the configured round limit is exhausted")
+        participant = participants[turn_index % len(participants)]
+        round_number = turn_index // len(participants) + 1
+
+        if participant["delivery"] == "external":
+            placeholder = self._authority_record(session_id, starting)
+            pending = self.store.read_external_intervention(session_id)
+            if pending is None:
+                pending = self._publish_external(
+                    session_id,
+                    state,
+                    participant,
+                    "discussion_turn",
+                    round_number,
+                )
+            self._require_external_match(
+                pending,
+                state,
+                participant,
+                "discussion_turn",
+                round_number,
+            )
+            if pending["response"] is None:
+                raise ExternalInterventionPending(pending)
+            current = self._require_running(self.store.read(session_id))
+            if not brainstorming._same_json_value(
+                brainstorming.coordination_projection(starting.state),
+                brainstorming.coordination_projection(current.state),
+            ):
+                raise brainstorming.RevisionConflict(current)
+            accepted = self.store.record_completed_turn(
+                session_id,
+                current.revision,
+                participant["id"],
+                pending["response"]["payload"]["markdown"],
+                placeholder,
+                publish=False,
+            )
+            self.store.finish_external_intervention(
+                session_id, pending["token"]
+            )
+            return self.store.reconcile_transcript(session_id)
+
+        if self.turn_preparer is None:
+            raise CoordinationRejected(
+                "repository session has no routed turn preparer"
+            )
+        workspace = state["request"]["workspace_path"]
+        workspace_stat = os.stat(workspace)
+        attempt = {
+            "token": str(uuid.uuid4()),
+            "participant_id": participant["id"],
+            "completed_turn_count": turn_index,
+            "target_revision": state["accepted_target_revision"],
+            "quiescent": False,
+            "target_parent": {
+                "path": os.path.realpath(workspace),
+                "device": workspace_stat.st_dev,
+                "inode": workspace_stat.st_ino,
+            },
+        }
+        attempt = self.store.begin_turn_attempt(session_id, attempt)
+        placeholder = self._authority_record(session_id, starting)
+        prepare_call = lambda correction: self.turn_preparer(
+            state, participant, round_number, placeholder, correction
+        )
+
+        def before_repair():
+            if not self.store.mark_turn_attempt_envelope_repair(
+                session_id, attempt["token"]
+            ):
+                raise runners.WorkerProtocolError(
+                    "the pending repository turn already used its correction"
+                )
+
+        try:
+            envelope, _runner_result = (
+                self.participant_execution.exchange_prepared_quiescent(
+                    session_id,
+                    participant["id"],
+                    prepare_call,
+                    execution_context,
+                    before_repair=before_repair,
+                )
+            )
+        except session_repository.ReadOnlyTurnInvalidated:
+            self.store.mark_turn_attempt_quiescent(
+                session_id, attempt["token"]
+            )
+            self.store.preserve_turn_attempt_accounting(
+                session_id, attempt["token"]
+            )
+            self.store.finish_turn_attempt(session_id, attempt["token"])
+            return self.store.reconcile_transcript(session_id)
+        except BaseException as exc:
+            if getattr(exc, "worker_quiescent", None) is True:
+                self.store.mark_turn_attempt_quiescent(
+                    session_id, attempt["token"]
+                )
+                self.store.preserve_turn_attempt_accounting(
+                    session_id, attempt["token"]
+                )
+                self.store.finish_turn_attempt(session_id, attempt["token"])
+            raise
+
+        self.store.mark_turn_attempt_quiescent(
+            session_id, attempt["token"]
+        )
+        current = self._require_running(self.store.read(session_id))
+        if not brainstorming._same_json_value(
+            brainstorming.coordination_projection(starting.state),
+            brainstorming.coordination_projection(current.state),
+        ):
+            raise brainstorming.RevisionConflict(current)
+        self.store.record_completed_turn(
+            session_id,
+            current.revision,
+            participant["id"],
+            envelope["markdown"],
+            placeholder,
+            publish=False,
+        )
+        self.store.finish_turn_attempt(session_id, attempt["token"])
+        return self.store.reconcile_transcript(session_id)
 
     def _run_next_turn_locked(self, session_id, execution_context, target):
         starting = self._prepare_locked(session_id, target)

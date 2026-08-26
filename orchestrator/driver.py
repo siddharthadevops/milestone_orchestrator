@@ -43,6 +43,7 @@ from . import contracts, errclass, gitops, interpreter, judgment_calls
 from . import kvstore, ledgers
 from . import model_profiles, pricing, profiles, projects, prompt_sets, prompts
 from . import registry, runners
+from . import session_repository
 from . import staffing
 from . import tasks
 from . import verifiers, workareas
@@ -1705,7 +1706,8 @@ class Driver(object):
         return values
 
     def _session_charge(
-        self, job, material, values, authority, artifact_type=None,
+        self, job, material, values, authority, repository,
+        artifact_type=None,
     ):
         accepted = [
             copy.deepcopy(item)
@@ -1722,6 +1724,7 @@ class Driver(object):
             "values": copy.deepcopy(values),
             "amendments_path": self._amendments_path(),
             "accepted_amendments": accepted,
+            "repository": copy.deepcopy(repository),
         }
         project_context = authority.get("project_context")
         if project_context is not None:
@@ -1729,6 +1732,25 @@ class Driver(object):
         if artifact_type is not None:
             charge["artifact_type"] = artifact_type
         return charge
+
+    def _session_repository_context(self, unit):
+        self._save()
+        try:
+            return session_repository.checkpoint_context(
+                self.workspace,
+                self.state_path,
+                self._skeleton_artifact(),
+                "Prepare Brainstorming session for %s" % st.unit_key(unit),
+            )
+        except (session_repository.SessionRepositoryError, gitops.GitError) as exc:
+            st.fail_run(
+                self.state,
+                "Brainstorming repository checkpoint failed: %s" % exc,
+                unit=unit,
+                type_="brainstorming_operational",
+            )
+            self._save()
+            raise StopStep("Brainstorming repository checkpoint failed")
 
     def _prepare_author_package(
         self, unit, kind, material, authority, recovery=None, meter=None,
@@ -5626,6 +5648,7 @@ class Driver(object):
             artifact_type = self._rethink_artifact_type(
                 unit, checked["target_path"]
             )
+            repository = self._session_repository_context(unit)
             session_charge = self._session_charge(
                 "rethink",
                 self._judgment_material(unit),
@@ -5638,6 +5661,7 @@ class Driver(object):
                     )
                 },
                 authority,
+                repository,
                 artifact_type=artifact_type,
             )
             staffing_selection = self._brainstorming_staffing()
@@ -6609,11 +6633,13 @@ class Driver(object):
             contracts.KIND_DRAFT_SLICE_NOTE: "draft_slice_note@slice_doc",
             contracts.KIND_IMPLEMENT: "implement@slice_impl",
         }[kind]
+        repository = self._session_repository_context(unit)
         session_charge = self._session_charge(
             job,
             self._judgment_material(unit),
             values,
             authority,
+            repository,
         )
         if kind == contracts.KIND_DRAFT_SLICE_NOTE:
             prompt = (
@@ -6987,6 +7013,10 @@ class Driver(object):
         return call()
 
     def _do_brainstorming_wait(self):
+        # Repository-backed seats may refresh only the canonical anchor and
+        # plan projection while this long-lived driver polls the child. Merge
+        # that boundary before this process writes any terminal handoff state.
+        self.state = st.load(self.state_path)
         unit = st.current_unit(self.state)
         wait = copy.deepcopy(unit.get("brainstorming_wait") or {})
         session_id = wait.get("session_id")
@@ -7980,6 +8010,12 @@ class Driver(object):
         same call on resume (see README, "Operational semantics")."""
         with self._exclusive():
             self._assert_not_stale()
+            # A repository-backed child may publish its accepted plan or task
+            # result without appending a milestone event.  Merge that durable
+            # state before strategy handling, whose profile cutover may save
+            # before the wait handler itself runs.
+            if self._brainstorming_wait_session() is not None:
+                self.state = st.load(self.state_path)
             action, boundary_note = self._decide_at_strategy_boundary()
             if action.type in (A_DONE, A_FAILED):
                 return action, boundary_note

@@ -404,6 +404,35 @@ def _launch_owned_session(
         raise
 
 
+def _launch_repository_session(
+    state,
+    config,
+    unit_key,
+    body,
+    staffing_selection=None,
+    active_home=None,
+):
+    """Launch a milestone session directly in the granted project repo."""
+    context = execution_context(state)
+    if context["project"] is not None:
+        body["project"] = context["project"]
+        body["work_area"] = context["work_area"]
+    caller = "milestone:%s:%s" % (
+        state.get("name") or "run", unit_key
+    )
+    kwargs = {}
+    if staffing_selection is not None:
+        kwargs["staffing_selection"] = staffing_selection
+    return brainstorming_lifecycle.create_resolved_session(
+        service_home(state, active_home),
+        body,
+        caller,
+        context,
+        config,
+        **kwargs
+    )
+
+
 def create_session(
     state,
     config,
@@ -422,9 +451,7 @@ def create_session(
     checked_charge = session_calls.validate_charge(session_charge)
     if checked_charge["job"] != "rethink":
         raise AdapterError("an attached rethink requires the rethink charge")
-    work_area, target = _materialize_target(
-        state, signal, references, active_home=active_home
-    )
+    validate_target(state, signal, references)
     context_references = list(references)
     if signal["target_path"] not in context_references:
         context_references.append(signal["target_path"])
@@ -441,7 +468,7 @@ def create_session(
     body = {
         "request": {
             "workspace_path": state["workspace"],
-            "target_path": target,
+            "target_path": signal["target_path"],
             "request": (
                 "Resolve the focused contradiction in the supplied finding. "
                 "Edit the target and any other repository files the resolution "
@@ -461,12 +488,10 @@ def create_session(
         "participants": participants,
         "closure_policy": "unanimity",
     }
-    return _launch_owned_session(
+    return _launch_repository_session(
         state,
         config,
         unit_key,
-        work_area,
-        target,
         body,
         staffing_selection=staffing_selection,
         active_home=active_home,

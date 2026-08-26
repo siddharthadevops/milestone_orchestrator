@@ -74,7 +74,7 @@ _TRANSCRIPT_LOCKS_GUARD = threading.Lock()
 
 ACTIVITY_SCHEMA_VERSION = 1
 ACTIVITY_STATUSES = ("completed", "failed")
-ACTIVITY_FAILURE_TYPES = ("protocol", "execution")
+ACTIVITY_FAILURE_TYPES = ("protocol", "execution", "acceptance")
 # The router's own token for "an input could not be read, so the default
 # document answered". Taken from the resolver rather than restated, so the
 # ledger and the marker can never drift apart.
