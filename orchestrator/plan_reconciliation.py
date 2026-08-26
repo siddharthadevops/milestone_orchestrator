@@ -113,6 +113,7 @@ def _completed_checkpoint_anchors(state, by_key):
             or event.get("cadence") not in (
                 "four_slice_checkpoint", "milestone_final"
             )
+            or event.get("status") not in ("passed", "no_suite")
             or event.get("ok") is not True
             or event.get("stable") is not True
         ):

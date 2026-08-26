@@ -392,11 +392,31 @@ class SuiteCheckpointCallTest(unittest.TestCase):
 
         self.assertIn("failed", note)
         seal.assert_not_called()
-        event = subject.state["events"][-1]
+        event = next(
+            event for event in reversed(subject.state["events"])
+            if event.get("type") == "verification"
+        )
         self.assertEqual(event["status"], "failed")
         self.assertEqual(event["failure_account"], failure)
         self.assertTrue(event["stable"])
         self.assertFalse(event["ok"])
+        unit = st.current_unit(subject.state)
+        self.assertEqual(unit["status"], st.U_FIXING)
+        self.assertEqual(unit["fix_source"]["type"], "suite_checkpoint")
+        self.assertEqual(unit["fix_source"]["return_to"], st.U_PRE_SEAL_VERIFY)
+        self.assertEqual(len(unit["fix_queue"]), 1)
+        finding = unit["fix_queue"][0]
+        self.assertEqual(finding["severity"], "P1")
+        self.assertEqual(finding["failure_account"], failure)
+        subject.state["milestone"]["slices"].append(
+            canonical_plan.validate_canonical_plan(
+                _document((1, 2))
+            )["projection"][1]
+        )
+        self.assertEqual(
+            subject._invalidated_suite_checkpoint_cadence(unit),
+            "four_slice_checkpoint",
+        )
 
 
 if __name__ == "__main__":

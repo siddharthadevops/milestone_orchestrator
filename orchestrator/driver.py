@@ -1408,6 +1408,7 @@ class Driver(object):
                 and event.get("cadence") in (
                     "four_slice_checkpoint", "milestone_final"
                 )
+                and event.get("status") in ("passed", "no_suite")
                 and event.get("ok") is True
                 and event.get("stable") is True
             ):
@@ -1464,7 +1465,7 @@ class Driver(object):
         return None
 
     def _invalidated_suite_checkpoint_cadence(self, unit):
-        """Keep a declared fresh rerun due across plan and unit changes."""
+        """Keep an unsatisfied checkpoint due across plan and unit changes."""
         if (
             unit.get("kind") != st.UNIT_SLICE_IMPL
             or unit.get("implementation_cut")
@@ -1479,6 +1480,14 @@ class Driver(object):
                     and event.get("status") in ("passed", "no_suite")
                 ):
                     return None
+                if (
+                    event.get("stable") is True
+                    and event.get("status") == "failed"
+                    and event.get("cadence") in (
+                        "four_slice_checkpoint", "milestone_final"
+                    )
+                ):
+                    return event["cadence"]
                 if (
                     event.get("unit") == key
                     and event.get("status") == "invalidated"
@@ -13236,10 +13245,52 @@ class Driver(object):
             self._save()
             raise StopStep("suite checkpoint blocked")
         if returned_status == "failed":
-            # Slice 13 consumes this exact event into the non-deferrable
-            # synthetic finding and fresh checkpoint lifecycle.
+            failure_account = copy.deepcopy(output["failure_account"])
+            finding = {
+                "id": "suite-checkpoint-%d" % verification_event["seq"],
+                "severity": "P1",
+                "summary": "The complete suite checkpoint failed",
+                "validity": {
+                    "permitted_baseline": (
+                        "A failed checkpoint may enter the declared fixer "
+                        "cycle, but it cannot satisfy the due suite gate."
+                    ),
+                    "actual_outcome": (
+                        "The accepted unchanged checkpoint returned failed."
+                    ),
+                    "incremental_harm": (
+                        "The current candidate cannot seal until the failure "
+                        "is triaged and a fresh checkpoint passes."
+                    ),
+                    "exceeds_baseline": True,
+                },
+                "plain": (
+                    "The complete suite failed, so the current candidate is "
+                    "not ready to seal."
+                ),
+                "example": (
+                    "The fixer may repair or reject this diagnosis, but the "
+                    "driver must run a fresh checkpoint either way."
+                ),
+                "contests": None,
+                # Queue-owned evidence, intentionally opaque to the driver.
+                # The ordinary fixer sees the exact checkpoint account; its
+                # reply contract only echoes the finding identity/severity.
+                "failure_account": failure_account,
+            }
+            st.enter_fix_episode(
+                self.state,
+                unit,
+                [finding],
+                source_type="suite_checkpoint",
+                source_family=actual_family,
+                source_round_id=(
+                    "suite-checkpoint:%d" % verification_event["seq"]
+                ),
+                return_to=st.U_PRE_SEAL_VERIFY,
+            )
             self._save()
-            return "suite checkpoint failed; failure account recorded"
+            return "suite checkpoint failed; ordinary fixer queued"
 
         unit.pop("suite_verification_pending", None)
         unit.pop("suite_armed_by_fix", None)

@@ -221,7 +221,7 @@ def _new_unit(kind, slice_id, part=None):
         "rounds_amnesty": 0,
         # The active fix episode (working fields; history lives in rounds):
         "fix_queue": [],            # findings currently queued for the fixer
-        "fix_source": None,         # {"type": verification|round|seal|delta,
+        "fix_source": None,         # {"type": suite_checkpoint|round|seal|delta,
                                     #  "family": origin family or None,
                                     #  "source_round_id": ...,
                                     #  "return_to": status after green+amend}
@@ -1022,8 +1022,9 @@ def _active_fix_root_index(events, key):
 def active_fix_origin_type(state, unit):
     """The active fix episode's ORIGINAL source_type, independent of the
     mutable fix_source["type"] that a dirty-delta re-queue clobbers to
-    "delta". Returns "round", "seal", "verification", a gap-repair key, or
-    None when the episode or its origin cannot be resolved.
+    "delta". Returns "round", "seal", "suite_checkpoint", a legacy
+    verification/gap-repair key, or None when the episode or its origin cannot
+    be resolved.
 
     New episodes carry origin_type on the source directly. Episodes
     persisted before that field existed are reconstructed from the immutable

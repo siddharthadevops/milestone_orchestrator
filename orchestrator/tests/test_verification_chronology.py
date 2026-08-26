@@ -25,12 +25,12 @@ from orchestrator import state as st
 from orchestrator.tests.test_driver_mock import (
     DriverTestCase,
     fix_ok,
-    suite_fix_ok,
     init_state,
     make_config,
     ok,
     report,
     step,
+    triaged,
     write_file,
 )
 
@@ -49,6 +49,45 @@ def _count(workspace, name):
         return 0
     with open(path, encoding="utf-8") as handle:
         return int(handle.read() or "0")
+
+
+def _increment_counter(name):
+    def effect(workspace):
+        path = os.path.join(workspace, ".orchestrator", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        value = _count(workspace, name) + 1
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(value))
+
+    return effect
+
+
+def _suite_step(command, status="passed", side_effect=None):
+    response = {
+        "status": status,
+        "kind": "suite_checkpoint",
+        "commands": [command],
+        "results": [{
+            "command": command,
+            "exit_code": 0 if status == "passed" else 1,
+            "evidence": (
+                "complete suite passed"
+                if status == "passed" else "complete suite failed"
+            ),
+        }],
+        "authority": {"source": "operator_config", "evidence": []},
+    }
+    if status == "failed":
+        response["failure_account"] = {
+            "command": command,
+            "exit_code": 1,
+            "diagnostics": "The complete suite reported one failure.",
+            "affected_tests": ["test_complete_suite"],
+        }
+    return step(
+        "suite_checkpoint", response, family="codex",
+        side_effect=side_effect,
+    )
 
 
 def _questions(kind):
@@ -173,7 +212,10 @@ def _clean_reviews():
     ]
 
 
-def _clean_milestone_script(slice_count, split_slice=None):
+def _clean_milestone_script(
+    slice_count, split_slice=None, checkpoints=None
+):
+    checkpoints = checkpoints or {}
     script = [_skeleton_step(slice_count)] + _clean_reviews()
     for slice_id in range(1, slice_count + 1):
         script.append(_doc_step(slice_id))
@@ -200,6 +242,11 @@ def _clean_milestone_script(slice_count, split_slice=None):
         else:
             script.append(_impl_step(slice_id))
             script.extend(_clean_reviews())
+        scheduled = checkpoints.get(slice_id)
+        if scheduled is not None:
+            script.extend(
+                scheduled if isinstance(scheduled, list) else [scheduled]
+            )
     return script
 
 
@@ -267,7 +314,20 @@ class TestVerificationChronology(DriverTestCase):
         with tempfile.TemporaryDirectory(prefix="orch-verify-cadence-") as ws:
             path = init_state(ws, make_config(verification=[command]))
             mock = runners.MockRunner(
-                _clean_milestone_script(5, split_slice=4)
+                _clean_milestone_script(
+                    5,
+                    split_slice=4,
+                    checkpoints={
+                        4: _suite_step(
+                            command,
+                            side_effect=_increment_counter(counter),
+                        ),
+                        5: _suite_step(
+                            command,
+                            side_effect=_increment_counter(counter),
+                        ),
+                    },
+                )
             )
             driver = drv.Driver(path, runner=mock)
 
@@ -333,7 +393,15 @@ class TestVerificationChronology(DriverTestCase):
         command = _counter_command(counter)
         with tempfile.TemporaryDirectory(prefix="orch-verify-short-") as ws:
             path = init_state(ws, make_config(verification=[command]))
-            mock = runners.MockRunner(_clean_milestone_script(3))
+            mock = runners.MockRunner(_clean_milestone_script(
+                3,
+                checkpoints={
+                    3: _suite_step(
+                        command,
+                        side_effect=_increment_counter(counter),
+                    ),
+                },
+            ))
             driver = drv.Driver(path, runner=mock)
 
             _actions, final = self.drive(driver, max_steps=80)
@@ -348,6 +416,27 @@ class TestVerificationChronology(DriverTestCase):
                     for event in events
                 ],
                 [("slice_impl-03", "milestone_final")],
+            )
+
+    def test_milestone_final_wins_a_coincident_fourth_checkpoint(self):
+        with tempfile.TemporaryDirectory(prefix="orch-verify-coincident-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            driver.state["milestone"]["slices"] = _slices(4)
+            driver.state["units"] = [
+                st._new_unit(st.UNIT_SLICE_IMPL, slice_id)
+                for slice_id in range(1, 5)
+            ]
+            for slice_id in (1, 2, 3):
+                st.append_event(
+                    driver.state,
+                    "slice_closed",
+                    unit="slice_impl-%02d" % slice_id,
+                )
+
+            self.assertEqual(
+                driver._full_verification_cadence(driver.state["units"][3]),
+                "milestone_final",
             )
 
     def test_checkpoint_counter_restarts_after_each_four_slices(self):
@@ -371,7 +460,8 @@ class TestVerificationChronology(DriverTestCase):
             )
             st.append_event(
                 driver.state, "verification", unit="slice_impl-04",
-                ok=True, stable=True, cadence="four_slice_checkpoint",
+                status="passed", ok=True, stable=True,
+                cadence="four_slice_checkpoint",
             )
             self.assertEqual(
                 driver._full_verification_cadence(driver.state["units"][3]),
@@ -395,7 +485,8 @@ class TestVerificationChronology(DriverTestCase):
             )
             st.append_event(
                 driver.state, "verification", unit="slice_impl-08",
-                ok=True, stable=True, cadence="four_slice_checkpoint",
+                status="no_suite", ok=True, stable=True,
+                cadence="four_slice_checkpoint",
             )
             st.append_event(
                 driver.state, "slice_closed", unit="slice_impl-08",
@@ -405,7 +496,7 @@ class TestVerificationChronology(DriverTestCase):
                 "milestone_final",
             )
 
-    def test_reused_scheduled_checkpoint_restarts_counter(self):
+    def test_legacy_reused_fixer_certification_does_not_anchor_cadence(self):
         with tempfile.TemporaryDirectory(prefix="orch-verify-reused-") as ws:
             path = init_state(ws, make_config())
             driver = drv.Driver(path, runner=runners.MockRunner([]))
@@ -421,7 +512,8 @@ class TestVerificationChronology(DriverTestCase):
                 )
             st.append_event(
                 driver.state, "verification", unit="slice_impl-04",
-                ok=True, stable=True, cadence="four_slice_checkpoint",
+                status="passed", ok=True, stable=True,
+                cadence="four_slice_checkpoint",
             )
             st.append_event(
                 driver.state, "slice_closed", unit="slice_impl-04",
@@ -440,8 +532,9 @@ class TestVerificationChronology(DriverTestCase):
                 driver.state, "slice_closed", unit="slice_impl-08",
             )
 
-            self.assertIsNone(
-                driver._full_verification_cadence(driver.state["units"][8])
+            self.assertEqual(
+                driver._full_verification_cadence(driver.state["units"][8]),
+                "four_slice_checkpoint",
             )
             for slice_id in (9, 10, 11):
                 st.append_event(
@@ -451,6 +544,68 @@ class TestVerificationChronology(DriverTestCase):
             self.assertEqual(
                 driver._full_verification_cadence(driver.state["units"][11]),
                 "four_slice_checkpoint",
+            )
+
+    def test_reconciliation_barrier_invalidates_unwound_checkpoint_anchor(self):
+        with tempfile.TemporaryDirectory(prefix="orch-verify-unwound-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            driver.state["milestone"]["slices"] = _slices(8)
+            driver.state["units"] = [
+                st._new_unit(st.UNIT_SLICE_IMPL, slice_id)
+                for slice_id in range(1, 9)
+            ]
+            for slice_id in (1, 2, 3):
+                st.append_event(
+                    driver.state,
+                    "slice_closed",
+                    unit="slice_impl-%02d" % slice_id,
+                    slice_id=slice_id,
+                )
+            st.append_event(
+                driver.state,
+                "verification",
+                unit="slice_impl-04",
+                status="passed",
+                cadence="four_slice_checkpoint",
+                ok=True,
+                stable=True,
+            )
+            st.append_event(
+                driver.state,
+                "slice_closed",
+                unit="slice_impl-04",
+                slice_id=4,
+            )
+            st.append_event(
+                driver.state,
+                "accepted_range_reconciliation_closed",
+                invalidated_slice_ids=[4],
+            )
+
+            rebuilt = driver.state["units"][3]
+            self.assertEqual(
+                driver._full_verification_cadence(rebuilt),
+                "four_slice_checkpoint",
+            )
+
+            st.append_event(
+                driver.state,
+                "verification",
+                unit="slice_impl-04",
+                status="no_suite",
+                cadence="four_slice_checkpoint",
+                ok=True,
+                stable=True,
+            )
+            st.append_event(
+                driver.state,
+                "slice_closed",
+                unit="slice_impl-04",
+                slice_id=4,
+            )
+            self.assertIsNone(
+                driver._full_verification_cadence(driver.state["units"][4])
             )
 
     def test_review_evidence_preserves_command_boundaries(self):
@@ -470,34 +625,65 @@ class TestVerificationChronology(DriverTestCase):
     def test_due_suite_failure_fixes_then_rereviews_before_seal(self):
         marker = "suite-green.marker"
         command = "test -f %s" % marker
-        script = _clean_milestone_script(1) + [
-            step(
-                contracts.KIND_FIX_FINDINGS,
-                suite_fix_ok(files_changed=[marker]),
-                family="codex",
-                side_effect=write_file(marker, "green\n"),
-            ),
-            # The repair declared it left the tests alone, so its
-            # certification is taken at its word: no delta review stands
-            # between it and the fresh whole-artifact rounds below.
-        ] + _clean_reviews()
         with tempfile.TemporaryDirectory(prefix="orch-verify-final-fix-") as ws:
             path = init_state(ws, make_config(verification=[command]))
-            mock = runners.MockRunner(script)
+            mock = runners.MockRunner(_clean_milestone_script(
+                1,
+                checkpoints={1: _suite_step(command, status="failed")},
+            ))
             driver = drv.Driver(path, runner=mock)
 
+            self.step_until(
+                driver,
+                lambda state: st.current_unit(state)["status"] == st.U_FIXING,
+                max_steps=40,
+            )
+            queued = st.current_unit(driver.state)["fix_queue"][0]
+            mock.script.extend([
+                step(
+                    contracts.KIND_FIX_FINDINGS,
+                    fix_ok(
+                        [triaged(
+                            queued["id"],
+                            "fixed",
+                            summary=queued["summary"],
+                            severity="P1",
+                        )],
+                        files_changed=[marker],
+                        questions=_questions(contracts.KIND_FIX_FINDINGS),
+                    ),
+                    family="codex",
+                    side_effect=write_file(marker, "green\n"),
+                ),
+                step(
+                    contracts.KIND_DELTA_REVIEW,
+                    {
+                        **report(contracts.KIND_DELTA_REVIEW),
+                        "questions": _questions(
+                            contracts.KIND_DELTA_REVIEW
+                        ),
+                    },
+                    family="codex",
+                ),
+                *_clean_reviews(),
+                _suite_step(command),
+            ])
             _actions, final = self.drive(driver, max_steps=40)
 
             self.assertEqual(final.type, drv.A_DONE)
             self.assertEqual(mock.script, [])
             state = st.load(path)
             events = self._verification_events(state)
-            self.assertEqual([event["ok"] for event in events], [False, True, True])
+            self.assertEqual([event["ok"] for event in events], [False, True])
+            self.assertEqual(
+                [event["status"] for event in events], ["failed", "passed"]
+            )
             self.assertEqual(events[0].get("cadence"), "milestone_final")
-            self.assertTrue(events[1].get("fixer_certified"))
-            self.assertFalse(events[1].get("reused"))
-            self.assertTrue(events[2].get("reused"))
-            self.assertEqual(events[2].get("cadence"), "milestone_final")
+            self.assertFalse(any(
+                event.get("fixer_certified") or event.get("reused")
+                for event in events
+            ))
+            self.assertEqual(events[1].get("cadence"), "milestone_final")
             self.assertFalse(any(
                 event.get("boundary") == "baseline" for event in events
             ))
@@ -520,7 +706,7 @@ class TestVerificationChronology(DriverTestCase):
             self.assertEqual(len(fixes), 1)
             self.assertEqual(
                 fixes[0]["source_round_id"],
-                "slice_impl-01-verify-pre_seal-1",
+                "suite-checkpoint:%d" % events[0]["seq"],
             )
             review_events = [
                 event
@@ -530,6 +716,55 @@ class TestVerificationChronology(DriverTestCase):
                 and event.get("kind") == "review_round"
             ]
             self.assertGreater(events[-1]["seq"], review_events[-1]["seq"])
+
+    def test_rejected_suite_diagnosis_still_requires_fresh_checkpoint(self):
+        command = "python3 -m unittest"
+        with tempfile.TemporaryDirectory(prefix="orch-verify-reject-fix-") as ws:
+            path = init_state(ws, make_config(verification=[command]))
+            mock = runners.MockRunner(_clean_milestone_script(
+                1,
+                checkpoints={1: _suite_step(command, status="failed")},
+            ))
+            driver = drv.Driver(path, runner=mock)
+
+            self.step_until(
+                driver,
+                lambda state: st.current_unit(state)["status"] == st.U_FIXING,
+                max_steps=40,
+            )
+            queued = st.current_unit(driver.state)["fix_queue"][0]
+            mock.script.extend([
+                step(
+                    contracts.KIND_FIX_FINDINGS,
+                    fix_ok(
+                        [triaged(
+                            queued["id"],
+                            "rejected",
+                            summary=queued["summary"],
+                            severity="P1",
+                            consultation={
+                                "resolution": (
+                                    "The reported diagnosis does not require "
+                                    "a repository edit."
+                                ),
+                            },
+                        )],
+                        questions=_questions(contracts.KIND_FIX_FINDINGS),
+                    ),
+                    family="codex",
+                ),
+                _suite_step(command),
+            ])
+
+            _actions, final = self.drive(driver, max_steps=20)
+
+            self.assertEqual(final.type, drv.A_DONE)
+            self.assertEqual(mock.script, [])
+            events = self._verification_events(st.load(path))
+            self.assertEqual(
+                [event["status"] for event in events], ["failed", "passed"]
+            )
+            self.assertFalse(any(event.get("fixer_certified") for event in events))
 
     def test_due_suite_fixer_commit_remains_in_reviewed_history(self):
         marker = "suite-green.marker"
@@ -556,19 +791,49 @@ class TestVerificationChronology(DriverTestCase):
                 timeout=60,
             )
 
-        script = _clean_milestone_script(1) + [
-            step(
-                contracts.KIND_FIX_FINDINGS,
-                suite_fix_ok(files_changed=[marker]),
-                family="codex",
-                side_effect=commit_repair,
-            ),
-        ] + _clean_reviews()
         with tempfile.TemporaryDirectory(prefix="orch-verify-commit-fix-") as ws:
             path = init_state(ws, make_config(verification=[command]))
-            mock = runners.MockRunner(script)
+            mock = runners.MockRunner(_clean_milestone_script(
+                1,
+                checkpoints={1: _suite_step(command, status="failed")},
+            ))
             driver = drv.Driver(path, runner=mock)
 
+            self.step_until(
+                driver,
+                lambda state: st.current_unit(state)["status"] == st.U_FIXING,
+                max_steps=40,
+            )
+            queued = st.current_unit(driver.state)["fix_queue"][0]
+            mock.script.extend([
+                step(
+                    contracts.KIND_FIX_FINDINGS,
+                    fix_ok(
+                        [triaged(
+                            queued["id"],
+                            "fixed",
+                            summary=queued["summary"],
+                            severity="P1",
+                        )],
+                        files_changed=[marker],
+                        questions=_questions(contracts.KIND_FIX_FINDINGS),
+                    ),
+                    family="codex",
+                    side_effect=commit_repair,
+                ),
+                step(
+                    contracts.KIND_DELTA_REVIEW,
+                    {
+                        **report(contracts.KIND_DELTA_REVIEW),
+                        "questions": _questions(
+                            contracts.KIND_DELTA_REVIEW
+                        ),
+                    },
+                    family="codex",
+                ),
+                *_clean_reviews(),
+                _suite_step(command),
+            ])
             _actions, final = self.drive(driver, max_steps=40)
 
             self.assertEqual(final.type, drv.A_DONE)
