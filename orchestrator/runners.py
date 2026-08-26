@@ -427,9 +427,9 @@ def _provider_transport_result(family, transport_text):
 
 
 class WorkerProtocolError(RuntimeError):
-    """The CLI ran but its output violates the JSON contract even after the
-    repair retry. Carries the raw output texts of both attempts so the
-    driver can persist them for the operator."""
+    """The CLI ran but its output violates the JSON contract after every
+    allowed attempt. Carries the raw output texts so the driver can persist
+    them for the operator."""
 
     def __init__(self, message, raw_texts=None, duration_s=None,
                  token_usage=None, token_usage_partial=False,
@@ -2897,11 +2897,13 @@ def call_worker(runner, family, prompt, kind, workspace,
                 execution_context=_AMBIENT_EXECUTION,
                 active_control=None, resolve_dispatch=None,
                 continuation_family=None, on_dispatch=None,
-                prepare_call=None):
+                prepare_call=None, before_dispatch=None,
+                single_attempt=False):
     """Run the CLI and return (validated_output, RunnerResult).
 
-    Exactly one repair retry on contract violation; then
-    WorkerProtocolError. RunnerError passes through untouched.
+    By default, exactly one repair retry follows a contract violation; then
+    WorkerProtocolError. ``single_attempt`` skips that retry. RunnerError
+    passes through untouched.
 
     extensions/roots (optional): the in-scope compiled project contract
     extensions (verifiers.CompiledExtension) and the granted work-area
@@ -2927,6 +2929,14 @@ def call_worker(runner, family, prompt, kind, workspace,
     validation. This is how routed consumers keep fresh prompt resolution,
     repository-plan handling, and served-contract validation in one physical
     boundary; legacy callers retain the supplied prompt and repair suffix.
+
+    before_dispatch (optional): called after dispatch resolution and marker
+    retargeting, immediately before each provider invocation. A failure stops
+    before the provider starts. This is the durable one-shot handoff seam.
+
+    single_attempt: disable the ordinary contract-correction call. A malformed
+    or contract-invalid first reply raises WorkerProtocolError with that one
+    attempt's raw output and accounting.
     """
     opts = dict(validate_opts or {})
     if start_session and session_ref is not None:
@@ -3218,6 +3228,24 @@ def call_worker(runner, family, prompt, kind, workspace,
                 if accepts_control:
                     kwargs["active_control"] = call_control
             try:
+                if before_dispatch is not None:
+                    try:
+                        before_dispatch(
+                            call_family,
+                            call_model,
+                            call_effort,
+                            prompt_set_fallback,
+                        )
+                    except Exception as exc:
+                        error = RunnerError(
+                            "provider dispatch could not persist its handoff: "
+                            "%s" % exc
+                        )
+                        error.resolved_family = call_family
+                        error.resolved_model = call_model
+                        error.resolved_effort = call_effort
+                        error.provider_dispatch_started = False
+                        raise error from exc
                 result = method(*args, **kwargs)
             except BaseException as exc:
                 exc.resolved_family = call_family
@@ -3330,6 +3358,33 @@ def call_worker(runner, family, prompt, kind, workspace,
         if isinstance(exc, verifiers.VerifierError):
             _attach_call_accounting(exc, result)
         raise
+    if single_attempt:
+        error = WorkerProtocolError(
+            "worker produced contract-violating output for single-attempt "
+            "kind %s (dispatch family %s): %s"
+            % (
+                kind,
+                getattr(result, "resolved_family", family),
+                first_error,
+            ),
+            raw_texts=[diagnostic_text(result)],
+            duration_s=result.duration_s,
+            token_usage=result.token_usage,
+            token_usage_partial=(
+                getattr(result, "token_usage_partial", False)
+                or result.token_usage is None
+            ),
+            cost_payloads=merged_cost_payloads(result),
+        )
+        error.resolved_family = getattr(result, "resolved_family", family)
+        error.resolved_model = getattr(result, "resolved_model", model)
+        error.resolved_effort = getattr(result, "resolved_effort", effort)
+        error.physical_dispatches = [
+            _physical_dispatch(
+                result, family, model, effort, error=first_error
+            )
+        ]
+        raise error
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
     repair_validate = _validate
     repair_fallback = None

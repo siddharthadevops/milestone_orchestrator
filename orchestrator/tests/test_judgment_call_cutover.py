@@ -25,6 +25,7 @@ JOBS = (
     "fix_findings@slice_doc",
     "fix_findings@slice_impl",
     "reclassify@doc",
+    "merge_repair@workspace",
 )
 
 
@@ -64,6 +65,18 @@ def values_for(workspace, job):
             "consultation_command": "consult --family claude",
             "scratch_path": ".orchestrator/scratch/",
         })
+    elif kind == "merge_repair":
+        values = {
+            "workspace": workspace,
+            "wipe_reason": "started slice deletion",
+            "wipe_boundary": "1" * 40,
+            "source_kind": "agent_call",
+            "source_base_role": "pre_call_commit",
+            "source_base_revision": "2" * 40,
+            "accepted_revision": "3" * 40,
+            "opening_reconciliation_account": "{}",
+            "required_outcome": "Leave one clean linear repaired commit.",
+        }
     else:
         values = {
             "kind": "reclassify",
@@ -229,6 +242,19 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             "questions": answers(rating.bound),
         }
         self.assertEqual(rating.validate(copy.deepcopy(rating_reply)), rating_reply)
+
+        repair = self.prepare(
+            "merge_repair@workspace", material="business_plan"
+        )
+        repair_reply = {
+            "status": "ok",
+            "kind": "merge_repair",
+            "files_changed": ["implementation/skeleton.md"],
+        }
+        self.assertEqual(
+            repair.validate(copy.deepcopy(repair_reply)), repair_reply
+        )
+        self.assertEqual(repair.bound.question_ids, ())
 
         for field in (
             "slices",
@@ -806,6 +832,30 @@ class JudgmentCallPreparationTest(unittest.TestCase):
         with self.assertRaises(contracts.ContractError):
             prepared.validate(copy.deepcopy(reply))
         reply["reuse_evidence"] = [{"finding": "Reused the routed binder."}]
+        self.assertEqual(prepared.validate(copy.deepcopy(reply)), reply)
+
+    def test_merge_repair_accepts_and_enforces_its_scoped_extension(self):
+        repair_policy = policy(field="repair_evidence")
+        repair_policy["scope"] = {
+            "kinds": [contracts.KIND_MERGE_REPAIR],
+            "unit_kinds": ["slice_impl"],
+        }
+        authority = project_context(self.temp.name, [repair_policy])
+        prepared = self.prepare(
+            "merge_repair@workspace",
+            project_context=authority,
+        )
+        reply = {
+            "status": "ok",
+            "kind": contracts.KIND_MERGE_REPAIR,
+            "files_changed": ["implementation/skeleton.md"],
+        }
+
+        with self.assertRaises(contracts.ContractError):
+            prepared.validate(copy.deepcopy(reply))
+        reply["repair_evidence"] = [{
+            "finding": "Reconciled the accepted range."
+        }]
         self.assertEqual(prepared.validate(copy.deepcopy(reply)), reply)
 
     def test_incomplete_project_authority_stops_during_preparation(self):

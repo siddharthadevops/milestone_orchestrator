@@ -1,4 +1,4 @@
-"""Prepared prompt and reply boundary for direct milestone judgments.
+"""Prepared prompt and reply boundary for direct milestone judgments/repair.
 
 The driver owns scheduling and repository transitions.  This adapter owns the
 fresh routed charge, the complete current authority block, and the validator
@@ -35,6 +35,7 @@ JUDGMENT_JOBS = frozenset((
     "fix_findings@slice_doc",
     "fix_findings@slice_impl",
     "reclassify@doc",
+    "merge_repair@workspace",
 ))
 
 _REQUIRED_JOB_PAYLOADS = {
@@ -82,6 +83,11 @@ _REQUIRED_JOB_PAYLOADS = {
         "finding_plain",
         "finding_example",
     )),
+    "merge_repair@workspace": frozenset((
+        "workspace", "wipe_reason", "wipe_boundary", "source_kind",
+        "source_base_role", "source_base_revision", "accepted_revision",
+        "opening_reconciliation_account", "required_outcome",
+    )),
 }
 
 _REQUIRED_CONTRACT_SECTIONS = {
@@ -95,6 +101,7 @@ _REQUIRED_CONTRACT_SECTIONS = {
         "fix_results", "fix_blocked", "fix_retry", "fix_need_rethink",
     )),
     "reclassify": frozenset(("reclassify_result",)),
+    "merge_repair": frozenset(("merge_repair_result",)),
 }
 
 _SHARED_CONTRACT_SECTIONS = frozenset((
@@ -210,10 +217,10 @@ def prepare(
     fixer_recovery_state=None,
     design_correction=None,
 ):
-    """Freshly resolve, render, bind, and pair one judgment charge."""
+    """Freshly resolve, render, bind, and pair one direct technical charge."""
     if job not in JUDGMENT_JOBS:
         raise prompt_router.PromptRouterError(
-            "job %r is not a direct milestone judgment charge" % job
+            "job %r is not a direct milestone judgment/repair charge" % job
         )
     if not isinstance(values, dict):
         raise prompt_router.PromptRouterError("values must be an object")

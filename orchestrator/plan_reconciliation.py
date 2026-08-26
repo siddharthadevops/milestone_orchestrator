@@ -95,9 +95,14 @@ def _unit_boundaries(state, workspace):
 
 def _completed_checkpoint_anchors(state, by_key):
     events = state.get("events") or []
+    barriers = st.reconciliation_invalidation_barriers(state)
     later_closures = set()
     completed = []
     for event in reversed(events):
+        if not st.event_survives_reconciliation_barrier(
+            state, event, barriers
+        ):
+            continue
         unit_key = event.get("unit")
         if event.get("type") == "slice_closed":
             later_closures.add(unit_key)
@@ -380,3 +385,281 @@ def observe_accepted_range(
     }
     milestone[canonical_plan.RECONCILIATION_KEY] = record
     return {"status": "opened", "reconciliation": copy.deepcopy(record)}
+
+
+def _final_account(record, final_plan):
+    """Recompute one account only from Slice 10's frozen original facts."""
+    old_plan = record.get("original_old_plan")
+    original = record.get("original_run_boundaries")
+    if (
+        not isinstance(old_plan, list)
+        or not isinstance(final_plan, list)
+        or not isinstance(original, dict)
+        or not isinstance(original.get("units"), list)
+        or not isinstance(original.get("checkpoint_anchors"), list)
+    ):
+        raise PlanReconciliationError(
+            "reconciliation original boundaries are invalid"
+        )
+    unit_boundaries = original["units"]
+    started_ids = {
+        boundary.get("slice_id")
+        for boundary in unit_boundaries
+        if isinstance(boundary, dict) and boundary.get("slice_id") is not None
+    }
+    candidate, triggers = _candidate_index(
+        old_plan, final_plan, started_ids
+    )
+    empty = {
+        "wipe_boundary": None,
+        "boundary_old_plan_index": None,
+        "boundary_slice_id": None,
+        "triggers": [],
+        "invalidated_units": [],
+        "invalidated_slice_ids": [],
+        "requeue_slice_ids": [],
+        "checkpoint_invalidations": [],
+        "invalidated_gate_revisions": [],
+        "invalidated_revisions": [],
+    }
+    if candidate is None:
+        return empty
+
+    milestone_start = original.get("milestone_start_revision")
+    if not isinstance(milestone_start, str) or not milestone_start:
+        raise PlanReconciliationError(
+            "reconciliation milestone-start revision is missing"
+        )
+    slice_gates = _last_gate_by_slice(unit_boundaries)
+    wipe_boundary = _wipe_base(
+        old_plan,
+        final_plan,
+        candidate,
+        slice_gates,
+        milestone_start,
+    )
+    suffix_ids = {
+        slice_plan["id"] for slice_plan in old_plan[candidate:]
+    }
+    invalidated_units = [
+        boundary["unit"]
+        for boundary in unit_boundaries
+        if boundary.get("slice_id") in suffix_ids
+    ]
+    invalidated_slice_ids = [
+        slice_plan["id"]
+        for slice_plan in old_plan[candidate:]
+        if slice_plan["id"] in started_ids
+    ]
+    invalidated_slice_set = set(invalidated_slice_ids)
+    requeue_slice_ids = [
+        slice_plan["id"]
+        for slice_plan in final_plan
+        if slice_plan["id"] in invalidated_slice_set
+    ]
+    checkpoint_invalidations = [
+        copy.deepcopy(checkpoint)
+        for checkpoint in original["checkpoint_anchors"]
+        if checkpoint.get("slice_id") in invalidated_slice_set
+    ]
+    invalidated_gate_revisions = []
+    for boundary in unit_boundaries:
+        if boundary.get("unit") not in invalidated_units:
+            continue
+        revision = boundary.get("gate_revision")
+        if revision is not None and revision not in invalidated_gate_revisions:
+            invalidated_gate_revisions.append(revision)
+    return {
+        "wipe_boundary": wipe_boundary,
+        "boundary_old_plan_index": candidate,
+        "boundary_slice_id": old_plan[candidate]["id"],
+        "triggers": list(triggers),
+        "invalidated_units": invalidated_units,
+        "invalidated_slice_ids": invalidated_slice_ids,
+        "requeue_slice_ids": requeue_slice_ids,
+        "checkpoint_invalidations": checkpoint_invalidations,
+        "invalidated_gate_revisions": invalidated_gate_revisions,
+        "invalidated_revisions": [],
+    }
+
+
+def validate_dispatch_state(state):
+    """Read-only admission checks for the sole merge-repair dispatch."""
+    milestone = state.get("milestone")
+    workspace = state.get("workspace")
+    record = (
+        milestone.get(canonical_plan.RECONCILIATION_KEY)
+        if isinstance(milestone, dict) else None
+    )
+    if (
+        not isinstance(workspace, str)
+        or not isinstance(record, dict)
+        or record.get("status") != "open"
+    ):
+        raise PlanReconciliationError("no open reconciliation is available")
+    accepted = _full_declared_revision(
+        workspace, record.get("accepted_revision"), "accepted_revision"
+    )
+    source_base = _full_declared_revision(
+        workspace,
+        record.get("source_base_revision"),
+        "source_base_revision",
+    )
+    branch = record.get("branch")
+    path = record.get("skeleton_path")
+    anchor = milestone.get(canonical_plan.ANCHOR_KEY)
+    original = record.get("original_run_boundaries")
+    if (
+        not isinstance(branch, str)
+        or not branch
+        or not isinstance(path, str)
+        or not path
+        or anchor != {"path": path, "revision": accepted}
+        or not isinstance(original, dict)
+    ):
+        raise PlanReconciliationError(
+            "open reconciliation authority is incomplete"
+        )
+    milestone_start = _full_declared_revision(
+        workspace,
+        original.get("milestone_start_revision"),
+        "milestone_start_revision",
+    )
+    wipe_boundary = _full_declared_revision(
+        workspace, record.get("wipe_boundary"), "wipe_boundary"
+    )
+    try:
+        if gitops.head_full_sha(workspace) != accepted:
+            raise PlanReconciliationError(
+                "merge repair must dispatch from accepted_revision"
+            )
+        if gitops.head_symbolic_ref(workspace) != branch:
+            raise PlanReconciliationError(
+                "merge repair must dispatch from the recorded branch"
+            )
+        if not gitops.repository_clean(workspace):
+            raise PlanReconciliationError(
+                "merge repair requires a clean accepted revision"
+            )
+        if not gitops.linear_interval(workspace, milestone_start, accepted):
+            raise PlanReconciliationError(
+                "accepted run-owned history is not linear"
+            )
+        if not gitops.is_ancestor(workspace, source_base, accepted):
+            raise PlanReconciliationError(
+                "accepted revision is not descended from its source base"
+            )
+        if not gitops.is_ancestor(workspace, wipe_boundary, accepted):
+            raise PlanReconciliationError(
+                "opening wipe boundary is not an accepted ancestor"
+            )
+    except gitops.GitError as exc:
+        raise PlanReconciliationError(
+            "merge-repair dispatch state cannot be read: %s" % exc
+        ) from exc
+    source_document, _source = _committed_plan(
+        workspace, source_base, path
+    )
+    _accepted_document, accepted_plan = _committed_plan(
+        workspace, accepted, path, anchored_document=source_document
+    )
+    if accepted_plan["slices"] != record.get("accepted_plan"):
+        raise PlanReconciliationError(
+            "accepted plan no longer matches the frozen reconciliation"
+        )
+    return copy.deepcopy(record)
+
+
+def validate_final_state(state, record):
+    """Read-only finite postconditions and final-account recomputation."""
+    workspace = state.get("workspace")
+    if not isinstance(workspace, str) or not isinstance(record, dict):
+        raise PlanReconciliationError("final reconciliation state is invalid")
+    accepted = _full_declared_revision(
+        workspace, record.get("accepted_revision"), "accepted_revision"
+    )
+    original = record.get("original_run_boundaries")
+    if not isinstance(original, dict):
+        raise PlanReconciliationError(
+            "reconciliation original boundaries are missing"
+        )
+    milestone_start = _full_declared_revision(
+        workspace,
+        original.get("milestone_start_revision"),
+        "milestone_start_revision",
+    )
+    try:
+        final_head = gitops.head_full_sha(workspace)
+        if final_head == accepted:
+            raise PlanReconciliationError(
+                "merge repair produced no final commit"
+            )
+        if gitops.head_symbolic_ref(workspace) != record.get("branch"):
+            raise PlanReconciliationError(
+                "merge repair changed the recorded branch"
+            )
+        if not gitops.repository_clean(workspace):
+            raise PlanReconciliationError(
+                "merge repair left the repository dirty"
+            )
+        if not gitops.linear_interval(workspace, milestone_start, final_head):
+            raise PlanReconciliationError(
+                "final run-owned history is not linear"
+            )
+    except gitops.GitError as exc:
+        raise PlanReconciliationError(
+            "merge-repair final state cannot be read: %s" % exc
+        ) from exc
+
+    path = record.get("skeleton_path")
+    accepted_document = gitops.show_file(workspace, accepted, path)
+    if accepted_document is None:
+        raise PlanReconciliationError(
+            "accepted revision cannot supply the final plan anchor"
+        )
+    final_document, final = _committed_plan(
+        workspace,
+        final_head,
+        path,
+        anchored_document=accepted_document,
+    )
+    account = _final_account(record, final["slices"])
+    try:
+        boundary = account["wipe_boundary"]
+        if boundary is None:
+            if not gitops.is_ancestor(workspace, accepted, final_head):
+                raise PlanReconciliationError(
+                    "no-wipe final history does not retain accepted_revision"
+                )
+        else:
+            boundary = _full_declared_revision(
+                workspace, boundary, "final wipe_boundary"
+            )
+            if not gitops.is_ancestor(workspace, boundary, accepted):
+                raise PlanReconciliationError(
+                    "final wipe boundary is not in the accepted history"
+                )
+            if not gitops.is_ancestor(workspace, boundary, final_head):
+                raise PlanReconciliationError(
+                    "final wipe boundary is not an ancestor of final HEAD"
+                )
+            invalidated = gitops.commits_between(
+                workspace, boundary, accepted
+            )
+            for revision in invalidated:
+                if gitops.is_ancestor(workspace, revision, final_head):
+                    raise PlanReconciliationError(
+                        "invalidated revision remains in final HEAD ancestry"
+                    )
+            account["invalidated_revisions"] = invalidated
+    except gitops.GitError as exc:
+        raise PlanReconciliationError(
+            "merge-repair ancestry cannot be checked: %s" % exc
+        ) from exc
+    return {
+        "final_head": final_head,
+        "final_document": final_document,
+        "final_plan": copy.deepcopy(final["slices"]),
+        "projection": copy.deepcopy(final["projection"]),
+        "final_account": account,
+    }

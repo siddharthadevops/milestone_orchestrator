@@ -164,6 +164,21 @@ class TestPolicyValidation(ProjectStoreTestCase):
                 with self.assertRaises(projects.PolicyValidationError):
                     self.store.put(policy)
 
+    def test_merge_repair_is_a_valid_project_policy_scope(self):
+        policy = valid_policy("merge-repair")
+        policy["scope"] = {
+            "kinds": [contracts.KIND_MERGE_REPAIR],
+            "unit_kinds": [state.UNIT_SLICE_IMPL],
+        }
+
+        stored = self.store.put(policy)["value"]
+        selected = self.store.in_scope(
+            contracts.KIND_MERGE_REPAIR, state.UNIT_SLICE_IMPL
+        )
+
+        self.assertTrue(selected.ok)
+        self.assertEqual(selected.value, [stored])
+
     def test_new_policy_rejects_retired_seal_worker_scope(self):
         policy = valid_policy("retired-new")
         policy["scope"]["kinds"] = ["seal_half"]

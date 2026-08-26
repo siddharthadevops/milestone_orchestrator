@@ -344,7 +344,17 @@ def assert_append_only(old_state, new_state_):
                 raise HistoryRewriteError(
                     "%s.design_update: terminal update was modified" % uctx
                 )
-            _post_seal = ("closed_record", "gate_commit", "design_update")
+            old_candidate = old_unit.get("preserved_candidate")
+            new_candidate = nu.get("preserved_candidate")
+            if new_candidate not in (old_candidate, None):
+                raise HistoryRewriteError(
+                    "%s.preserved_candidate: terminal candidate was modified"
+                    % uctx
+                )
+            _post_seal = (
+                "closed_record", "gate_commit", "design_update",
+                "preserved_candidate",
+            )
             frozen_old = {k: v for k, v in old_unit.items() if k not in _post_seal}
             frozen_new = {k: v for k, v in nu.items() if k not in _post_seal}
             if frozen_old != frozen_new:
@@ -760,13 +770,34 @@ def ensure_due_unit(state):
     through to a later pre-created record, re-running the very slices
     that depend on the inserted one. No-op in every other situation
     (an earlier planned unit still in flight, or no record missing), so
-    it never pre-creates future records. Returns the appended unit or
-    None."""
+    it never pre-creates future records.
+
+    A deleted implementation record remains as immutable history.  If a
+    later accepted plan reintroduces that slice id, the reconciliation-close
+    barrier makes every stale lifecycle phase ineligible: return the same
+    record to a fresh implementation before navigation can resume obsolete
+    draft, review, fix, or seal work.  A matching reconciliation requeue or a
+    later closure proves that the record already belongs to the current era.
+    Returns the appended or requeued unit, otherwise None."""
     by_key = {unit_identity(u): u for u in state["units"]}
+    barriers = reconciliation_invalidation_barriers(state)
     for key in planned_execution_units(state):
         unit = by_key.get(key)
         if unit is None:
             return ensure_next_unit(state)  # appends exactly this key
+        if (
+            unit.get("kind") == UNIT_SLICE_IMPL
+            and _implementation_precedes_reconciliation_rebuild(
+                state, unit, barriers
+            )
+        ):
+            return requeue_implementation_after_reconciliation(
+                state,
+                unit,
+                _reconciliation_barrier_revision(
+                    state, unit.get("slice_id"), barriers
+                ),
+            )
         if unit["status"] != U_SEALED:
             return None
     return None
@@ -1401,6 +1432,113 @@ def close_slice(state, unit):
     )
 
 
+def reconciliation_invalidation_barriers(state):
+    """Latest reconciliation-close event sequence for each invalidated slice.
+
+    The close events are the immutable authority.  Unit records can be reused
+    after a repair, so a stale ``closed_record`` or an earlier verification
+    event cannot by itself distinguish the old implementation from its later
+    rebuild.  Consumers compare event sequence numbers with this derived map;
+    no parallel generation counter is needed.
+    """
+    barriers = {}
+    for event in state.get("events") or []:
+        if event.get("type") != "accepted_range_reconciliation_closed":
+            continue
+        sequence = event.get("seq")
+        if type(sequence) is not int:
+            continue
+        for slice_id in event.get("invalidated_slice_ids") or []:
+            if type(slice_id) is not int:
+                continue
+            previous = barriers.get(slice_id)
+            if previous is None or sequence > previous:
+                barriers[slice_id] = sequence
+    return barriers
+
+
+def event_survives_reconciliation_barrier(state, event, barriers=None):
+    """Whether a slice event belongs to the current post-repair history.
+
+    Events unrelated to a slice always survive.  For a slice event, the event
+    must occur after that slice's latest reconciliation-close barrier.  Both
+    ``slice_closed`` and full-suite ``verification`` records are supported:
+    the former carries ``slice_id`` directly while the latter is resolved by
+    its existing unit key.
+    """
+    slice_id = event.get("slice_id")
+    if type(slice_id) is not int:
+        event_unit = event.get("unit")
+        unit = next(
+            (
+                candidate
+                for candidate in state.get("units") or []
+                if unit_key(candidate) == event_unit
+            ),
+            None,
+        )
+        slice_id = None if unit is None else unit.get("slice_id")
+    if type(slice_id) is not int:
+        return True
+
+    if barriers is None:
+        barriers = reconciliation_invalidation_barriers(state)
+    barrier = barriers.get(slice_id)
+    if barrier is None:
+        return True
+    sequence = event.get("seq")
+    return type(sequence) is int and sequence > barrier
+
+
+def _implementation_precedes_reconciliation_rebuild(
+    state, unit, barriers=None
+):
+    """Whether this historical implementation has no current rebuild proof."""
+    if barriers is None:
+        barriers = reconciliation_invalidation_barriers(state)
+    barrier = barriers.get(unit.get("slice_id"))
+    if barrier is None:
+        return False
+    barrier_event = next(
+        item
+        for item in state.get("events") or []
+        if item.get("type") == "accepted_range_reconciliation_closed"
+        and item.get("seq") == barrier
+    )
+    key = unit_key(unit)
+    return not any(
+        event.get("unit") == key
+        and (
+            (
+                event.get("type") == "slice_closed"
+                and type(event.get("seq")) is int
+                and event["seq"] > barrier
+            )
+            or (
+                event.get("type")
+                == "implementation_requeued_after_reconciliation"
+                and event.get("accepted_revision")
+                == barrier_event.get("accepted_revision")
+            )
+        )
+        for event in state.get("events") or []
+    )
+
+
+def _reconciliation_barrier_revision(state, slice_id, barriers=None):
+    """Accepted revision naming a slice's latest close barrier."""
+    if barriers is None:
+        barriers = reconciliation_invalidation_barriers(state)
+    barrier = barriers.get(slice_id)
+    event = next(
+        item
+        for item in state.get("events") or []
+        if item.get("type") == "accepted_range_reconciliation_closed"
+        and item.get("seq") == barrier
+    )
+    return event["accepted_revision"]
+
+
 def maybe_close_milestone(state):
     if state["milestone"]["status"] == M_CLOSED:
         return True  # idempotent: never records milestone_closed twice
@@ -1637,6 +1775,89 @@ def reset_for_redraft(state, unit, reason):
         reason=reason,
         rounds_before=len(unit["rounds"]),
         seals_before=len(unit["seals"]),
+    )
+    return unit
+
+
+def requeue_implementation_after_reconciliation(
+    state, unit, accepted_revision
+):
+    """Return one retained invalidated implementation to a fresh draft.
+
+    Reconciliation does not create a second unit identity or rewrite audit
+    history.  The existing implementation record keeps its immutable cut,
+    rounds, seals, debt, and verification episode sequence.  Only the stale
+    candidate/closure fields and in-flight episode state are retired before
+    the same record becomes pending again.
+
+    ``accepted_revision`` is the identity of the one-shot reconciliation; it
+    is copied onto the append-only event instead of introducing another id.
+    Source task/session carriers are deliberately outside this helper because
+    the reconciliation closer retires only the exact carrier that produced
+    the accepted range.
+    """
+    if unit.get("kind") != UNIT_SLICE_IMPL:
+        raise IllegalTransition(
+            "reconciliation can requeue only a slice_impl unit"
+        )
+    if not isinstance(accepted_revision, str) or not accepted_revision:
+        raise ValueError("accepted_revision must be a non-empty string")
+
+    prior_status = unit.get("status")
+    prior_gate = unit.get("gate_commit")
+    rounds_before = len(unit.get("rounds") or [])
+    seals_before = len(unit.get("seals") or [])
+
+    unit["status"] = U_PENDING
+    unit["artifact"] = None
+    unit["draft"] = None
+    unit["family_index"] = 0
+    unit["review_cycle_start"] = rounds_before
+    unit["review_evidence_fingerprint"] = None
+    unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
+    unit["closed_record"] = None
+    unit["gate_commit"] = None
+    unit["failed_from"] = None
+    unit["rounds_amnesty"] = rounds_before
+    unit["fix_queue"] = []
+    unit["fix_source"] = None
+    unit["fix_loop_rounds"] = 0
+
+    # These are active-candidate or active-episode facts.  Their durable
+    # evidence already lives in rounds/seals/events; carrying them into the
+    # rebuilt implementation would make the new author resume discarded work.
+    for transient in (
+        "implementation_attempt_snapshot",
+        "implementation_stabilization",
+        "pending_wip",
+        "preserved_candidate",
+        "brainstorming_review_handoff",
+        "design_update",
+        "design_correction",
+        "design_correction_attempted",
+        "baseline_verification",
+        "baseline_unstable_runs",
+        "suite_verification_pending",
+        "suite_armed_by_fix",
+        "skip_next_verify",
+        "phantom_retried",
+        "deferred_fix_episode",
+        "under_repair",
+        "gap_repairs",
+        "has_gap_remodel",
+    ):
+        unit.pop(transient, None)
+
+    append_event(
+        state,
+        "implementation_requeued_after_reconciliation",
+        unit=unit_key(unit),
+        slice_id=unit.get("slice_id"),
+        accepted_revision=accepted_revision,
+        from_status=prior_status,
+        prior_gate_commit=prior_gate,
+        rounds_before=rounds_before,
+        seals_before=seals_before,
     )
     return unit
 

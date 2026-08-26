@@ -4757,6 +4757,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                              'variables': []},
                                                             {'ref': 'project_context'},
                                                             {'ref': 'process_authority'},
+                                                            {'ref': 'operator_amendments_author'},
                                                             {'text': ['WHAT HAPPENED',
                                                                       '- wipe reason: '
                                                                       '{{wipe_reason}}',

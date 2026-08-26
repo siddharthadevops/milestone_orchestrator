@@ -62,6 +62,10 @@ KIND_FIX_FINDINGS = "fix_findings"
 # run's configured threshold (a binary "is it safe?" question biases an
 # LLM to the safe answer; a graded rating keeps it calibrated).
 KIND_RECLASSIFY = "reclassify"
+# One-shot workspace reconciliation is routed by the Prompt Router rather
+# than the legacy builder table, so it is a valid project-policy target but
+# deliberately is not added to ``KINDS`` below.
+KIND_MERGE_REPAIR = "merge_repair"
 
 # Ordered drift-risk scale for reclassify ratings (least to most risk).
 DRIFT_RISK_LEVELS = ("low", "medium", "high", "xhigh")
@@ -1240,13 +1244,16 @@ KIND_OUTPUT_KEYS = {
     KIND_RECLASSIFY: frozenset(
         {"drift_risk", "drift_damage", "reason", "questions"}
     ),
+    # Routed directly through prompt_contracts rather than the legacy worker
+    # validator, but project safeguards still need the same collision source.
+    KIND_MERGE_REPAIR: frozenset({"files_changed"}),
 }
 
 
 def reserved_output_keys(kind):
     """Top-level output keys the worker protocol itself uses for `kind`
     (the common keys plus the kind's own)."""
-    if kind not in KINDS:
+    if kind not in KIND_OUTPUT_KEYS:
         raise ContractError("unknown kind %r" % (kind,))
     return COMMON_OUTPUT_KEYS | KIND_OUTPUT_KEYS[kind]
 

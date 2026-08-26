@@ -786,6 +786,49 @@ def is_ancestor(workspace, ancestor, descendant):
     ).returncode == 0
 
 
+def repository_clean(workspace):
+    """Whether HEAD, index, tracked bytes, and ordinary untracked files agree."""
+    _assert_workspace_root(workspace)
+    return not bool(
+        _run(
+            workspace,
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=normal",
+        ).stdout.strip()
+    )
+
+
+def linear_interval(workspace, ancestor, descendant):
+    """Whether ``ancestor..descendant`` is ancestral and contains no merge."""
+    _assert_workspace_root(workspace)
+    if not is_ancestor(workspace, ancestor, descendant):
+        return False
+    return not bool(
+        _run(
+            workspace,
+            "rev-list",
+            "--merges",
+            descendant,
+            "^%s" % ancestor,
+        ).stdout.strip()
+    )
+
+
+def commits_between(workspace, ancestor, descendant):
+    """Return full commits strictly after an ancestral boundary, newest first."""
+    _assert_workspace_root(workspace)
+    if not is_ancestor(workspace, ancestor, descendant):
+        raise GitError("commit interval is not ancestral")
+    output = _run(
+        workspace,
+        "rev-list",
+        descendant,
+        "^%s" % ancestor,
+    ).stdout
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
 def restore_clean(workspace):
     """Revert the worktree to HEAD (the last accepted state): the recovery
     path when a report-only reviewer tampered with a clean worktree.

@@ -1014,11 +1014,22 @@ class Driver(object):
             # above ran or completed: the session names a document, it does
             # not need one to exist.
             self._derive_staffing_session()
-        # Before repo validation: if a pending gap's cleanup never ran (a crash
-        # between recording the gap and cleaning up), worker junk such as a
-        # nested repo could make ensure_repo reject the workspace and deadlock
-        # every resume.
-        self._pre_clean_pending_gap()
+        startup_reconciliation = self.state["milestone"].get(
+            canonical_plan.RECONCILIATION_KEY
+        )
+        startup_reconciliation_open = (
+            isinstance(startup_reconciliation, dict)
+            and startup_reconciliation.get("status") == "open"
+        )
+        # An accepted-range reconciliation is the exclusive lifecycle owner.
+        # Existing gap/redoc recovery may mutate state and Git, so defer it
+        # until the one-shot LLM has installed and closed the final plan.
+        if not startup_reconciliation_open:
+            # Before repo validation: if a pending gap's cleanup never ran (a
+            # crash between recording the gap and cleaning up), worker junk
+            # such as a nested repo could make ensure_repo reject the workspace
+            # and deadlock every resume.
+            self._pre_clean_pending_gap()
         if gitops.enabled(self.config):
             try:
                 gitops.ensure_repo(
@@ -1033,8 +1044,9 @@ class Driver(object):
                 if self.state["failure"] is None:
                     st.fail_run(self.state, "git unavailable: %s" % exc)
                     self._save()
-        self._consume_pending_gap()
-        self._migrate_active_redoc_wave()
+        if not startup_reconciliation_open:
+            self._consume_pending_gap()
+            self._migrate_active_redoc_wave()
         # A crash between a seal and its _after_seal ensure_next_unit can
         # leave the DUE planned unit without a record; with a mid-table
         # remodel insert, navigation would fall through to a later
@@ -1048,8 +1060,28 @@ class Driver(object):
                 with self._exclusive():
                     self.state = st.load(self.state_path)
                     if self.state.get("failure") is None:
-                        closure_recovered = self._consume_pending_closure()
-                        materialized = st.ensure_due_unit(self.state) is not None
+                        reconciliation = self.state["milestone"].get(
+                            canonical_plan.RECONCILIATION_KEY
+                        )
+                        reconciliation_open = (
+                            isinstance(reconciliation, dict)
+                            and reconciliation.get("status") == "open"
+                        )
+                        # The accepted projection is provisional until the
+                        # one-shot repair closes.  A restart must not open its
+                        # units or judge parked candidates against it: both
+                        # would mutate/fail the frozen ledger before the LLM
+                        # installs the final plan.
+                        closure_recovered = (
+                            False
+                            if reconciliation_open
+                            else self._consume_pending_closure()
+                        )
+                        materialized = (
+                            False
+                            if reconciliation_open
+                            else st.ensure_due_unit(self.state) is not None
+                        )
                         try:
                             # A parked implementation must remain assigned to
                             # a planned slice across operator resume as well as
@@ -1057,7 +1089,8 @@ class Driver(object):
                             # problem.  Otherwise clearing the failure could
                             # let navigation reach DONE with work still held
                             # only by its durable parking ref.
-                            self._guard_unplanned_preserved_candidates()
+                            if not reconciliation_open:
+                                self._guard_unplanned_preserved_candidates()
                         except StopStep:
                             pass  # the guard persisted the typed failure
                         else:
@@ -1066,6 +1099,17 @@ class Driver(object):
                             if (
                                 _current_author_unit(self.state) is None
                                 and self.state.get("failure") is None
+                                and not (
+                                    isinstance(
+                                        self.state["milestone"].get(
+                                            canonical_plan.RECONCILIATION_KEY
+                                        ),
+                                        dict,
+                                    )
+                                    and self.state["milestone"][
+                                        canonical_plan.RECONCILIATION_KEY
+                                    ].get("status") == "open"
+                                )
                             ):
                                 was_closed = (
                                     self.state["milestone"]["status"]
@@ -1349,7 +1393,12 @@ class Driver(object):
         explicit cadence also excludes historical implementation baselines.
         """
         closed_after = set()
+        barriers = st.reconciliation_invalidation_barriers(self.state)
         for event in reversed(self.state.get("events") or []):
+            if not st.event_survives_reconciliation_barrier(
+                self.state, event, barriers
+            ):
+                continue
             if event.get("type") == "slice_closed":
                 closed_after.add(event.get("unit"))
                 continue
@@ -1375,11 +1424,15 @@ class Driver(object):
             for candidate in self.state.get("units") or []
         }
         completed = set()
+        barriers = st.reconciliation_invalidation_barriers(self.state)
         for event in self.state.get("events") or []:
             if (
                 event.get("type") != "slice_closed"
                 or int(event.get("seq") or -1) <= after_seq
                 or event.get("unit") == anchor_unit
+                or not st.event_survives_reconciliation_barrier(
+                    self.state, event, barriers
+                )
             ):
                 continue
             closed = by_key.get(event.get("unit"))
@@ -3070,6 +3123,12 @@ class Driver(object):
             self._save()
         root_call = calls[0] if calls else marker
         kind = root_call.get("kind")
+        if kind == "merge_repair":
+            # A3 assigns every repository mutation to the sole repair LLM.
+            # An interrupted attempt is terminal/manual; startup must not
+            # restore, fold, or otherwise reinterpret the LLM-left state.
+            self._clear_busy()
+            return
         if not gitops.enabled(self.config):
             self._clear_busy()
             return
@@ -3989,6 +4048,25 @@ class Driver(object):
                     % kind
                 )
 
+    def _refresh_busy_state_digest(self, label, kind):
+        """Rebind a prepared call marker after its before-dispatch state save."""
+        with self._busy_lock:
+            marker = self._read_busy()
+            if (
+                marker is None
+                or marker.get("label") != label
+                or marker.get("kind") != kind
+            ):
+                raise RuntimeError(
+                    "%s call lost its accounting marker before dispatch"
+                    % kind
+                )
+            marker["state_digest"] = self._state_file_digest()
+            if not self._write_busy(marker):
+                raise RuntimeError(
+                    "%s call could not refresh its accounting marker" % kind
+                )
+
     def _price_call(self, family, model, call, include_repair=False):
         """Price one completed call and hang the answer on it.
 
@@ -4197,7 +4275,8 @@ class Driver(object):
               start_session=False, session_ref=None, active_control=None,
               repeat_protocol=False, dispatch_resolver=None,
               continuation_family=None, task_id=None, prepare_call=None,
-              episode_unit=None, cutoff_marker=None, nested=False):
+              episode_unit=None, cutoff_marker=None, nested=False,
+              single_attempt=False, before_dispatch=None):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep.
 
@@ -4218,6 +4297,8 @@ class Driver(object):
         retries = self.config.get("infra_retry_backoff_s")
         if retries is None:
             retries = [10, 30]
+        if single_attempt:
+            retries = []
         attempt = 0
         while True:
             call_family, call_model, call_effort = family, model, effort
@@ -4269,6 +4350,18 @@ class Driver(object):
                         )
                     ),
                     prepare_call=prepare_call,
+                    single_attempt=single_attempt,
+                    before_dispatch=(
+                        (
+                            lambda f, m, e, fallback: (
+                                before_dispatch(f, m, e, fallback),
+                                self._refresh_busy_state_digest(
+                                    raw_name, kind
+                                ),
+                            )
+                        )
+                        if before_dispatch is not None else None
+                    ),
                 )
                 actual_family, actual_model, actual_effort = (
                     self._result_identity(
@@ -4617,7 +4710,9 @@ class Driver(object):
                         session_ref = None
                         start_session = True
                     continue
-                classifiable = self._errclass_eligible(exc)
+                classifiable = (
+                    not single_attempt and self._errclass_eligible(exc)
+                )
                 if classifiable:
                     etype, resume_at, evidence = self._classify_failure(
                         actual_family, exc, raw_name=raw_name, unit=call_unit
@@ -4631,6 +4726,7 @@ class Driver(object):
                     resume_at = evidence = None
                 if (
                     not nested
+                    and not single_attempt
                     and etype in ("network", "busy")
                     and attempt < len(retries)
                 ):
@@ -4777,6 +4873,405 @@ class Driver(object):
         )
         st.ensure_due_unit(self.state)
         return False
+
+    def _reconciliation_source_unit(self, record):
+        source = record.get("source")
+        if not isinstance(source, dict):
+            raise st.IllegalTransition("reconciliation source is invalid")
+        key = source.get("unit")
+        if not isinstance(key, str) or not key:
+            raise st.IllegalTransition("reconciliation source has no unit")
+        unit = self._unit_by_key(key)
+        if unit is None:
+            raise st.IllegalTransition(
+                "reconciliation source unit %s is unavailable" % key
+            )
+        return unit
+
+    def _reconciliation_values(self, record):
+        source = record["source"]
+        opening = record["opening_account"]
+        source_kind = (
+            "brainstorming_session"
+            if source.get("executor") == "brainstorming" else "agent_call"
+        )
+        account = {
+            "source_base_revision": record["source_base_revision"],
+            "accepted_revision": record["accepted_revision"],
+            "original_old_plan": record["original_old_plan"],
+            "original_run_boundaries": record["original_run_boundaries"],
+            "opening_account": opening,
+        }
+        return {
+            "workspace": self.workspace,
+            "wipe_reason": json.dumps(
+                {
+                    "triggers": opening.get("triggers") or [],
+                    "invalidated_slice_ids": opening.get(
+                        "invalidated_slice_ids"
+                    ) or [],
+                    "requeue_slice_ids": opening.get("requeue_slice_ids") or [],
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "wipe_boundary": record["wipe_boundary"],
+            "source_kind": source_kind,
+            "source_base_role": (
+                "pre_session_commit"
+                if source_kind == "brainstorming_session"
+                else "pre_call_commit"
+            ),
+            "source_base_revision": record["source_base_revision"],
+            "accepted_revision": record["accepted_revision"],
+            "opening_reconciliation_account": json.dumps(
+                account,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "required_outcome": (
+                "Preserve the accepted source intent and required prefix; "
+                "remove the computed unwound history; finish one valid "
+                "canonical plan and a clean linear same-branch commit."
+            ),
+        }
+
+    def _reconciliation_prepare_call(self, record, unit, material):
+        def prepare(repair_error):
+            if repair_error is not None:
+                raise st.IllegalTransition(
+                    "merge_repair has no contract-correction attempt"
+                )
+            authority = self._worker_episode_authority(unit, "merge_repair")
+            self._activate_worker_episode_authority(authority)
+            return judgment_calls.prepare(
+                self._author_prompt_home(),
+                job="merge_repair@workspace",
+                material=material,
+                values=self._reconciliation_values(record),
+                amendments=authority["amendments"],
+                operator_complete=(
+                    authority["operator_complete"]
+                    or self.state.get("schema_version", 0)
+                    < st.PROMPT_ROUTER_ACTIVATION_SCHEMA_VERSION
+                ),
+                prompt_set=self.state.get(
+                    st.PROMPT_SET_KEY, prompt_sets.DEFAULT_SET_NAME
+                ),
+                project_context=authority["project_context"],
+                workspace=self.workspace,
+            )
+
+        return prepare
+
+    def _mark_merge_repair_handoff(
+        self, accepted_revision, raw_name, family, model, effort, fallback
+    ):
+        record = self.state["milestone"].get(
+            canonical_plan.RECONCILIATION_KEY
+        )
+        if (
+            not isinstance(record, dict)
+            or record.get("status") != "open"
+            or record.get("accepted_revision") != accepted_revision
+            or record.get("handoff") is not None
+        ):
+            raise st.IllegalTransition(
+                "merge_repair handoff is no longer dispatchable"
+            )
+        handoff = {
+            "at": st.now_iso(),
+            "label": raw_name,
+            "kind": "merge_repair",
+            "family": family,
+            "model": model,
+            "effort": effort,
+        }
+        if fallback is not None:
+            handoff["prompt_set_fallback"] = fallback
+        record["handoff"] = handoff
+        st.append_event(
+            self.state,
+            "merge_repair_handoff",
+            accepted_revision=accepted_revision,
+            **copy.deepcopy(handoff),
+        )
+        self._save()
+
+    def _record_merge_repair_result(self, output, result, raw_path):
+        family, model, effort = self._result_identity(result, None, None, None)
+        duration, usage, partial = self._call_accounting(result)
+        status = (
+            output.get("status") if isinstance(output, dict) else "interrupted"
+        )
+        return st.append_event(
+            self.state,
+            "merge_repair_result",
+            status=status,
+            family=family,
+            model=model,
+            effort=effort,
+            raw_path=raw_path,
+            duration_s=duration,
+            token_usage=copy.deepcopy(usage),
+            token_usage_partial=bool(partial or usage is None),
+            cost=copy.deepcopy(getattr(result, "cost", None)),
+            cost_partial=bool(
+                getattr(result, "cost_partial", False)
+                or getattr(result, "cost", None) is None
+            ),
+            **self._prompt_set_fallback_fields(result),
+        )
+
+    def _validate_reconciliation_source_carrier(self, record):
+        source = record["source"]
+        unit = self._reconciliation_source_unit(record)
+        task_id = source.get("task_id")
+        task = None
+        active = unit.get("active_task")
+        if task_id is not None:
+            if not isinstance(task_id, str) or not task_id:
+                raise st.IllegalTransition(
+                    "reconciliation source task identity is invalid"
+                )
+            task = tasks.task_record(self.state, task_id)
+            if active is not None and (
+                not isinstance(active, dict) or active.get("id") != task_id
+            ):
+                raise st.IllegalTransition(
+                    "reconciliation source task no longer owns its unit"
+                )
+            if task.get("result") is None and (
+                not isinstance(active, dict) or active.get("id") != task_id
+            ):
+                raise st.IllegalTransition(
+                    "open reconciliation source task is detached"
+                )
+        session_id = source.get("session_id")
+        if session_id is not None:
+            wait = unit.get("brainstorming_wait")
+            if (
+                not isinstance(session_id, str)
+                or not session_id
+                or not isinstance(wait, dict)
+                or wait.get("session_id") != session_id
+            ):
+                raise st.IllegalTransition(
+                    "reconciliation source session is detached"
+                )
+        return unit, task_id, task, session_id
+
+    def _close_reconciliation(self, record, final):
+        """Apply one successful account in memory; the step performs one save."""
+        baseline = self.state
+        candidate = copy.deepcopy(baseline)
+        self.state = candidate
+        try:
+            live = self.state["milestone"].get(
+                canonical_plan.RECONCILIATION_KEY
+            )
+            if live != record:
+                raise st.IllegalTransition(
+                    "open reconciliation changed before atomic close"
+                )
+            unit, task_id, task, session_id = (
+                self._validate_reconciliation_source_carrier(record)
+            )
+            account = final["final_account"]
+            by_key = {
+                st.unit_key(item): item
+                for item in self.state.get("units") or []
+            }
+            invalidated = []
+            for key in account["invalidated_units"]:
+                target = by_key.get(key)
+                if target is None:
+                    raise st.IllegalTransition(
+                        "invalidated unit %s is unavailable" % key
+                    )
+                invalidated.append(target)
+
+            if task_id is not None and task.get("result") is None:
+                self._fail_worker_task_if_open(
+                    unit,
+                    {
+                        "status": "superseded_by_reconciliation",
+                        "accepted_revision": record["accepted_revision"],
+                        "final_head": final["final_head"],
+                    },
+                    reason="source result superseded by accepted-range reconciliation",
+                    task_id=task_id,
+                )
+            active = unit.get("active_task")
+            if isinstance(active, dict) and active.get("id") == task_id:
+                unit.pop("active_task", None)
+            if session_id is not None:
+                unit.pop("brainstorming_wait", None)
+                unit.pop("brainstorming_resume", None)
+            unit.pop("implementation_attempt_snapshot", None)
+            st.append_event(
+                self.state,
+                "reconciliation_source_retired",
+                unit=st.unit_key(unit),
+                task_id=task_id,
+                session_id=session_id,
+                owner_survives=(
+                    unit.get("slice_id") is None
+                    or unit.get("slice_id") in {
+                        item["id"] for item in final["final_plan"]
+                    }
+                ),
+            )
+
+            requeue_ids = set(account["requeue_slice_ids"])
+            for target in invalidated:
+                if target.get("kind") != st.UNIT_SLICE_IMPL:
+                    continue
+                target["closed_record"] = None
+                # The final repair supersedes every parked pre-repair tree,
+                # including one whose slice is now only historical.
+                target.pop("preserved_candidate", None)
+                if target.get("slice_id") in requeue_ids:
+                    st.requeue_implementation_after_reconciliation(
+                        self.state,
+                        target,
+                        record["accepted_revision"],
+                    )
+
+            milestone = self.state["milestone"]
+            milestone["slices"] = copy.deepcopy(final["projection"])
+            milestone[canonical_plan.ANCHOR_KEY] = {
+                "path": record["skeleton_path"],
+                "revision": final["final_head"],
+            }
+            milestone.pop(canonical_plan.RECONCILIATION_KEY, None)
+            st.append_event(
+                self.state,
+                "accepted_range_reconciliation_closed",
+                source_base_revision=record["source_base_revision"],
+                accepted_revision=record["accepted_revision"],
+                final_head=final["final_head"],
+                invalidated_units=copy.deepcopy(
+                    account["invalidated_units"]
+                ),
+                invalidated_slice_ids=copy.deepcopy(
+                    account["invalidated_slice_ids"]
+                ),
+                requeue_slice_ids=copy.deepcopy(
+                    account["requeue_slice_ids"]
+                ),
+                checkpoint_invalidations=copy.deepcopy(
+                    account["checkpoint_invalidations"]
+                ),
+                final_account=copy.deepcopy(account),
+            )
+            st.ensure_due_unit(self.state)
+        except Exception:
+            self.state = baseline
+            raise
+
+    def _fail_reconciliation(self, reason, unit=None, type_="reconciliation"):
+        if self.state.get("failure") is None:
+            st.fail_run(
+                self.state,
+                "accepted-range reconciliation failed: %s" % reason,
+                unit=unit,
+                type_=type_,
+            )
+            self._save()
+        raise StopStep(reason)
+
+    def _do_reconciliation(self):
+        record = self.state["milestone"].get(
+            canonical_plan.RECONCILIATION_KEY
+        )
+        try:
+            if isinstance(record, dict) and record.get("handoff") is not None:
+                unit = self._reconciliation_source_unit(record)
+                return self._fail_reconciliation(
+                    "the sole merge_repair handoff was already dispatched",
+                    unit=unit,
+                )
+            record = plan_reconciliation.validate_dispatch_state(self.state)
+            unit = self._reconciliation_source_unit(record)
+            source = record.get("source") or {}
+            material = source.get("material")
+            if not isinstance(material, str) or not material:
+                raise plan_reconciliation.PlanReconciliationError(
+                    "reconciliation source material is missing"
+                )
+        except (
+            plan_reconciliation.PlanReconciliationError,
+            st.IllegalTransition,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            return self._fail_reconciliation(str(exc), unit=locals().get("unit"))
+
+        family, model, effort = self._staff(
+            "sync", material=material, episode_unit=unit
+        )
+        dispatch = self._dispatch_for_role(
+            "sync", material=material, episode_unit=unit
+        )
+        raw_name = "accepted-range-merge-repair"
+        output, result, raw_path = self._call(
+            family,
+            "merge repair",
+            "merge_repair",
+            raw_name,
+            model=model,
+            effort=effort,
+            dispatch_resolver=dispatch,
+            prepare_call=self._reconciliation_prepare_call(
+                record, unit, material
+            ),
+            episode_unit=unit,
+            single_attempt=True,
+            before_dispatch=(
+                lambda f, m, e, fallback: self._mark_merge_repair_handoff(
+                    record["accepted_revision"],
+                    raw_name,
+                    f,
+                    m,
+                    e,
+                    fallback,
+                )
+            ),
+        )
+        record = copy.deepcopy(
+            self.state["milestone"].get(
+                canonical_plan.RECONCILIATION_KEY
+            )
+        )
+        self._record_merge_repair_result(output, result, raw_path)
+        if not isinstance(output, dict):
+            return self._fail_reconciliation(
+                "merge_repair was interrupted", unit=unit
+            )
+        if output.get("status") == "blocked":
+            return self._fail_reconciliation(
+                output.get("blocked_reason") or "merge_repair blocked",
+                unit=unit,
+                type_="worker_blocked",
+            )
+        try:
+            final = plan_reconciliation.validate_final_state(
+                self.state, record
+            )
+            self._close_reconciliation(record, final)
+        except (
+            plan_reconciliation.PlanReconciliationError,
+            st.IllegalTransition,
+            tasks.TaskRecordError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            return self._fail_reconciliation(str(exc), unit=unit)
+        return "accepted range reconciled at %s" % final["final_head"]
 
     @staticmethod
     def _errclass_eligible(exc):
@@ -8241,9 +8736,9 @@ class Driver(object):
     def step(self):
         """Execute exactly one action. Returns (action, note).
 
-        Worker calls have at-least-once semantics: records are saved only
-        after the handler completes, so a crash mid-handler re-executes the
-        same call on resume (see README, "Operational semantics")."""
+        Ordinary worker calls have at-least-once semantics. The sole
+        merge_repair exception persists its handoff immediately before
+        dispatch and never re-dispatches a marked reconciliation."""
         with self._exclusive():
             self._assert_not_stale()
             # A repository-backed child may publish its accepted plan or task
@@ -8255,8 +8750,6 @@ class Driver(object):
             action, boundary_note = self._decide_at_strategy_boundary()
             if action.type in (A_DONE, A_FAILED):
                 return action, boundary_note
-            if action.type == A_RECONCILIATION:
-                return action, "accepted plan range is frozen for reconciliation"
             handler = {
                 A_DRAFT: self._do_draft,
                 A_VERIFY: self._do_verify,
@@ -8265,6 +8758,7 @@ class Driver(object):
                 A_DELTA_REVIEW: self._do_delta_review,
                 A_SEAL_ATTEMPT: self._do_seal_attempt,
                 A_BRAINSTORM_WAIT: self._do_brainstorming_wait,
+                A_RECONCILIATION: self._do_reconciliation,
             }[action.type]
             waiting_session = (
                 self._brainstorming_wait_session()
@@ -8316,7 +8810,8 @@ class Driver(object):
             if action.type == A_FAILED:
                 return 2
             if action.type == A_RECONCILIATION:
-                return 4
+                if decide(self.state).type == A_RECONCILIATION:
+                    return 4
             if (
                 action.type == A_BRAINSTORM_WAIT
                 and self._brainstorming_wait_session() == waiting_session

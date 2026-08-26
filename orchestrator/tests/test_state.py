@@ -2247,6 +2247,269 @@ class TestResetForRedraft(TempWorkspaceCase):
         )
 
 
+class TestReconciliationStateSeams(TempWorkspaceCase):
+    def _sealed_implementation(self):
+        state = make_state(
+            self.workspace, slices=[{"id": 1, "title": "one"}],
+        )
+        state["units"][0]["status"] = st.U_SEALED
+        doc = st.ensure_next_unit(state)
+        doc["status"] = st.U_SEALED
+        unit = st.ensure_next_unit(state)
+        unit.update({
+            "status": st.U_SEALED,
+            "artifact": "src/one.py",
+            "draft": {"kind": "implement", "result": {"status": "ok"}},
+            "family_index": 2,
+            "review_cycle_start": 1,
+            "review_evidence_fingerprint": "old-bytes",
+            "rounds": [{"id": "old-round", "family": "codex"}],
+            "seals": [{"attempt": 1, "passed": True}],
+            "debt": [{"id": "old-debt", "summary": "history"}],
+            "implementation_cut": {
+                "part": "a",
+                "next_part": "b",
+                "cut_scope": "first half",
+                "remaining_scope": "second half",
+            },
+            "verify_episode_seq": {"pre_review": 4, "pre_seal": 3},
+            "closed_record": {"slice_id": 1},
+            "gate_commit": "abc1234",
+            "failed_from": st.U_ROUNDS,
+            "fix_queue": [{"id": "stale"}],
+            "fix_source": {"type": "round"},
+            "fix_loop_rounds": 3,
+            "pending_wip": {"revision": "old"},
+            "preserved_candidate": {"ref": "refs/orchestrator/parked"},
+            "implementation_attempt_snapshot": {"revision": "old"},
+            "implementation_stabilization": {"status": "waiting"},
+            "brainstorming_review_handoff": {"session_id": "old"},
+            "suite_verification_pending": True,
+            "has_gap_remodel": True,
+        })
+        return state, unit
+
+    def test_requeue_preserves_history_and_cut_but_retires_stale_candidate(self):
+        state, unit = self._sealed_implementation()
+        immutable = {
+            key: copy.deepcopy(unit[key])
+            for key in (
+                "rounds", "seals", "debt", "implementation_cut",
+                "verify_episode_seq",
+            )
+        }
+
+        result = st.requeue_implementation_after_reconciliation(
+            state, unit, "accepted-sha"
+        )
+
+        self.assertIs(result, unit)
+        for key, value in immutable.items():
+            self.assertEqual(unit[key], value)
+        self.assertEqual(unit["status"], st.U_PENDING)
+        self.assertIsNone(unit["artifact"])
+        self.assertIsNone(unit["draft"])
+        self.assertIsNone(unit["closed_record"])
+        self.assertIsNone(unit["gate_commit"])
+        self.assertEqual(unit["family_index"], 0)
+        self.assertEqual(unit["review_cycle_start"], 1)
+        self.assertEqual(unit["rounds_amnesty"], 1)
+        self.assertEqual(unit["fix_queue"], [])
+        self.assertIsNone(unit["fix_source"])
+        for key in (
+            "pending_wip", "preserved_candidate",
+            "implementation_attempt_snapshot",
+            "implementation_stabilization", "brainstorming_review_handoff",
+            "suite_verification_pending", "has_gap_remodel",
+        ):
+            self.assertNotIn(key, unit)
+        event = state["events"][-1]
+        self.assertEqual(
+            event["type"], "implementation_requeued_after_reconciliation"
+        )
+        self.assertEqual(event["accepted_revision"], "accepted-sha")
+        self.assertEqual(event["from_status"], st.U_SEALED)
+        self.assertEqual(event["prior_gate_commit"], "abc1234")
+
+    def test_requeue_is_an_append_only_reopen_of_the_same_unit(self):
+        state, unit = self._sealed_implementation()
+        path = os.path.join(self.workspace, "state.json")
+        identity = st.unit_identity(unit)
+        st.save_new(path, state)
+
+        st.requeue_implementation_after_reconciliation(
+            state, unit, "accepted-sha"
+        )
+        st.save(path, state)
+
+        reloaded = st.load(path)
+        rebuilt = reloaded["units"][2]
+        self.assertEqual(st.unit_identity(rebuilt), identity)
+        self.assertEqual(rebuilt["status"], st.U_PENDING)
+        self.assertEqual(len(rebuilt["rounds"]), 1)
+        self.assertEqual(len(rebuilt["seals"]), 1)
+
+    def test_sealed_candidate_can_only_be_retired_not_rewritten(self):
+        old, unit = self._sealed_implementation()
+        new = copy.deepcopy(old)
+        new_unit = new["units"][2]
+        new_unit.pop("preserved_candidate")
+
+        st.assert_append_only(old, new)
+
+        rewritten = copy.deepcopy(old)
+        rewritten["units"][2]["preserved_candidate"] = {
+            "ref": "refs/orchestrator/different"
+        }
+        with self.assertRaises(st.HistoryRewriteError):
+            st.assert_append_only(old, rewritten)
+
+    def test_requeue_rejects_non_implementation_units(self):
+        state = make_state(self.workspace)
+        with self.assertRaises(st.IllegalTransition):
+            st.requeue_implementation_after_reconciliation(
+                state, state["units"][0], "accepted-sha"
+            )
+
+    def test_close_events_form_slice_barriers_for_cadence_events(self):
+        state, unit = self._sealed_implementation()
+        old_verification = st.append_event(
+            state, "verification", unit=st.unit_key(unit), ok=True,
+            stable=True, cadence="four_slice_checkpoint",
+        )
+        old_closure = st.append_event(
+            state, "slice_closed", unit=st.unit_key(unit), slice_id=1,
+        )
+        st.append_event(
+            state,
+            "accepted_range_reconciliation_closed",
+            accepted_revision="accepted-a",
+            invalidated_slice_ids=[1],
+        )
+        later_verification = st.append_event(
+            state, "verification", unit=st.unit_key(unit), ok=True,
+            stable=True, cadence="four_slice_checkpoint",
+        )
+        later_closure = st.append_event(
+            state, "slice_closed", unit=st.unit_key(unit), slice_id=1,
+        )
+        latest_barrier = st.append_event(
+            state,
+            "accepted_range_reconciliation_closed",
+            accepted_revision="accepted-b",
+            invalidated_slice_ids=[1, 2],
+        )
+        post_latest = st.append_event(
+            state, "slice_closed", unit=st.unit_key(unit), slice_id=1,
+        )
+        untouched = st.append_event(
+            state, "slice_closed", unit="slice_impl-03", slice_id=3,
+        )
+
+        barriers = st.reconciliation_invalidation_barriers(state)
+        self.assertEqual(
+            barriers,
+            {1: latest_barrier["seq"], 2: latest_barrier["seq"]},
+        )
+        for event in (
+            old_verification, old_closure, later_verification, later_closure,
+        ):
+            self.assertFalse(st.event_survives_reconciliation_barrier(
+                state, event, barriers
+            ))
+        self.assertTrue(st.event_survives_reconciliation_barrier(
+            state, post_latest, barriers
+        ))
+        self.assertTrue(st.event_survives_reconciliation_barrier(
+            state, untouched, barriers
+        ))
+
+    def test_due_requeues_a_reintroduced_implementation_behind_barrier(self):
+        state, unit = self._sealed_implementation()
+        st.append_event(
+            state, "slice_closed", unit=st.unit_key(unit), slice_id=1,
+        )
+        st.append_event(
+            state,
+            "accepted_range_reconciliation_closed",
+            accepted_revision="accepted-delete",
+            invalidated_slice_ids=[1],
+        )
+
+        due = st.ensure_due_unit(state)
+
+        self.assertIs(due, unit)
+        self.assertEqual(unit["status"], st.U_PENDING)
+        self.assertIsNone(unit["closed_record"])
+        self.assertEqual(
+            state["events"][-1]["accepted_revision"], "accepted-delete"
+        )
+
+    def test_due_requeues_a_reintroduced_in_flight_implementation(self):
+        state, unit = self._sealed_implementation()
+        unit["status"] = st.U_FIXING
+        unit["artifact"] = "src/stale-before-delete.py"
+        unit["draft"] = {
+            "kind": "implement", "result": {"status": "ok"}
+        }
+        unit["fix_queue"] = [{"id": "stale-finding"}]
+        st.append_event(
+            state,
+            "accepted_range_reconciliation_closed",
+            accepted_revision="accepted-delete-in-flight",
+            invalidated_slice_ids=[1],
+        )
+
+        due = st.ensure_due_unit(state)
+
+        self.assertIs(due, unit)
+        self.assertEqual(unit["status"], st.U_PENDING)
+        self.assertIsNone(unit["artifact"])
+        self.assertIsNone(unit["draft"])
+        self.assertEqual(unit["fix_queue"], [])
+        self.assertEqual(
+            state["events"][-1]["accepted_revision"],
+            "accepted-delete-in-flight",
+        )
+
+    def test_due_preserves_an_active_rebuild_for_the_latest_barrier(self):
+        state, unit = self._sealed_implementation()
+        st.requeue_implementation_after_reconciliation(
+            state, unit, "accepted-retained"
+        )
+        st.append_event(
+            state,
+            "accepted_range_reconciliation_closed",
+            accepted_revision="accepted-retained",
+            invalidated_slice_ids=[1],
+        )
+        unit["status"] = st.U_ROUNDS
+        unit["artifact"] = "src/current-rebuild.py"
+
+        due = st.ensure_due_unit(state)
+
+        self.assertIsNone(due)
+        self.assertEqual(unit["status"], st.U_ROUNDS)
+        self.assertEqual(unit["artifact"], "src/current-rebuild.py")
+
+    def test_due_keeps_a_post_reconciliation_implementation_sealed(self):
+        state, unit = self._sealed_implementation()
+        st.append_event(
+            state,
+            "accepted_range_reconciliation_closed",
+            accepted_revision="accepted-repair",
+            invalidated_slice_ids=[1],
+        )
+        st.append_event(
+            state, "slice_closed", unit=st.unit_key(unit), slice_id=1,
+        )
+
+        due = st.ensure_due_unit(state)
+
+        self.assertIsNot(due, unit)
+        self.assertEqual(unit["status"], st.U_SEALED)
+
+
 class TestSummary(TempWorkspaceCase):
     def test_shape_with_units_rounds_seals_and_failure(self):
         state = make_state(self.workspace)

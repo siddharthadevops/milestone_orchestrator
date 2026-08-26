@@ -31,6 +31,9 @@ MALFORMED = "malformed_policy"
 INVALID_POLICY = "invalid_policy"
 INVALID_DEFAULTS = "invalid_defaults"
 RETIRED_SCOPE_KINDS = frozenset({"seal_half"})
+POLICY_SCOPE_KINDS = frozenset(
+    contracts.KINDS + (contracts.KIND_MERGE_REPAIR,)
+)
 
 
 @dataclass(frozen=True)
@@ -86,7 +89,7 @@ def _validate_scope(scope, allow_retired=False):
         _raise(MALFORMED)
     if not isinstance(unit_kinds, list) or not unit_kinds:
         _raise(MALFORMED)
-    allowed = set(contracts.KINDS)
+    allowed = set(POLICY_SCOPE_KINDS)
     if allow_retired:
         allowed.update(RETIRED_SCOPE_KINDS)
     if any(kind not in allowed for kind in kinds):

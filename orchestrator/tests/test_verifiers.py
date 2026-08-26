@@ -306,6 +306,14 @@ class TestFieldCollisions(unittest.TestCase):
         self.assertIn(
             "findings", contracts.reserved_output_keys("review_round")
         )
+        self.assertIn(
+            "files_changed",
+            contracts.reserved_output_keys(contracts.KIND_MERGE_REPAIR),
+        )
+        self.assertNotIn(
+            "suite_command",
+            contracts.reserved_output_keys(contracts.KIND_MERGE_REPAIR),
+        )
         with self.assertRaises(contracts.ContractError):
             contracts.reserved_output_keys("bogus_kind")
 

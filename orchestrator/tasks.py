@@ -34,6 +34,7 @@ _WORKER_ACCOUNTING_EVENTS = frozenset({
     "implementation_size_interrupted",
     "worker_interrupted",
     "worker_malformed",
+    "worker_paused_for_plan_reconciliation",
     "worker_unaccepted",
 })
 

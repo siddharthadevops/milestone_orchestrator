@@ -1730,6 +1730,92 @@ class TestCallWorker(unittest.TestCase):
         self.assertEqual(obj, VALID_IMPLEMENT)
         self.assertIn("files_changed", runner.calls[1][2])
 
+    def test_single_attempt_contract_violation_does_not_repair(self):
+        runner = MockRunner([{
+            "expect_kind": "implement",
+            "response": "one malformed reply",
+        }])
+
+        with self.assertRaises(WorkerProtocolError) as caught:
+            call_worker(
+                runner,
+                "codex",
+                make_prompt("implement"),
+                "implement",
+                self.workspace,
+                single_attempt=True,
+            )
+
+        error = caught.exception
+        self.assertIn("single-attempt", str(error))
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(error.raw_texts, ["one malformed reply"])
+        self.assertEqual(len(error.physical_dispatches), 1)
+        self.assertEqual(error.physical_dispatches[0]["family"], "codex")
+
+    def test_before_dispatch_is_the_last_step_before_each_provider_call(self):
+        order = []
+
+        class OrderedRunner(object):
+            def __init__(self):
+                self.calls = 0
+
+            def call(self, _family, _prompt, _workspace,
+                     model=None, effort=None):
+                del model, effort
+                self.calls += 1
+                order.append("provider-%d" % self.calls)
+                reply = (
+                    "not json"
+                    if self.calls == 1 else json.dumps(VALID_IMPLEMENT)
+                )
+                return runners.RunnerResult(reply, 0, 0.01)
+
+        def on_dispatch(*_args):
+            order.append("marker")
+
+        def before_dispatch(*_args):
+            order.append("handoff")
+
+        output, _result = call_worker(
+            OrderedRunner(),
+            "codex",
+            make_prompt("implement"),
+            "implement",
+            self.workspace,
+            on_dispatch=on_dispatch,
+            before_dispatch=before_dispatch,
+        )
+
+        self.assertEqual(output, VALID_IMPLEMENT)
+        self.assertEqual(order, [
+            "marker", "handoff", "provider-1",
+            "marker", "handoff", "provider-2",
+        ])
+
+    def test_failed_before_dispatch_never_starts_provider(self):
+        runner = MockRunner([{
+            "expect_kind": "implement",
+            "response": VALID_IMPLEMENT,
+        }])
+
+        with self.assertRaisesRegex(
+            RunnerError, "could not persist its handoff"
+        ) as caught:
+            call_worker(
+                runner,
+                "codex",
+                make_prompt("implement"),
+                "implement",
+                self.workspace,
+                before_dispatch=lambda *_args: (_ for _ in ()).throw(
+                    RuntimeError("disk unavailable")
+                ),
+            )
+
+        self.assertFalse(caught.exception.provider_dispatch_started)
+        self.assertEqual(runner.calls, [])
+
     def test_junk_twice_raises_worker_protocol_error(self):
         runner = MockRunner(
             [
