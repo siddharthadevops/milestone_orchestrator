@@ -11,7 +11,7 @@ import tempfile
 
 from orchestrator import brainstorming, brainstorming_coordination
 from orchestrator import brainstorming_lifecycle
-from orchestrator import contracts, registry
+from orchestrator import contracts, registry, session_calls
 
 
 class AdapterError(RuntimeError):
@@ -176,30 +176,38 @@ def stable_references(state, candidates, target_path):
 
 def validate_origin_signal(signal, kind, queued_findings=None):
     """Apply caller-state checks that the common schema cannot know."""
-    if (
-        kind in (
-            contracts.KIND_DRAFT_SLICE_NOTE,
-            contracts.KIND_IMPLEMENT,
+    if kind not in contracts.RETHINK_KINDS or not isinstance(signal, dict):
+        raise AdapterError("the origin cannot open a rethink session")
+    if signal.get("status") != "need_rethink" or signal.get("kind") != kind:
+        raise AdapterError("the rethink signal does not match its origin")
+    finding = signal.get("finding")
+    if not isinstance(finding, dict) or not finding:
+        raise AdapterError("a rethink requires one source finding")
+    if kind in contracts.REPORT_KINDS:
+        contracts.validate_report_finding(
+            finding,
+            "milestone need_rethink.finding",
+            require_plain=True,
         )
-        and "request" not in signal
-        and "max_rounds" not in signal
+    target = signal.get("target_path")
+    if (
+        not isinstance(target, str)
+        or not target.strip()
+        or os.path.isabs(target)
+        or "\x00" in target
+        or os.path.normpath(target) != target
+        or target in (".", "..")
+        or target.startswith(".." + os.sep)
     ):
-        signal = copy.deepcopy(signal)
-        signal.update({
-            "request": (
-                "Resolve the focused design contradiction described in the "
-                "supplied source finding."
-            ),
-            "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
-        })
-    contracts.validate_need_rethink(
-        signal,
-        kind,
-        "milestone need_rethink",
-        require_plain=kind in contracts.REPORT_KINDS,
-    )
+        raise AdapterError(
+            "a rethink target must be normalized and workspace-relative"
+        )
+    checked = {
+        "finding": copy.deepcopy(finding),
+        "target_path": target,
+    }
     if kind == contracts.KIND_FIX_FINDINGS:
-        wanted = (signal.get("finding") or {}).get("id")
+        wanted = finding.get("id")
         matches = [
             finding
             for finding in list(queued_findings or [])
@@ -213,10 +221,8 @@ def validate_origin_signal(signal, kind, queued_findings=None):
         # finding may normalize a byte it never meant to contest — one
         # transposed character in the echo killed a run (2026-08-21) —
         # so the id selects and the queue supplies the body.
-        checked = copy.deepcopy(signal)
         checked["finding"] = copy.deepcopy(matches[0])
-        return checked
-    return copy.deepcopy(signal)
+    return checked
 
 
 def _owned_work_areas_root(state, active_home=None):
@@ -404,6 +410,7 @@ def create_session(
     unit_key,
     signal,
     references,
+    session_charge,
     authority_context=None,
     lead_profile=None,
     counterpart_profile=None,
@@ -412,48 +419,41 @@ def create_session(
 ):
     """Translate one valid signal into the existing standalone lifecycle."""
     participants = _participants(lead_profile, counterpart_profile)
+    checked_charge = session_calls.validate_charge(session_charge)
+    if checked_charge["job"] != "rethink":
+        raise AdapterError("an attached rethink requires the rethink charge")
     work_area, target = _materialize_target(
         state, signal, references, active_home=active_home
     )
-    amendment_mode = (
-        signal.get("result_mode")
-        == contracts.RETHINK_RESULT_DESIGN_AMENDMENT
-    )
     context_references = list(references)
-    if amendment_mode and signal["target_path"] not in context_references:
+    if signal["target_path"] not in context_references:
         context_references.append(signal["target_path"])
-    source_payload = copy.deepcopy(signal["finding"])
-    if amendment_mode:
-        source_payload = {
-            "finding": copy.deepcopy(signal["finding"]),
-            "authority_context": copy.deepcopy(authority_context or {}),
-        }
-        if "failure_gap" in signal:
-            source_payload["failure_gap"] = copy.deepcopy(
-                signal["failure_gap"]
-            )
+    source_payload = {
+        "finding": copy.deepcopy(signal["finding"]),
+        "session_charge": checked_charge,
+    }
+    accepted = [
+        copy.deepcopy(item)
+        for item in (authority_context or {}).get("amendments") or []
+        if isinstance(item, dict)
+        and item.get("authority") == "brainstorming_design"
+    ]
     body = {
         "request": {
             "workspace_path": state["workspace"],
             "target_path": target,
-            "request": signal["request"],
+            "request": (
+                "Resolve the focused contradiction in the supplied finding. "
+                "Edit the target and any other repository files the resolution "
+                "requires."
+            ),
             "context": {
                 "brief": (
-                    (
-                        "A milestone worker paused on one focused, in-goal "
-                        "design contradiction. The target is a new concise "
-                        "design amendment, not a copy of the source. Replace "
-                        "its placeholder with only the agreed amendment. %s "
-                        % DESIGN_AMENDMENT_LENGTH_GUIDANCE
-                    )
-                    if amendment_mode else
-                    "A milestone worker paused with one focused design request. "
-                    "The source finding below is preserved unchanged."
+                    "A milestone worker reported one focused contradiction. "
+                    "The finding below is the complete rethink charge."
                 ),
                 "references": context_references,
-                "amendments": copy.deepcopy(
-                    (authority_context or {}).get("amendments") or []
-                ),
+                "amendments": accepted,
                 "source_payload": source_payload,
             },
             "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,

@@ -20,6 +20,21 @@
         "ref": "project_context"
       },
       {
+        "ref": "operator_amendments_author",
+        "mount": [
+          "role:initial_position"
+        ]
+      },
+      {
+        "ref": "operator_amendments_review",
+        "mount": [
+          "role:contrary_position"
+        ]
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
         "ref": "bs_workarea"
       },
       {
@@ -27,6 +42,9 @@
       },
       {
         "ref": "bs_sources"
+      },
+      {
+        "ref": "rethink_charge"
       },
       {
         "text": [

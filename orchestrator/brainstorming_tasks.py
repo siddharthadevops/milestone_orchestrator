@@ -17,6 +17,7 @@ from orchestrator import brainstorming
 from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import brainstorming_milestone as milestone
 from orchestrator import kvstore
+from orchestrator import session_calls
 from orchestrator import state as st
 from orchestrator import tasks
 
@@ -170,6 +171,32 @@ def admit_task(
             tasks.INVALID_TASK_REQUEST,
             "the Brainstorming adapter requires task_executor brainstorming",
         )
+    context = checked["request"].get("context") or {}
+    charge = context.get("session_charge")
+    if charge is not None:
+        checked_charge = session_calls.validate_charge(charge)
+        task_kind = context.get("task_kind")
+        expected_job = {
+            "draft_slice_note": "draft_slice_note@slice_doc",
+            "implement": "implement@slice_impl",
+        }.get(task_kind)
+        if checked_charge["job"] != expected_job:
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "Brainstorming producer charge does not match its task kind",
+            )
+        expected_material = (
+            tasks.order_staffing_material(checked)
+            or (
+                "document"
+                if task_kind == "draft_slice_note" else "code"
+            )
+        )
+        if checked_charge["material"] != expected_material:
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "Brainstorming producer charge does not match its admitted material",
+            )
     staffing = resolve_staffing(
         config, os.path.realpath(primary_workspace), staffing_selection
     )
@@ -270,6 +297,14 @@ def _creation_body(record, participants, target, workspace):
                 "source_payload": {
                     "task_context": copy.deepcopy(request["context"]),
                     "work_area": copy.deepcopy(request["work_area"]),
+                    **(
+                        {
+                            "session_charge": copy.deepcopy(
+                                request["context"]["session_charge"]
+                            )
+                        }
+                        if "session_charge" in request["context"] else {}
+                    ),
                     **(
                         {"output_directory": request["output_directory"]}
                         if "output_directory" in request else {}

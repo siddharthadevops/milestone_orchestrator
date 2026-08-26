@@ -561,6 +561,22 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                'one '
                                                                                'per '
                                                                                'line.'}]},
+                                  'rethink_charge': {'text': ['RETHINK CHARGE '
+                                                              '(complete source '
+                                                              'finding)',
+                                                              '{{rethink_finding}}'],
+                                                     'variables': [{'name': 'rethink_finding',
+                                                                    'required': False,
+                                                                    'drop_unit_if_absent': True,
+                                                                    'description': 'Opaque '
+                                                                                   'JSON '
+                                                                                   'rendering '
+                                                                                   'of '
+                                                                                   'the '
+                                                                                   'complete '
+                                                                                   'validated '
+                                                                                   'source '
+                                                                                   'finding.'}]},
                                   'altitude_review': {'text': ['ALTITUDE '
                                                                '(documentation '
                                                                'discipline)',
@@ -1290,14 +1306,20 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                'finding '
                                                                                'alone.'],
                                                                       'variables': []},
-                                              'design_correction_verdict': {'text': ['A provisional '
-                                                                                    'design-correction '
-                                                                                    'delta supplies its '
-                                                                                    'complete retained '
-                                                                                    'context here and '
-                                                                                    'requires '
-                                                                                    'design_correction_verdict={decision, '
-                                                                                    'reason}.'],
+                                              'design_correction_verdict': {'text': ['A '
+                                                                                     'provisional '
+                                                                                     'design-correction '
+                                                                                     'delta '
+                                                                                     'supplies '
+                                                                                     'its '
+                                                                                     'complete '
+                                                                                     'retained '
+                                                                                     'context '
+                                                                                     'here '
+                                                                                     'and '
+                                                                                     'requires '
+                                                                                     'design_correction_verdict={decision, '
+                                                                                     'reason}.'],
                                                                             'variables': []},
                                               'review_contract': {'text': ['Clean or '
                                                                            'findings:',
@@ -4953,9 +4975,15 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                              'naturally.'],
                                                                     'variables': []},
                                                                    {'ref': 'project_context'},
+                                                                   {'ref': 'operator_amendments_author',
+                                                                    'mount': ['role:initial_position']},
+                                                                   {'ref': 'operator_amendments_review',
+                                                                    'mount': ['role:contrary_position']},
+                                                                   {'ref': 'contract_correction'},
                                                                    {'ref': 'bs_workarea'},
                                                                    {'ref': 'process_authority'},
                                                                    {'ref': 'bs_sources'},
+                                                                   {'ref': 'rethink_charge'},
                                                                    {'text': ['TURN',
                                                                              '- '
                                                                              'participant_id: '
@@ -5364,6 +5392,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                              'questions.'],
                                                                     'variables': []},
                                                                    {'ref': 'project_context'},
+                                                                   {'ref': 'operator_amendments_review'},
+                                                                   {'ref': 'contract_correction'},
                                                                    {'ref': 'process_authority'},
                                                                    {'text': ['SOURCES',
                                                                              '- '
@@ -5384,6 +5414,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                    'required': True},
                                                                                   {'name': 'reference_documents',
                                                                                    'required': True}]},
+                                                                   {'ref': 'rethink_charge'},
                                                                    {'text': ['PERSONA',
                                                                              '- This '
                                                                              'scene '

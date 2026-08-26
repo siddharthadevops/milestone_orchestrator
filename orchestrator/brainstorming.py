@@ -1022,6 +1022,7 @@ def validate_activity_event(event):
             # before the staffing cutover simply has no such note, and one
             # written on an ordinary answer has none either.
             "staffing_fallback",
+            "prompt_set_fallback",
             # Withdrawn model-profile attribution may remain in ledgers
             # written by the superseded runtime. It has no authority, but
             # generic Brainstorming execution and recovery must still read
@@ -1163,6 +1164,13 @@ def validate_activity_event(event):
                 % STAFFING_FALLBACK_DEFAULT_DOCUMENT
             )
         checked["staffing_fallback"] = fallback
+    prompt_fallback = event.get("prompt_set_fallback")
+    if prompt_fallback is not None:
+        if prompt_fallback not in ("stored_default", "in_code_seed"):
+            raise ContractError(
+                "activity_event.prompt_set_fallback is invalid"
+            )
+        checked["prompt_set_fallback"] = prompt_fallback
     return checked
 
 

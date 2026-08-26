@@ -70,6 +70,7 @@ BS_COMMON = {
     'target_path': '/Users/siddhartha/Development/source/life_prod/ai_capability_certification/implementation/milestones/m9/skeleton.md',
     'reference_documents': '  - implementation/milestones/m9/skeleton.md\n  - implementation/milestones/m9/goal.md',
     'workspace_path': '/Users/siddhartha/Development/source/life_prod/ai_capability_certification',
+    'rethink_finding': '{"id":"F1","summary":"Resolve the bounded contradiction in the current design."}',
 }
 
 RUNS = {

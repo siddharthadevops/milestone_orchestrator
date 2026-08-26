@@ -1704,6 +1704,32 @@ class Driver(object):
             values["author_recovery"] = recovery
         return values
 
+    def _session_charge(
+        self, job, material, values, authority, artifact_type=None,
+    ):
+        accepted = [
+            copy.deepcopy(item)
+            for item in authority.get("amendments") or []
+            if isinstance(item, dict)
+            and item.get("authority") == "brainstorming_design"
+        ]
+        charge = {
+            "job": job,
+            "material": material,
+            "prompt_set": self.state.get(
+                st.PROMPT_SET_KEY, prompt_sets.DEFAULT_SET_NAME
+            ),
+            "values": copy.deepcopy(values),
+            "amendments_path": self._amendments_path(),
+            "accepted_amendments": accepted,
+        }
+        project_context = authority.get("project_context")
+        if project_context is not None:
+            charge["project_context"] = copy.deepcopy(project_context)
+        if artifact_type is not None:
+            charge["artifact_type"] = artifact_type
+        return charge
+
     def _prepare_author_package(
         self, unit, kind, material, authority, recovery=None, meter=None,
         author_coordinates=None,
@@ -5316,9 +5342,15 @@ class Driver(object):
 
     @staticmethod
     def _rethink_requests_design_amendment(signal):
+        return False
+
+    def _rethink_artifact_type(self, unit, target_path):
+        if target_path in self._design_document_paths():
+            return "document"
         return (
-            signal.get("result_mode")
-            == contracts.RETHINK_RESULT_DESIGN_AMENDMENT
+            "document"
+            if unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)
+            else "implementation"
         )
 
     def _adopt_brainstorming_design_amendment(
@@ -5580,24 +5612,32 @@ class Driver(object):
                     "the origin provider exposed no explicit session reference"
                 )
             references = self._brainstorming_references(unit, checked)
+            authority = self._worker_episode_authority(unit, kind)
             authority_context = {
-                "amendments": self._amendments(
-                    record_seen=False, unit=unit
+                "amendments": copy.deepcopy(
+                    authority.get("amendments") or []
+                ),
+                "project_context": copy.deepcopy(
+                    authority.get("project_context")
                 ),
             }
-            if self._rethink_requests_design_amendment(checked):
-                # The attached discussion is independent non-Worker activity.
-                # Its briefing reads project law when the session starts; the
-                # origin task's frozen context governs only Worker execution.
-                project_context, _extensions, _roots = (
-                    self._project_prompt_inputs(
-                        unit, kind, record_seen=False
+            artifact_type = self._rethink_artifact_type(
+                unit, checked["target_path"]
+            )
+            session_charge = self._session_charge(
+                "rethink",
+                self._judgment_material(unit),
+                {
+                    "rethink_finding": json.dumps(
+                        checked["finding"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
                     )
-                )
-                authority_context.update({
-                    "goal": self.state.get("goal"),
-                    "project_context": project_context,
-                })
+                },
+                authority,
+                artifact_type=artifact_type,
+            )
             staffing_selection = self._brainstorming_staffing()
             lead_profile = counterpart_profile = None
             if staffing_selection is None:
@@ -5610,6 +5650,7 @@ class Driver(object):
                 st.unit_key(unit),
                 checked,
                 references,
+                session_charge,
                 authority_context=authority_context,
                 lead_profile=lead_profile,
                 counterpart_profile=counterpart_profile,
@@ -6540,9 +6581,8 @@ class Driver(object):
         from orchestrator import brainstorming_tasks
 
         slice_info = self._slice_info(unit["slice_id"])
-        project_context, _extensions, _roots = self._project_prompt_inputs(
-            unit, kind
-        )
+        authority = self._worker_episode_authority(unit, kind)
+        project_context = authority.get("project_context")
         governing = (
             self._skeleton_artifact()
             if kind == contracts.KIND_DRAFT_SLICE_NOTE
@@ -6556,32 +6596,45 @@ class Driver(object):
                 or self._note_predates_skeleton(unit["slice_id"])
             )
         )
-        prompt = prompts.build_brainstorming_production(
-            kind,
-            self.workspace,
-            self._goal_for(unit),
-            slice_info,
-            governing,
-            amendments=self._amendments(unit=unit),
-            project_context=project_context,
-            implementation_scope=(
-                self._implementation_scope(unit)
-                if kind == contracts.KIND_IMPLEMENT else None
-            ),
-            skeleton_path=skeleton_path,
-            remodeled=remodeled,
-            two_register=(
-                kind == contracts.KIND_DRAFT_SLICE_NOTE
-                and interpreter.doc_register(self.state) == "lay+hard-table"
-            ),
-            battery=(
-                interpreter.battery_questions(self.state, unit["kind"])
-                if kind == contracts.KIND_DRAFT_SLICE_NOTE else None
-            ),
+        coordinates = self._author_coordinates(unit, kind)
+        values = self._author_values(
+            unit, kind, authority, author_coordinates=coordinates
         )
+        values.pop("kind", None)
+        values.pop("workspace", None)
+        values.pop("operator_amendments", None)
+        job = {
+            contracts.KIND_DRAFT_SLICE_NOTE: "draft_slice_note@slice_doc",
+            contracts.KIND_IMPLEMENT: "implement@slice_impl",
+        }[kind]
+        session_charge = self._session_charge(
+            job,
+            self._judgment_material(unit),
+            values,
+            authority,
+        )
+        if kind == contracts.KIND_DRAFT_SLICE_NOTE:
+            prompt = (
+                "Draft the slice note for slice %s (%s) at %s against the "
+                "current skeleton at %s."
+                % (
+                    slice_info["id"], slice_info["title"],
+                    coordinates["slice_note_path"], skeleton_path,
+                )
+            )
+        else:
+            prompt = (
+                "Implement slice %s (%s) against its current note at %s."
+                % (
+                    slice_info["id"], slice_info["title"],
+                    coordinates["slice_note_path"],
+                )
+            )
         context = {
             "task_kind": kind,
             "unit": st.unit_key(unit),
+            "author_coordinates": coordinates,
+            "session_charge": session_charge,
         }
         if project_context is not None:
             context["project_context"] = copy.deepcopy(project_context)
@@ -8221,13 +8274,6 @@ class Driver(object):
                 return self._finish_draft(
                     unit, "recovered implementation draft"
                 )
-            if (
-                unit["kind"] == st.UNIT_SKELETON
-                and self._guarantee_calibration_config() is not None
-                and (unit.get("guarantee_calibration") or {}).get("status")
-                != "complete"
-            ):
-                return self._start_guarantee_calibration(unit)
             # Defensive compatibility for a persisted post-draft unit whose
             # status was left pending by an older/crashed driver. The work is
             # already present; never call the implementer twice or livelock
@@ -8631,12 +8677,6 @@ class Driver(object):
         self._terminalize_worker_task(unit, output, result=result)
         if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
             st.set_discovered_suite(self.state, output["suite_command"])
-        if (
-            unit["kind"] == st.UNIT_SKELETON
-            and self._guarantee_calibration_config() is not None
-        ):
-            unit["guarantee_calibration"] = {"status": "pending"}
-            return self._start_guarantee_calibration(unit)
         return self._finish_draft(unit, "drafted")
 
     # -- gap routing (reform §3: stop-report-repair-resume) -----------------

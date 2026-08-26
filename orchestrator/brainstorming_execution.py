@@ -58,6 +58,7 @@ class RunnerParticipantExecutor:
         # dispatch resolver, so the activity entry for this call can say so
         # without the answer growing a fourth key.
         self.staffing_fallback = None
+        self.prompt_set_fallback = None
 
     def prepare_dispatch(self, round_number=1):
         """Resolve optional current settings immediately before one call.
@@ -472,6 +473,9 @@ class ParticipantExecution:
         fallback = getattr(executor, "staffing_fallback", None)
         if fallback:
             event["staffing_fallback"] = fallback
+        prompt_fallback = getattr(executor, "prompt_set_fallback", None)
+        if prompt_fallback:
+            event["prompt_set_fallback"] = prompt_fallback
         usage_source = result if result is not None else error
         token_usage = runners.normalize_token_usage(
             getattr(usage_source, "token_usage", None)
@@ -612,6 +616,32 @@ class ParticipantExecution:
             after_validate=after_validate,
         )
 
+    def exchange_prepared_quiescent(
+        self,
+        session_id,
+        participant_id,
+        prepare_call,
+        execution_context,
+        before_repair=None,
+        after_validate=None,
+    ):
+        """Resolve prompt and bound validator afresh for each attempt."""
+        if not callable(prepare_call):
+            raise brainstorming.ContractError(
+                "prepared exchange requires a callable preparation boundary"
+            )
+        return self._exchange(
+            session_id,
+            participant_id,
+            None,
+            execution_context,
+            require_quiescence=True,
+            validator=None,
+            before_repair=before_repair,
+            after_validate=after_validate,
+            prepare_call=prepare_call,
+        )
+
     def exchange_control_quiescent(
         self,
         session_id,
@@ -691,6 +721,7 @@ class ParticipantExecution:
         before_repair=None,
         after_validate=None,
         required_status="running",
+        prepare_call=None,
     ):
         if after_validate is not None and not callable(after_validate):
             raise brainstorming.ContractError(
@@ -709,6 +740,7 @@ class ParticipantExecution:
                 before_repair,
                 after_validate,
                 required_status,
+                prepare_call,
             )
         except BaseException as exc:
             if require_quiescence and evidence["quiescent"]:
@@ -754,13 +786,34 @@ class ParticipantExecution:
         before_repair,
         after_validate,
         required_status,
+        prepare_call,
     ):
         brainstorming._text(participant_id, "participant_id")
-        brainstorming._text(prompt, "prompt")
         snapshot = self.store.read(session_id)
         self._require_status(snapshot, required_status)
         participant = self._participant(snapshot, participant_id)
         executor = self._executor(participant)
+        if prepare_call is not None:
+            try:
+                prepared = prepare_call(None)
+                prompt = prepared.prompt
+                validator = prepared.validate
+                executor.prompt_set_fallback = (
+                    prepared.prompt_set_fallback
+                )
+            except BaseException as exc:
+                try:
+                    exc.brainstorming_dispatch_refused = True
+                except (AttributeError, TypeError):
+                    pass
+                raise
+        else:
+            executor.prompt_set_fallback = None
+        brainstorming._text(prompt, "prompt")
+        if not callable(validator):
+            raise ExecutionRejected(
+                "participant reply validator is unavailable"
+            )
         if require_quiescence and not callable(
             getattr(executor, "wait_for_quiescence", None)
         ):
@@ -897,7 +950,28 @@ class ParticipantExecution:
                 provider_ref,
                 required_status=required_status,
             )
-        repair_prompt = prompt + (runners.REPAIR_SUFFIX % first_error)
+        if prepare_call is None:
+            repair_prompt = prompt + (runners.REPAIR_SUFFIX % first_error)
+            repair_validator = validator
+        else:
+            try:
+                prepared = prepare_call(first_error)
+                repair_prompt = prepared.prompt
+                repair_validator = prepared.validate
+                executor.prompt_set_fallback = (
+                    prepared.prompt_set_fallback
+                )
+            except BaseException as exc:
+                try:
+                    exc.brainstorming_dispatch_refused = True
+                except (AttributeError, TypeError):
+                    pass
+                raise
+            brainstorming._text(repair_prompt, "repair prompt")
+            if not callable(repair_validator):
+                raise ExecutionRejected(
+                    "participant repair validator is unavailable"
+                )
         result2, started_at2 = self._invoke_tracked(
             session_id,
             participant,
@@ -929,7 +1003,7 @@ class ParticipantExecution:
             )
             raise
         try:
-            envelope = self._parse(result2, validator)
+            envelope = self._parse(result2, repair_validator)
             if fresh_each_call:
                 self._require_status(
                     self.store.read(session_id), required_status

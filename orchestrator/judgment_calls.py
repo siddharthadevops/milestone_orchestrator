@@ -14,6 +14,7 @@ import json
 
 from . import (
     contracts,
+    prompt_authority,
     prompt_contracts,
     prompt_router,
     prompt_sets,
@@ -126,44 +127,19 @@ def _current_amendments(amendments, operator_complete):
         raise prompt_router.PromptRouterError(
             "current amendments must be a sequence"
         )
-    operator = []
-    design = []
-    for item in amendments:
-        if not isinstance(item, dict):
-            raise prompt_router.PromptRouterError(
-                "current amendments contain a malformed entry"
-            )
-        text = item.get("text")
-        if not isinstance(text, str) or not text.strip():
-            raise prompt_router.PromptRouterError(
-                "current amendments contain a malformed entry"
-            )
-        target = (
-            design
-            if item.get("authority") == "brainstorming_design"
-            else operator
+    if any(not isinstance(item, dict) for item in amendments):
+        raise prompt_router.PromptRouterError(
+            "current amendments contain a malformed entry"
         )
-        target.append(item)
-
-    lines = [
-        "CURRENT MUTABLE OPERATOR AMENDMENTS (complete replacement set)",
-        "This set replaces every mutable operator amendment shown earlier.",
+    operator = [
+        item for item in amendments
+        if item.get("authority") != "brainstorming_design"
     ]
-    if operator:
-        for item in operator:
-            label = str(item.get("id") or "?")
-            lines.append("[%s] %s" % (label, item["text"].strip()))
-    else:
-        lines.append("CURRENT MUTABLE OPERATOR AMENDMENTS: none.")
-    if design:
-        lines.extend((
-            "",
-            "ACCEPTED BRAINSTORMING DESIGN AMENDMENTS (append-only)",
-        ))
-        for item in design:
-            label = str(item.get("id") or "?")
-            lines.append("[%s]\n%s" % (label, item["text"]))
-    return "\n".join(lines)
+    design = [
+        item for item in amendments
+        if item.get("authority") == "brainstorming_design"
+    ]
+    return prompt_authority.current_amendments(operator, design)
 
 
 def _validate_project_authority(authority):

@@ -31,7 +31,7 @@ from orchestrator import brainstorming
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_execution as execution
 from orchestrator import driver, errclass, kvstore, pricing, registry
-from orchestrator import runners, staffing
+from orchestrator import runners, session_calls, staffing
 
 try:
     import fcntl
@@ -3254,6 +3254,7 @@ def _wait_for_external_response(
     record,
     pending,
     execution_context,
+    turn_preparer=None,
 ):
     """Wait without a target lock; optionally let the narrator answer."""
     token = pending.intervention["token"]
@@ -3290,16 +3291,50 @@ def _wait_for_external_response(
 
         claimed = store.claim_external_intervention(record["id"], token)
         snapshot = store.read(record["id"])
-        prompt = coordination.build_external_narrator_prompt(
-            snapshot.state, claimed
-        )
+        prepare_call = None
+        if (
+            claimed["action_kind"] == "discussion_turn"
+            and turn_preparer is not None
+        ):
+            participant = next(
+                item for item in snapshot.state["run_config"]["participants"]
+                if item["id"] == claimed["participant_id"]
+            )
+            revision = (
+                snapshot.state["accepted_target_revision"]
+                or snapshot.state["recovery_baseline_revision"]
+            )
+            target_revision = store.read_target_revision(
+                record["id"], revision
+            )
+            prepare_call = lambda correction: turn_preparer(
+                snapshot.state,
+                participant,
+                claimed["round"],
+                target_revision,
+                correction,
+            )
+            prompt = None
+        else:
+            prompt = coordination.build_external_narrator_prompt(
+                snapshot.state, claimed
+            )
         try:
             if claimed["action_kind"] == "discussion_turn":
-                envelope, _result = participant_execution.exchange_quiescent(
-                    record["id"],
-                    claimed["participant_id"],
-                    prompt,
-                    execution_context,
+                exchange = (
+                    participant_execution.exchange_prepared_quiescent
+                    if prepare_call is not None else
+                    participant_execution.exchange_quiescent
+                )
+                args = (
+                    (record["id"], claimed["participant_id"], prepare_call,
+                     execution_context)
+                    if prepare_call is not None else
+                    (record["id"], claimed["participant_id"], prompt,
+                     execution_context)
+                )
+                envelope, _result = exchange(
+                    *args,
                     before_repair=lambda: store.retry_external_provider(
                         record["id"], token
                     ),
@@ -3391,8 +3426,23 @@ def run_lifecycle(
                 home, record, staffing_session
             ),
         )
+        seed = store.read(session_id)
+        turn_preparer = (
+            None
+            if seed is None
+            or session_calls.charge_from_state(seed.state) is None
+            else lambda state, participant, round_number, target_revision,
+                        correction: session_calls.prepare_turn(
+                            home,
+                            state,
+                            participant,
+                            round_number,
+                            target_revision,
+                            correction,
+                        )
+        )
         coordinator = coordination.BrainstormingCoordinator(
-            store, participant_execution
+            store, participant_execution, turn_preparer=turn_preparer
         )
         resumed = coordinator.reconcile_external_intervention(session_id)
         if resumed.state["status"] in brainstorming.TERMINAL_STATUSES:
@@ -3451,6 +3501,7 @@ def run_lifecycle(
                         record,
                         pending,
                         execution_context,
+                        turn_preparer,
                     )
                     continue
                 except coordination.OperationalRetryPending as pending:
@@ -3476,6 +3527,7 @@ def run_lifecycle(
                         record,
                         pending,
                         execution_context,
+                        turn_preparer,
                     )
                     continue
                 except coordination.OperationalRetryPending as pending:

@@ -979,9 +979,10 @@ characters, but never omit a material question merely to fit.
 class BrainstormingCoordinator:
     """Coordinate ordered turns and revision-bound closure."""
 
-    def __init__(self, store, participant_execution):
+    def __init__(self, store, participant_execution, turn_preparer=None):
         self.store = store
         self.participant_execution = participant_execution
+        self.turn_preparer = turn_preparer
 
     @staticmethod
     def _require_running(snapshot):
@@ -1855,13 +1856,24 @@ class BrainstormingCoordinator:
                 session_id, pending["token"]
             )
             return self.store.reconcile_transcript(session_id)
-        prompt = build_turn_prompt(
-            state,
-            participant,
-            round_number,
-            accepted_target,
-            execution_context,
-        )
+        prepare_call = None
+        if self.turn_preparer is None:
+            prompt = build_turn_prompt(
+                state,
+                participant,
+                round_number,
+                accepted_target,
+                execution_context,
+            )
+        else:
+            prompt = None
+            prepare_call = lambda correction: self.turn_preparer(
+                state,
+                participant,
+                round_number,
+                accepted_target,
+                correction,
+            )
         attempt = {
             "token": str(uuid.uuid4()),
             "participant_id": participant["id"],
@@ -1872,9 +1884,11 @@ class BrainstormingCoordinator:
         }
         attempt = self._begin_or_retry_attempt(session_id, attempt)
 
-        exchange = getattr(
-            self.participant_execution, "exchange_quiescent", None
+        exchange_name = (
+            "exchange_prepared_quiescent"
+            if prepare_call is not None else "exchange_quiescent"
         )
+        exchange = getattr(self.participant_execution, exchange_name, None)
         if not callable(exchange):
             self._recover_rejected(
                 session_id,
@@ -1885,11 +1899,13 @@ class BrainstormingCoordinator:
                 ),
             )
         try:
+            args = (
+                (session_id, participant["id"], prepare_call, execution_context)
+                if prepare_call is not None else
+                (session_id, participant["id"], prompt, execution_context)
+            )
             envelope, _runner_result = exchange(
-                session_id,
-                participant["id"],
-                prompt,
-                execution_context,
+                *args,
                 before_repair=lambda: self._before_envelope_repair(
                     session_id,
                     attempt["token"],

@@ -255,6 +255,20 @@
         }
       ]
     },
+    "rethink_charge": {
+      "text": [
+        "RETHINK CHARGE (complete source finding)",
+        "{{rethink_finding}}"
+      ],
+      "variables": [
+        {
+          "name": "rethink_finding",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Opaque JSON rendering of the complete validated source finding."
+        }
+      ]
+    },
     "altitude_review": {
       "text": [
         "ALTITUDE (documentation discipline)",

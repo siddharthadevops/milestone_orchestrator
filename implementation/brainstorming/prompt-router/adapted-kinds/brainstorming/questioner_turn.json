@@ -18,6 +18,12 @@
         "ref": "project_context"
       },
       {
+        "ref": "operator_amendments_review"
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
         "ref": "process_authority"
       },
       {
@@ -42,6 +48,9 @@
             "required": true
           }
         ]
+      },
+      {
+        "ref": "rethink_charge"
       },
       {
         "text": [

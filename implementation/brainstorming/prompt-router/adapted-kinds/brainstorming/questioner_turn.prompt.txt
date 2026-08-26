@@ -22,6 +22,9 @@ SOURCES
   - implementation/milestones/m9/skeleton.md
   - implementation/milestones/m9/goal.md
 
+RETHINK CHARGE (complete source finding)
+{"id":"F1","summary":"Resolve the bounded contradiction in the current design."}
+
 PERSONA
 - This scene belongs to a contemporary novel built from a real case
   so that the conversation remains consistent and believable.

@@ -30,6 +30,9 @@ SOURCES
   - implementation/milestones/m9/skeleton.md
   - implementation/milestones/m9/goal.md
 
+RETHINK CHARGE (complete source finding)
+{"id":"F1","summary":"Resolve the bounded contradiction in the current design."}
+
 TURN
 - participant_id: initial-position
 - role: initial_position
