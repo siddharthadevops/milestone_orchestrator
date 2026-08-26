@@ -33,6 +33,25 @@ PreparedSessionCall = collections.namedtuple(
 )
 
 
+def _mounted_variable_declarations(prompt):
+    declarations = collections.Counter()
+    for section in ("instructions", "output_contract"):
+        for unit in prompt[section]:
+            for declaration in unit["variables"]:
+                declarations[declaration["name"]] += 1
+    return declarations
+
+
+def _mounted_variable_substitutions(prompt, variable):
+    placeholder = "{{%s}}" % variable
+    return sum(
+        line.count(placeholder)
+        for section in ("instructions", "output_contract")
+        for unit in prompt[section]
+        for line in unit["text"]
+    )
+
+
 def read_current_amendments(path, accepted=()):
     """Read mutable authority now and combine it with accepted design law."""
     return prompt_authority.current_amendments(
@@ -262,26 +281,23 @@ def prepare(
                 "routed session prompt cannot bind its served contract: %s"
                 % exc
             ) from exc
-        declarations = {
-            declaration["name"]
-            for unit in prompt["instructions"]
-            for declaration in unit["variables"]
-        }
-        if "operator_amendments" not in declarations:
-            raise prompt_sets.PromptSetError(
-                "routed session prompt omits current operator authority"
-            )
-        if (
-            correction is not None
-            and "contract_correction" not in declarations
-        ):
-            raise prompt_sets.PromptSetError(
-                "routed session prompt omits its contract correction"
-            )
-        if extensions and "ecosystem_map" not in declarations:
-            raise prompt_sets.PromptSetError(
-                "routed session prompt omits active project safeguards"
-            )
+        declarations = _mounted_variable_declarations(prompt)
+        required_mounts = ["operator_amendments"]
+        if job == "rethink":
+            required_mounts.append("rethink_finding")
+        if correction is not None:
+            required_mounts.append("contract_correction")
+        if authority_body is not None:
+            required_mounts.append("ecosystem_map")
+        for variable in required_mounts:
+            if (
+                declarations[variable] != 1
+                or _mounted_variable_substitutions(prompt, variable) != 1
+            ):
+                raise prompt_sets.PromptSetError(
+                    "routed session prompt must mount adapter-owned payload "
+                    "%r exactly once" % variable
+                )
         prompt_router.render(bound.prompt, charge_values)
 
     resolution = prompt_router.resolve(

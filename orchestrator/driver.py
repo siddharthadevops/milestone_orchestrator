@@ -5345,11 +5345,13 @@ class Driver(object):
         return False
 
     def _rethink_artifact_type(self, unit, target_path):
+        del unit
         if target_path in self._design_document_paths():
             return "document"
+        extension = os.path.splitext(target_path)[1].lower()
         return (
             "document"
-            if unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)
+            if extension in (".adoc", ".markdown", ".md", ".mdx", ".rst", ".txt")
             else "implementation"
         )
 

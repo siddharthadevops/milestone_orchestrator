@@ -460,6 +460,64 @@ class SessionCallCutoverTest(unittest.TestCase):
         ]
         self.assertEqual(len(mounted), 1)
 
+    def test_rethink_payload_mount_is_exact_for_every_seat(self):
+        base = prompt_sets.default_seed().documents
+        cases = (
+            ("brainstorming/discussion_turn.json", "initial_position", True),
+            ("brainstorming/discussion_turn.json", "contrary_position", False),
+            ("brainstorming/questioner_turn.json", "common_sense", False),
+        )
+        for member, role, lead in cases:
+            for mutation in ("missing", "duplicate"):
+                with self.subTest(role=role, mutation=mutation):
+                    documents = copy.deepcopy(base)
+                    parts = documents[member]["instructions"]["parts"]
+                    index = next(
+                        index for index, part in enumerate(parts)
+                        if part.get("ref") == "rethink_charge"
+                    )
+                    if mutation == "missing":
+                        parts.pop(index)
+                    else:
+                        parts.insert(index, {"ref": "rethink_charge"})
+                    self.write_set("invalid-rethink-mount", documents)
+                    prepared = self.prepare(
+                        "rethink", role, lead,
+                        artifact_type="document",
+                        prompt_set="invalid-rethink-mount",
+                    )
+                    declarations = session_calls._mounted_variable_declarations(
+                        prepared.bound.prompt
+                    )
+                    self.assertEqual(declarations["rethink_finding"], 1)
+                    self.assertEqual(
+                        session_calls._mounted_variable_substitutions(
+                            prepared.bound.prompt, "rethink_finding"
+                        ),
+                        1,
+                    )
+                    self.assertIsNotNone(prepared.prompt_set_fallback)
+
+    def test_rethink_artifact_type_follows_the_target(self):
+        subject = object.__new__(driver.Driver)
+        subject._design_document_paths = lambda: [
+            "implementation/milestones/demo/skeleton.md"
+        ]
+        unit = {"kind": state.UNIT_SLICE_IMPL}
+        for target in (
+            "implementation/milestones/demo/skeleton.md",
+            "README.md",
+            "docs/architecture.rst",
+        ):
+            with self.subTest(target=target):
+                self.assertEqual(
+                    subject._rethink_artifact_type(unit, target), "document"
+                )
+        self.assertEqual(
+            subject._rethink_artifact_type(unit, "orchestrator/driver.py"),
+            "implementation",
+        )
+
     def test_session_correction_reloads_prompt_and_authority(self):
         documents = copy.deepcopy(prompt_sets.default_seed().documents)
         first_line = "First stored session wording."
