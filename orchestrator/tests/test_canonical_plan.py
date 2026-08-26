@@ -556,7 +556,7 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
     def test_trusted_observer_projects_a_valid_block_without_policing_bytes(self):
         slices, head, _anchor = self.establish()
         state = st.load(self.state_path)
-        snapshot = canonical_plan.begin_observed_call(state, self.skeleton)
+        snapshot = canonical_plan.begin_author_call(state, self.skeleton)
         changed_slices = slices + [slice_plan(3)]
         self.write_skeleton(document(changed_slices))
         unrelated = os.path.join(self.workspace, "trusted-output.txt")
@@ -573,25 +573,26 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
             [2, 1, 3],
         )
 
-    def test_unchanged_trusted_observer_reads_only_the_canonical_document(self):
+    def test_unchanged_trusted_observer_captures_a_only_before_dispatch(self):
         _slices, _head, anchor = self.establish()
         state = st.load(self.state_path)
-        snapshot = canonical_plan.begin_observed_call(state, self.skeleton)
-
+        snapshot_worktree_tree = gitops.snapshot_worktree_tree
         with mock.patch.object(
             gitops,
             "snapshot_worktree_tree",
-            side_effect=AssertionError("trusted observation staged the worktree"),
-        ):
+            side_effect=snapshot_worktree_tree,
+        ) as capture:
+            snapshot = canonical_plan.begin_author_call(state, self.skeleton)
             result = canonical_plan.complete_observed_call(state, snapshot)
 
+        self.assertEqual(capture.call_count, 1)
         self.assertFalse(result["changed"])
         self.assertEqual(result["anchor"], anchor)
 
     def test_trusted_observer_leaves_invalid_worker_state_untouched(self):
         _slices, head, anchor = self.establish()
         state = st.load(self.state_path)
-        snapshot = canonical_plan.begin_observed_call(state, self.skeleton)
+        snapshot = canonical_plan.begin_author_call(state, self.skeleton)
         invalid = framed('{"slices":[')
         self.write_skeleton(invalid)
         unrelated = os.path.join(self.workspace, "trusted-output.txt")

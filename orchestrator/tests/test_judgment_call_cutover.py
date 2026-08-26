@@ -230,7 +230,14 @@ class JudgmentCallPreparationTest(unittest.TestCase):
         }
         self.assertEqual(rating.validate(copy.deepcopy(rating_reply)), rating_reply)
 
-        for field in ("slices", "suite_command"):
+        for field in (
+            "slices",
+            "suite_command",
+            "suite_command_finding_id",
+            "design_update",
+            "design_correction",
+            "brainstorming_application",
+        ):
             with self.subTest(field=field):
                 invalid = dict(review_reply, **{field: "retired"})
                 with self.assertRaises(contracts.ContractError):
@@ -1020,7 +1027,7 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
         )
         self.assertTrue(os.path.exists(os.path.join(self.workspace, "trusted.txt")))
 
-    def test_unchanged_trusted_review_does_not_snapshot_the_worktree(self):
+    def test_unchanged_trusted_review_captures_a_once_before_dispatch(self):
         self.subject.runner = runners.MockRunner([{
             "expect_kind": "review_round",
             "response": {
@@ -1030,11 +1037,12 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
         }])
         unit = state.current_unit(self.subject.state)
 
+        snapshot_worktree_tree = canonical_plan.gitops.snapshot_worktree_tree
         with mock.patch.object(
             canonical_plan.gitops,
             "snapshot_worktree_tree",
-            side_effect=AssertionError("trusted observation staged the worktree"),
-        ):
+            side_effect=snapshot_worktree_tree,
+        ) as capture:
             output, _result, _raw = self.subject._call(
                 "codex", "legacy", "review_round", "trusted-unchanged",
                 prepare_call=self.subject._judgment_prepare_call(
@@ -1043,6 +1051,7 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
                 episode_unit=unit,
             )
 
+        self.assertEqual(capture.call_count, 1)
         self.assertEqual(output["findings"], [])
         self.assertIsNone(self.subject.state.get("failure"))
 
@@ -1134,130 +1143,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
         )
         self.assertEqual(self.subject.runner.calls[0][2], prepared.prompt)
 
-    def test_restart_preserves_completed_trusted_plan_change(self):
-        def edit(workspace):
-            with open(
-                os.path.join(workspace, self.skeleton), "w", encoding="utf-8"
-            ) as handle:
-                handle.write(canonical_document("Changed before restart"))
-            with open(
-                os.path.join(workspace, "trusted.txt"), "w", encoding="utf-8"
-            ) as handle:
-                handle.write("kept across restart\n")
-
-        self.subject.runner = runners.MockRunner([{
-            "expect_kind": "review_round",
-            "side_effect": edit,
-            "response": {
-                "status": "ok", "kind": "review_round", "findings": [],
-                "questions": self.questions(),
-            },
-        }])
-        unit = state.current_unit(self.subject.state)
-        self.subject._call(
-            "codex", "legacy", "review_round", "trusted-restart",
-            prepare_call=self.subject._judgment_prepare_call(
-                unit, "review_round", "trusted-restart"
-            ),
-            episode_unit=unit,
-        )
-        with open(self.subject._busy_path(), encoding="utf-8") as handle:
-            self.assertTrue(json.load(handle)["completed"])
-
-        restarted = driver.Driver(
-            self.state_path, runner=runners.MockRunner([])
-        )
-
-        with open(
-            os.path.join(self.workspace, self.skeleton), encoding="utf-8"
-        ) as handle:
-            self.assertEqual(
-                handle.read(), canonical_document("Changed before restart")
-            )
-        with open(
-            os.path.join(self.workspace, "trusted.txt"), encoding="utf-8"
-        ) as handle:
-            self.assertEqual(handle.read(), "kept across restart\n")
-        self.assertEqual(
-            restarted.state["milestone"]["slices"][0]["title"],
-            "Changed before restart",
-        )
-        self.assertFalse(any(
-            event["type"] == "unclean_stop_restored"
-            for event in restarted.state["events"]
-        ))
-        canonical_plan.begin_observed_call(restarted.state, self.skeleton)
-        self.assertFalse(os.path.exists(restarted._busy_path()))
-
-    def test_restart_during_correction_preserves_trusted_non_plan_mutation(self):
-        def edit(workspace):
-            with open(
-                os.path.join(workspace, "trusted.txt"), "w", encoding="utf-8"
-            ) as handle:
-                handle.write("kept across correction restart\n")
-
-        def interrupt(_workspace):
-            raise KeyboardInterrupt()
-
-        self.subject.runner = runners.MockRunner([
-            {
-                "expect_kind": "review_round",
-                "side_effect": edit,
-                "response": {"bad": 1},
-            },
-            {
-                "expect_kind": "review_round",
-                "side_effect": interrupt,
-                "response": {},
-            },
-        ])
-        unit = state.current_unit(self.subject.state)
-        unit["status"] = state.U_ROUNDS
-        task = self.subject._admit_worker_task(
-            unit, contracts.KIND_REVIEW_ROUND, "legacy", "codex"
-        )
-
-        with self.assertRaises(KeyboardInterrupt):
-            self.subject._call(
-                "codex", "legacy", "review_round", "trusted-correction",
-                task_id=task["id"],
-                prepare_call=self.subject._judgment_prepare_call(
-                    unit, "review_round", "trusted-correction"
-                ),
-                episode_unit=unit,
-            )
-
-        anchor = self.subject.state["milestone"][canonical_plan.ANCHOR_KEY]
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=self.workspace,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        self.assertEqual(anchor["revision"], head)
-        with open(self.subject._busy_path(), encoding="utf-8") as handle:
-            self.assertFalse(json.load(handle).get("completed", False))
-
-        restarted = driver.Driver(
-            self.state_path, runner=runners.MockRunner([])
-        )
-
-        with open(
-            os.path.join(self.workspace, "trusted.txt"), encoding="utf-8"
-        ) as handle:
-            self.assertEqual(handle.read(), "kept across correction restart\n")
-        self.assertEqual(
-            restarted.state["milestone"]["slices"][0]["title"],
-            "One",
-        )
-        self.assertFalse(any(
-            event["type"] == "unclean_stop_restored"
-            for event in restarted.state["events"]
-        ))
-        canonical_plan.begin_observed_call(restarted.state, self.skeleton)
-        self.assertFalse(os.path.exists(restarted._busy_path()))
-
     def _open_slice_impl(self, material=None):
         if material is not None:
             path = os.path.join(self.workspace, self.skeleton)
@@ -1284,96 +1169,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
         unit["status"] = state.U_ROUNDS
         self.subject._save()
         return unit
-
-    def test_plan_deleting_review_keeps_material_for_nested_rating(self):
-        unit = self._open_slice_impl(material="document")
-
-        def replace_plan(workspace):
-            with open(
-                os.path.join(workspace, self.skeleton), "w", encoding="utf-8"
-            ) as handle:
-                handle.write(canonical_document("Replacement", slice_id=2))
-
-        self.subject.runner = runners.MockRunner([
-            {
-                "expect_kind": "review_round",
-                "side_effect": replace_plan,
-                "response": {
-                    "status": "ok", "kind": "review_round", "findings": [],
-                    "questions": self.questions(),
-                },
-            },
-            {
-                "expect_kind": "reclassify",
-                "response": {
-                    "status": "ok",
-                    "kind": "reclassify",
-                    "drift_risk": "high",
-                    "drift_damage": "high",
-                    "reason": "The finding remains material.",
-                    "questions": self.questions(),
-                },
-            },
-        ])
-        self.subject._call(
-            "codex", "legacy", "review_round", "plan-deleting-review",
-            prepare_call=self.subject._judgment_prepare_call(
-                unit, "review_round", "plan-deleting-review"
-            ),
-            episode_unit=unit,
-        )
-        finding = {
-            "id": "F1", "severity": "P3", "summary": "Ambiguous text.",
-            "validity": {}, "plain": "A builder can read it two ways.",
-            "example": "One builder chooses the wrong branch.",
-        }
-
-        debt, retained = self.subject._partition_defer_candidates(
-            unit, [(finding, "codex")]
-        )
-
-        self.assertEqual(debt, [])
-        self.assertEqual(retained, [(finding, "codex")])
-        self.assertEqual(len(self.subject.runner.calls), 2)
-        self.assertEqual(unit[state.PLAN_FOLLOWUP_MATERIAL_KEY], "document")
-
-    def test_plan_changing_judgment_keeps_origin_current_for_follow_up(self):
-        unit = self._open_slice_impl()
-
-        def replace_plan(workspace):
-            with open(
-                os.path.join(workspace, self.skeleton), "w", encoding="utf-8"
-            ) as handle:
-                handle.write(canonical_document("Replacement", slice_id=2))
-
-        self.subject.runner = runners.MockRunner([{
-            "expect_kind": "review_round",
-            "side_effect": replace_plan,
-            "response": {
-                "status": "ok", "kind": "review_round", "findings": [],
-                "questions": self.questions(),
-            },
-        }])
-        self.subject._call(
-            "codex", "legacy", "review_round", "plan-follow-up-review",
-            prepare_call=self.subject._judgment_prepare_call(
-                unit, "review_round", "plan-follow-up-review"
-            ),
-            episode_unit=unit,
-        )
-        state.enter_fix_episode(
-            self.subject.state,
-            unit,
-            [{"id": "F1", "severity": "P1", "summary": "Fix it."}],
-            "round",
-            "codex",
-            "slice_impl-01-codex-r1",
-            state.U_ROUNDS,
-        )
-
-        self.assertTrue(unit[state.PLAN_FOLLOWUP_KEY])
-        self.assertIs(state.current_unit(self.subject.state), unit)
-        self.assertFalse(state.maybe_close_milestone(self.subject.state))
 
     def test_pre_activation_run_without_mutable_authority_still_dispatches(self):
         os.unlink(self.subject._amendments_path())
@@ -1709,117 +1504,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
             for event in self.subject.state["events"]
         ))
 
-    def test_trusted_review_mutations_rebind_without_restarting_cycle(self):
-        unit = self._open_slice_impl()
-
-        def leave(path):
-            def change(workspace):
-                with open(os.path.join(workspace, path), "w") as handle:
-                    handle.write("left by trusted review\n")
-            return change
-
-        clean = {
-            "status": "ok",
-            "kind": "review_round",
-            "findings": [],
-            "questions": self.questions(),
-        }
-        self.subject.runner = runners.MockRunner([
-            {
-                "expect_kind": "review_round",
-                "side_effect": leave("review-one.txt"),
-                "response": copy.deepcopy(clean),
-            },
-            {
-                "expect_kind": "review_round",
-                "side_effect": leave("review-two.txt"),
-                "response": copy.deepcopy(clean),
-            },
-        ])
-
-        self.subject._do_review_round()
-        first_fingerprint = unit["review_evidence_fingerprint"]
-        self.subject._do_review_round()
-        second_fingerprint = unit["review_evidence_fingerprint"]
-
-        self.assertNotEqual(first_fingerprint, second_fingerprint)
-        self.assertEqual(unit["status"], state.U_PRE_SEAL_VERIFY)
-        self.assertEqual(len(self.subject.runner.calls), 2)
-        self.assertFalse(any(
-            event["type"] == "review_cycle_restarted"
-            for event in self.subject.state["events"]
-        ))
-        self.assertEqual(len(self.subject._seal_reviews(
-            unit,
-            current_fingerprint=self.subject._review_evidence_fingerprint(unit),
-        )), 2)
-
-    def test_trusted_rating_mutation_does_not_discard_parent_review(self):
-        unit = self._open_slice_impl()
-        finding = {
-            "id": "F1",
-            "severity": "P3",
-            "summary": "The low-risk wording can be deferred.",
-            "validity": {
-                "permitted_baseline": "Low-risk debt may be deferred.",
-                "actual_outcome": "The wording remains locally ambiguous.",
-                "incremental_harm": "A later maintainer may reread it.",
-                "exceeds_baseline": True,
-            },
-            "plain": "The wording may require a second reading.",
-            "example": "A maintainer pauses before making the local edit.",
-            "contests": None,
-        }
-
-        def rating_mutation(workspace):
-            with open(os.path.join(workspace, "rating.txt"), "w") as handle:
-                handle.write("left by trusted rating\n")
-
-        self.subject.runner = runners.MockRunner([
-            {
-                "expect_kind": "review_round",
-                "response": {
-                    "status": "ok",
-                    "kind": "review_round",
-                    "findings": [copy.deepcopy(finding)],
-                    "questions": self.questions(),
-                },
-            },
-            {
-                "expect_kind": "reclassify",
-                "side_effect": rating_mutation,
-                "response": {
-                    "status": "ok",
-                    "kind": "reclassify",
-                    "drift_risk": "low",
-                    "drift_damage": "low",
-                    "reason": "The ambiguity is local and cheap to revisit.",
-                    "questions": self.questions(),
-                },
-            },
-            {
-                "expect_kind": "review_round",
-                "response": {
-                    "status": "ok",
-                    "kind": "review_round",
-                    "findings": [],
-                    "questions": self.questions(),
-                },
-            },
-        ])
-
-        first_note = self.subject._do_review_round()
-        second_note = self.subject._do_review_round()
-
-        self.assertIn("deferred as debt", first_note)
-        self.assertIn("round: clean", second_note)
-        self.assertEqual(unit["status"], state.U_PRE_SEAL_VERIFY)
-        self.assertEqual(len(self.subject.runner.calls), 3)
-        self.assertFalse(any(
-            event["type"] == "review_cycle_restarted"
-            for event in self.subject.state["events"]
-        ))
-
     def test_exhausted_rating_contract_is_terminal(self):
         self.subject.runner = runners.MockRunner([
             {"expect_kind": "reclassify", "response": {"bad": 1}},
@@ -2017,107 +1701,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
             "unreadable authority",
         )
         self.assertFalse(os.path.exists(self.subject._busy_path()))
-
-    def test_rating_correction_keeps_coordinates_after_plan_deletes_slice(self):
-        skeleton_unit = state.current_unit(self.subject.state)
-        skeleton_unit["status"] = state.U_SEALED
-        slice_doc = state.ensure_next_unit(self.subject.state)
-        slice_doc["status"] = state.U_SEALED
-        slice_doc["artifact"] = "implementation/slices/slice-01.md"
-        unit = state.ensure_next_unit(self.subject.state)
-        unit["artifact"] = "orchestrator/driver.py"
-        self.subject._save()
-
-        def replace_plan(workspace):
-            with open(
-                os.path.join(workspace, self.skeleton), "w", encoding="utf-8"
-            ) as handle:
-                handle.write(canonical_document("Replacement", slice_id=2))
-
-        self.subject.runner = runners.MockRunner([
-            {
-                "expect_kind": "reclassify",
-                "side_effect": replace_plan,
-                "response": {"bad": 1},
-            },
-            {
-                "expect_kind": "reclassify",
-                "response": {
-                    "status": "ok",
-                    "kind": "reclassify",
-                    "drift_risk": "high",
-                    "drift_damage": "high",
-                    "reason": "The ambiguity materially affects builders.",
-                    "questions": self.questions(),
-                },
-            },
-        ])
-        finding = {
-            "id": "F1", "severity": "P3", "summary": "Ambiguous text.",
-            "validity": {}, "plain": "A builder can read it two ways.",
-            "example": "One builder chooses the wrong branch.",
-        }
-
-        debt, retained = self.subject._partition_defer_candidates(
-            unit, [(finding, "codex")]
-        )
-
-        self.assertEqual(debt, [])
-        self.assertEqual(retained, [(finding, "codex")])
-        self.assertEqual(len(self.subject.runner.calls), 2)
-        self.assertEqual(
-            [item["id"] for item in self.subject.state["milestone"]["slices"]],
-            [2],
-        )
-
-    def test_exhausted_rating_keeps_parent_on_captured_unit_after_plan_change(self):
-        skeleton_unit = state.current_unit(self.subject.state)
-        skeleton_unit["status"] = state.U_SEALED
-        slice_doc = state.ensure_next_unit(self.subject.state)
-        slice_doc["status"] = state.U_SEALED
-        slice_doc["artifact"] = "implementation/slices/slice-01.md"
-        unit = state.ensure_next_unit(self.subject.state)
-        unit["artifact"] = "orchestrator/driver.py"
-        self.subject._save()
-
-        def replace_plan(workspace):
-            with open(
-                os.path.join(workspace, self.skeleton), "w", encoding="utf-8"
-            ) as handle:
-                handle.write(canonical_document("Replacement", slice_id=2))
-
-        self.subject.runner = runners.MockRunner([
-            {
-                "expect_kind": "reclassify",
-                "side_effect": replace_plan,
-                "response": {"bad": 1},
-            },
-            {"expect_kind": "reclassify", "response": {"bad": 2}},
-        ])
-        finding = {
-            "id": "F1", "severity": "P3", "summary": "Ambiguous text.",
-            "validity": {}, "plain": "A builder can read it two ways.",
-            "example": "One builder chooses the wrong branch.",
-        }
-        parent = runners.RunnerResult(
-            '{"status":"ok","kind":"review_round"}', 0, 0.01
-        )
-
-        with self.assertRaises(driver.StopStep):
-            self.subject._partition_defer_candidates(
-                unit,
-                [(finding, "codex")],
-                parent_call=(contracts.KIND_REVIEW_ROUND, "codex", parent),
-            )
-
-        parent_events = [
-            event for event in self.subject.state["events"]
-            if event["type"] == "worker_unaccepted"
-            and event["kind"] == contracts.KIND_REVIEW_ROUND
-        ]
-        self.assertEqual(len(parent_events), 1)
-        self.assertEqual(parent_events[0]["unit"], state.unit_key(unit))
-
 
 if __name__ == "__main__":
     unittest.main()

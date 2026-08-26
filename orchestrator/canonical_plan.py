@@ -452,36 +452,6 @@ def begin_author_call(state, skeleton_path, *, allow_unanchored=False):
     }
 
 
-def begin_observed_call(state, skeleton_path):
-    """Guard one trusted call without snapshotting unrelated repository state."""
-    skeleton_path = _relative_path(skeleton_path)
-    workspace = state.get("workspace")
-    if not isinstance(workspace, str) or not workspace:
-        raise CanonicalPlanError("run state has no workspace")
-    anchor = _anchor(state)
-    if anchor is None:
-        raise CanonicalPlanError("canonical plan has not been anchored")
-    if anchor["path"] != skeleton_path:
-        raise CanonicalPlanError("canonical-plan anchor path cannot change")
-    guarded_dispatch(state, lambda: None)
-    anchored_document = _anchored_document(state, anchor)
-    try:
-        gitops.pin_canonical_plan_commit(
-            workspace, skeleton_path, anchor["revision"]
-        )
-    except gitops.GitError as exc:
-        raise CanonicalPlanError(
-            "canonical-plan anchor could not be made durable: %s" % exc
-        ) from exc
-    return {
-        "workspace": workspace,
-        "path": skeleton_path,
-        "anchor": copy.deepcopy(anchor),
-        "anchored_document": anchored_document,
-        "anchored_block": canonical_block_bytes(anchored_document),
-    }
-
-
 def _reject_author_call(snapshot, cause):
     try:
         restore_author_call(snapshot)

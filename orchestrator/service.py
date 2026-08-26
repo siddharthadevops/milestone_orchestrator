@@ -2731,16 +2731,23 @@ def _amendments_path(entry):
 
 
 def read_amendments(entry):
+    path = _amendments_path(entry)
     try:
-        with open(_amendments_path(entry), "r", encoding="utf-8") as fh:
+        with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return [
-            a
-            for a in (data.get("amendments") or [])
-            if isinstance(a, dict) and str(a.get("text") or "").strip()
-        ]
-    except (OSError, ValueError):
-        return []
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise ApiError(409, "amendments source unreadable: %s" % exc) from exc
+    raw = data.get("amendments") if isinstance(data, dict) else None
+    if not isinstance(raw, list):
+        raise ApiError(409, "amendments source must contain an array")
+    if any(
+        not isinstance(item, dict)
+        or not isinstance(item.get("text"), str)
+        or not item["text"].strip()
+        for item in raw
+    ):
+        raise ApiError(409, "amendments source contains an invalid entry")
+    return [dict(item) for item in raw]
 
 
 def add_amendment(home, run_id, body):

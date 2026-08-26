@@ -26,11 +26,30 @@ from orchestrator.tests.test_brainstorming_milestone_adapter import (
 )
 from orchestrator.tests.test_driver_mock import (
     finding,
-    fix_ok,
+    fix_ok as legacy_fix_ok,
     ok,
-    report,
+    report as legacy_report,
     triaged,
 )
+
+
+def _judgment_questions():
+    return [
+        {"id": "environment_fit", "answer": "Checked."},
+        {"id": "human_scale", "answer": "Checked."},
+    ]
+
+
+def fix_ok(*args, **kwargs):
+    value = legacy_fix_ok(*args, **kwargs)
+    value["questions"] = _judgment_questions()
+    return value
+
+
+def report(kind, findings=()):
+    value = legacy_report(kind, findings)
+    value["questions"] = _judgment_questions()
+    return value
 
 
 def _usage(amount=3):
@@ -60,6 +79,7 @@ def _rethink(kind, source=None, result_mode="proposal"):
     })
     if kind in contracts.RETHINK_CONTINUATION_KINDS:
         value["failure_gap"] = failure_gap()
+    value["questions"] = _judgment_questions()
     return value
 
 

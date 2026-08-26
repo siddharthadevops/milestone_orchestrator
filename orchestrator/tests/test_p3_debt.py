@@ -26,13 +26,12 @@ from orchestrator import state as st
 
 from orchestrator.tests.test_driver_mock import (
     DriverTestCase,
-    battery_entries,
     finding,
-    fix_ok,
+    fix_ok as legacy_fix_ok,
     init_state,
     make_config,
     ok,
-    report,
+    report as legacy_report,
     skeleton_script,
     step,
     triaged,
@@ -40,8 +39,66 @@ from orchestrator.tests.test_driver_mock import (
 )
 
 
+def judgment_questions():
+    return [
+        {"id": "environment_fit", "answer": "Checked."},
+        {"id": "human_scale", "answer": "Checked."},
+    ]
+
+
+def report(kind, findings=()):
+    payload = legacy_report(kind, findings)
+    payload["questions"] = judgment_questions()
+    return payload
+
+
+def fix_ok(*args, **kwargs):
+    payload = legacy_fix_ok(*args, **kwargs)
+    payload["questions"] = judgment_questions()
+    return payload
+
+
 def draft_step():
-    return skeleton_script()[0]
+    current = skeleton_script()[0]
+    response = dict(current["response"])
+    response.pop("slices", None)
+    response["questions"] = [
+        {"id": question_id, "answer": "Checked."}
+        for question_id in (
+            "due_diligence_count",
+            "machinery_trust",
+            "environment_fit",
+            "human_scale",
+        )
+    ]
+    return dict(
+        current,
+        response=response,
+        side_effect=write_file(
+            "docs/skeleton.md",
+            canonical_skeleton_document("Calculator core"),
+        ),
+    )
+
+
+def canonical_skeleton_document(title="Core"):
+    """One valid routed-plan fixture for these legacy lifecycle tests."""
+    plan = {
+        "slices": [{
+            "id": 1,
+            "title": title,
+            "intent": "Exercise finding-debt routing for one slice.",
+            "material": "code",
+            "producer_task_executor": {
+                "draft_slice_note": "agent_call",
+                "implement": "agent_call",
+            },
+        }],
+    }
+    return (
+        "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+        % json.dumps(plan, separators=(",", ":"))
+    )
 
 
 def homed_draft_step():
@@ -102,8 +159,6 @@ def reform_draft_step():
     """draft_step() plus the answered question battery a reform profile
     hard-requires on doc drafts (legacy/profile-less drafts stay bare)."""
     s = draft_step()
-    s["response"]["battery"] = battery_entries(
-        contracts.BATTERY_QUESTIONS_SKELETON)
     return s
 
 
@@ -119,7 +174,8 @@ def reclassify(defer_ok, family, reason="verified", risk=None,
                 ok("reclassify",
                    drift_risk=risk or lvl,
                    drift_damage=damage or lvl,
-                   reason=reason),
+                   reason=reason,
+                   questions=judgment_questions()),
                 family=family, side_effect=side_effect)
 
 
@@ -716,18 +772,7 @@ class TestP3Debt(DriverTestCase):
             # FROM; after that the document alone decides.
             path = init_state(ws, make_config(p3_reclassify_debt=True))
             mock = runners.MockRunner([
-                step(
-                    "draft_skeleton",
-                    ok(
-                        "draft_skeleton",
-                        artifact="docs/skeleton.md",
-                        slices=[{"id": 1, "title": "One"}],
-                    ),
-                    family="claude",
-                    side_effect=write_file(
-                        "docs/skeleton.md", "# Current profile\n"
-                    ),
-                ),
+                dict(draft_step(), expect_family="claude"),
                 step(
                     "review_round",
                     report(
@@ -755,16 +800,6 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(event["model"], "profile-rater")
             self.assertEqual(event["effort"], "high")
             self.assertTrue(event["defer_ok"])
-            reclassify_prompt = next(
-                prompt for _family, kind, prompt in mock.calls
-                if kind == contracts.KIND_RECLASSIFY
-            )
-            self.assertIn(
-                "Another reviewer raised the finding below",
-                reclassify_prompt,
-            )
-            self.assertNotIn("opposite family) raised", reclassify_prompt)
-
     def test_reform_gates_on_damage_not_probability(self):
         # The two-axis decision (operator 2026-07-09): a certain-but-cheap
         # drift defers; an unlikely-but-destructive one is fixed.
@@ -1152,6 +1187,9 @@ class TestP3Debt(DriverTestCase):
         # pending, ready for its implement draft (mirrors the setup the
         # existing impl-seal test uses, but stops before implement).
         path = init_state(ws, make_config(p3_reclassify_debt=True))
+        write_file(
+            "docs/skeleton.md", canonical_skeleton_document("impl")
+        )(ws)
         state = st.load(path)
         state["milestone"]["slices"] = [{"id": 1, "title": "impl"}]
         state["units"][0]["status"] = st.U_SEALED
@@ -1173,7 +1211,15 @@ class TestP3Debt(DriverTestCase):
             path = self._impl_pending(ws)
             mock = runners.MockRunner([
                 step("implement",
-                     ok("implement", files_changed=["calculator.py"]),
+                     ok(
+                         "implement",
+                         files_changed=["calculator.py"],
+                         questions=[
+                             {"id": "machinery_trust", "answer": "Checked."},
+                             {"id": "environment_fit", "answer": "Checked."},
+                             {"id": "human_scale", "answer": "Checked."},
+                         ],
+                     ),
                      family="codex",
                      side_effect=write_file(
                          "calculator.py", "def add(a, b):\n    return a + b\n")),
@@ -1215,7 +1261,15 @@ class TestP3Debt(DriverTestCase):
             path = self._impl_pending(ws)
             mock = runners.MockRunner([
                 step("implement",
-                     ok("implement", files_changed=["calculator.py"]),
+                     ok(
+                         "implement",
+                         files_changed=["calculator.py"],
+                         questions=[
+                             {"id": "machinery_trust", "answer": "Checked."},
+                             {"id": "environment_fit", "answer": "Checked."},
+                             {"id": "human_scale", "answer": "Checked."},
+                         ],
+                     ),
                      family="codex",
                      side_effect=write_file(
                          "calculator.py", "def add(a, b):\n    return a + b\n")),

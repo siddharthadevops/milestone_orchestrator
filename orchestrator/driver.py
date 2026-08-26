@@ -1781,14 +1781,6 @@ class Driver(object):
                     message="canonical plan after %s" % kind,
                 )
                 if plan_result["changed"]:
-                    if st.unit_identity(unit) in st.planned_execution_units(
-                        self.state
-                    ):
-                        unit.pop(st.PLAN_FOLLOWUP_KEY, None)
-                        unit.pop(st.PLAN_FOLLOWUP_MATERIAL_KEY, None)
-                    else:
-                        unit[st.PLAN_FOLLOWUP_KEY] = True
-                        unit[st.PLAN_FOLLOWUP_MATERIAL_KEY] = material
                     st.ensure_due_unit(self.state)
                 self._enforce_sealed_artifacts(
                     raw_name,
@@ -1816,8 +1808,6 @@ class Driver(object):
     def _judgment_material(self, unit):
         if unit["kind"] == st.UNIT_SKELETON:
             return "document"
-        if st.PLAN_FOLLOWUP_MATERIAL_KEY in unit:
-            return unit[st.PLAN_FOLLOWUP_MATERIAL_KEY]
         material = tasks.slice_material(self._slice_info(unit["slice_id"]))
         if material:
             return material
@@ -1938,10 +1928,8 @@ class Driver(object):
                 design_correction=context.get("design_correction"),
             )
             editing = kind == contracts.KIND_FIX_FINDINGS
-            snapshot = (
-                canonical_plan.begin_author_call(self.state, skeleton_path)
-                if editing else
-                canonical_plan.begin_observed_call(self.state, skeleton_path)
+            snapshot = canonical_plan.begin_author_call(
+                self.state, skeleton_path
             )
 
             def complete():
@@ -1961,14 +1949,6 @@ class Driver(object):
                         preserve_canonical_plan=True,
                     )
                 if plan_result["changed"]:
-                    if st.unit_identity(unit) in st.planned_execution_units(
-                        self.state
-                    ):
-                        unit.pop(st.PLAN_FOLLOWUP_KEY, None)
-                        unit.pop(st.PLAN_FOLLOWUP_MATERIAL_KEY, None)
-                    else:
-                        unit[st.PLAN_FOLLOWUP_KEY] = True
-                        unit[st.PLAN_FOLLOWUP_MATERIAL_KEY] = material
                     st.ensure_due_unit(self.state)
                 self._save()
 
@@ -2933,17 +2913,6 @@ class Driver(object):
             self._save()
         root_call = calls[0] if calls else marker
         kind = root_call.get("kind")
-        if kind in (
-            contracts.KIND_REVIEW_ROUND,
-            contracts.KIND_DELTA_REVIEW,
-            contracts.KIND_RECLASSIFY,
-        ):
-            # These report-only prompts are trusted. Their repository bytes
-            # are never subject to the generic interrupted-call restoration,
-            # whether the interrupted physical attempt changed the plan or
-            # only other governed paths.
-            self._clear_busy()
-            return
         if not gitops.enabled(self.config):
             self._clear_busy()
             return
@@ -12861,12 +12830,6 @@ class Driver(object):
                     if (f.get("severity") not in defer_scope
                         or f.get("id") in retained_ids)
                 ]
-        # Trusted report-only judgments are consumed even when their call left
-        # repository bytes behind. Rebind the live cycle to the post-call
-        # candidate so that the next family distinguishes those accepted bytes
-        # from a later inter-call edit without discarding earlier judgments.
-        evidence_fingerprint = self._review_evidence_fingerprint(unit)
-        unit["review_evidence_fingerprint"] = evidence_fingerprint
         round_meta = {
             "model": review_model,
             "effort": review_effort,

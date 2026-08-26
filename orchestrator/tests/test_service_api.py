@@ -983,6 +983,27 @@ class AmendmentsApiTest(ServiceApiTest):
             "POST", "/api/runs/unknown-run/amendments", {"text": "hi"})
         self.assertEqual(status, 404)
 
+    def test_invalid_amendments_source_fails_closed_without_overwrite(self):
+        ws = self.workspace("ws-amend-invalid-source")
+        status, body = self.create_run(ws)
+        self.assertEqual(status, 201)
+        rid = body["run"]["id"]
+        path = os.path.join(ws, ".orchestrator", "amendments.json")
+        invalid = b'{"amendments":['
+        with open(path, "wb") as handle:
+            handle.write(invalid)
+
+        for method, endpoint, payload in (
+            ("GET", "/api/runs/%s" % rid, None),
+            ("POST", "/api/runs/%s/amendments" % rid, {"text": "new"}),
+            ("DELETE", "/api/runs/%s/amendments/A1" % rid, None),
+        ):
+            with self.subTest(method=method):
+                status, body = self.request_json(method, endpoint, payload)
+                self.assertEqual(status, 409, body)
+                with open(path, "rb") as handle:
+                    self.assertEqual(handle.read(), invalid)
+
 
 class ActsApiTest(ServiceApiTest):
     def test_projectless_creation_acts_are_single_homed(self):

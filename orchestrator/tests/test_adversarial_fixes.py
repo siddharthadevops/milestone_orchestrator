@@ -40,26 +40,83 @@ from orchestrator.tests.test_driver_mock import (
     DriverTestCase,
     append_file,
     finding,
-    fix_ok,
-    suite_fix_ok,
+    fix_ok as legacy_fix_ok,
+    suite_fix_ok as legacy_suite_fix_ok,
     init_state,
     make_config,
     multi,
     ok,
-    report,
+    report as legacy_report,
     step,
     triaged,
     write_file,
 )
 
 
+def judgment_questions():
+    return [
+        {"id": "environment_fit", "answer": "Checked."},
+        {"id": "human_scale", "answer": "Checked."},
+    ]
+
+
+def report(kind, findings=()):
+    payload = legacy_report(kind, findings)
+    payload["questions"] = judgment_questions()
+    return payload
+
+
+def fix_ok(*args, **kwargs):
+    payload = legacy_fix_ok(*args, **kwargs)
+    payload["questions"] = judgment_questions()
+    return payload
+
+
+def suite_fix_ok(*args, **kwargs):
+    payload = legacy_suite_fix_ok(*args, **kwargs)
+    payload["questions"] = judgment_questions()
+    return payload
+
+
 def draft_step():
     return step(
         "draft_skeleton",
-        ok("draft_skeleton", artifact="docs/skeleton.md",
-           slices=[{"id": 1, "title": "core"}]),
+        ok(
+            "draft_skeleton",
+            artifact="docs/skeleton.md",
+            questions=[
+                {"id": question_id, "answer": "Checked."}
+                for question_id in (
+                    "due_diligence_count",
+                    "machinery_trust",
+                    "environment_fit",
+                    "human_scale",
+                )
+            ],
+        ),
         family="codex",
-        side_effect=write_file("docs/skeleton.md", "# Skeleton\n\nGoal.\n"),
+        side_effect=write_file(
+            "docs/skeleton.md", canonical_skeleton_document()
+        ),
+    )
+
+
+def canonical_skeleton_document():
+    plan = {
+        "slices": [{
+            "id": 1,
+            "title": "Core",
+            "intent": "Exercise adversarial fix behavior for one slice.",
+            "material": "code",
+            "producer_task_executor": {
+                "draft_slice_note": "agent_call",
+                "implement": "agent_call",
+            },
+        }],
+    }
+    return (
+        "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+        % json.dumps(plan, separators=(",", ":"))
     )
 
 
@@ -67,7 +124,7 @@ def init_final_impl_state(workspace, config):
     """Start directly at a one-slice milestone's final implementation."""
     path = init_state(workspace, config)
     os.makedirs(os.path.join(workspace, "docs"), exist_ok=True)
-    write_file("docs/skeleton.md", "# Skeleton\n")(workspace)
+    write_file("docs/skeleton.md", canonical_skeleton_document())(workspace)
     write_file("docs/slice-01.md", "# Slice 01\n")(workspace)
     state = st.load(path)
     state["milestone"]["slices"] = [{"id": 1, "title": "Core"}]
@@ -85,7 +142,15 @@ def init_final_impl_state(workspace, config):
 def implement_step():
     return step(
         "implement",
-        ok("implement", files_changed=["core.txt"]),
+        ok(
+            "implement",
+            files_changed=["core.txt"],
+            questions=[
+                {"id": "machinery_trust", "answer": "Checked."},
+                {"id": "environment_fit", "answer": "Checked."},
+                {"id": "human_scale", "answer": "Checked."},
+            ],
+        ),
         family="codex",
         side_effect=write_file("core.txt", "implemented\n"),
     )
@@ -234,8 +299,11 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                 step("fix_findings",
                      fix_ok([triaged("F1", "fixed", "missing non-goals")],
                             files_changed=["docs/skeleton.md"]),
-                     side_effect=write_file("docs/skeleton.md",
-                                            "# fixed for real\n")),
+                     side_effect=write_file(
+                         "docs/skeleton.md",
+                         canonical_skeleton_document()
+                         + "\n## Fixed\n\nAdded non-goals.\n",
+                     )),
                 step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"),
                      family="codex"),
@@ -289,7 +357,7 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                     consultation={"resolution": "not a defect"},
                     prevention={"documented_in": "docs/skeleton.md",
                                 "note": "phantom"},
-                )]),
+                )], files_changed=["docs/skeleton.md"]),
             )
             self.assert_failed(
                 path, driver,
@@ -603,7 +671,16 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                 step("review_round", report("review_round"), family="claude"),
                 step(
                     "draft_slice_note",
-                    ok("draft_slice_note", artifact="docs/slice-01.md"),
+                    ok(
+                        "draft_slice_note",
+                        artifact="docs/slice-01.md",
+                        questions=[
+                            {"id": "due_diligence_count", "answer": "Checked."},
+                            {"id": "machinery_trust", "answer": "Checked."},
+                            {"id": "environment_fit", "answer": "Checked."},
+                            {"id": "human_scale", "answer": "Checked."},
+                        ],
+                    ),
                     family="codex",
                     side_effect=write_file(
                         "docs/slice-01.md", "# Slice 01\n\nBuild core.\n"
