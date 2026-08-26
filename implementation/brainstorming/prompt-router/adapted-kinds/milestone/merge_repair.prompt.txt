@@ -45,11 +45,6 @@ WHAT HAPPENED
 - opening reconciliation account (original old plan/run boundaries and opening wipe/requeue/checkpoint effects): {"old_plan_ids":[1,2,3,4,5,6,7,8],"old_run_boundaries":{"3":"3abbd13e7c966cbeeac773870dfd0eb115d596f1"},"wipe_boundary":"3abbd13e7c966cbeeac773870dfd0eb115d596f1","requeue":[4,5,6,7,8],"invalidated_commits":["109f276ebd03825a8d8f8e0947487765b6860ed1"],"checkpoint_anchors_invalidated":[]}
 - required outcome: Preserve history through slice 3 and all accepted intent; remove run-owned work for slices 4-8; finish one valid canonical block; leave a clean same-branch linear final commit with the wipe boundary ancestral and listed invalidated commits absent.
 
-QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
-- guarantee_fit: What guarantees govern your work or judgment, what strength do they require, and why? If none apply, explain why no guarantee is needed and how your work still fits the surrounding project's accepted standard.
-- cheapest_sufficient: What materially simpler alternative did you examine—including tolerating a loud bounded failure or an extremely unlikely edge—and what concrete guarantee makes it insufficient?
-- rare_failure_posture: What are the realistic probability and damage of the event this work prevents? Would letting that rare case fail closed and surface clearly for retry or operator action be cheaper than preventing it? Explain the trade-off.
-
 OUTPUT CONTRACT
 Return exactly one JSON object, nothing else:
 {"status": "ok" | "blocked",
@@ -57,8 +52,3 @@ Return exactly one JSON object, nothing else:
  "files_changed": ["<workspace-relative paths you touched>", ...],
  "blocked_reason": "<required when blocked: what cannot be reconciled>",
  "notes": "<optional, short>"}
-
-"questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
-  (one entry per QUESTIONS id above, in EVERY reply whatever its status;
-   each entry ANSWERS its question and briefly describes the work behind
-   it — the machine requires one non-empty answer per mounted id and at most 300 characters; it does not judge substance)

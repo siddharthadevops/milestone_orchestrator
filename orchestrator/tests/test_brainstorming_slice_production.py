@@ -16,6 +16,7 @@ from orchestrator import runners
 from orchestrator import state as st
 from orchestrator import tasks
 from orchestrator.tests.test_driver_mock import (
+    prompt_response,
     report as legacy_report,
     step,
     write_file,
@@ -40,35 +41,8 @@ def task_success(n=2):
     }
 
 
-def routed_questions(kind):
-    ids = []
-    if kind in (
-        contracts.KIND_DRAFT_SKELETON,
-        contracts.KIND_DRAFT_SLICE_NOTE,
-    ):
-        ids.append("due_diligence_count")
-    if kind in (
-        contracts.KIND_DRAFT_SKELETON,
-        contracts.KIND_DRAFT_SLICE_NOTE,
-        contracts.KIND_IMPLEMENT,
-    ):
-        ids.append("machinery_trust")
-    ids.extend(("environment_fit", "human_scale"))
-    ids.extend((
-        "guarantee_fit",
-        "cheapest_sufficient",
-        "rare_failure_posture",
-    ))
-    return [
-        {"id": question_id, "answer": "The bounded check is satisfied."}
-        for question_id in ids
-    ]
-
-
 def report(kind, findings=()):
-    payload = legacy_report(kind, findings)
-    payload["questions"] = routed_questions(kind)
-    return payload
+    return legacy_report(kind, findings)
 
 
 def canonical_skeleton(note_executor, implement_executor, title="Mixed producers"):
@@ -109,14 +83,6 @@ def suite_checkpoint_response(status, commands):
                 "basis": "No complete suite is configured or declared.",
             }],
         },
-        "questions": [
-            {"id": question_id, "answer": "Checked."}
-            for question_id in (
-                "guarantee_fit",
-                "cheapest_sufficient",
-                "rare_failure_posture",
-            )
-        ],
     }
     return response
 
@@ -299,11 +265,10 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
 
     def test_brainstorming_note_waits_replaces_path_then_worker_implements(self):
         self.planned("brainstorming", "agent_call")
-        worker = {
+        worker = prompt_response({
             "status": "ok", "kind": contracts.KIND_IMPLEMENT,
             "files_changed": ["worker-implementation.txt"],
-            "questions": routed_questions(contracts.KIND_IMPLEMENT),
-        }
+        })
         subject = drv.Driver(self.path, runner=runners.MockRunner([{
             "response": worker,
             "side_effect": write_file(
@@ -337,11 +302,10 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
 
     def test_worker_note_then_target_free_brainstorming_implementation(self):
         self.planned("agent_call", "brainstorming")
-        note = {
+        note = prompt_response({
             "status": "ok", "kind": contracts.KIND_DRAFT_SLICE_NOTE,
             "artifact": "docs/custom-note.md",
-            "questions": routed_questions(contracts.KIND_DRAFT_SLICE_NOTE),
-        }
+        })
         subject = drv.Driver(self.path, runner=runners.MockRunner([{
             "response": note,
             "side_effect": write_file("docs/custom-note.md", "# Custom note\n"),
@@ -368,11 +332,10 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
 
     def test_brainstorming_implementation_reads_later_skeleton_assignment(self):
         self.planned("agent_call", "brainstorming")
-        note = {
+        note = prompt_response({
             "status": "ok", "kind": contracts.KIND_DRAFT_SLICE_NOTE,
             "artifact": "docs/older-note.md",
-            "questions": routed_questions(contracts.KIND_DRAFT_SLICE_NOTE),
-        }
+        })
         subject = drv.Driver(
             self.path, runner=runners.MockRunner([{
                 "response": note,
@@ -413,11 +376,10 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
 
     def test_brainstorming_remodel_successor_uses_durable_assignment(self):
         self.planned("agent_call", "brainstorming")
-        note = {
+        note = prompt_response({
             "status": "ok", "kind": contracts.KIND_DRAFT_SLICE_NOTE,
             "artifact": "docs/resealed-note.md",
-            "questions": routed_questions(contracts.KIND_DRAFT_SLICE_NOTE),
-        }
+        })
         subject = drv.Driver(
             self.path, runner=runners.MockRunner([{
                 "response": note,

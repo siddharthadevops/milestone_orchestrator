@@ -13,6 +13,7 @@ from orchestrator import author_calls, canonical_plan, contracts
 from orchestrator import driver, ledgers
 from orchestrator import prompt_sets, runners, staffing, state, tasks
 from orchestrator import verifiers
+from orchestrator.tests.test_driver_mock import prompt_response
 
 
 def implement_values(workspace, **changes):
@@ -559,6 +560,10 @@ class AuthorCallPreparationTest(unittest.TestCase):
         with open(implement_path, "r", encoding="utf-8") as handle:
             custom_implement = json.load(handle)
         custom_implement["output_contract"]["sections"] = []
+        custom_implement["questions"]["items"] = [{
+            "id": "fixture_question",
+            "text": "Was the configured fixture checked?",
+        }]
         with open(implement_path, "w", encoding="utf-8") as handle:
             json.dump(custom_implement, handle)
 
@@ -636,20 +641,11 @@ class DriverAuthorActivationTest(unittest.TestCase):
             reply = {
                 "status": "ok", "kind": "draft_skeleton",
                 "artifact": skeleton_path,
-                "questions": [
-                    {"id": name, "answer": "Checked."}
-                    for name in (
-                        "due_diligence_count", "machinery_trust",
-                        "environment_fit", "human_scale",
-                        "guarantee_fit", "cheapest_sufficient",
-                        "rare_failure_posture",
-                    )
-                ],
             }
             runner = runners.MockRunner([{
                 "expect_kind": "draft_skeleton",
                 "side_effect": write_plan,
-                "response": reply,
+                "response": prompt_response(reply),
             }])
             driver.Driver(
                 state_path, runner=runner, model_profiles_home=home

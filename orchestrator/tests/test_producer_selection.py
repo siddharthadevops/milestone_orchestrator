@@ -79,18 +79,6 @@ def canonical_skeleton_step(material=None):
         ok(
             "draft_skeleton",
             artifact="docs/skeleton.md",
-            questions=[
-                {"id": question, "answer": "Checked the bounded fixture."}
-                for question in (
-                    "due_diligence_count",
-                    "machinery_trust",
-                    "environment_fit",
-                    "human_scale",
-                    "guarantee_fit",
-                    "cheapest_sufficient",
-                    "rare_failure_posture",
-                )
-            ],
         ),
         side_effect=write_file("docs/skeleton.md", document),
     )

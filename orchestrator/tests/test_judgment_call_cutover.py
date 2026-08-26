@@ -29,12 +29,6 @@ JOBS = (
     "suite_checkpoint@workspace",
 )
 
-PROPORTIONALITY_QUESTION_IDS = (
-    "guarantee_fit",
-    "cheapest_sufficient",
-    "rare_failure_posture",
-)
-
 
 def values_for(workspace, job):
     kind = job.split("@", 1)[0]
@@ -107,6 +101,45 @@ def answers(bound, text="Checked the current artifact and contract."):
         {"id": question_id, "answer": text}
         for question_id in bound.question_ids
     ]
+
+
+def with_answers(
+    bound,
+    payload,
+    text="Checked the current artifact and contract.",
+):
+    configured = answers(bound, text)
+    if configured:
+        payload["questions"] = configured
+    return payload
+
+
+def rendered_answers(prompt, text="Checked the configured prompt."):
+    """Answer exactly the question ids mounted in one rendered prompt."""
+    return [
+        {"id": question_id, "answer": text}
+        for question_id in runners.prompt_question_ids(prompt)
+    ]
+
+
+class ConfiguredQuestionMockRunner(runners.MockRunner):
+    """Populate successful fixture replies from the prompt actually served."""
+
+    def call(self, family, prompt, workspace, *args, **kwargs):
+        if self.script:
+            step = self.script[0]
+            response = step.get("response")
+            if isinstance(response, dict) and response.get("kind"):
+                step = dict(step)
+                response = copy.deepcopy(response)
+                configured = rendered_answers(prompt)
+                if configured:
+                    response["questions"] = configured
+                else:
+                    response.pop("questions", None)
+                step["response"] = response
+                self.script[0] = step
+        return super().call(family, prompt, workspace, *args, **kwargs)
 
 
 def policy(field="reuse_evidence"):
@@ -215,66 +248,57 @@ class JudgmentCallPreparationTest(unittest.TestCase):
 
     def test_registered_judgment_envelopes_validate_without_legacy_fields(self):
         review = self.prepare("review_round@slice_impl")
-        review_reply = {
+        review_reply = with_answers(review.bound, {
             "status": "ok",
             "kind": "review_round",
             "findings": [],
-            "questions": answers(review.bound),
-        }
+        })
         self.assertEqual(review.validate(copy.deepcopy(review_reply)), review_reply)
 
         delta = self.prepare("delta_review@slice_doc")
-        delta_reply = {
+        delta_reply = with_answers(delta.bound, {
             "status": "ok",
             "kind": "delta_review",
             "findings": [],
-            "questions": answers(delta.bound),
-        }
+        })
         self.assertEqual(delta.validate(copy.deepcopy(delta_reply)), delta_reply)
 
         fixer = self.prepare("fix_findings@skeleton")
-        fix_reply = {
+        fix_reply = with_answers(fixer.bound, {
             "status": "ok",
             "kind": "fix_findings",
             "findings": [],
             "files_changed": [],
-            "questions": answers(fixer.bound),
-        }
+        })
         self.assertEqual(fixer.validate(copy.deepcopy(fix_reply)), fix_reply)
 
         rating = self.prepare("reclassify@doc")
-        rating_reply = {
+        rating_reply = with_answers(rating.bound, {
             "status": "ok",
             "kind": "reclassify",
             "drift_risk": "low",
             "drift_damage": "medium",
             "reason": "The ambiguity is visible and locally corrected.",
-            "questions": answers(rating.bound),
-        }
+        })
         self.assertEqual(rating.validate(copy.deepcopy(rating_reply)), rating_reply)
 
         repair = self.prepare(
             "merge_repair@workspace", material="business_plan"
         )
-        repair_reply = {
+        repair_reply = with_answers(repair.bound, {
             "status": "ok",
             "kind": "merge_repair",
             "files_changed": ["implementation/skeleton.md"],
-            "questions": answers(repair.bound),
-        }
+        })
         self.assertEqual(
             repair.validate(copy.deepcopy(repair_reply)), repair_reply
-        )
-        self.assertEqual(
-            repair.bound.question_ids,
-            PROPORTIONALITY_QUESTION_IDS,
         )
 
         checkpoint = self.prepare(
             "suite_checkpoint@workspace",
             configured_suite_commands=["true"],
         )
-        checkpoint_reply = {
+        checkpoint_reply = with_answers(checkpoint.bound, {
             "status": "passed",
             "kind": "suite_checkpoint",
             "commands": ["true"],
@@ -282,17 +306,12 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             "results": [
                 {"command": "true", "exit_code": 0, "evidence": "done"}
             ],
-            "questions": answers(checkpoint.bound),
-        }
+        })
         self.assertEqual(
             checkpoint.validate(copy.deepcopy(checkpoint_reply)),
             checkpoint_reply,
         )
         self.assertIn('["true"]', checkpoint.prompt)
-        self.assertEqual(
-            checkpoint.bound.question_ids,
-            PROPORTIONALITY_QUESTION_IDS,
-        )
 
         for field in (
             "slices",
@@ -832,14 +851,13 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             prepared.prompt,
             prompt_router.render(prepared.bound.prompt, expected_values),
         )
-        reply = {
+        reply = with_answers(prepared.bound, {
             "status": "ok",
             "kind": "reclassify",
             "drift_risk": "low",
             "drift_damage": "low",
             "reason": "The correction is local and self-revealing.",
-            "questions": answers(prepared.bound),
-        }
+        })
         with self.assertRaises(contracts.ContractError):
             prepared.validate(copy.deepcopy(reply))
         reply["reuse_evidence"] = [{"finding": "Reused the routed binder."}]
@@ -856,12 +874,11 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             "merge_repair@workspace",
             project_context=authority,
         )
-        reply = {
+        reply = with_answers(prepared.bound, {
             "status": "ok",
             "kind": contracts.KIND_MERGE_REPAIR,
             "files_changed": ["implementation/skeleton.md"],
-            "questions": answers(prepared.bound),
-        }
+        })
 
         with self.assertRaises(contracts.ContractError):
             prepared.validate(copy.deepcopy(reply))
@@ -881,7 +898,7 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             configured_suite_commands=["python3 -m unittest"],
             project_context=project_context(self.temp.name, [suite_policy]),
         )
-        reply = {
+        reply = with_answers(prepared.bound, {
             "status": "passed",
             "kind": "suite_checkpoint",
             "commands": ["python3 -m unittest"],
@@ -891,8 +908,7 @@ class JudgmentCallPreparationTest(unittest.TestCase):
                 "exit_code": 0,
                 "evidence": "green",
             }],
-            "questions": answers(prepared.bound),
-        }
+        })
         with self.assertRaises(contracts.ContractError):
             prepared.validate(copy.deepcopy(reply))
         reply["suite_evidence"] = [{"finding": "Complete suite passed."}]
@@ -953,18 +969,15 @@ class JudgmentCallPreparationTest(unittest.TestCase):
                 ),
             )
 
-    def test_question_answers_enforce_the_structural_length_limit(self):
+    def test_question_answers_have_no_structural_length_limit(self):
         prepared = self.prepare("review_round@skeleton")
         reply = {
             "status": "ok",
             "kind": "review_round",
             "findings": [],
-            "questions": answers(prepared.bound, "x" * 300),
+            "questions": answers(prepared.bound, "x" * 3000),
         }
         self.assertEqual(prepared.validate(copy.deepcopy(reply)), reply)
-        reply["questions"][0]["answer"] = "x" * 301
-        with self.assertRaises(contracts.ContractError):
-            prepared.validate(reply)
 
     def test_trusted_judgment_prose_is_not_a_runtime_schema(self):
         self.assertTrue(prompt_sets.ensure_default(self.temp.name))
@@ -1079,25 +1092,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
         )
         self.subject._save()
 
-    @staticmethod
-    def questions():
-        return [
-            {
-                "id": "guarantee_fit",
-                "answer": "The accepted project standard governs this judgment.",
-            },
-            {
-                "id": "cheapest_sufficient",
-                "answer": "The smallest bounded alternative is sufficient.",
-            },
-            {
-                "id": "rare_failure_posture",
-                "answer": "Rare bounded failures can stop for operator action.",
-            },
-            {"id": "environment_fit", "answer": "The repository standard."},
-            {"id": "human_scale", "answer": "The judgment is proportional."},
-        ]
-
     def test_trusted_review_keeps_other_mutations_and_projects_plan(self):
         def edit(workspace):
             with open(os.path.join(workspace, self.skeleton), "w") as handle:
@@ -1105,12 +1099,11 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
             with open(os.path.join(workspace, "trusted.txt"), "w") as handle:
                 handle.write("kept\n")
 
-        self.subject.runner = runners.MockRunner([{
+        self.subject.runner = ConfiguredQuestionMockRunner([{
             "expect_kind": "review_round",
             "side_effect": edit,
             "response": {
                 "status": "ok", "kind": "review_round", "findings": [],
-                "questions": self.questions(),
             },
         }])
         unit = state.current_unit(self.subject.state)
@@ -1129,11 +1122,10 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(self.workspace, "trusted.txt")))
 
     def test_unchanged_trusted_review_captures_a_once_before_dispatch(self):
-        self.subject.runner = runners.MockRunner([{
+        self.subject.runner = ConfiguredQuestionMockRunner([{
             "expect_kind": "review_round",
             "response": {
                 "status": "ok", "kind": "review_round", "findings": [],
-                "questions": self.questions(),
             },
         }])
         unit = state.current_unit(self.subject.state)
@@ -1186,7 +1178,7 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
             "meta": {"delta_base_revision": base_revision},
             "result": {"findings": []},
         }]
-        self.subject.runner = runners.MockRunner([{
+        self.subject.runner = ConfiguredQuestionMockRunner([{
             "expect_kind": "delta_review",
             "response": {
                 "status": "ok",
@@ -1196,7 +1188,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
                     "decision": "ratify",
                     "reason": "The retained authority uniquely resolves it.",
                 },
-                "questions": self.questions(),
             },
         }])
 
@@ -1326,12 +1317,12 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
             with open(os.path.join(workspace, "discarded.txt"), "w") as handle:
                 handle.write("discard me\n")
 
-        self.subject.runner = runners.MockRunner([{
+        self.subject.runner = ConfiguredQuestionMockRunner([{
             "expect_kind": "fix_findings",
             "side_effect": damage,
             "response": {
                 "status": "ok", "kind": "fix_findings", "findings": [],
-                "files_changed": [], "questions": self.questions(),
+                "files_changed": [],
             },
         }])
         unit = state.current_unit(self.subject.state)
@@ -1391,7 +1382,7 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
                 check=True,
             )
 
-        self.subject.runner = runners.MockRunner([
+        self.subject.runner = ConfiguredQuestionMockRunner([
             {
                 "expect_kind": "fix_findings",
                 "side_effect": commit_fix,
@@ -1405,7 +1396,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
                         "adjudication_ref": None,
                     }],
                     "files_changed": ["fix.txt"],
-                    "questions": self.questions(),
                 },
             },
             {
@@ -1414,7 +1404,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
                     "status": "ok",
                     "kind": "delta_review",
                     "findings": [],
-                    "questions": self.questions(),
                 },
             },
         ])

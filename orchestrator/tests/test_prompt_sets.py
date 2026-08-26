@@ -136,7 +136,22 @@ class PromptSetStoreTest(unittest.TestCase):
                 elif defect == "lead_turn_question_collision":
                     kind_path = directory / "brainstorming/discussion_turn.json"
                     document = json.loads(kind_path.read_text(encoding="utf-8"))
-                    document["questions"]["items"][0]["id"] = "environment_fit"
+                    borrowed_path = directory / "milestone/draft_slice_note.json"
+                    borrowed = json.loads(
+                        borrowed_path.read_text(encoding="utf-8")
+                    )
+                    collision_id = "fixture_borrowed_collision"
+                    borrowed["questions"]["items"].append({
+                        "id": collision_id,
+                        "text": "Borrowed fixture question",
+                    })
+                    borrowed_path.write_text(
+                        json.dumps(borrowed), encoding="utf-8"
+                    )
+                    document["questions"]["items"].append({
+                        "id": collision_id,
+                        "text": "Lead fixture question",
+                    })
                     kind_path.write_text(json.dumps(document), encoding="utf-8")
                 elif defect == "invalid_optional_control":
                     document = json.loads(kind_path.read_text(encoding="utf-8"))
@@ -179,7 +194,13 @@ class PromptSetStoreTest(unittest.TestCase):
                             {"ref": "does_not_exist"}
                         )
                     elif defect == "duplicate_id":
-                        item = copy.deepcopy(document["questions"]["items"][0])
+                        items = document["questions"]["items"]
+                        if not items:
+                            items.append({
+                                "id": "fixture_duplicate",
+                                "text": "Synthetic fixture question",
+                            })
+                        item = copy.deepcopy(items[0])
                         document["questions"]["items"].append(item)
                     else:
                         inline = next(
@@ -201,9 +222,25 @@ class PromptSetStoreTest(unittest.TestCase):
         contrary = self.write_set("contrary-question-overlap")
         discussion_path = contrary / "brainstorming/discussion_turn.json"
         discussion = json.loads(discussion_path.read_text(encoding="utf-8"))
+        borrowed = json.loads(
+            (contrary / "milestone/draft_slice_note.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        overlap_id = "fixture_nonlead_overlap"
+        borrowed["questions"]["items"].append({
+            "id": overlap_id,
+            "text": "Borrowed fixture question",
+        })
+        (contrary / "milestone/draft_slice_note.json").write_text(
+            json.dumps(borrowed), encoding="utf-8"
+        )
         discussion["variants"]["role_stance"]["contrary_position"][
             "questions"
-        ] = [{"id": "environment_fit", "text": "Contrary-only question"}]
+        ] = [{
+            "id": overlap_id,
+            "text": "Contrary-only question",
+        }]
         discussion_path.write_text(json.dumps(discussion), encoding="utf-8")
         self.assertEqual(
             ps.load(self.home, "contrary-question-overlap").name,

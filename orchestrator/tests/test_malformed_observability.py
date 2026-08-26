@@ -43,18 +43,6 @@ def draft():
         ok(
             "draft_skeleton",
             artifact="docs/skeleton.md",
-            questions=[
-                {"id": question, "answer": "Checked the bounded fixture."}
-                for question in (
-                    "due_diligence_count",
-                    "machinery_trust",
-                    "environment_fit",
-                    "human_scale",
-                    "guarantee_fit",
-                    "cheapest_sufficient",
-                    "rare_failure_posture",
-                )
-            ],
         ),
         family="codex",
         side_effect=write_file(
@@ -94,7 +82,12 @@ class MalformedObservabilityTest(unittest.TestCase):
                 draft(),
                 # First attempt violates the contract; the repair retry
                 # (same kind, same runner) returns a valid clean round.
-                step("review_round", MALFORMED_REVIEW, family="codex"),
+                step(
+                    "review_round",
+                    MALFORMED_REVIEW,
+                    family="codex",
+                    prompt_questions=False,
+                ),
                 step("review_round", report("review_round"), family="codex"),
             ],
             stop=lambda s: self._malformed_events(s),
@@ -128,8 +121,14 @@ class MalformedObservabilityTest(unittest.TestCase):
         # only its final `}`. It must still surface as malformed — the
         # model dropping the brace is a real defect — but it must NOT cost
         # a replacement re-review, which is what silently changed verdicts.
-        valid = report("review_round")
-        unterminated = json.dumps(valid)[:-1] + "\n"
+        served = {}
+
+        def unterminated(prompt):
+            valid = report("review_round")(prompt)
+            served["valid"] = valid
+            served["text"] = json.dumps(valid)[:-1] + "\n"
+            return served["text"]
+
         state = self._drive(
             [
                 draft(),
@@ -146,18 +145,25 @@ class MalformedObservabilityTest(unittest.TestCase):
         self.assertIsNone(e["duration_s"])
         with open(os.path.join(state["workspace"], e["raw_path"]),
                   "r", encoding="utf-8") as fh:
-            self.assertEqual(fh.read(), unterminated)
+            self.assertEqual(fh.read(), served["text"])
         # The round landed with the findings the worker actually reported,
         # not a second opinion.
         rounds = state["units"][0]["rounds"]
         self.assertEqual(len(rounds), 1)
-        self.assertEqual(rounds[0]["result"]["findings"], valid["findings"])
+        self.assertEqual(
+            rounds[0]["result"]["findings"], served["valid"]["findings"]
+        )
 
     def test_summary_projects_the_malformed_trail(self):
         state = self._drive(
             [
                 draft(),
-                step("review_round", MALFORMED_REVIEW, family="codex"),
+                step(
+                    "review_round",
+                    MALFORMED_REVIEW,
+                    family="codex",
+                    prompt_questions=False,
+                ),
                 step("review_round", report("review_round"), family="codex"),
             ],
             stop=lambda s: self._malformed_events(s),
@@ -173,8 +179,18 @@ class MalformedObservabilityTest(unittest.TestCase):
         state = self._drive(
             [
                 draft(),
-                step("review_round", MALFORMED_REVIEW, family="codex"),
-                step("review_round", MALFORMED_REVIEW, family="codex"),
+                step(
+                    "review_round",
+                    MALFORMED_REVIEW,
+                    family="codex",
+                    prompt_questions=False,
+                ),
+                step(
+                    "review_round",
+                    MALFORMED_REVIEW,
+                    family="codex",
+                    prompt_questions=False,
+                ),
             ],
             stop=lambda s: s.get("failure"),
         )

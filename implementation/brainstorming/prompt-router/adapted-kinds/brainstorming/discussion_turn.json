@@ -148,7 +148,7 @@
   },
   "questions": {
     "intro": [
-      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+      "QUESTIONS (answer each in output, backed by an explanation)"
     ],
     "items": [
       {

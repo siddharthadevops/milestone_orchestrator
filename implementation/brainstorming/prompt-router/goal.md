@@ -112,21 +112,20 @@ recorded in its README. The load-bearing ones this milestone implements in code:
 - DUE DILIGENCE is written into the DOCUMENT only — reviewers judge the
   document whole, with no dedicated policing recipe (decision 16); the
   old `battery` output array and its validator retire. QUESTIONS is the
-  first-class output battery: per-kind items, one short bounded sentence
+  first-class output battery: per-kind items, one explanatory free-text answer
   each, presence-checked only — and required in EVERY reply, whatever its
   status: blocked, retry, and need_rethink included. Every entry ANSWERS its
   question and backs it with a brief description of the work behind it
-  (bounded at 300 characters) — never a bare verdict word an idle model
+  with no length ceiling — never a bare verdict word an idle model
   can emit for free: describing forces doing, answering forces deciding.
   Presence means present AND non-empty — that is the whole check,
   deliberately: external actors will
   later inject their own questions, and content machinery could never
   verify those. Even asking for a rethink requires having answered the
-  battery. Three explanatory proportionality questions mount once through
-  the shared header, so every kind answers them, including the bare technical
-  `merge_repair` and `suite_checkpoint` calls. They are ordinary free-text
-  answers under the same non-empty, 300-character structural check; there is
-  no `none` shortcut and no semantic parser or content judgment.
+  battery. The rule binds every kind that defines or mounts a battery;
+  a bare technical kind that defines none (`merge_repair`,
+  `suite_checkpoint`) owes none. There is no `none` shortcut and no
+  semantic parser or content judgment.
 - `need_rethink` is a report, not a steering wheel: `finding` +
   `target_path`, no request framing, no result_mode, no max_rounds — the
   orchestrator runs the session from the finding alone. The session's

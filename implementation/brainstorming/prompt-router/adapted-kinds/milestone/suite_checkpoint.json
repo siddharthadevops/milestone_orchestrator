@@ -1,7 +1,7 @@
 {
   "kind": "suite_checkpoint",
   "process": "milestone",
-  "description": "Bare technical agent call: discovers when necessary and runs the official complete suite at a scheduled checkpoint. No craft law; universal explanatory questions still mount.",
+  "description": "Bare technical agent call: discovers when necessary and runs the official complete suite at a scheduled checkpoint. No craft law, no battery.",
   "instructions": {
     "parts": [
       {
@@ -85,9 +85,7 @@
     ]
   },
   "questions": {
-    "intro": [
-      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
-    ],
+    "status": "bare technical kind — no battery by design",
     "items": []
   },
   "output_contract": {
@@ -133,9 +131,6 @@
           " \"blocked_reason\":\"<what prevented a trustworthy execution>\"}"
         ],
         "variables": []
-      },
-      {
-        "ref": "questions_output"
       }
     ]
   }

@@ -354,11 +354,7 @@ def _questions(obj, bound, options, ctx):
                 "%s: duplicate question id %r" % (actx, question_id)
             )
         seen.add(question_id)
-        text = _text(answer, "answer", actx)
-        if len(text) > 300:
-            raise contracts.ContractError(
-                "%s.answer must be at most 300 characters" % actx
-            )
+        _text(answer, "answer", actx)
     missing = [question_id for question_id in expected if question_id not in seen]
     if missing:
         raise contracts.ContractError(

@@ -2654,13 +2654,23 @@ def _unlink_quiet(path):
 # Mock runner (tests)
 
 
+def mock_response_text(response, prompt):
+    """Resolve a prompt-aware fixture and return its transport text."""
+    if callable(response):
+        response = response(prompt)
+    if isinstance(response, dict):
+        return json.dumps(response)
+    return response
+
+
 class MockRunner(object):
     """Deterministic scripted runner.
 
     script: list of steps, each a dict:
       {"expect_kind": "<kind>",          # asserted against the prompt header
        "expect_family": "<family>",      # optional assertion
-       "response": <dict or raw string>, # dict is json.dumps'ed
+       "response": <dict, raw string, or callable(prompt)>,
+                                          # dict is json.dumps'ed
        "side_effect": callable(workspace) or None}
     """
 
@@ -2700,11 +2710,7 @@ class MockRunner(object):
         side_effect = step.get("side_effect")
         if side_effect is not None:
             side_effect(workspace)
-        response = step["response"]
-        if isinstance(response, dict):
-            text = json.dumps(response)
-        else:
-            text = response
+        text = mock_response_text(step["response"], prompt)
         return RunnerResult(text, 0, 0.01)
 
     def start_session(
@@ -2764,6 +2770,30 @@ def prompt_kind(prompt):
         if line.startswith("KIND:"):
             return line.split(":", 1)[1].strip()
     return None
+
+
+def prompt_question_ids(prompt):
+    """Read question ids from our deterministic rendered prompt format.
+
+    This is a MockRunner/test-fixture convenience, not an LLM-output parser.
+    The renderer owns the exact ``QUESTIONS`` / ``OUTPUT CONTRACT`` framing.
+    """
+    in_questions = False
+    question_ids = []
+    for line in prompt.splitlines():
+        if line.startswith("QUESTIONS"):
+            in_questions = True
+            continue
+        if in_questions and line.startswith("OUTPUT CONTRACT"):
+            break
+        if not in_questions or not line.startswith("- "):
+            continue
+        candidate, separator, _question = line[2:].partition(":")
+        if separator and candidate and not any(
+            char.isspace() for char in candidate
+        ):
+            question_ids.append(candidate)
+    return tuple(question_ids)
 
 
 def save_prompt_trace(directory, family, prompt, label=None):

@@ -25,8 +25,16 @@ from orchestrator.tests.test_driver_mock import (
     finding,
     fix_ok as legacy_fix_ok,
     ok,
+    prompt_response,
     report as legacy_report,
     triaged,
+)
+
+
+_AUTHOR_KINDS = (
+    contracts.KIND_DRAFT_SKELETON,
+    contracts.KIND_DRAFT_SLICE_NOTE,
+    contracts.KIND_IMPLEMENT,
 )
 
 
@@ -59,26 +67,12 @@ def failure_gap():
     }
 
 
-def _judgment_questions():
-    return [
-        {"id": "environment_fit", "answer": "Checked."},
-        {"id": "human_scale", "answer": "Checked."},
-        {"id": "guarantee_fit", "answer": "Checked."},
-        {"id": "cheapest_sufficient", "answer": "Checked."},
-        {"id": "rare_failure_posture", "answer": "Checked."},
-    ]
-
-
 def fix_ok(*args, **kwargs):
-    value = legacy_fix_ok(*args, **kwargs)
-    value["questions"] = _judgment_questions()
-    return value
+    return prompt_response(legacy_fix_ok(*args, **kwargs))
 
 
 def report(kind, findings=()):
-    value = legacy_report(kind, findings)
-    value["questions"] = _judgment_questions()
-    return value
+    return prompt_response(legacy_report(kind, findings))
 
 
 def _usage(amount=3):
@@ -98,9 +92,8 @@ def _rethink(kind, source=None, result_mode="proposal"):
         "finding": copy.deepcopy(source or {"id": "BUILD", "summary": "choice"}),
         "target_path": "proposals/rethink.md",
     }
-    if kind in _AUTHOR_QUESTION_IDS:
-        value["questions"] = _author_questions(kind)
-        return value
+    if kind in _AUTHOR_KINDS:
+        return prompt_response(value)
     value.update({
         "request": "Resolve the one bounded design question.",
         "max_rounds": 20,
@@ -108,49 +101,11 @@ def _rethink(kind, source=None, result_mode="proposal"):
     })
     if kind in contracts.RETHINK_CONTINUATION_KINDS:
         value["failure_gap"] = failure_gap()
-    value["questions"] = _judgment_questions()
-    return value
-
-
-_AUTHOR_QUESTION_IDS = {
-    contracts.KIND_DRAFT_SKELETON: (
-        "due_diligence_count",
-        "machinery_trust",
-        "environment_fit",
-        "human_scale",
-        "guarantee_fit",
-        "cheapest_sufficient",
-        "rare_failure_posture",
-    ),
-    contracts.KIND_DRAFT_SLICE_NOTE: (
-        "due_diligence_count",
-        "machinery_trust",
-        "environment_fit",
-        "human_scale",
-        "guarantee_fit",
-        "cheapest_sufficient",
-        "rare_failure_posture",
-    ),
-    contracts.KIND_IMPLEMENT: (
-        "machinery_trust",
-        "environment_fit",
-        "human_scale",
-        "guarantee_fit",
-        "cheapest_sufficient",
-        "rare_failure_posture",
-    ),
-}
-
-
-def _author_questions(kind):
-    return [
-        {"id": question_id, "answer": "Checked the bounded fixture."}
-        for question_id in _AUTHOR_QUESTION_IDS[kind]
-    ]
+    return prompt_response(value)
 
 
 def _author_ok(kind, **extra):
-    return ok(kind, questions=_author_questions(kind), **extra)
+    return prompt_response(ok(kind, **extra))
 
 
 def _worker_plan():
@@ -566,7 +521,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             with self.subTest(kind=kind):
                 path = self._path("kind-%d" % number, unit_kind, status)
                 scripted = {"expect_kind": kind, "response": response}
-                if kind in _AUTHOR_QUESTION_IDS:
+                if kind in _AUTHOR_KINDS:
                     def author_edit(workspace, author_kind=kind):
                         if author_kind == contracts.KIND_DRAFT_SKELETON:
                             relative = "docs/skeleton.md"

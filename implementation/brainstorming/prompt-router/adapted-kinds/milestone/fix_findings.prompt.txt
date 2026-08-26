@@ -168,12 +168,9 @@ PROCESS AUTHORITY
 - Never invoke, spawn, or consult another LLM or agent. Only the
   deterministic driver dispatches model calls.
 
-QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
+QUESTIONS (answer each in output, backed by an explanation)
 - environment_fit: What standard does the surrounding work live at, and do any fixes you applied exceed it where the mandate did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found.
 - human_scale: Put your fixes next to the findings: did you repair at the grain and size the mandate means, or feed literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
-- guarantee_fit: What guarantees govern your work or judgment, what strength do they require, and why? If none apply, explain why no guarantee is needed and how your work still fits the surrounding project's accepted standard.
-- cheapest_sufficient: What materially simpler alternative did you examine—including tolerating a loud bounded failure or an extremely unlikely edge—and what concrete guarantee makes it insufficient?
-- rare_failure_posture: What are the realistic probability and damage of the event this work prevents? Would letting that rare case fail closed and surface clearly for retry or operator action be cheaper than preventing it? Explain the trade-off.
 
 OUTPUT CONTRACT (mandatory)
 Return exactly one JSON object; no prose or markdown fences.
@@ -211,7 +208,7 @@ Focused discussion before deciding one queued finding:
 No proposed direction and no other fields; sibling findings stay
 queued — the orchestrator runs the session from the finding alone.
 
-"questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
+"questions": [{"id": "<id>", "answer": "<the answer, backed by an explanation>"}, ...]
   (one entry per QUESTIONS id above, in EVERY reply whatever its status;
    each entry ANSWERS its question and briefly describes the work behind
-   it — the machine requires one non-empty answer per mounted id and at most 300 characters; it does not judge substance)
+   it — the machine requires one non-empty answer per mounted id; it does not judge substance or length)

@@ -105,55 +105,46 @@ def init_state(workspace, config, goal=GOAL):
     return path
 
 
-_GLOBAL_QUESTION_IDS = (
-    "guarantee_fit",
-    "cheapest_sufficient",
-    "rare_failure_posture",
-)
+class _PromptResponse(dict):
+    """A scripted payload that answers the physical prompt it receives."""
 
+    def __init__(self, response, answer):
+        super().__init__(response)
+        self.answer = answer
 
-_QUESTION_IDS = {
-    contracts.KIND_DRAFT_SKELETON: (
-        "due_diligence_count",
-        "machinery_trust",
-        "environment_fit",
-        "human_scale",
-    ),
-    contracts.KIND_DRAFT_SLICE_NOTE: (
-        "due_diligence_count",
-        "machinery_trust",
-        "environment_fit",
-        "human_scale",
-    ),
-    contracts.KIND_IMPLEMENT: (
-        "machinery_trust",
-        "environment_fit",
-        "human_scale",
-    ),
-    contracts.KIND_REVIEW_ROUND: ("environment_fit", "human_scale"),
-    contracts.KIND_FIX_FINDINGS: ("environment_fit", "human_scale"),
-    contracts.KIND_DELTA_REVIEW: ("environment_fit", "human_scale"),
-    contracts.KIND_RECLASSIFY: ("environment_fit", "human_scale"),
-    contracts.KIND_MERGE_REPAIR: (),
-    contracts.KIND_SUITE_CHECKPOINT: (),
-}
+    def __call__(self, prompt):
+        payload = copy.deepcopy(dict(self))
+        if "questions" not in payload:
+            question_ids = runners.prompt_question_ids(prompt)
+            if question_ids:
+                payload["questions"] = [
+                    {"id": question_id, "answer": self.answer}
+                    for question_id in question_ids
+                ]
+        return payload
 
-
-def questions(kind):
-    return [
-        {"id": question_id, "answer": "Checked the bounded fixture."}
-        for question_id in (
-            _QUESTION_IDS.get(kind, ()) + _GLOBAL_QUESTION_IDS
+    def __deepcopy__(self, memo):
+        copied = _PromptResponse(
+            copy.deepcopy(dict(self), memo),
+            copy.deepcopy(self.answer, memo),
         )
-    ]
+        memo[id(self)] = copied
+        return copied
+
+
+def prompt_response(response, answer="Checked the bounded fixture."):
+    """Answer exactly the question ids mounted in the dispatched prompt."""
+    if not isinstance(response, dict):
+        raise TypeError("prompt-aware response must be an object")
+    if isinstance(response, _PromptResponse) and response.answer == answer:
+        return response
+    return _PromptResponse(response, answer)
 
 
 def ok(kind, **extra):
     payload = {"status": "ok", "kind": kind}
-    if kind in _QUESTION_IDS:
-        payload["questions"] = questions(kind)
     payload.update(extra)
-    return payload
+    return prompt_response(payload)
 
 
 def report(kind, findings=()):
@@ -259,7 +250,6 @@ def suite_checkpoint_step(command, status="passed"):
     response = {
         "status": status,
         "kind": contracts.KIND_SUITE_CHECKPOINT,
-        "questions": questions(contracts.KIND_SUITE_CHECKPOINT),
         "commands": [command],
         "results": [{
             "command": command,
@@ -285,13 +275,47 @@ def suite_checkpoint_step(command, status="passed"):
     )
 
 
-def step(kind, response, family=None, side_effect=None):
+def step(kind, response, family=None, side_effect=None,
+         prompt_questions=True):
+    if (
+        prompt_questions
+        and isinstance(response, dict)
+        and not callable(response)
+    ):
+        response = prompt_response(response)
     s = {"expect_kind": kind, "response": response}
     if family is not None:
         s["expect_family"] = family
     if side_effect is not None:
         s["side_effect"] = side_effect
     return s
+
+
+class TestPromptQuestionFixture(unittest.TestCase):
+    def test_response_tracks_every_physically_mounted_question(self):
+        for count in (0, 2, 10):
+            with self.subTest(count=count):
+                expected = ["question_%d" % index for index in range(count)]
+                prompt = "\n".join(
+                    ["KIND: review_round"]
+                    + (["QUESTIONS (answer each in output)"] if expected else [])
+                    + ["- %s: Explain it." % question_id
+                       for question_id in expected]
+                    + ["OUTPUT CONTRACT (mandatory)"]
+                )
+                payload = prompt_response({
+                    "status": "ok",
+                    "kind": "review_round",
+                    "findings": [],
+                })(prompt)
+                answers = payload.get("questions", [])
+                self.assertEqual(
+                    [item["id"] for item in answers],
+                    expected,
+                )
+                self.assertTrue(all(item["answer"] for item in answers))
+                if not expected:
+                    self.assertNotIn("questions", payload)
 
 
 def write_file(rel, content):
@@ -872,14 +896,16 @@ class TestFailedCallAccounting(DriverTestCase):
             def __init__(self):
                 self.calls = 0
 
-            def call(self, *_args, **_kwargs):
+            def call(self, _family, prompt, _workspace, **_kwargs):
                 self.calls += 1
                 if self.calls == 1:
                     return runners.RunnerResult(
                         "not json", 0, 1.0, token_usage=first_usage
                     )
                 return runners.RunnerResult(
-                    json.dumps(skeleton_script()[0]["response"]),
+                    runners.mock_response_text(
+                        skeleton_script()[0]["response"], prompt
+                    ),
                     0,
                     2.0,
                     token_usage=second_usage,
@@ -1468,7 +1494,6 @@ class TestFixerProtocolFailures(DriverTestCase):
             "kind": contracts.KIND_FIX_FINDINGS,
             "retry_reason": "consultation_unavailable",
             "notes": "legacy nested consultation did not return",
-            "questions": questions(contracts.KIND_FIX_FINDINGS),
         }
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())

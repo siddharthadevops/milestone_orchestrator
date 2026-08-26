@@ -47,8 +47,8 @@ captured evidence it was pruned from.
 - **Units per kind.** `instructions` (ordered `parts`), `questions` (the NEW
   output-answered battery: `intro` lines + `items` of `{id, text}`; renders as
   a QUESTIONS block before the contract and lands in the output's `questions`
-  array, checked for one non-empty answer per mounted id with a 300-character
-  maximum; kinds without authored items stay blank), and
+  array, checked for one non-empty answer per mounted id with no length
+  ceiling; kinds without authored items stay blank), and
   `output_contract` (ordered `sections`).
 - **Refs can pin per-kind constants.** `{"ref": "common_fields", "defaults":
   {"status_vocabulary": "…"}}` fixes a shared unit's variable to a kind-level
@@ -79,8 +79,8 @@ captured evidence it was pruned from.
   are **task description**, named **DUE DILIGENCE**: they live inside
   `instructions` and are answered in the DOCUMENT only. **QUESTIONS** is the
   separate first-class battery answered in the output JSON (`questions`
-  array, short bounded sentences, with exact ids, non-emptiness, and the
-  300-character maximum machine-checked) — the two never share a name.
+  array, explanatory free text with exact ids and non-emptiness
+  machine-checked) — the two never share a name.
 
 ## Deliberate adaptation decisions (vs the captures — veto any of these)
 
@@ -757,6 +757,19 @@ captured evidence it was pruned from.
     corresponding older goal/rationale prose; those statements are chronology
     only. The current base corpus remains the default future code material;
     domain-specific material question sets are later work.
+
+76. **Explanatory answers have no length ceiling** (operator ruling,
+    2026-08-26): every mounted question still requires exactly one non-empty
+    free-text answer, but neither the prompt nor the machine imposes a maximum
+    length. Substance and length remain unscored. This supersedes the
+    300-character portions of decisions 52, 62, and 75.
+
+77. **The three universal explanatory questions are withdrawn** (operator
+    ruling, 2026-08-26): `guarantee_fit`, `cheapest_sufficient`, and
+    `rare_failure_posture` no longer mount through the shared header. Each kind
+    returns to its previously designed local battery; bare technical kinds owe
+    none. This supersedes decision 75 without changing the dynamic mounted-id
+    reply contract or decision 76's absence of a length ceiling.
 
 ## Content observations left untouched (not adaptation's call)
 

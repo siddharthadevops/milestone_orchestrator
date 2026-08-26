@@ -23,52 +23,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                            'path of '
                                                                            'the '
                                                                            'primary '
-                                                                           'workspace.'}],
-                                             'questions': [{'id': 'guarantee_fit',
-                                                            'text': 'What guarantees '
-                                                                    'govern your work '
-                                                                    'or judgment, what '
-                                                                    'strength do they '
-                                                                    'require, and why? '
-                                                                    'If none apply, '
-                                                                    'explain why no '
-                                                                    'guarantee is '
-                                                                    'needed and how '
-                                                                    'your work still '
-                                                                    'fits the '
-                                                                    'surrounding '
-                                                                    "project's "
-                                                                    'accepted '
-                                                                    'standard.'},
-                                                           {'id': 'cheapest_sufficient',
-                                                            'text': 'What materially '
-                                                                    'simpler '
-                                                                    'alternative did '
-                                                                    'you '
-                                                                    'examine—including '
-                                                                    'tolerating a loud '
-                                                                    'bounded failure '
-                                                                    'or an extremely '
-                                                                    'unlikely edge—and '
-                                                                    'what concrete '
-                                                                    'guarantee makes '
-                                                                    'it insufficient?'},
-                                                           {'id': 'rare_failure_posture',
-                                                            'text': 'What are the '
-                                                                    'realistic '
-                                                                    'probability and '
-                                                                    'damage of the '
-                                                                    'event this work '
-                                                                    'prevents? Would '
-                                                                    'letting that rare '
-                                                                    'case fail closed '
-                                                                    'and surface '
-                                                                    'clearly for retry '
-                                                                    'or operator '
-                                                                    'action be cheaper '
-                                                                    'than preventing '
-                                                                    'it? Explain the '
-                                                                    'trade-off.'}]},
+                                                                           'workspace.'}]},
                                   'project_context': {'text': ['PROJECT CONTEXT '
                                                                '(standing project law; '
                                                                'binding)',
@@ -1538,11 +1493,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             '"<the '
                                                                             'answer, '
                                                                             'backed by '
-                                                                            'a brief '
-                                                                            'description; '
-                                                                            'at most '
-                                                                            '300 '
-                                                                            'characters>"}, '
+                                                                            'an '
+                                                                            'explanation>"}, '
                                                                             '...]',
                                                                             '  (one '
                                                                             'entry per '
@@ -1572,12 +1524,12 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'answer '
                                                                             'per '
                                                                             'mounted '
-                                                                            'id and at '
-                                                                            'most 300 '
-                                                                            'characters; '
-                                                                            'it does '
-                                                                            'not judge '
-                                                                            'substance)'],
+                                                                            'id; it '
+                                                                            'does not '
+                                                                            'judge '
+                                                                            'substance '
+                                                                            'or '
+                                                                            'length)'],
                                                                    'variables': []},
                                               'implement_result': {'text': ['Kind '
                                                                             'implement '
@@ -1997,9 +1949,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                               {'ref': 'reuse_gate'},
                                                               {'ref': 'process_authority'}]},
                                    'questions': {'intro': ['QUESTIONS (answer each in '
-                                                           'output, backed by a brief '
-                                                           'description; at most 300 '
-                                                           'characters per answer)'],
+                                                           'output, backed by an '
+                                                           'explanation)'],
                                                  'items': [{'id': 'due_diligence_count',
                                                             'text': 'How many Due '
                                                                     'Diligence rows '
@@ -2408,10 +2359,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                 {'ref': 'process_authority'},
                                                                 {'ref': 'design_contradiction_author'}]},
                                      'questions': {'intro': ['QUESTIONS (answer each '
-                                                             'in output, backed by a '
-                                                             'brief description; at '
-                                                             'most 300 characters per '
-                                                             'answer)'],
+                                                             'in output, backed by an '
+                                                             'explanation)'],
                                                    'items': [{'id': 'due_diligence_count',
                                                               'text': 'How many Due '
                                                                       'Diligence rows '
@@ -2615,9 +2564,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                'your work compares to '
                                                                'what was asked.'}],
                                             'intro': ['QUESTIONS (answer each in '
-                                                      'output, backed by a brief '
-                                                      'description; at most 300 '
-                                                      'characters per answer)']},
+                                                      'output, backed by an '
+                                                      'explanation)']},
                               'output_contract': {'sections': [{'ref': 'envelope_verbose'},
                                                                {'ref': 'common_fields',
                                                                 'defaults': {'status_vocabulary': '"ok" '
@@ -2696,9 +2644,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                   'compares to what '
                                                                   'was asked.'}],
                                                'intro': ['QUESTIONS (answer each in '
-                                                         'output, backed by a brief '
-                                                         'description; at most 300 '
-                                                         'characters per answer)']},
+                                                         'output, backed by an '
+                                                         'explanation)']},
                                  'output_contract': {'sections': [{'ref': 'envelope_compact'},
                                                                   {'ref': 'review_contract'},
                                                                   {'ref': 'review_blocked'},
@@ -2980,9 +2927,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                   'compares to what '
                                                                   'was asked.'}],
                                                'intro': ['QUESTIONS (answer each in '
-                                                         'output, backed by a brief '
-                                                         'description; at most 300 '
-                                                         'characters per answer)']},
+                                                         'output, backed by an '
+                                                         'explanation)']},
                                  'output_contract': {'sections': [{'ref': 'envelope_compact'},
                                                                   {'ref': 'review_contract'},
                                                                   {'ref': 'review_blocked'},
@@ -3451,9 +3397,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                 'your work compares to '
                                                                 'what was asked.'}],
                                              'intro': ['QUESTIONS (answer each in '
-                                                       'output, backed by a brief '
-                                                       'description; at most 300 '
-                                                       'characters per answer)']},
+                                                       'output, backed by an '
+                                                       'explanation)']},
                                'output_contract': {'sections': [{'id': 'reclassify_result',
                                                                  'text': ['OUTPUT '
                                                                           'CONTRACT '
@@ -3497,8 +3442,11 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           '[{"id": '
                                                                           '"<id>", '
                                                                           '"answer": '
-                                                                          '"<one short '
-                                                                          'sentence>"}, '
+                                                                          '"<the '
+                                                                          'answer, '
+                                                                          'backed by '
+                                                                          'an '
+                                                                          'explanation>"}, '
                                                                           '...]}',
                                                                           '  (one '
                                                                           'entry per '
@@ -3506,12 +3454,10 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           'id above; '
                                                                           'each answer '
                                                                           'must be '
-                                                                          'non-empty '
-                                                                          'and at most '
-                                                                          '300 '
-                                                                          'characters; '
+                                                                          'non-empty; '
                                                                           'substance '
-                                                                          'is not '
+                                                                          'and length '
+                                                                          'are not '
                                                                           'machine-judged)'],
                                                                  'variables': []}]}},
  'milestone/fix_findings.json': {'kind': 'fix_findings',
@@ -3838,9 +3784,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                   'compares to what '
                                                                   'was asked.'}],
                                                'intro': ['QUESTIONS (answer each in '
-                                                         'output, backed by a brief '
-                                                         'description; at most 300 '
-                                                         'characters per answer)']},
+                                                         'output, backed by an '
+                                                         'explanation)']},
                                  'output_contract': {'sections': [{'ref': 'envelope_compact'},
                                                                   {'id': 'fix_results',
                                                                    'text': ['Completed '
@@ -4175,8 +4120,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                     'discovers when necessary and runs '
                                                     'the official complete suite at a '
                                                     'scheduled checkpoint. No craft '
-                                                    'law; universal explanatory '
-                                                    'questions still mount.',
+                                                    'law, no battery.',
                                      'instructions': {'parts': [{'ref': 'header'},
                                                                 {'ref': 'contract_correction'},
                                                                 {'text': ['TASK: '
@@ -4445,11 +4389,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           'passed.'],
                                                                  'variables': []},
                                                                 {'ref': 'process_authority'}]},
-                                     'questions': {'intro': ['QUESTIONS (answer each '
-                                                             'in output, backed by a '
-                                                             'brief description; at '
-                                                             'most 300 characters per '
-                                                             'answer)'],
+                                     'questions': {'status': 'bare technical kind — no '
+                                                             'battery by design',
                                                    'items': []},
                                      'output_contract': {'sections': [{'id': 'suite_checkpoint_result',
                                                                        'text': ['OUTPUT '
@@ -4643,16 +4584,14 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                 'a '
                                                                                 'trustworthy '
                                                                                 'execution>"}'],
-                                                                       'variables': []},
-                                                                      {'ref': 'questions_output'}]}},
+                                                                       'variables': []}]}},
  'milestone/merge_repair.json': {'kind': 'merge_repair',
                                  'process': 'milestone',
                                  'description': 'Bare technical call: after a computed '
                                                 'plan wipe, owns all run-owned '
                                                 'repository surgery and the final '
-                                                'same-branch commit. No craft law; '
-                                                'universal explanatory questions still '
-                                                'mount.',
+                                                'same-branch commit. No craft law, no '
+                                                'battery.',
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'text': ['TASK: the '
                                                                       'accepted plan '
@@ -4885,10 +4824,9 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                            'and '
                                                                                            'final '
                                                                                            'commit.'}]}]},
-                                 'questions': {'intro': ['QUESTIONS (answer each in '
-                                                         'output, backed by a brief '
-                                                         'description; at most 300 '
-                                                         'characters per answer)'],
+                                 'questions': {'status': 'bare technical kind — no '
+                                                         'battery by design (decision '
+                                                         '57)',
                                                'items': []},
                                  'output_contract': {'sections': [{'id': 'merge_repair_result',
                                                                    'text': ['OUTPUT '
@@ -4921,8 +4859,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             ' "notes": '
                                                                             '"<optional, '
                                                                             'short>"}'],
-                                                                   'variables': []},
-                                                                  {'ref': 'questions_output'}]}},
+                                                                   'variables': []}]}},
  'brainstorming/discussion_turn.json': {'kind': 'discussion_turn',
                                         'process': 'brainstorming',
                                         'description': "One seat's turn in a live "
@@ -5210,10 +5147,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                            'questions': []}}},
                                         'questions': {'intro': ['QUESTIONS (answer '
                                                                 'each in output, '
-                                                                'backed by a brief '
-                                                                'description; at most '
-                                                                '300 characters per '
-                                                                'answer)'],
+                                                                'backed by an '
+                                                                'explanation)'],
                                                       'items': [{'id': 'turn_environment_fit',
                                                                  'text': 'What '
                                                                          'standard '
@@ -5582,10 +5517,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                     'variables': []}]},
                                         'questions': {'intro': ['QUESTIONS (answer '
                                                                 'each in output, '
-                                                                'backed by a brief '
-                                                                'description; at most '
-                                                                '300 characters per '
-                                                                'answer)'],
+                                                                'backed by an '
+                                                                'explanation)'],
                                                       'items': [{'id': 'turn_environment_fit',
                                                                  'text': 'What '
                                                                          'standard '

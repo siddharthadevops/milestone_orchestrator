@@ -59,11 +59,6 @@ PROCESS AUTHORITY
 - Never invoke, spawn, or consult another LLM or agent. Only the
   deterministic driver dispatches model calls.
 
-QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
-- guarantee_fit: What guarantees govern your work or judgment, what strength do they require, and why? If none apply, explain why no guarantee is needed and how your work still fits the surrounding project's accepted standard.
-- cheapest_sufficient: What materially simpler alternative did you examine—including tolerating a loud bounded failure or an extremely unlikely edge—and what concrete guarantee makes it insufficient?
-- rare_failure_posture: What are the realistic probability and damage of the event this work prevents? Would letting that rare case fail closed and surface clearly for retry or operator action be cheaper than preventing it? Explain the trade-off.
-
 OUTPUT CONTRACT
 Return exactly one JSON object, nothing else.
 Passed or failed execution:
@@ -100,8 +95,3 @@ Impossible checkpoint:
  "commands":["<resolved command, if any>",...],
  "results":[<attempted results, if any>],
  "blocked_reason":"<what prevented a trustworthy execution>"}
-
-"questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
-  (one entry per QUESTIONS id above, in EVERY reply whatever its status;
-   each entry ANSWERS its question and briefly describes the work behind
-   it — the machine requires one non-empty answer per mounted id and at most 300 characters; it does not judge substance)

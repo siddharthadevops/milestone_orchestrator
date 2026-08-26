@@ -31,33 +31,18 @@ from orchestrator.tests.test_driver_mock import (
     make_config,
     ok,
     report as legacy_report,
-    skeleton_script,
     step,
     triaged,
     write_file,
 )
 
 
-def judgment_questions():
-    return [
-        {"id": "environment_fit", "answer": "Checked."},
-        {"id": "human_scale", "answer": "Checked."},
-        {"id": "guarantee_fit", "answer": "Checked."},
-        {"id": "cheapest_sufficient", "answer": "Checked."},
-        {"id": "rare_failure_posture", "answer": "Checked."},
-    ]
-
-
 def report(kind, findings=()):
-    payload = legacy_report(kind, findings)
-    payload["questions"] = judgment_questions()
-    return payload
+    return legacy_report(kind, findings)
 
 
 def fix_ok(*args, **kwargs):
-    payload = legacy_fix_ok(*args, **kwargs)
-    payload["questions"] = judgment_questions()
-    return payload
+    return legacy_fix_ok(*args, **kwargs)
 
 
 def no_suite_checkpoint():
@@ -75,38 +60,16 @@ def no_suite_checkpoint():
                     "basis": "No complete suite is configured or declared.",
                 }],
             },
-            "questions": [
-                {"id": question_id, "answer": "Checked."}
-                for question_id in (
-                    "guarantee_fit",
-                    "cheapest_sufficient",
-                    "rare_failure_posture",
-                )
-            ],
         },
         family="codex",
     )
 
 
 def draft_step():
-    current = skeleton_script()[0]
-    response = dict(current["response"])
-    response.pop("slices", None)
-    response["questions"] = [
-        {"id": question_id, "answer": "Checked."}
-        for question_id in (
-            "due_diligence_count",
-            "machinery_trust",
-            "environment_fit",
-            "human_scale",
-            "guarantee_fit",
-            "cheapest_sufficient",
-            "rare_failure_posture",
-        )
-    ]
-    return dict(
-        current,
-        response=response,
+    return step(
+        "draft_skeleton",
+        ok("draft_skeleton", artifact="docs/skeleton.md"),
+        family="codex",
         side_effect=write_file(
             "docs/skeleton.md",
             canonical_skeleton_document("Calculator core"),
@@ -207,8 +170,7 @@ def reclassify(defer_ok, family, reason="verified", risk=None,
                 ok("reclassify",
                    drift_risk=risk or lvl,
                    drift_damage=damage or lvl,
-                   reason=reason,
-                   questions=judgment_questions()),
+                   reason=reason),
                 family=family, side_effect=side_effect)
 
 
@@ -1386,14 +1348,6 @@ class TestP3Debt(DriverTestCase):
                      ok(
                          "implement",
                          files_changed=["calculator.py"],
-                         questions=[
-                             {"id": "machinery_trust", "answer": "Checked."},
-                             {"id": "environment_fit", "answer": "Checked."},
-                             {"id": "human_scale", "answer": "Checked."},
-                             {"id": "guarantee_fit", "answer": "Checked."},
-                             {"id": "cheapest_sufficient", "answer": "Checked."},
-                             {"id": "rare_failure_posture", "answer": "Checked."},
-                         ],
                      ),
                      family="codex",
                      side_effect=write_file(
@@ -1438,14 +1392,6 @@ class TestP3Debt(DriverTestCase):
                      ok(
                          "implement",
                          files_changed=["calculator.py"],
-                         questions=[
-                             {"id": "machinery_trust", "answer": "Checked."},
-                             {"id": "environment_fit", "answer": "Checked."},
-                             {"id": "human_scale", "answer": "Checked."},
-                             {"id": "guarantee_fit", "answer": "Checked."},
-                             {"id": "cheapest_sufficient", "answer": "Checked."},
-                             {"id": "rare_failure_posture", "answer": "Checked."},
-                         ],
                      ),
                      family="codex",
                      side_effect=write_file(
@@ -1479,14 +1425,6 @@ class TestP3Debt(DriverTestCase):
                      ok(
                          "implement",
                          files_changed=["calculator.py"],
-                         questions=[
-                             {"id": "machinery_trust", "answer": "Checked."},
-                             {"id": "environment_fit", "answer": "Checked."},
-                             {"id": "human_scale", "answer": "Checked."},
-                             {"id": "guarantee_fit", "answer": "Checked."},
-                             {"id": "cheapest_sufficient", "answer": "Checked."},
-                             {"id": "rare_failure_posture", "answer": "Checked."},
-                         ],
                      ),
                      family="codex",
                      side_effect=write_file(

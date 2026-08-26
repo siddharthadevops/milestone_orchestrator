@@ -11,6 +11,7 @@ from orchestrator import plan_reconciliation, tasks
 from orchestrator import runners
 from orchestrator import state as st
 from orchestrator import staffing
+from orchestrator.tests.test_driver_mock import prompt_response
 
 
 def _slice(slice_id):
@@ -181,24 +182,10 @@ class ReconciliationCallTest(unittest.TestCase):
             "status": status,
             "kind": "merge_repair",
             "files_changed": [self.path, "repair.txt"],
-            "questions": [
-                {
-                    "id": "guarantee_fit",
-                    "answer": "The accepted reconciliation contract governs.",
-                },
-                {
-                    "id": "cheapest_sufficient",
-                    "answer": "One bounded repair call is the simplest option.",
-                },
-                {
-                    "id": "rare_failure_posture",
-                    "answer": "A failed repair stops for operator action.",
-                },
-            ],
         }
         if status == "blocked":
             result["blocked_reason"] = "The required repair cannot complete."
-        return result
+        return prompt_response(result)
 
     def test_success_marks_before_dispatch_and_closes_one_account(self):
         seen = []

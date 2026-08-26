@@ -243,7 +243,7 @@ class TaskConformanceTest(unittest.TestCase):
         self.assertEqual(terminal["result"]["status"], "success")
         self.assertEqual(
             terminal["result"]["native_result"],
-            ok(contracts.KIND_IMPLEMENT, **native),
+            ok(contracts.KIND_IMPLEMENT, **native)(runner.calls[0][2]),
         )
         self.assertNotIn("reason", terminal["result"])
         self.assertFalse(os.path.exists(outside_claim))

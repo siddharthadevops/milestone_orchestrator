@@ -322,6 +322,10 @@ class PromptContractsTest(unittest.TestCase):
             assembled = prompt_router.assemble(
                 seed, material="code", values=values, **charge
             )
+            assembled["questions"]["items"].append({
+                "id": "fixture_%s_question" % charge["executor"],
+                "text": "Was the structural fixture answered?",
+            })
             assembled["output_contract"] = [
                 item for item in assembled["output_contract"]
                 if item["id"] == "questions_output"
@@ -340,11 +344,8 @@ class PromptContractsTest(unittest.TestCase):
                     prompt_contracts.validate(bound, {"status": status,
                                                        "questions": answers})
             long_answers = copy.deepcopy(answers)
-            long_answers[0]["answer"] = "x" * 301
-            with self.assertRaises(contracts.ContractError):
-                prompt_contracts.validate(
-                    bound, {"questions": long_answers}
-                )
+            long_answers[0]["answer"] = "x" * 3000
+            prompt_contracts.validate(bound, {"questions": long_answers})
             bad = [
                 {}, {"questions": answers[:-1]},
                 {"questions": answers + [copy.deepcopy(answers[0])]},
@@ -371,6 +372,10 @@ class PromptContractsTest(unittest.TestCase):
             material="document",
             values=values,
         )
+        assembled["questions"]["items"].append({
+            "id": "fixture_reclassify_question",
+            "text": "Was the reclassification fixture answered?",
+        })
         bound = prompt_contracts.bind(assembled)
         self.assertNotIn("questions_output", bound.registered_section_ids)
         self.assertTrue(bound.question_ids)

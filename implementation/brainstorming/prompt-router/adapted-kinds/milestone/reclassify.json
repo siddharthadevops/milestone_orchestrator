@@ -131,7 +131,7 @@
       }
     ],
     "intro": [
-      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+      "QUESTIONS (answer each in output, backed by an explanation)"
     ]
   },
   "output_contract": {
@@ -147,8 +147,8 @@
           " \"drift_risk\": \"low\" | \"medium\" | \"high\" | \"xhigh\",",
           " \"drift_damage\": \"low\" | \"medium\" | \"high\" | \"xhigh\",",
           " \"reason\": \"<one sentence: the concrete basis for BOTH ratings>\",",
-          " \"questions\": [{\"id\": \"<id>\", \"answer\": \"<one short sentence>\"}, ...]}",
-          "  (one entry per QUESTIONS id above; each answer must be non-empty and at most 300 characters; substance is not machine-judged)"
+          " \"questions\": [{\"id\": \"<id>\", \"answer\": \"<the answer, backed by an explanation>\"}, ...]}",
+          "  (one entry per QUESTIONS id above; each answer must be non-empty; substance and length are not machine-judged)"
         ],
         "variables": []
       }

@@ -66,7 +66,6 @@ def _suite_step(command, status="passed", side_effect=None):
     response = {
         "status": status,
         "kind": "suite_checkpoint",
-        "questions": _questions(contracts.KIND_SUITE_CHECKPOINT),
         "commands": [command],
         "results": [{
             "command": command,
@@ -89,40 +88,6 @@ def _suite_step(command, status="passed", side_effect=None):
         "suite_checkpoint", response, family="codex",
         side_effect=side_effect,
     )
-
-
-def _questions(kind):
-    ids = []
-    if kind in (
-        contracts.KIND_DRAFT_SKELETON,
-        contracts.KIND_DRAFT_SLICE_NOTE,
-    ):
-        ids.append("due_diligence_count")
-    if kind in (
-        contracts.KIND_DRAFT_SKELETON,
-        contracts.KIND_DRAFT_SLICE_NOTE,
-        contracts.KIND_IMPLEMENT,
-    ):
-        ids.append("machinery_trust")
-    if kind in (
-        contracts.KIND_DRAFT_SKELETON,
-        contracts.KIND_DRAFT_SLICE_NOTE,
-        contracts.KIND_IMPLEMENT,
-        contracts.KIND_REVIEW_ROUND,
-        contracts.KIND_FIX_FINDINGS,
-        contracts.KIND_DELTA_REVIEW,
-        contracts.KIND_RECLASSIFY,
-    ):
-        ids.extend(("environment_fit", "human_scale"))
-    ids.extend((
-        "guarantee_fit",
-        "cheapest_sufficient",
-        "rare_failure_posture",
-    ))
-    return [
-        {"id": question_id, "answer": "The bounded check is satisfied."}
-        for question_id in ids
-    ]
 
 
 def _slices(count):
@@ -152,7 +117,6 @@ def _skeleton_step(slice_count):
         ok(
             contracts.KIND_DRAFT_SKELETON,
             artifact="docs/skeleton.md",
-            questions=_questions(contracts.KIND_DRAFT_SKELETON),
         ),
         family="codex",
         side_effect=write_file(
@@ -171,7 +135,6 @@ def _doc_step(slice_id):
         ok(
             contracts.KIND_DRAFT_SLICE_NOTE,
             artifact=path,
-            questions=_questions(contracts.KIND_DRAFT_SLICE_NOTE),
         ),
         family="codex",
         side_effect=write_file(
@@ -188,7 +151,6 @@ def _impl_step(slice_id, part=None, cut=None):
     result = ok(
         contracts.KIND_IMPLEMENT,
         files_changed=[path],
-        questions=_questions(contracts.KIND_IMPLEMENT),
     )
     if cut is not None:
         result["implementation_cut"] = {
@@ -210,18 +172,12 @@ def _clean_reviews():
     return [
         step(
             contracts.KIND_REVIEW_ROUND,
-            {
-                **report(contracts.KIND_REVIEW_ROUND),
-                "questions": _questions(contracts.KIND_REVIEW_ROUND),
-            },
+            report(contracts.KIND_REVIEW_ROUND),
             family="codex",
         ),
         step(
             contracts.KIND_REVIEW_ROUND,
-            {
-                **report(contracts.KIND_REVIEW_ROUND),
-                "questions": _questions(contracts.KIND_REVIEW_ROUND),
-            },
+            report(contracts.KIND_REVIEW_ROUND),
             family="claude",
         ),
     ]
@@ -650,19 +606,13 @@ class TestVerificationChronology(DriverTestCase):
                             severity="P1",
                         )],
                         files_changed=[marker],
-                        questions=_questions(contracts.KIND_FIX_FINDINGS),
                     ),
                     family="codex",
                     side_effect=write_file(marker, "green\n"),
                 ),
                 step(
                     contracts.KIND_DELTA_REVIEW,
-                    {
-                        **report(contracts.KIND_DELTA_REVIEW),
-                        "questions": _questions(
-                            contracts.KIND_DELTA_REVIEW
-                        ),
-                    },
+                    report(contracts.KIND_DELTA_REVIEW),
                     family="codex",
                 ),
                 *_clean_reviews(),
@@ -743,7 +693,6 @@ class TestVerificationChronology(DriverTestCase):
                             summary=queued["summary"],
                             severity="P1",
                         )],
-                        questions=_questions(contracts.KIND_FIX_FINDINGS),
                     ),
                     family="codex",
                 ),
@@ -810,19 +759,13 @@ class TestVerificationChronology(DriverTestCase):
                             severity="P1",
                         )],
                         files_changed=[marker],
-                        questions=_questions(contracts.KIND_FIX_FINDINGS),
                     ),
                     family="codex",
                     side_effect=commit_repair,
                 ),
                 step(
                     contracts.KIND_DELTA_REVIEW,
-                    {
-                        **report(contracts.KIND_DELTA_REVIEW),
-                        "questions": _questions(
-                            contracts.KIND_DELTA_REVIEW
-                        ),
-                    },
+                    report(contracts.KIND_DELTA_REVIEW),
                     family="codex",
                 ),
                 *_clean_reviews(),

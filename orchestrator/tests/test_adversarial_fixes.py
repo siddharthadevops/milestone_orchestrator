@@ -49,26 +49,12 @@ from orchestrator.tests.test_driver_mock import (
 )
 
 
-def judgment_questions():
-    return [
-        {"id": "environment_fit", "answer": "Checked."},
-        {"id": "human_scale", "answer": "Checked."},
-        {"id": "guarantee_fit", "answer": "Checked."},
-        {"id": "cheapest_sufficient", "answer": "Checked."},
-        {"id": "rare_failure_posture", "answer": "Checked."},
-    ]
-
-
 def report(kind, findings=()):
-    payload = legacy_report(kind, findings)
-    payload["questions"] = judgment_questions()
-    return payload
+    return legacy_report(kind, findings)
 
 
 def fix_ok(*args, **kwargs):
-    payload = legacy_fix_ok(*args, **kwargs)
-    payload["questions"] = judgment_questions()
-    return payload
+    return legacy_fix_ok(*args, **kwargs)
 
 
 def draft_step():
@@ -77,18 +63,6 @@ def draft_step():
         ok(
             "draft_skeleton",
             artifact="docs/skeleton.md",
-            questions=[
-                {"id": question_id, "answer": "Checked."}
-                for question_id in (
-                    "due_diligence_count",
-                    "machinery_trust",
-                    "environment_fit",
-                    "human_scale",
-                    "guarantee_fit",
-                    "cheapest_sufficient",
-                    "rare_failure_posture",
-                )
-            ],
         ),
         family="codex",
         side_effect=write_file(
@@ -141,14 +115,6 @@ def implement_step():
         ok(
             "implement",
             files_changed=["core.txt"],
-            questions=[
-                {"id": "machinery_trust", "answer": "Checked."},
-                {"id": "environment_fit", "answer": "Checked."},
-                {"id": "human_scale", "answer": "Checked."},
-                {"id": "guarantee_fit", "answer": "Checked."},
-                {"id": "cheapest_sufficient", "answer": "Checked."},
-                {"id": "rare_failure_posture", "answer": "Checked."},
-            ],
         ),
         family="codex",
         side_effect=write_file("core.txt", "implemented\n"),

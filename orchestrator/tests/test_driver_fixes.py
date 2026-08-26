@@ -30,6 +30,7 @@ from orchestrator import driver as drv
 from orchestrator import profiles
 from orchestrator import runners
 from orchestrator import state as st
+from orchestrator.tests.test_driver_mock import prompt_response
 
 GOAL = "Build a small CLI calculator (add/sub/mul/div) with unit tests"
 
@@ -149,50 +150,8 @@ def fix_fixed(*ids, **extra):
 
 
 def step(kind, response, family=None, side_effect=None):
-    question_ids = {
-        "draft_skeleton": (
-            "due_diligence_count", "machinery_trust",
-            "environment_fit", "human_scale",
-            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
-        ),
-        "draft_slice_note": (
-            "due_diligence_count", "machinery_trust",
-            "environment_fit", "human_scale",
-            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
-        ),
-        "implement": (
-            "machinery_trust", "environment_fit", "human_scale",
-            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
-        ),
-        "review_round": (
-            "environment_fit", "human_scale", "guarantee_fit",
-            "cheapest_sufficient", "rare_failure_posture",
-        ),
-        "delta_review": (
-            "environment_fit", "human_scale", "guarantee_fit",
-            "cheapest_sufficient", "rare_failure_posture",
-        ),
-        "fix_findings": (
-            "environment_fit", "human_scale", "guarantee_fit",
-            "cheapest_sufficient", "rare_failure_posture",
-        ),
-        "reclassify": (
-            "environment_fit", "human_scale", "guarantee_fit",
-            "cheapest_sufficient", "rare_failure_posture",
-        ),
-        "merge_repair": (
-            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
-        ),
-        "suite_checkpoint": (
-            "guarantee_fit", "cheapest_sufficient", "rare_failure_posture",
-        ),
-    }
-    if isinstance(response, dict) and kind in question_ids:
-        response = dict(response)
-        response.setdefault("questions", [
-            {"id": question_id, "answer": "Checked."}
-            for question_id in question_ids[kind]
-        ])
+    if isinstance(response, dict) and not callable(response):
+        response = prompt_response(response)
     s = {"expect_kind": kind, "response": response}
     if family is not None:
         s["expect_family"] = family

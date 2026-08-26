@@ -30,13 +30,6 @@ EXPECTED_GOLDENS = frozenset((
     "milestone/review_round.prompt.txt",
     "milestone/suite_checkpoint.prompt.txt",
 ))
-GLOBAL_QUESTION_IDS = (
-    "guarantee_fit",
-    "cheapest_sufficient",
-    "rare_failure_posture",
-)
-
-
 def validation_values(prompt_set):
     """Supply opaque fixture values for every declaration in the seed."""
     names = set()
@@ -250,8 +243,7 @@ class PromptRouterTest(unittest.TestCase):
                 )
                 self.assertEqual(prompt["kind"], kind)
                 ids = [item["id"] for item in prompt["questions"]["items"]]
-                for question_id in GLOBAL_QUESTION_IDS:
-                    self.assertEqual(ids.count(question_id), 1)
+                self.assertEqual(len(ids), len(set(ids)))
 
         cases = (
             ("draft_slice_note@slice_doc", None, "initial_position", True,
@@ -279,21 +271,31 @@ class PromptRouterTest(unittest.TestCase):
                 self.assertIn(present, text)
                 self.assertNotIn(absent, text)
                 ids = [item["id"] for item in prompt["questions"]["items"]]
-                for question_id in GLOBAL_QUESTION_IDS:
-                    self.assertEqual(ids.count(question_id), 1)
+                self.assertEqual(len(ids), len(set(ids)))
+
+        job = "draft_slice_note@slice_doc"
+        direct = prompt_router.assemble(
+            self.prompt_set,
+            job=job,
+            executor="agent_call",
+            material="code",
+            values=self.values(job),
+        )
         lead = prompt_router.assemble(
             self.prompt_set,
-            job="draft_slice_note@slice_doc",
+            job=job,
             executor="brainstorming",
             material="code",
-            values=self.values("draft_slice_note@slice_doc"),
+            values=self.values(job),
             role="initial_position",
             lead=True,
         )
-        self.assertIn(
-            "due_diligence_count",
-            [item["id"] for item in lead["questions"]["items"]],
-        )
+        direct_ids = [
+            item["id"] for item in direct["questions"]["items"]
+        ]
+        lead_ids = [item["id"] for item in lead["questions"]["items"]]
+        for question_id in direct_ids:
+            self.assertEqual(lead_ids.count(question_id), 1)
 
         invalid = self.values("implement@slice_impl")
         invalid["plan_authoring_authorized"] = True
@@ -587,9 +589,23 @@ class PromptRouterTest(unittest.TestCase):
             ]["code"]["questions"] = []
 
         def duplicate_question_id(documents):
-            documents["shared/shared.json"]["material_layers"][
+            base = documents["milestone/implement.json"]["questions"][
+                "items"
+            ]
+            if not base:
+                base.append({
+                    "id": "fixture_base_question",
+                    "text": "Was the base fixture mounted?",
+                })
+            layer = documents["shared/shared.json"]["material_layers"][
                 "implement@slice_impl"
-            ]["code"]["questions"]["items"][0]["id"] = "machinery_trust"
+            ]["code"]["questions"]["items"]
+            if not layer:
+                layer.append({
+                    "id": "fixture_layer_question",
+                    "text": "Was the layer fixture mounted?",
+                })
+            layer[0]["id"] = base[0]["id"]
 
         def duplicate_contract_id(documents):
             documents["shared/shared.json"]["material_layers"][

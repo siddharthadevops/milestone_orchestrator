@@ -10,6 +10,7 @@ from orchestrator import brainstorming_milestone, brainstorming_tasks
 from orchestrator import canonical_plan, driver, gitops, plan_reconciliation
 from orchestrator import runners
 from orchestrator import state as st
+from orchestrator.tests.test_driver_mock import prompt_response
 
 
 def _slice(slice_id, title=None):
@@ -441,26 +442,11 @@ class PlanReconciliationTests(unittest.TestCase):
                 runner=runners.MockRunner([{
                     "expect_kind": "draft_skeleton",
                     "side_effect": write_initial_plan,
-                    "response": {
+                    "response": prompt_response({
                         "status": "ok",
                         "kind": "draft_skeleton",
                         "artifact": "docs/skeleton.md",
-                        "questions": [
-                            {
-                                "id": question_id,
-                                "answer": "The bounded check is satisfied.",
-                            }
-                            for question_id in (
-                                "due_diligence_count",
-                                "machinery_trust",
-                                "environment_fit",
-                                "human_scale",
-                                "guarantee_fit",
-                                "cheapest_sufficient",
-                                "rare_failure_posture",
-                            )
-                        ],
-                    },
+                    }),
                 }]),
             )
 

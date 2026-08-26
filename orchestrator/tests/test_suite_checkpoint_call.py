@@ -135,7 +135,6 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         response = {
             "status": status,
             "kind": "suite_checkpoint",
-            "questions": self._questions(),
             "commands": commands,
             "results": [
                 {
@@ -150,13 +149,19 @@ class SuiteCheckpointCallTest(unittest.TestCase):
                 "evidence": [],
             },
         }
-        return response
+        return self._with_questions(response)
 
     def _questions(self):
         return [
             {"id": question_id, "answer": "Checked."}
             for question_id in self.checkpoint_question_ids
         ]
+
+    def _with_questions(self, response):
+        questions = self._questions()
+        if questions:
+            response["questions"] = questions
+        return response
 
     def test_default_config_declares_checkpoint_suite(self):
         self.assertEqual(
@@ -372,7 +377,6 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         response = {
             "status": "no_suite",
             "kind": "suite_checkpoint",
-            "questions": self._questions(),
             "commands": [],
             "results": [],
             "authority": {
@@ -383,6 +387,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
                 }],
             },
         }
+        self._with_questions(response)
         subject = self._subject(response)
 
         note, seal = self._verify(subject)
@@ -403,7 +408,6 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         response = {
             "status": "failed",
             "kind": "suite_checkpoint",
-            "questions": self._questions(),
             "commands": [self.command],
             "results": [{
                 "command": self.command,
@@ -413,6 +417,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
             "authority": {"source": "operator_config", "evidence": []},
             "failure_account": failure,
         }
+        self._with_questions(response)
         subject = self._subject(response)
 
         note, seal = self._verify(subject)

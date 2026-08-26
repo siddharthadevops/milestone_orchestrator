@@ -18,19 +18,13 @@ from orchestrator import canonical_plan
 from orchestrator import contracts, prompt_authority, prompt_router, prompt_sets
 from orchestrator import driver, ledgers, runners, session_calls
 from orchestrator import session_repository, state, tasks
+from orchestrator.tests.test_driver_mock import prompt_response
 
 
 RETHINK_FINDING = json.dumps(
     {"id": "F1", "summary": "One bounded contradiction."},
     sort_keys=True,
 )
-GLOBAL_QUESTION_IDS = (
-    "guarantee_fit",
-    "cheapest_sufficient",
-    "rare_failure_posture",
-)
-
-
 def repository_context(workspace):
     return {
         "state_path": os.path.join(workspace, "state.json"),
@@ -77,7 +71,12 @@ class RecordingExecutor:
 
     def start(self, prompt, workspace_path, execution_context):
         self.calls.append(prompt)
-        result = runners.RunnerResult(self.replies.pop(0), 0, 0.01)
+        reply = self.replies.pop(0)
+        if callable(reply):
+            reply = reply(prompt)
+        if isinstance(reply, dict):
+            reply = json.dumps(reply)
+        result = runners.RunnerResult(reply, 0, 0.01)
         result.session_ref = "session-1"
         result.worker_quiescent = True
         return result
@@ -86,7 +85,12 @@ class RecordingExecutor:
         self, session_ref, prompt, workspace_path, execution_context
     ):
         self.calls.append(prompt)
-        result = runners.RunnerResult(self.replies.pop(0), 0, 0.01)
+        reply = self.replies.pop(0)
+        if callable(reply):
+            reply = reply(prompt)
+        if isinstance(reply, dict):
+            reply = json.dumps(reply)
+        result = runners.RunnerResult(reply, 0, 0.01)
         result.session_ref = session_ref
         result.worker_quiescent = True
         return result
@@ -154,10 +158,10 @@ class SessionCallCutoverTest(unittest.TestCase):
                     if role == "common_sense" else "discussion_turn"
                 )
                 self.assertEqual(prepared.bound.prompt["kind"], expected_kind)
-                for question_id in GLOBAL_QUESTION_IDS:
-                    self.assertEqual(
-                        prepared.bound.question_ids.count(question_id), 1
-                    )
+                self.assertEqual(
+                    len(prepared.bound.question_ids),
+                    len(set(prepared.bound.question_ids)),
+                )
                 reply = {
                     "kind": expected_kind,
                     "markdown": "One bounded intervention.",
@@ -451,7 +455,7 @@ class SessionCallCutoverTest(unittest.TestCase):
             [1, 2],
         )
 
-    def test_session_questions_and_envelopes_are_bound(self):
+    def test_session_envelopes_follow_the_bound_question_ids(self):
         lead = self.prepare(
             "draft_slice_note@slice_doc", "initial_position", True
         )
@@ -465,13 +469,11 @@ class SessionCallCutoverTest(unittest.TestCase):
             "rethink", "common_sense", False,
             artifact_type="document",
         )
-        self.assertGreater(len(lead.bound.question_ids), len(contrary.bound.question_ids))
-        self.assertEqual(
-            set(rethink.bound.question_ids),
-            set(GLOBAL_QUESTION_IDS)
-            | {"turn_environment_fit", "turn_human_scale"},
-        )
-        self.assertIn("request_focus", dante.bound.question_ids)
+        for prepared in (lead, contrary, rethink, dante):
+            self.assertEqual(
+                len(prepared.bound.question_ids),
+                len(set(prepared.bound.question_ids)),
+            )
         invalid = {
             "kind": "questioner_turn",
             "markdown": "Any remaining question?",
@@ -884,30 +886,8 @@ class SessionCallCutoverTest(unittest.TestCase):
         reply = {
             "kind": "discussion_turn",
             "markdown": "The focused issue is resolved.",
-            "questions": [
-                {
-                    "id": "turn_environment_fit",
-                    "answer": "Checked the surrounding standard.",
-                },
-                {
-                    "id": "turn_human_scale",
-                    "answer": "Kept the intervention at request scale.",
-                },
-                {
-                    "id": "guarantee_fit",
-                    "answer": "Checked the governing guarantee strength.",
-                },
-                {
-                    "id": "cheapest_sufficient",
-                    "answer": "Checked the cheapest sufficient alternative.",
-                },
-                {
-                    "id": "rare_failure_posture",
-                    "answer": "Priced the rare failure and fail-closed option.",
-                },
-            ],
         }
-        executor = RecordingExecutor([json.dumps(reply)])
+        executor = RecordingExecutor([prompt_response(reply)])
         participant_execution = brainstorming_execution.ParticipantExecution(
             store, {
                 "lead-executor": executor,

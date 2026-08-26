@@ -95,8 +95,7 @@ class LiveControlRunner(runners.MockRunner):
             if isinstance(response, BaseException):
                 raise response
             self._write_lines(workspace, self.recovery_lines)
-            text = json.dumps(response) if isinstance(response, dict) \
-                else response
+            text = runners.mock_response_text(response, prompt)
             return runners.RunnerResult(text, 0, 0.02)
 
         def receive_steer(_text):
@@ -121,7 +120,11 @@ class LiveControlRunner(runners.MockRunner):
                     raise AssertionError("unexpected cutoff recovery")
                 self._write_lines(workspace, self.recovery_lines)
                 return runners.RunnerResult(
-                    json.dumps(self.recovery_response), 0, 0.02
+                    runners.mock_response_text(
+                        self.recovery_response, prompt
+                    ),
+                    0,
+                    0.02,
                 )
             if self.mode == "normal":
                 self._write_lines(workspace, 2)
@@ -170,7 +173,9 @@ class LiveControlRunner(runners.MockRunner):
                             "cutoff persistence failure was not observed",
                         )
                         result = runners.RunnerResult(
-                            json.dumps(self.response), 0, 0.02
+                            runners.mock_response_text(self.response, prompt),
+                            0,
+                            0.02,
                         )
                         result.steers = active_control.steers
                         return result
@@ -180,7 +185,9 @@ class LiveControlRunner(runners.MockRunner):
                     )
                     if self.mode == "complete_after_accepted_interrupt":
                         result = runners.RunnerResult(
-                            json.dumps(self.response), 0, 0.02
+                            runners.mock_response_text(self.response, prompt),
+                            0,
+                            0.02,
                         )
                         result.steers = active_control.steers
                         return result
@@ -204,7 +211,9 @@ class LiveControlRunner(runners.MockRunner):
                     )
                     result.steers = active_control.steers
                     return result
-            result = runners.RunnerResult(json.dumps(self.response), 0, 0.02)
+            result = runners.RunnerResult(
+                runners.mock_response_text(self.response, prompt), 0, 0.02
+            )
             result.steers = active_control.steers
             return result
         finally:
@@ -244,7 +253,7 @@ class InfraRetryControlRunner(object):
         self.controls = []
         self.raw_texts = list(raw_texts or [])
 
-    def call(self, _family, _prompt, _workspace, model=None, effort=None,
+    def call(self, _family, prompt, _workspace, model=None, effort=None,
              active_control=None):
         del model, effort
         self.controls.append((
@@ -258,7 +267,9 @@ class InfraRetryControlRunner(object):
             error.raw_texts = list(self.raw_texts)
             raise error
         return runners.RunnerResult(
-            json.dumps(ok(contracts.KIND_IMPLEMENT, files_changed=[])),
+            runners.mock_response_text(
+                ok(contracts.KIND_IMPLEMENT, files_changed=[]), prompt
+            ),
             0,
             0.02,
         )
@@ -337,7 +348,7 @@ class TimedOutSteerConfirmedRunner(runners.MockRunner):
             LiveControlRunner._write_lines(workspace, 3)
             self.assert_confirmation(confirmed)
             return runners.RunnerResult(
-                json.dumps(self.response), 0, 0.02
+                runners.mock_response_text(self.response, prompt), 0, 0.02
             )
         finally:
             active_control._close()
@@ -392,7 +403,7 @@ class RepairAckCutRunner(runners.MockRunner):
             if not confirmed.wait(1):
                 raise AssertionError("repair ACK was not observed")
             return runners.RunnerResult(
-                json.dumps(self.response), 0, 0.02
+                runners.mock_response_text(self.response, prompt), 0, 0.02
             )
         finally:
             active_control._close()
@@ -423,7 +434,7 @@ class ProactiveRepairCutRunner(runners.MockRunner):
             if len(self.calls) == 1:
                 return runners.RunnerResult("not json", 0, 0.01)
             return runners.RunnerResult(
-                json.dumps(self.response), 0, 0.02
+                runners.mock_response_text(self.response, prompt), 0, 0.02
             )
         finally:
             active_control._close()

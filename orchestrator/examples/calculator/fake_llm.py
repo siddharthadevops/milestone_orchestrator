@@ -203,59 +203,41 @@ if __name__ == "__main__":
     unittest.main()
 '''
 
-AUTHOR_QUESTIONS = {
-    "draft_skeleton": (
-        "due_diligence_count",
-        "machinery_trust",
-        "environment_fit",
-        "human_scale",
-    ),
-    "draft_slice_note": (
-        "due_diligence_count",
-        "machinery_trust",
-        "environment_fit",
-        "human_scale",
-    ),
-    "implement": (
-        "machinery_trust",
-        "environment_fit",
-        "human_scale",
-    ),
-}
-
-JUDGMENT_QUESTION_IDS = ("environment_fit", "human_scale")
-GLOBAL_QUESTION_IDS = (
-    "guarantee_fit",
-    "cheapest_sufficient",
-    "rare_failure_posture",
-)
+def prompt_question_ids(prompt):
+    """Read ids from the deterministic QUESTIONS block served to the fake."""
+    in_questions = False
+    question_ids = []
+    for line in prompt.splitlines():
+        if line.startswith("QUESTIONS"):
+            in_questions = True
+            continue
+        if in_questions and line.startswith("OUTPUT CONTRACT"):
+            break
+        if not in_questions or not line.startswith("- "):
+            continue
+        candidate, separator, _question = line[2:].partition(":")
+        if separator and candidate and not any(
+            char.isspace() for char in candidate
+        ):
+            question_ids.append(candidate)
+    return tuple(question_ids)
 
 
-def global_questions():
-    return [
-        {"id": question_id, "answer": "Checked by the calculator fixture."}
-        for question_id in GLOBAL_QUESTION_IDS
-    ]
-
-
-def author_questions(kind):
-    return [
-        {"id": question_id, "answer": "Checked by the calculator fixture."}
-        for question_id in AUTHOR_QUESTIONS[kind] + GLOBAL_QUESTION_IDS
-    ]
-
-
-def judgment_questions():
-    return [
-        {"id": question_id, "answer": "Checked by the calculator fixture."}
-        for question_id in JUDGMENT_QUESTION_IDS + GLOBAL_QUESTION_IDS
-    ]
+def answer_prompt_questions(prompt, payload):
+    question_ids = prompt_question_ids(prompt)
+    if question_ids:
+        payload["questions"] = [
+            {
+                "id": question_id,
+                "answer": "Checked by the calculator fixture.",
+            }
+            for question_id in question_ids
+        ]
+    return payload
 
 
 def ok(kind, **extra):
     payload = {"status": "ok", "kind": kind}
-    if kind in ("review_round", "delta_review", "fix_findings", "reclassify"):
-        payload["questions"] = judgment_questions()
     payload.update(extra)
     return payload
 
@@ -293,7 +275,6 @@ def respond(kind, family, workspace, count, prompt):
         return ok(
             kind,
             artifact="docs/skeleton.md",
-            questions=author_questions(kind),
         )
 
     if kind == "draft_slice_note":
@@ -307,7 +288,6 @@ def respond(kind, family, workspace, count, prompt):
         return ok(
             kind,
             artifact="docs/slice-01.md",
-            questions=author_questions(kind),
         )
 
     if kind == "implement":
@@ -316,7 +296,6 @@ def respond(kind, family, workspace, count, prompt):
         return ok(
             kind,
             files_changed=["calculator.py", "test_calculator.py"],
-            questions=author_questions(kind),
         )
 
     # ---- scheduled complete-suite checkpoint ----------------------------
@@ -340,7 +319,6 @@ def respond(kind, family, workspace, count, prompt):
         response = {
             "status": "passed" if completed.returncode == 0 else "failed",
             "kind": kind,
-            "questions": global_questions(),
             "commands": [command],
             "results": [{
                 "command": command,
@@ -498,12 +476,6 @@ def respond(kind, family, workspace, count, prompt):
         "kind": kind,
         "blocked_reason": "fake_llm has no script for kind %r" % kind,
     }
-    if kind in AUTHOR_QUESTIONS:
-        blocked["questions"] = author_questions(kind)
-    elif kind in ("review_round", "delta_review", "fix_findings", "reclassify"):
-        blocked["questions"] = judgment_questions()
-    elif kind == "suite_checkpoint":
-        blocked["questions"] = global_questions()
     return blocked
 
 
@@ -524,7 +496,8 @@ def main():
     count = bump_counter(
         workspace, "%s:%s:%s" % (prompt_scope(prompt), kind, family)
     )
-    print(json.dumps(respond(kind, family, workspace, count, prompt)))
+    response = respond(kind, family, workspace, count, prompt)
+    print(json.dumps(answer_prompt_questions(prompt, response)))
     return 0
 
 

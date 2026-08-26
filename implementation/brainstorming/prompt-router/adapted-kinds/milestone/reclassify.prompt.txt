@@ -72,12 +72,9 @@ PROCESS AUTHORITY
 - Never invoke, spawn, or consult another LLM or agent. Only the
   deterministic driver dispatches model calls.
 
-QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
+QUESTIONS (answer each in output, backed by an explanation)
 - environment_fit: What standard does the surrounding work live at, and does your rating assume a stricter one the mandate did not order? Answer, backed by a brief description of the standard you assumed and why.
 - human_scale: Would a human see your rating as proportionate to what the finding actually is — or does it price literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
-- guarantee_fit: What guarantees govern your work or judgment, what strength do they require, and why? If none apply, explain why no guarantee is needed and how your work still fits the surrounding project's accepted standard.
-- cheapest_sufficient: What materially simpler alternative did you examine—including tolerating a loud bounded failure or an extremely unlikely edge—and what concrete guarantee makes it insufficient?
-- rare_failure_posture: What are the realistic probability and damage of the event this work prevents? Would letting that rare case fail closed and surface clearly for retry or operator action be cheaper than preventing it? Explain the trade-off.
 
 OUTPUT CONTRACT (mandatory)
 Respond with EXACTLY ONE JSON object and nothing else — no prose outside it,
@@ -87,5 +84,5 @@ no markdown fences:
  "drift_risk": "low" | "medium" | "high" | "xhigh",
  "drift_damage": "low" | "medium" | "high" | "xhigh",
  "reason": "<one sentence: the concrete basis for BOTH ratings>",
- "questions": [{"id": "<id>", "answer": "<one short sentence>"}, ...]}
-  (one entry per QUESTIONS id above; each answer must be non-empty and at most 300 characters; substance is not machine-judged)
+ "questions": [{"id": "<id>", "answer": "<the answer, backed by an explanation>"}, ...]}
+  (one entry per QUESTIONS id above; each answer must be non-empty; substance and length are not machine-judged)
