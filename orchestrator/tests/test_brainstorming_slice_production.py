@@ -728,7 +728,9 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
                 suite_checkpoint_response("no_suite", []),
             ),
         ])
-        subject = self.ready_brainstorming_implementation(runner)
+        subject = self.ready_brainstorming_implementation(
+            runner, verification=[]
+        )
         self.complete_brainstorming_implementation(subject)
         self.drive_until_closed(subject)
 

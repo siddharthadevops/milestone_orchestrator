@@ -56,6 +56,11 @@ FULL_VERIFICATION_SLICE_INTERVAL = 4
 class _NoIndependentReclassifier(runners.RunnerError):
     """Current structural policy leaves no separate rating call."""
 
+CHECKPOINT_SUITE_COMMAND = (
+    "python3 -m unittest orchestrator.tests.suite_checkpoint"
+)
+
+
 DEFAULT_CONFIG = {
     "families_order": ["codex", "claude"],
     "fix_family": None,  # default: first family in families_order
@@ -143,7 +148,9 @@ DEFAULT_CONFIG = {
         "unconfirmed_grace_s": 180,
         "confirmed_grace_s": 600,
     },
-    "verification": [],
+    # The normal milestone gate is intentionally proportional. Releases and
+    # deliberate deep checks run orchestrator.tests.suite_extended manually.
+    "verification": [CHECKPOINT_SUITE_COMMAND],
     # Unlimited by default, same philosophy as worker timeouts: a real
     # suite may take 15+ minutes and a gate that kills it converts honest
     # work into failures. Set a number (seconds) to cap it per run.

@@ -91,8 +91,18 @@ class BrowseFsTest(unittest.TestCase):
         root = os.path.abspath(os.sep)
         out = service.browse_fs(root, mode="dir")
         self.assertIsNone(out["parent"])
-        home = service.browse_fs("~", mode="dir")
-        self.assertEqual(home["path"], os.path.expanduser("~"))
+        fake_home = os.path.join(self.root, "operator-home")
+        os.makedirs(fake_home)
+        real_expanduser = os.path.expanduser
+
+        def isolated_expanduser(path):
+            return fake_home if path == "~" else real_expanduser(path)
+
+        with mock.patch.object(
+            service.os.path, "expanduser", side_effect=isolated_expanduser
+        ):
+            home = service.browse_fs("~", mode="dir")
+        self.assertEqual(home["path"], fake_home)
 
     def test_nearest_walks_up_to_existing_ancestor(self):
         missing = os.path.join(self.root, "new-ws", "deeper")

@@ -555,7 +555,25 @@ The milestone closes from clean same-byte reviews without a seal worker call.
 
 ## Tests
 
-    python3 -m unittest discover -s orchestrator/tests -t .
+The normal milestone checkpoint runs the proportional suite:
+
+    python3 -m unittest orchestrator.tests.suite_checkpoint
+
+For releases, large architectural changes, and deliberate deep verification,
+run the exhaustive complement manually:
+
+    python3 -m unittest orchestrator.tests.suite_extended
+
+The two commands partition every retained test. Verify that inventory after
+changing suite membership with:
+
+    python3 -m unittest orchestrator.tests.test_suite_inventory
+
+The checkpoint keeps fast unit and contract coverage, central routed-prompt,
+state, validation, and driver boundaries, and the real fake-CLI lifecycle.
+The extended suite retains slow failure matrices, Git/service/process cases,
+multi-profile and compatibility permutations, and legacy prompt-substring
+checks. See `orchestrator/tests/README.md` for the measured classification.
 
 Tiers:
 1. Unit: state transitions, append-only enforcement, JSON extraction,

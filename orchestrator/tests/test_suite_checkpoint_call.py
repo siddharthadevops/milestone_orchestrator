@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from orchestrator import canonical_plan, driver, gitops, runners
+from orchestrator import canonical_plan, driver, gitops, judgment_calls, runners
 from orchestrator import staffing
 from orchestrator import state as st
 
@@ -61,6 +61,18 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         )
         self.addCleanup(self.model_home.cleanup)
         staffing.ensure_documents(self.model_home.name, config=config)
+        self.checkpoint_question_ids = judgment_calls.prepare(
+            self.model_home.name,
+            job="suite_checkpoint@workspace",
+            material="code",
+            values={
+                "kind": "suite_checkpoint",
+                "workspace": self.workspace,
+                "checkpoint_reason": "four_slice_checkpoint",
+            },
+            amendments=[],
+            configured_suite_commands=[self.command],
+        ).bound.question_ids
 
         state = st.new_state("goal", self.workspace, config)
         state["milestone"]["slices"] = copy.deepcopy(
@@ -140,16 +152,17 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         }
         return response
 
-    @staticmethod
-    def _questions():
+    def _questions(self):
         return [
             {"id": question_id, "answer": "Checked."}
-            for question_id in (
-                "guarantee_fit",
-                "cheapest_sufficient",
-                "rare_failure_posture",
-            )
+            for question_id in self.checkpoint_question_ids
         ]
+
+    def test_default_config_declares_checkpoint_suite(self):
+        self.assertEqual(
+            driver.load_config()["verification"],
+            [driver.CHECKPOINT_SUITE_COMMAND],
+        )
 
     def _subject(self, response, side_effect=None):
         return driver.Driver(

@@ -24,6 +24,29 @@ from orchestrator import access, driver, interpreter, model_profiles, profiles, 
 from orchestrator import service, state as st
 
 
+def load_tests(loader, tests, pattern):
+    """Run the base HTTP contract once, not once through every subclass."""
+    filtered = unittest.TestSuite()
+
+    def cases(suite):
+        for candidate in suite:
+            if isinstance(candidate, unittest.TestSuite):
+                yield from cases(candidate)
+            else:
+                yield candidate
+
+    for test in cases(tests):
+        inherited = ServiceApiTest.__dict__.get(test._testMethodName)
+        if (
+            test.__class__ is not ServiceApiTest
+            and inherited is not None
+            and getattr(test.__class__, test._testMethodName) is inherited
+        ):
+            continue
+        filtered.addTest(test)
+    return filtered
+
+
 class ServiceApiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="orch-service-test-")
