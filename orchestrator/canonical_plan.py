@@ -412,6 +412,16 @@ def begin_author_call(state, skeleton_path, *, allow_unanchored=False):
             raise CanonicalPlanError(
                 "canonical-plan anchor could not be made durable: %s" % exc
             ) from exc
+    # A plan-changing direct call must own an isolated committed range. Fold
+    # any ordinary pending delta into A before dispatch; a clean repository
+    # creates no bookkeeping commit.
+    try:
+        gitops.commit_plain(workspace, "Checkpoint before canonical-plan call")
+    except gitops.GitError as exc:
+        raise CanonicalPlanError(
+            "canonical-plan pre-call checkpoint could not be committed: %s"
+            % exc
+        ) from exc
     try:
         repository = _repository_snapshot(workspace)
     except gitops.GitError as exc:
@@ -515,15 +525,20 @@ def _complete_call(
         plan = validate_canonical_plan(
             document, snapshot.get("anchored_document")
         )
-        tree = gitops.snapshot_worktree_tree(workspace)
-        parent = (
-            snapshot["anchor"]["revision"]
-            if snapshot["anchor"] is not None
-            else snapshot["repository"]["head"]
-        )
-        revision = gitops.commit_tree_snapshot(
-            workspace, tree, message, parent=parent
-        )
+        repository = snapshot["repository"]
+        if gitops.head_symbolic_ref(workspace) != repository["sym"]:
+            raise CanonicalPlanError(
+                "accepted direct call did not remain on its source branch"
+            )
+        gitops.commit_plain(workspace, message)
+        revision = gitops.head_full_sha(workspace)
+        if (
+            revision == repository["head"]
+            or not gitops.is_ancestor(workspace, repository["head"], revision)
+        ):
+            raise CanonicalPlanError(
+                "accepted direct call did not produce a linear committed range"
+            )
         if gitops.show_file_mode(
             workspace, revision, snapshot["path"]
         ) not in ("100644", "100755"):
@@ -549,7 +564,58 @@ def _complete_call(
     anchor = {"path": snapshot["path"], "revision": revision}
     state["milestone"]["slices"] = plan["projection"]
     state["milestone"][ANCHOR_KEY] = anchor
-    return {"changed": True, "anchor": copy.deepcopy(anchor)}
+    return {
+        "changed": True,
+        "initial": snapshot["anchor"] is None,
+        "source_base_revision": snapshot["repository"]["head"],
+        "accepted_revision": revision,
+        "branch": snapshot["repository"]["sym"],
+        "plan_path": snapshot["path"],
+        "anchor": copy.deepcopy(anchor),
+    }
+
+
+def finalize_author_range(state, result, *, message="canonical plan boundary"):
+    """Commit any proportional post-observer restoration into accepted B."""
+    if not isinstance(result, dict) or not result.get("changed"):
+        return result
+    workspace = state["workspace"]
+    try:
+        gitops.commit_plain(workspace, message)
+        revision = gitops.head_full_sha(workspace)
+        if not gitops.is_ancestor(
+            workspace, result["source_base_revision"], revision
+        ):
+            raise CanonicalPlanError(
+                "final direct-call boundary is not linear from its source"
+            )
+        document = gitops.show_file(workspace, revision, result["plan_path"])
+        anchor = state["milestone"].get(ANCHOR_KEY) or {}
+        accepted = gitops.show_file(
+            workspace, anchor.get("revision"), result["plan_path"]
+        )
+        if (
+            gitops.show_file_mode(workspace, revision, result["plan_path"])
+            not in ("100644", "100755")
+            or document is None
+            or accepted is None
+            or canonical_block_bytes(document) != canonical_block_bytes(accepted)
+        ):
+            raise CanonicalPlanError(
+                "final direct-call revision lost its accepted canonical block"
+            )
+        gitops.pin_canonical_plan_commit(
+            workspace, result["plan_path"], revision
+        )
+    except (CanonicalPlanError, gitops.GitError) as exc:
+        raise CanonicalPlanError(
+            "accepted direct-call range could not be finalized: %s" % exc
+        ) from exc
+    result = copy.deepcopy(result)
+    result["accepted_revision"] = revision
+    result["anchor"] = {"path": result["plan_path"], "revision": revision}
+    state["milestone"][ANCHOR_KEY] = copy.deepcopy(result["anchor"])
+    return result
 
 
 def complete_author_call(state, snapshot, *, message="canonical plan accepted"):

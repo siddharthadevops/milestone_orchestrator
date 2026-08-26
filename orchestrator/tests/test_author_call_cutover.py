@@ -935,7 +935,7 @@ class DriverAuthorActivationTest(unittest.TestCase):
             def edit_plan(workspace):
                 with open(skeleton_file, "w", encoding="utf-8") as handle:
                     handle.write(document(
-                        "New", "UNAUTHORIZED PROSE", slice_ids=(2, 1)
+                        "New", "UNAUTHORIZED PROSE", slice_ids=(1, 2)
                     ))
                 note_file = os.path.join(workspace, note_path)
                 os.makedirs(os.path.dirname(note_file), exist_ok=True)
@@ -957,7 +957,7 @@ class DriverAuthorActivationTest(unittest.TestCase):
             self.assertEqual(
                 canonical_plan.canonical_block_bytes(surviving),
                 canonical_plan.canonical_block_bytes(document(
-                    "New", "x", slice_ids=(2, 1)
+                    "New", "x", slice_ids=(1, 2)
                 )),
             )
             self.assertEqual(
@@ -965,16 +965,16 @@ class DriverAuthorActivationTest(unittest.TestCase):
             )
             self.assertEqual(
                 state.unit_identity(state.current_unit(reloaded)),
-                (state.UNIT_SLICE_DOC, 2, None),
+                (state.UNIT_SLICE_DOC, 1, None),
             )
             canonical_plan.guarded_dispatch(reloaded, lambda: None)
 
             unit = state.current_unit(subject.state)
             self.assertEqual(
                 state.unit_identity(unit),
-                (state.UNIT_SLICE_DOC, 2, None),
+                (state.UNIT_SLICE_DOC, 1, None),
             )
-            note_path = ledgers.slice_note_path(subject.state, 2)
+            note_path = ledgers.slice_note_path(subject.state, 1)
             reply = {
                 **reply,
                 "artifact": note_path,
@@ -984,7 +984,7 @@ class DriverAuthorActivationTest(unittest.TestCase):
                 with open(skeleton_file, "w", encoding="utf-8") as handle:
                     handle.write(document(
                         "Newest", "SECOND UNAUTHORIZED PROSE",
-                        slice_ids=(3, 2, 1),
+                        slice_ids=(1, 2, 3),
                     ))
 
             subject.runner = runners.MockRunner([{
@@ -1029,7 +1029,7 @@ class DriverAuthorActivationTest(unittest.TestCase):
             self.assertEqual(
                 canonical_plan.canonical_block_bytes(surviving),
                 canonical_plan.canonical_block_bytes(
-                    document("Newest", "ignored", slice_ids=(3, 2, 1))
+                    document("Newest", "ignored", slice_ids=(1, 2, 3))
                 ),
             )
             self.assertEqual(
@@ -1047,12 +1047,6 @@ class DriverAuthorActivationTest(unittest.TestCase):
             self.assertEqual(
                 rejected["failure"]["unit"], state.unit_key(unit)
             )
-            inserted = next(
-                candidate for candidate in rejected["units"]
-                if state.unit_identity(candidate)
-                == (state.UNIT_SLICE_DOC, 3, None)
-            )
-            self.assertEqual(inserted["status"], state.U_PENDING)
 
 
 class DriverAuthorFindingRegressionTest(unittest.TestCase):
@@ -1591,6 +1585,23 @@ class DriverAuthorFindingRegressionTest(unittest.TestCase):
 
     def test_rethink_origin_persists_its_fallback_sidecar(self):
         with tempfile.TemporaryDirectory(prefix="orch-author-rethink-") as ws:
+            subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=ws,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test"],
+                cwd=ws,
+                check=True,
+            )
+            with open(os.path.join(ws, "seed.txt"), "w", encoding="utf-8") as handle:
+                handle.write("seed\n")
+            subprocess.run(["git", "add", "seed.txt"], cwd=ws, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "baseline"], cwd=ws, check=True
+            )
             state_path, subject = self._subject(ws, runners.MockRunner([]))
             result = runners.RunnerResult("{}", 0, 1.0)
             result.prompt_set_fallback = "rung-1"

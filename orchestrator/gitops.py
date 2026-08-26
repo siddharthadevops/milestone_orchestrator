@@ -761,6 +761,31 @@ def commit_plain(workspace, message):
     return _run(workspace, "rev-parse", "--short", "HEAD").stdout.strip()
 
 
+def commit_full_sha(workspace, revision="HEAD"):
+    """Resolve one declared commit-ish to its unambiguous full commit SHA."""
+    _assert_workspace_root(workspace)
+    if not isinstance(revision, str) or not revision:
+        raise GitError("commit revision is invalid")
+    return _run(
+        workspace, "rev-parse", "--verify", "%s^{commit}" % revision
+    ).stdout.strip()
+
+
+def is_ancestor(workspace, ancestor, descendant):
+    """Whether two declared commits form the requested linear ancestry."""
+    _assert_workspace_root(workspace)
+    if not all(isinstance(value, str) and value for value in (ancestor, descendant)):
+        raise GitError("commit ancestry revisions are invalid")
+    return _run(
+        workspace,
+        "merge-base",
+        "--is-ancestor",
+        ancestor,
+        descendant,
+        check=False,
+    ).returncode == 0
+
+
 def restore_clean(workspace):
     """Revert the worktree to HEAD (the last accepted state): the recovery
     path when a report-only reviewer tampered with a clean worktree.

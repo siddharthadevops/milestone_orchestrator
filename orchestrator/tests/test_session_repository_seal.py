@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from orchestrator import brainstorming, brainstorming_milestone
+from orchestrator import brainstorming, brainstorming_milestone, canonical_plan
 from orchestrator import brainstorming_tasks, driver, tasks
 from orchestrator import session_repository, state
 
@@ -32,7 +32,20 @@ class RepositorySealTest(unittest.TestCase):
         Path(self.workspace, "target.md").write_text(
             "initial\n", encoding="utf-8"
         )
-        git(self.workspace, "add", "target.md")
+        canonical = (
+            "# Skeleton\n\n## Canonical slice plan\n```json\n"
+            '{"slices":[{"id":1,"title":"One","intent":"Build one.",'
+            '"producer_task_executor":{"draft_slice_note":"agent_call",'
+            '"implement":"agent_call"}}]}\n```\n'
+        )
+        Path(self.workspace, "skeleton.md").write_text(
+            canonical, encoding="utf-8"
+        )
+        Path(self.workspace, "docs").mkdir()
+        Path(self.workspace, "docs", "skeleton.md").write_text(
+            canonical, encoding="utf-8"
+        )
+        git(self.workspace, "add", "target.md", "skeleton.md", "docs/skeleton.md")
         git(self.workspace, "commit", "-qm", "baseline")
         self.base = git(self.workspace, "rev-parse", "HEAD")
         self.amendments = os.path.join(self.temp.name, "amendments.json")
@@ -315,6 +328,7 @@ class RepositorySealTest(unittest.TestCase):
             config=driver.load_config(None),
         )
         document = state.load(state_path)
+        canonical_plan.establish_current_plan(document, "docs/skeleton.md")
         unit = state.current_unit(document)
         unit["implementation_attempt_snapshot"] = {"tree": "stale"}
         unit["brainstorming_wait"] = {

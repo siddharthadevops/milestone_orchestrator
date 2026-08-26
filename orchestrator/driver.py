@@ -42,7 +42,7 @@ from . import brainstorming_milestone, canonical_plan
 from . import contracts, errclass, gitops, interpreter, judgment_calls
 from . import kvstore, ledgers
 from . import model_profiles, pricing, profiles, projects, prompt_sets, prompts
-from . import registry, runners
+from . import plan_reconciliation, registry, runners
 from . import session_repository
 from . import staffing
 from . import tasks
@@ -331,6 +331,7 @@ A_FIX = "fix_findings"
 A_DELTA_REVIEW = "delta_review"
 A_SEAL_ATTEMPT = "seal_attempt"
 A_BRAINSTORM_WAIT = "brainstorming_wait"
+A_RECONCILIATION = "accepted_range_reconciliation"
 A_DONE = "done"
 A_FAILED = "failed"
 
@@ -344,6 +345,14 @@ def _current_author_unit(state):
         st.UNIT_SLICE_DOC: contracts.KIND_DRAFT_SLICE_NOTE,
         st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
     }
+    waiting = [
+        unit for unit in state.get("units", [])
+        if isinstance(unit.get("brainstorming_wait"), dict)
+    ]
+    if len(waiting) > 1:
+        raise st.IllegalTransition("multiple Brainstorming sessions are attached")
+    if waiting:
+        return waiting[0]
     active = [
         unit for unit in state.get("units", [])
         if unit.get("status") == st.U_PENDING
@@ -362,6 +371,14 @@ def decide(state):
         return Action(A_FAILED, reason=(state["failure"] or {}).get("reason"))
     if state["milestone"]["status"] == st.M_CLOSED:
         return Action(A_DONE)
+    reconciliation = state["milestone"].get(
+        canonical_plan.RECONCILIATION_KEY
+    )
+    if (
+        isinstance(reconciliation, dict)
+        and reconciliation.get("status") == "open"
+    ):
+        return Action(A_RECONCILIATION)
     unit = _current_author_unit(state)
     if unit is None:
         return Action(A_DONE)  # run() closes the milestone
@@ -1786,6 +1803,7 @@ class Driver(object):
     ):
         """Build the fresh routed package and proportional plan boundary."""
         skeleton_path = self._skeleton_artifact()
+        logical_source_base = None
 
         def prepare(repair_error):
             authority = self._worker_episode_authority(unit, kind)
@@ -1823,19 +1841,72 @@ class Driver(object):
             )
 
             def complete():
+                nonlocal logical_source_base
                 plan_result = canonical_plan.complete_author_call(
                     self.state,
                     snapshot,
                     message="canonical plan after %s" % kind,
                 )
-                if plan_result["changed"]:
-                    st.ensure_due_unit(self.state)
                 self._enforce_sealed_artifacts(
                     raw_name,
                     editable_sealed=self._editable_design_paths(unit),
                     preserve_canonical_plan=True,
                 )
+                plan_result = canonical_plan.finalize_author_range(
+                    self.state,
+                    plan_result,
+                    message="Finalize canonical plan after %s" % kind,
+                )
+                plan_result["source"] = {
+                    "executor": "agent_call",
+                    "job": {
+                        contracts.KIND_DRAFT_SKELETON:
+                            "draft_skeleton@skeleton",
+                        contracts.KIND_DRAFT_SLICE_NOTE:
+                            "draft_slice_note@slice_doc",
+                        contracts.KIND_IMPLEMENT: "implement@slice_impl",
+                    }[kind],
+                    "material": material,
+                    "unit": st.unit_key(unit),
+                    "physical_attempt": 2 if repair_error is not None else 1,
+                    "range_start_attempt": (
+                        1 if logical_source_base is not None
+                        else 2 if repair_error is not None else 1
+                    ),
+                    **(
+                        {"task_id": unit["active_task"]["id"]}
+                        if isinstance(unit.get("active_task"), dict)
+                        and unit["active_task"].get("id")
+                        else {}
+                    ),
+                }
+                if plan_result["changed"]:
+                    if plan_result.get("initial"):
+                        st.ensure_due_unit(self.state)
+                        st.append_event(
+                            self.state,
+                            "canonical_plan_established",
+                            accepted_revision=plan_result[
+                                "accepted_revision"
+                            ],
+                        )
+                    else:
+                        if logical_source_base is None:
+                            logical_source_base = plan_result[
+                                "source_base_revision"
+                            ]
+                            plan_result["source"]["range_start_attempt"] = (
+                                plan_result["source"]["physical_attempt"]
+                            )
+                        plan_result["scheduling_frozen"] = (
+                            self._observe_accepted_plan_range(
+                                logical_source_base,
+                                plan_result["accepted_revision"],
+                                plan_result["source"],
+                            )
+                        )
                 self._save()
+                return plan_result
 
             return prepared._replace(complete=complete)
 
@@ -1950,6 +2021,7 @@ class Driver(object):
         # decision, so keep its original route coordinates.
         job = self._judgment_job(unit, kind)
         material = self._judgment_material(unit)
+        logical_source_base = None
 
         def prepare(repair_error):
             authority = self._worker_episode_authority(unit, kind)
@@ -1981,6 +2053,7 @@ class Driver(object):
             )
 
             def complete():
+                nonlocal logical_source_base
                 completer = (
                     canonical_plan.complete_author_call if editing
                     else canonical_plan.complete_observed_call
@@ -1996,9 +2069,45 @@ class Driver(object):
                         editable_sealed=self._editable_design_paths(unit),
                         preserve_canonical_plan=True,
                     )
+                    plan_result = canonical_plan.finalize_author_range(
+                        self.state,
+                        plan_result,
+                        message="Finalize canonical plan after %s" % kind,
+                    )
+                plan_result["source"] = {
+                    "executor": "agent_call",
+                    "job": job,
+                    "material": material,
+                    "unit": st.unit_key(unit),
+                    "physical_attempt": 2 if repair_error is not None else 1,
+                    "range_start_attempt": (
+                        1 if logical_source_base is not None
+                        else 2 if repair_error is not None else 1
+                    ),
+                    **(
+                        {"task_id": unit["active_task"]["id"]}
+                        if isinstance(unit.get("active_task"), dict)
+                        and unit["active_task"].get("id")
+                        else {}
+                    ),
+                }
                 if plan_result["changed"]:
-                    st.ensure_due_unit(self.state)
+                    if logical_source_base is None:
+                        logical_source_base = plan_result[
+                            "source_base_revision"
+                        ]
+                        plan_result["source"]["range_start_attempt"] = (
+                            plan_result["source"]["physical_attempt"]
+                        )
+                    plan_result["scheduling_frozen"] = (
+                        self._observe_accepted_plan_range(
+                            logical_source_base,
+                            plan_result["accepted_revision"],
+                            plan_result["source"],
+                        )
+                    )
                 self._save()
+                return plan_result
 
             return prepared._replace(complete=complete)
 
@@ -4173,6 +4282,67 @@ class Driver(object):
                     kind, actual_family, raw_name, result, task_id=task_id,
                     unit=call_unit,
                 )
+            except runners.CallBoundaryStop as exc:
+                actual_family, actual_model, actual_effort = (
+                    self._result_identity(
+                        exc, call_family, call_model, call_effort
+                    )
+                )
+                self._retain_call_identity(
+                    exc, actual_model, actual_effort, actual_family
+                )
+                self._require_busy_accounting(
+                    kind,
+                    actual_family,
+                    raw_name,
+                    exc,
+                    task_id=task_id,
+                    unit=call_unit,
+                )
+                raw_texts = list(getattr(exc, "raw_texts", None) or [])
+                raw_path = None
+                if raw_texts:
+                    raw_path = (
+                        self._save_raw_noclobber(raw_name, raw_texts[-1])
+                        if kind in contracts.REPORT_KINDS
+                        else self._save_raw(raw_name, raw_texts[-1])
+                    )
+                st.append_event(
+                    self.state,
+                    "worker_paused_for_plan_reconciliation",
+                    unit=self._worker_event_unit(call_unit),
+                    label=raw_name,
+                    kind=kind,
+                    family=actual_family,
+                    model=actual_model,
+                    effort=actual_effort,
+                    raw_path=raw_path,
+                    duration_s=getattr(exc, "duration_s", None),
+                    token_usage=copy.deepcopy(
+                        getattr(exc, "token_usage", None)
+                    ),
+                    token_usage_partial=bool(
+                        getattr(exc, "token_usage_partial", False)
+                        or getattr(exc, "token_usage", None) is None
+                    ),
+                    cost=copy.deepcopy(getattr(exc, "cost", None)),
+                    cost_partial=bool(
+                        getattr(exc, "cost_partial", False)
+                        or getattr(exc, "cost", None) is None
+                    ),
+                    **self._prompt_set_fallback_evidence(exc),
+                    **self._worker_task_fields(
+                        kind=kind,
+                        family=actual_family,
+                        label=raw_name,
+                        result=exc,
+                    ),
+                )
+                self._save()
+                self._clear_busy()
+                raise PlanReconciliationOpened(
+                    "accepted physical call opened plan reconciliation"
+                )
             except StopStep as exc:
                 if getattr(
                     exc, "completed_attempt_before_dispatch_failure", False
@@ -4573,6 +4743,40 @@ class Driver(object):
             raw_name, kind, actual_family, result, unit=call_unit
         )
         return output, result, raw_path
+
+    def _observe_accepted_plan_range(
+        self, source_base_revision, accepted_revision, source
+    ):
+        """Record one A..B plan consequence; return whether scheduling froze."""
+        outcome = plan_reconciliation.observe_accepted_range(
+            self.state,
+            source_base_revision,
+            accepted_revision,
+            source=source,
+        )
+        if outcome["status"] == "opened":
+            record = outcome["reconciliation"]
+            st.append_event(
+                self.state,
+                "accepted_range_reconciliation_opened",
+                source=copy.deepcopy(record.get("source") or {}),
+                source_base_revision=record["source_base_revision"],
+                accepted_revision=record["accepted_revision"],
+                wipe_boundary=copy.deepcopy(
+                    record["opening_account"]["wipe_boundary"]
+                ),
+            )
+            return True
+        st.append_event(
+            self.state,
+            "canonical_plan_range_accepted",
+            source=copy.deepcopy(source),
+            source_base_revision=outcome["source_base_revision"],
+            accepted_revision=outcome["accepted_revision"],
+            wipe_boundary=None,
+        )
+        st.ensure_due_unit(self.state)
+        return False
 
     @staticmethod
     def _errclass_eligible(exc):
@@ -5742,6 +5946,14 @@ class Driver(object):
                 "raw_name": raw_name,
                 "duration_s": result.duration_s,
                 "pre_snapshot": copy.deepcopy(pre_snapshot),
+                "plan_source": {
+                    "executor": "brainstorming",
+                    "job": session_charge["job"],
+                    "material": session_charge["material"],
+                    "unit": st.unit_key(unit),
+                    "physical_attempt": "repository_session",
+                    "session_id": created["id"],
+                },
                 **self._prompt_set_fallback_fields(result),
                 **self._worker_task_fields(
                     kind=kind, family=family, label=raw_name, result=result
@@ -6800,6 +7012,17 @@ class Driver(object):
                 "kind": kind,
                 "task_executor": "brainstorming",
                 "task_id": record["id"],
+                "plan_source": {
+                    "executor": "brainstorming",
+                    "job": record["order"]["request"]["context"]
+                        ["session_charge"]["job"],
+                    "material": record["order"]["request"]["context"]
+                        ["session_charge"]["material"],
+                    "unit": st.unit_key(unit),
+                    "physical_attempt": "repository_session",
+                    "task_id": record["id"],
+                    "session_id": session_id,
+                },
                 **(
                     {"planned_slice_note_path": planned}
                     if planned is not None else {}
@@ -6859,6 +7082,19 @@ class Driver(object):
         native = copy.deepcopy(result.get("native_result"))
         if not isinstance(native, dict):
             raise st.IllegalTransition("Brainstorming result is unavailable")
+        if (
+            "source_base_revision" in native
+            and "accepted_revision" in native
+            and self._observe_accepted_plan_range(
+                native["source_base_revision"],
+                native["accepted_revision"],
+                copy.deepcopy(origin.get("plan_source") or {}),
+            )
+        ):
+            self._save()
+            raise PlanReconciliationOpened(
+                "accepted producer plan range requires reconciliation"
+            )
         st.record_draft(
             self.state,
             unit,
@@ -6982,7 +7218,11 @@ class Driver(object):
         # plan projection while this long-lived driver polls the child. Merge
         # that boundary before this process writes any terminal handoff state.
         self.state = st.load(self.state_path)
-        unit = st.current_unit(self.state)
+        unit = _current_author_unit(self.state)
+        if unit is None or not unit.get("brainstorming_wait"):
+            raise st.IllegalTransition(
+                "brainstorming wait action has no attached unit"
+            )
         wait = copy.deepcopy(unit.get("brainstorming_wait") or {})
         session_id = wait.get("session_id")
         if not session_id:
@@ -7269,6 +7509,15 @@ class Driver(object):
             "source_base_revision" in handoff
             and "accepted_revision" in handoff
         ):
+            if self._observe_accepted_plan_range(
+                handoff["source_base_revision"],
+                handoff["accepted_revision"],
+                copy.deepcopy(origin.get("plan_source") or {}),
+            ):
+                self._save()
+                raise PlanReconciliationOpened(
+                    "accepted rethink plan range requires reconciliation"
+                )
             unit.pop("brainstorming_wait", None)
             unit.pop("brainstorming_resume", None)
             if kind == contracts.KIND_IMPLEMENT:
@@ -8006,6 +8255,8 @@ class Driver(object):
             action, boundary_note = self._decide_at_strategy_boundary()
             if action.type in (A_DONE, A_FAILED):
                 return action, boundary_note
+            if action.type == A_RECONCILIATION:
+                return action, "accepted plan range is frozen for reconciliation"
             handler = {
                 A_DRAFT: self._do_draft,
                 A_VERIFY: self._do_verify,
@@ -8021,6 +8272,8 @@ class Driver(object):
             )
             try:
                 note = handler()
+            except PlanReconciliationOpened as exc:
+                return Action(A_RECONCILIATION), str(exc)
             except StopStep as exc:
                 return action, "run failed: %s" % exc
             if (
@@ -8062,6 +8315,8 @@ class Driver(object):
                 return 0
             if action.type == A_FAILED:
                 return 2
+            if action.type == A_RECONCILIATION:
+                return 4
             if (
                 action.type == A_BRAINSTORM_WAIT
                 and self._brainstorming_wait_session() == waiting_session
@@ -10928,6 +11183,31 @@ class Driver(object):
             )
         else:
             fix_workspace_changed = bool(fix_workspace_delta)
+        if gitops.enabled(self.config) and pre_head is not None:
+            try:
+                post_fix_head = gitops.head_full_sha(self.workspace)
+                if (
+                    post_fix_head != pre_head
+                    and gitops.is_ancestor(
+                        self.workspace, pre_head, post_fix_head
+                    )
+                ):
+                    if not any(
+                        event.get("type") == "fixer_commits_preserved"
+                        and event.get("unit") == st.unit_key(unit)
+                        for event in self.state.get("events") or []
+                    ):
+                        st.append_event(
+                            self.state,
+                            "fixer_commits_preserved",
+                            unit=st.unit_key(unit),
+                            source_revision=pre_head,
+                            accepted_revision=post_fix_head,
+                        )
+            except gitops.GitError:
+                # The ordinary fixer boundary will fail at its next concrete
+                # Git consumer; this marker adds no recovery inference.
+                pass
         if verification_repair and source.get("deferred_candidate_changed"):
             fix_workspace_changed = True
         self._record_design_changes(unit, fix_workspace_delta)
@@ -11631,9 +11911,7 @@ class Driver(object):
         for round_info in reversed(unit["rounds"]):
             if round_info["kind"] == contracts.KIND_FIX_FINDINGS:
                 fixer_family = round_info["family"]
-                delta_base_revision = (round_info.get("meta") or {}).get(
-                    "delta_base_revision"
-                )
+                delta_base_revision = round_info.get("delta_base_revision")
                 break
         if delta_base_revision is None:
             try:
@@ -13096,6 +13374,18 @@ class Driver(object):
         self._save()
         try:
             ledgers.generate(self.state, self.workspace)
+            if any(
+                event.get("type") == "fixer_commits_preserved"
+                and event.get("unit") == st.unit_key(unit)
+                for event in self.state.get("events") or []
+            ):
+                # A fixer may deliberately leave linear commits. Give the
+                # deterministic gate its own disposable child so amending the
+                # gate cannot erase the fixer's reviewed commit identity.
+                gitops.commit_wip(
+                    self.workspace,
+                    "wip: gate %s" % st.display_unit_key(unit),
+                )
             sha = gitops.finalize_gate(self.workspace, self._gate_message(unit))
         except (gitops.GitError, ledgers.LedgerError, OSError) as exc:
             # A hostile/malformed index file must become a RECORDED run
@@ -13155,6 +13445,10 @@ class Driver(object):
 
 class StopStep(RuntimeError):
     """Raised by executors after fail_run() has recorded the explanation."""
+
+
+class PlanReconciliationOpened(RuntimeError):
+    """A valid accepted range froze scheduling before source consumption."""
 
 
 def run_verification(commands, workspace, timeout):

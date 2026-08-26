@@ -12,6 +12,7 @@ Review rounds continue to use only their focused checks.  These tests pin the
 deterministic scheduling and retain the existing full-suite repair coverage.
 """
 
+import json
 import os
 import subprocess
 import tempfile
@@ -50,6 +51,26 @@ def _count(workspace, name):
         return int(handle.read() or "0")
 
 
+def _questions(kind):
+    ids = []
+    if kind in (
+        contracts.KIND_DRAFT_SKELETON,
+        contracts.KIND_DRAFT_SLICE_NOTE,
+    ):
+        ids.append("due_diligence_count")
+    if kind in (
+        contracts.KIND_DRAFT_SKELETON,
+        contracts.KIND_DRAFT_SLICE_NOTE,
+        contracts.KIND_IMPLEMENT,
+    ):
+        ids.append("machinery_trust")
+    ids.extend(("environment_fit", "human_scale"))
+    return [
+        {"id": question_id, "answer": "The bounded check is satisfied."}
+        for question_id in ids
+    ]
+
+
 def _slices(count):
     return [
         {"id": slice_id, "title": "Feature %02d" % slice_id}
@@ -58,17 +79,33 @@ def _slices(count):
 
 
 def _skeleton_step(slice_count):
+    plan = {
+        "slices": [
+            {
+                "id": slice_id,
+                "title": "Feature %02d" % slice_id,
+                "intent": "Implement feature %02d." % slice_id,
+                "producer_task_executor": {
+                    "draft_slice_note": "agent_call",
+                    "implement": "agent_call",
+                },
+            }
+            for slice_id in range(1, slice_count + 1)
+        ]
+    }
     return step(
         contracts.KIND_DRAFT_SKELETON,
         ok(
             contracts.KIND_DRAFT_SKELETON,
             artifact="docs/skeleton.md",
-            slices=_slices(slice_count),
+            questions=_questions(contracts.KIND_DRAFT_SKELETON),
         ),
         family="codex",
         side_effect=write_file(
             "docs/skeleton.md",
-            "# Milestone\n\n%d implementation slices.\n" % slice_count,
+            "# Milestone\n\n%d implementation slices.\n\n"
+            "## Canonical slice plan\n```json\n%s\n```\n"
+            % (slice_count, json.dumps(plan, separators=(",", ":"))),
         ),
     )
 
@@ -77,7 +114,11 @@ def _doc_step(slice_id):
     path = "docs/slice-%02d.md" % slice_id
     return step(
         contracts.KIND_DRAFT_SLICE_NOTE,
-        ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact=path),
+        ok(
+            contracts.KIND_DRAFT_SLICE_NOTE,
+            artifact=path,
+            questions=_questions(contracts.KIND_DRAFT_SLICE_NOTE),
+        ),
         family="codex",
         side_effect=write_file(
             path,
@@ -90,7 +131,11 @@ def _doc_step(slice_id):
 def _impl_step(slice_id, part=None, cut=None):
     suffix = "_%s" % part if part else ""
     path = "feature_%02d%s.py" % (slice_id, suffix)
-    result = ok(contracts.KIND_IMPLEMENT, files_changed=[path])
+    result = ok(
+        contracts.KIND_IMPLEMENT,
+        files_changed=[path],
+        questions=_questions(contracts.KIND_IMPLEMENT),
+    )
     if cut is not None:
         result["implementation_cut"] = {
             "cut_scope": cut[0],
@@ -111,12 +156,18 @@ def _clean_reviews():
     return [
         step(
             contracts.KIND_REVIEW_ROUND,
-            report(contracts.KIND_REVIEW_ROUND),
+            {
+                **report(contracts.KIND_REVIEW_ROUND),
+                "questions": _questions(contracts.KIND_REVIEW_ROUND),
+            },
             family="codex",
         ),
         step(
             contracts.KIND_REVIEW_ROUND,
-            report(contracts.KIND_REVIEW_ROUND),
+            {
+                **report(contracts.KIND_REVIEW_ROUND),
+                "questions": _questions(contracts.KIND_REVIEW_ROUND),
+            },
             family="claude",
         ),
     ]

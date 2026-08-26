@@ -70,6 +70,10 @@ class PromptPreparationError(RunnerError):
     """A routed call could not be prepared before provider dispatch."""
 
 
+class CallBoundaryStop(RunnerError):
+    """A successful physical completion froze scheduling before validation."""
+
+
 class ProviderResponseError(RunnerError):
     """The CLI returned a structured provider failure, not an answer."""
 
@@ -2993,9 +2997,15 @@ def call_worker(runner, family, prompt, kind, workspace,
 
     def complete_attempt(complete, outcome):
         if complete is None:
-            return
+            return None
         try:
-            complete()
+            boundary = complete()
+            if boundary is not None:
+                recorded = list(
+                    getattr(outcome, "call_boundary_results", None) or []
+                )
+                recorded.append(boundary)
+                outcome.call_boundary_results = recorded
         except Exception as exc:
             error = RunnerError(
                 "worker post-call boundary rejected the attempt: %s" % exc
@@ -3034,6 +3044,37 @@ def call_worker(runner, family, prompt, kind, workspace,
                 _physical_dispatch(error, family, model, effort, error=error)
             ]
             raise error from exc
+        if isinstance(boundary, dict) and boundary.get("scheduling_frozen"):
+            error = CallBoundaryStop(
+                "accepted plan range opened reconciliation"
+            )
+            error.provider_dispatch_started = True
+            error.prepared_completion_attempted = True
+            error.call_boundary_failure = False
+            error.call_boundary_results = list(
+                getattr(outcome, "call_boundary_results", None) or []
+            )
+            diagnostic = diagnostic_text(outcome)
+            error.raw_texts = [diagnostic] if diagnostic else []
+            error.duration_s = getattr(outcome, "duration_s", None)
+            error.token_usage = normalize_token_usage(
+                getattr(outcome, "token_usage", None)
+            )
+            error.token_usage_partial = bool(
+                getattr(outcome, "token_usage_partial", False)
+                or error.token_usage is None
+            )
+            error.cost_payloads = list(
+                getattr(outcome, "cost_payloads", None) or []
+            )
+            for name in (
+                "resolved_family", "resolved_model", "resolved_effort",
+                "prompt_set_fallback",
+            ):
+                if hasattr(outcome, name):
+                    setattr(error, name, getattr(outcome, name))
+            raise error
+        return boundary
 
     def current_family_prompt(call_prompt, call_family):
         """Keep the machine header coherent with late dispatch resolution."""
@@ -3318,6 +3359,11 @@ def call_worker(runner, family, prompt, kind, workspace,
             repair_fallback,
         )
         complete_attempt(repair_complete, result2)
+        result2.call_boundary_results = list(
+            getattr(result, "call_boundary_results", None) or []
+        ) + list(
+            getattr(result2, "call_boundary_results", None) or []
+        )
     except verifiers.VerifierError as exc:
         repair_started = getattr(exc, "provider_dispatch_started", False)
         if repair_started:

@@ -432,7 +432,10 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
         )
 
         self.assertTrue(result["changed"])
-        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(result["source_base_revision"], head)
+        self.assertEqual(
+            self.git("rev-parse", "HEAD"), result["accepted_revision"]
+        )
         self.assertEqual(
             self.git(
                 "rev-parse",
@@ -455,7 +458,10 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
         result = canonical_plan.complete_author_call(state, snapshot)
 
         self.assertTrue(result["changed"])
-        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(result["source_base_revision"], head)
+        self.assertEqual(
+            self.git("rev-parse", "HEAD"), result["accepted_revision"]
+        )
         self.assertNotEqual(result["anchor"], old_anchor)
         self.assertEqual(
             self.git(
@@ -505,7 +511,6 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
         untracked = os.path.join(self.workspace, "untracked.txt")
         with open(untracked, "w", encoding="utf-8") as handle:
             handle.write("pre-call untracked\n")
-        before_status = self.git("status", "--short")
         state = st.load(self.state_path)
 
         snapshot = canonical_plan.begin_author_call(state, self.skeleton)
@@ -514,12 +519,11 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
             set(repository),
             {"workspace", "sym", "head", "index_tree", "worktree_tree"},
         )
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "worker commit")
+        self.assertNotEqual(repository["head"], head)
+        self.assertEqual(self.git("status", "--short"), "")
         anchor_ref = gitops.canonical_plan_anchor_ref(self.skeleton)
         self.git("update-ref", "-d", anchor_ref)
         self.write_skeleton(framed('{"slices":['))
-        os.unlink(staged)
         with open(
             os.path.join(self.workspace, "worker-only.txt"),
             "w",
@@ -527,13 +531,14 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
         ) as handle:
             handle.write("discard me\n")
         self.git("add", "-A")
+        self.git("commit", "-q", "-m", "worker commit")
 
         with self.assertRaisesRegex(
             canonical_plan.CanonicalPlanError, "snapshot was restored"
         ):
             canonical_plan.complete_author_call(state, snapshot)
 
-        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(self.git("rev-parse", "HEAD"), repository["head"])
         self.assertEqual(
             gitops.snapshot_index_tree(self.workspace),
             repository["index_tree"],
@@ -542,7 +547,11 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
             gitops.snapshot_worktree_tree(self.workspace),
             repository["worktree_tree"],
         )
-        self.assertEqual(self.git("status", "--short"), before_status)
+        self.assertEqual(self.git("status", "--short"), "")
+        with open(staged, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "pre-call worktree\n")
+        with open(untracked, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "pre-call untracked\n")
         self.assertEqual(
             state["milestone"][canonical_plan.ANCHOR_KEY], anchor
         )
@@ -566,7 +575,10 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
         result = canonical_plan.complete_observed_call(state, snapshot)
 
         self.assertTrue(result["changed"])
-        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(result["source_base_revision"], head)
+        self.assertEqual(
+            self.git("rev-parse", "HEAD"), result["accepted_revision"]
+        )
         self.assertTrue(os.path.exists(unrelated))
         self.assertEqual(
             [item["id"] for item in state["milestone"]["slices"]],
