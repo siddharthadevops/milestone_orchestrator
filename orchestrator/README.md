@@ -454,6 +454,16 @@ state; dirty reviews queue their findings for the FIX LOOP:
          review at the first family; full verification waits for its scheduled
          checkpoint
 
+Full and delta reviews use the same configurable classification floors.
+`doc_reclassify_from` and `impl_reclassify_from` accept `disabled`, `P3`,
+`P2`, `P1`, or `P0`; a floor includes that severity and every less-severe
+one (`P2` means P2+P3). Defaults are P2 for documentation and P1 for
+implementation. `p3_defer_max_risk` remains the independent rating threshold:
+classification decides what is measured, while the threshold decides tracked
+debt versus fixing. Deferred findings remain in the run's append-only debt
+history and unresolved debt stays available for operator review after closure;
+it does not block milestone completion.
+
 A failing scheduled suite opens a dedicated full-suite fixer call, not a synthetic
 review-finding dispute. The fixer receives the goal, reviewed design, project
 context, amendments, proportionality rules, and configured suite commands; it

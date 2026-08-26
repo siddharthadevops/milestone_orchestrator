@@ -46,14 +46,18 @@ so the worst realistic damage is rework.
   xhigh  effectively irreversible or externally published
 Self-revelation discounts DAMAGE (cheap on contact), never the
 probability.
+A deferred finding remains recorded as tracked debt and available
+for operator review after milestone completion. Deferral neither
+discards it nor blocks milestone completion.
 
 WHO BUILDS ON IT: slice docs drafted by codex (gpt-5.6-sol, max effort); implementation built by codex (gpt-5.6-sol, max effort) — weigh the reading an agent at
 that strength actually makes, not a hypothetical junior's.
 
 If the finding touches correctness, behaviour, or test coverage
 beyond what its severity label suggests, say so in `reason` and
-rate accordingly. Do not inflate to be safe or deflate to be
-agreeable — a wrong rating in either direction corrupts the
+rate accordingly. Rate the requested axes as they actually stand:
+do not inflate a rating to force immediate repair or deflate it to
+be agreeable — a wrong rating in either direction corrupts the
 decision this feeds.
 
 FINDING (severity P2, id S10-CLAUDE-001):

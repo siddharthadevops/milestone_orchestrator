@@ -271,6 +271,10 @@ class StrategyDecisionCatalogueTest(ProfilesCase):
     EXPECTED = [
         {"key": "stages[0].loop", "status": "active",
          "values": ["family_until_clean"]},
+        {"key": "doc_reclassify_from", "status": "active",
+         "values": ["disabled", "P3", "P2", "P1", "P0"]},
+        {"key": "impl_reclassify_from", "status": "active",
+         "values": ["disabled", "P3", "P2", "P1", "P0"]},
         {"key": "p3_defer_max_risk", "status": "active",
          "values": ["low", "medium", "high", "xhigh"]},
         {"key": "p3_reclassify_debt", "status": "active",
@@ -305,6 +309,12 @@ class StrategyDecisionCatalogueTest(ProfilesCase):
             self.assertEqual(rebuilt, source)
             self.assertEqual(pr.semantic_hash(rebuilt), pr.semantic_hash(source))
             self.assertIn("non-operative", pr.SEEDS[name]["description"])
+
+    def test_seed_classification_floors_match_operator_defaults(self):
+        for name in ("strict", "light"):
+            content = pr.SEEDS[name]["profile"]
+            self.assertEqual(content["doc_reclassify_from"], "P2")
+            self.assertEqual(content["impl_reclassify_from"], "P1")
 
 
 class StrategyDecisionValidationTest(ProfilesCase):
@@ -345,6 +355,8 @@ class StrategyDecisionValidationTest(ProfilesCase):
         invalid = [
             {"unknown": True},
             {"doc_register": "brief"},
+            {"doc_reclassify_from": "P4"},
+            {"impl_reclassify_from": False},
             {"p3_reclassify_debt": 1},
             {"final_open_pass": "false"},
             {"stages": []},

@@ -26,7 +26,12 @@ FAMILY_UNTIL_CLEAN = profiles.FAMILY_UNTIL_CLEAN
 # config are listed; more join as later phases read them. Structural
 # profile keys (stages, compat, fuser_*, doc_register, final_open_pass) are
 # NOT dials and never merge into the config namespace.
-PROFILE_DIALS = ("p3_defer_max_risk", "p3_reclassify_debt")
+PROFILE_DIALS = (
+    "doc_reclassify_from",
+    "impl_reclassify_from",
+    "p3_defer_max_risk",
+    "p3_reclassify_debt",
+)
 
 
 def governing_profile(state):
@@ -141,36 +146,24 @@ def battery_questions(state, unit_kind):
     return None
 
 
-def doc_defer_scope(state):
-    """The severities a DOC-phase review round may defer as tracked debt
-    (subject to the drift-risk threshold). The pre-reform gate — and the
-    `legacy` compat profile and every profile-less run — defer only lone
-    P3s ({"P3"}). A reform profile widens this to the full §2 doc gate:
-    P0/P1 ALWAYS fix (never in scope), P2/P3 are rated and the threshold
-    decides fix-vs-debt ({"P2","P3"}). Returned as a tuple so callers pass
-    it straight to contracts.all_in_severity.
+def _configured_defer_scope(state, key, default):
+    """Expand one configured floor into its exact deferrable severities."""
+    floor = effective_config(state).get(key, default)
+    if floor not in contracts.RECLASSIFY_FROM_LEVELS:
+        floor = default
+    if floor == "disabled":
+        return ()
+    return contracts.SEVERITIES[contracts.SEVERITIES.index(floor):]
 
-    A reform profile is any governing profile that is not the `legacy`
-    compatibility artifact (which declares `compat`)."""
-    profile = governing_profile(state)
-    if profile and not profile.get("compat"):
-        return ("P2", "P3")
-    return ("P3",)
+
+def doc_defer_scope(state):
+    """Configured DOC classification scope; P2 means P2 and P3."""
+    return _configured_defer_scope(state, "doc_reclassify_from", "P2")
 
 
 def impl_defer_scope(state):
-    """The severities an IMPLEMENTATION-phase review round may defer
-    as tracked debt (subject to the drift-risk threshold). Always P3 only:
-    on the code phase a P2 is a visible functional deviation that must be
-    fixed even under the lightest profile, so only cosmetic P3s (polish,
-    test-completeness nits with no victim) become debt. Without this an
-    impl slice whose reviewer supplies an unbounded stream of fresh P3s
-    fix-loops until the round cap fails the run — the exact churn the debt
-    valve exists to stop, previously left unguarded on the code phase.
-
-    Returned as a tuple so callers pass it straight to
-    contracts.all_in_severity."""
-    return ("P3",)
+    """Configured implementation scope; P1 means P1, P2, and P3."""
+    return _configured_defer_scope(state, "impl_reclassify_from", "P1")
 
 
 def defer_scope_for(state, unit_kind):

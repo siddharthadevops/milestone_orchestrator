@@ -113,6 +113,21 @@ class EffectiveConfigTest(unittest.TestCase):
         self.assertNotIn("stages", eff)
         self.assertNotIn("compat", eff)
 
+    def test_profile_classification_floors_override_run_defaults(self):
+        state = _state({
+            "doc_reclassify_from": "P2",
+            "impl_reclassify_from": "P1",
+            "profile": {
+                "doc_reclassify_from": "P3",
+                "impl_reclassify_from": "disabled",
+            },
+        })
+        effective = it.effective_config(state)
+        self.assertEqual(effective["doc_reclassify_from"], "P3")
+        self.assertEqual(effective["impl_reclassify_from"], "disabled")
+        self.assertEqual(it.doc_defer_scope(state), ("P3",))
+        self.assertEqual(it.impl_defer_scope(state), ())
+
 
 class VerifyEmbeddedTest(unittest.TestCase):
     def test_profileless_and_ref_only_are_noops(self):
@@ -168,18 +183,30 @@ class VerifyEmbeddedTest(unittest.TestCase):
 
 
 class DocDeferScopeTest(unittest.TestCase):
-    """The DOC-gate deferral scope (spec §2): legacy/profile-less defer only
-    lone P3s; a reform profile widens to P2/P3 (P0/P1 always fix)."""
+    """The DOC classification floor defaults to P2 and is configurable."""
 
-    def test_profileless_and_legacy_are_p3_only(self):
-        self.assertEqual(it.doc_defer_scope(_state({})), ("P3",))
-        legacy = _state({"profile": profiles.SEEDS["legacy"]["profile"]})
-        self.assertEqual(it.doc_defer_scope(legacy), ("P3",))
+    def test_default_and_seed_profiles_classify_p2_and_p3(self):
+        self.assertEqual(it.doc_defer_scope(_state({})), ("P2", "P3"))
+        for name in ("strict", "light", "legacy"):
+            state = _state({"profile": profiles.SEEDS[name]["profile"]})
+            self.assertEqual(it.doc_defer_scope(state), ("P2", "P3"))
 
-    def test_reform_profiles_widen_to_p2_p3(self):
-        for name in ("strict", "light"):
-            st = _state({"profile": profiles.SEEDS[name]["profile"]})
-            self.assertEqual(set(it.doc_defer_scope(st)), {"P2", "P3"})
+    def test_configured_floor_expands_narrow_to_broad_and_can_disable(self):
+        expected = {
+            "disabled": (),
+            "P3": ("P3",),
+            "P2": ("P2", "P3"),
+            "P1": ("P1", "P2", "P3"),
+            "P0": ("P0", "P1", "P2", "P3"),
+        }
+        for floor, scope in expected.items():
+            with self.subTest(floor=floor):
+                self.assertEqual(
+                    it.doc_defer_scope(_state({
+                        "doc_reclassify_from": floor,
+                    })),
+                    scope,
+                )
 
     def test_all_in_severity_matches_scope(self):
         p3 = [{"severity": "P3"}]
@@ -188,7 +215,7 @@ class DocDeferScopeTest(unittest.TestCase):
         # legacy scope: only all-P3 rounds are eligible.
         self.assertTrue(contracts.all_in_severity(p3, ("P3",)))
         self.assertFalse(contracts.all_in_severity(p2p3, ("P3",)))
-        # reform scope: P2/P3 eligible, a P0/P1 present blocks deferral.
+        # Any finding outside the chosen scope blocks all-in-scope eligibility.
         self.assertTrue(contracts.all_in_severity(p2p3, ("P2", "P3")))
         self.assertFalse(contracts.all_in_severity(with_p1, ("P2", "P3")))
         # empty is never eligible; all_p3 stays a P3-only alias.
@@ -198,26 +225,37 @@ class DocDeferScopeTest(unittest.TestCase):
 
 
 class ImplDeferScopeTest(unittest.TestCase):
-    """The IMPL-phase deferral scope: always P3 only — a code P2 is a
-    visible functional deviation that must be fixed even under the lightest
-    profile, so only cosmetic P3s become debt. defer_scope_for dispatches
-    by phase and returns empty for any non-unit kind."""
+    """The implementation classification floor defaults to P1."""
 
-    def test_impl_scope_is_p3_only_for_every_profile(self):
-        self.assertEqual(it.impl_defer_scope(_state({})), ("P3",))
+    def test_impl_scope_defaults_to_p1_through_p3_for_every_profile(self):
+        self.assertEqual(
+            it.impl_defer_scope(_state({})), ("P1", "P2", "P3")
+        )
         for name in ("legacy", "strict", "light"):
             state = _state({"profile": profiles.SEEDS[name]["profile"]})
-            self.assertEqual(it.impl_defer_scope(state), ("P3",))
+            self.assertEqual(
+                it.impl_defer_scope(state), ("P1", "P2", "P3")
+            )
+
+    def test_impl_floor_is_independent_from_doc_floor(self):
+        state = _state({
+            "doc_reclassify_from": "disabled",
+            "impl_reclassify_from": "P2",
+        })
+        self.assertEqual(it.doc_defer_scope(state), ())
+        self.assertEqual(it.impl_defer_scope(state), ("P2", "P3"))
 
     def test_defer_scope_for_dispatches_by_phase(self):
-        # A reform profile: docs widen to P2/P3, impl stays P3-only.
+        # Defaults are independent: docs start at P2, implementation at P1.
         state = _state({"profile": profiles.SEEDS["light"]["profile"]})
         self.assertEqual(set(it.defer_scope_for(state, st.UNIT_SKELETON)),
                          {"P2", "P3"})
         self.assertEqual(set(it.defer_scope_for(state, st.UNIT_SLICE_DOC)),
                          {"P2", "P3"})
-        self.assertEqual(it.defer_scope_for(state, st.UNIT_SLICE_IMPL),
-                         ("P3",))
+        self.assertEqual(
+            it.defer_scope_for(state, st.UNIT_SLICE_IMPL),
+            ("P1", "P2", "P3"),
+        )
         # Any other kind defers nothing.
         self.assertEqual(it.defer_scope_for(state, "something_else"), ())
 

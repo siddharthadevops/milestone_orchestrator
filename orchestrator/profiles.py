@@ -23,7 +23,7 @@ Identity and run retention:
   ordinary save normalizes it away; selecting a profile never mutates the
   reusable source.
 
-The two composable seeds (`strict`, `light`) use the complete six-decision
+The two composable seeds (`strict`, `light`) use the complete eight-decision
 catalogue.  Their fixed open-action envelope is structural seed content, not
 an operator decision.  The `legacy` seed is an exact compatibility fence and
 is never composable.
@@ -43,6 +43,8 @@ _FIXED_ACTION_SCOPE = "open"
 
 _DECISION_SPECS = (
     ("stages[0].loop", "active", (FAMILY_UNTIL_CLEAN,)),
+    ("doc_reclassify_from", "active", contracts.RECLASSIFY_FROM_LEVELS),
+    ("impl_reclassify_from", "active", contracts.RECLASSIFY_FROM_LEVELS),
     ("p3_defer_max_risk", "active", contracts.DRIFT_RISK_LEVELS),
     ("p3_reclassify_debt", "active", (False, True)),
     ("doc_register", "active", ("dense", "lay+hard-table")),
@@ -337,11 +339,14 @@ SEEDS = {
         "sealed": False,
         "description": (
             "Cost-of-being-wrong: high (storage/contract work; the canon "
-            "itself). Every finding opens a fix cycle; dense contract "
-            "register. Reserved fuser-discard and final-pass choices are "
-            "retained but non-operative."
+            "itself). Documentation classifies from P2, implementation from "
+            "P1, and only low-rated findings defer; dense contract register. "
+            "Reserved fuser-discard and final-pass choices are retained but "
+            "non-operative."
         ),
         "profile": {
+            "doc_reclassify_from": "P2",
+            "impl_reclassify_from": "P1",
             "p3_defer_max_risk": "low",
             "p3_reclassify_debt": True,
             "doc_register": "dense",
@@ -359,11 +364,14 @@ SEEDS = {
         "sealed": False,
         "description": (
             "Cost-of-being-wrong: low (UI shell work). Findings rated "
-            "at-or-below medium record as debt; lay register + hard "
-            "table. Reserved fuser-discard and final-pass choices are "
-            "retained but non-operative."
+            "at-or-below medium record as debt; documentation classifies "
+            "from P2 and implementation from P1; lay register + hard table. "
+            "Reserved fuser-discard and final-pass choices are retained but "
+            "non-operative."
         ),
         "profile": {
+            "doc_reclassify_from": "P2",
+            "impl_reclassify_from": "P1",
             "p3_defer_max_risk": "medium",
             "p3_reclassify_debt": True,
             "doc_register": "lay+hard-table",

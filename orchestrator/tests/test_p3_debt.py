@@ -3,10 +3,9 @@
 When `p3_reclassify_debt` is on, eligible full- and delta-review findings
 receive classification one by one. Ratings below the configured threshold
 become tracked debt; only the remaining findings reach the fixer. One blocking
-finding never drags accepted debt into its fix cycle. The deferrable scope is
-phase-dependent (interpreter.defer_scope_for): the DOC phase defers P3 (legacy)
-or P2/P3 (reform); the IMPL phase defers cosmetic P3s only (a code P2 always
-fixes).
+finding never drags accepted debt into its fix cycle. The configurable scope is
+phase-dependent (interpreter.defer_scope_for): documentation defaults to P2/P3
+and implementation defaults to P1/P2/P3.
 """
 
 import copy
@@ -628,14 +627,14 @@ class TestP3Debt(DriverTestCase):
                 step(
                     "review_round",
                     report("review_round", [
-                        finding("F1", "material defect", severity="P2")
+                        finding("F1", "material defect", severity="P1")
                     ]),
                     family="codex",
                 ),
                 step(
                     "fix_findings",
                     fix_ok(
-                        [triaged("F1", "fixed", severity="P2")],
+                        [triaged("F1", "fixed", severity="P1")],
                         files_changed=["docs/skeleton.md"],
                     ),
                     family="codex",
@@ -646,7 +645,9 @@ class TestP3Debt(DriverTestCase):
                 step(
                     "delta_review",
                     report("delta_review", [
-                        finding("F2", "tiny follow-up wording")
+                        finding(
+                            "F2", "tiny follow-up wording", severity="P2"
+                        )
                     ]),
                     family="codex",
                 ),
@@ -692,14 +693,14 @@ class TestP3Debt(DriverTestCase):
                 step(
                     "review_round",
                     report("review_round", [
-                        finding("F1", "material defect", severity="P2")
+                        finding("F1", "material defect", severity="P1")
                     ]),
                     family="codex",
                 ),
                 step(
                     "fix_findings",
                     fix_ok(
-                        [triaged("F1", "fixed", severity="P2")],
+                        [triaged("F1", "fixed", severity="P1")],
                         files_changed=["docs/skeleton.md"],
                     ),
                     family="codex",
@@ -710,8 +711,12 @@ class TestP3Debt(DriverTestCase):
                 step(
                     "delta_review",
                     report("delta_review", [
-                        finding("F2", "tiny follow-up wording"),
-                        finding("F3", "hidden follow-up defect"),
+                        finding(
+                            "F2", "tiny follow-up wording", severity="P2"
+                        ),
+                        finding(
+                            "F3", "hidden follow-up defect", severity="P2"
+                        ),
                     ]),
                     family="codex",
                 ),
@@ -983,14 +988,17 @@ class TestP3Debt(DriverTestCase):
                 else:
                     self.assertEqual(unit["debt"], [])
 
-    def test_legacy_profile_still_fixes_a_lone_p2(self):
-        # The SAME P2 under the legacy compat profile keeps the pre-reform
-        # P3-only scope: not deferrable, so a fix cycle fires (no reclassify
-        # call is even made — the round is not all-in-scope).
+    def test_configured_p3_doc_floor_keeps_a_p2_for_the_fixer(self):
+        # The severity floor is independently configurable: P3 excludes P2
+        # from classification, so it reaches the fixer directly.
         legacy = profiles.SEEDS["legacy"]["profile"]
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(
-                ws, make_config(p3_reclassify_debt=True, profile=legacy))
+                ws, make_config(
+                    p3_reclassify_debt=True,
+                    profile=legacy,
+                    doc_reclassify_from="P3",
+                ))
             mock = runners.MockRunner([
                 draft_step(),
                 step("review_round",
@@ -1060,6 +1068,7 @@ class TestP3Debt(DriverTestCase):
                             [finding("F1", "real gap", severity="P2"),
                              finding("F2", "stale word")]),
                      family="codex"),
+                reclassify(False, family="claude", reason="material gap"),
                 reclassify(True, family="claude", reason="wording only"),
             ])
             driver = drv.Driver(path, runner=mock)
@@ -1069,8 +1078,8 @@ class TestP3Debt(DriverTestCase):
             unit = state["units"][0]
             self.assertIn("reclassify", [c[1] for c in mock.calls])
             self.assertEqual([d["id"] for d in unit["debt"]], ["codex-F2"])
-            # The real P2 is fixed; the independently accepted P3 no longer
-            # rides along merely because another finding blocked the round.
+            # The real P2 is retained; the independently accepted P3 no
+            # longer rides along merely because another finding blocked.
             self.assertEqual(
                 [f["id"] for f in unit["fix_queue"]], ["F1"])
 
@@ -1325,11 +1334,17 @@ class TestP3Debt(DriverTestCase):
             with self.assertRaises(drv.StopStep):
                 driver._staff("classify")
 
-    def _impl_pending(self, ws):
+    def _impl_pending(self, ws, **config_overrides):
         # State with skeleton + slice_doc SEALED and the slice_impl unit
         # pending, ready for its implement draft (mirrors the setup the
         # existing impl-seal test uses, but stops before implement).
-        path = init_state(ws, make_config(p3_reclassify_debt=True))
+        path = init_state(
+            ws,
+            make_config(
+                p3_reclassify_debt=True,
+                **config_overrides,
+            ),
+        )
         write_file(
             "docs/skeleton.md", canonical_skeleton_document("impl")
         )(ws)
@@ -1398,11 +1413,47 @@ class TestP3Debt(DriverTestCase):
                              {"claude", "codex"})
             self.assertEqual(impl["seals"][0]["halves"], {})
 
-    def test_impl_round_p2_is_never_deferred(self):
-        # The impl scope is P3-only: a code P2 (a real functional deviation)
-        # always reaches the fixer even with the debt valve armed.
+    def test_impl_round_p1_is_classified_and_preserved_as_p1_debt(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = self._impl_pending(ws)
+            mock = runners.MockRunner([
+                step("implement",
+                     ok(
+                         "implement",
+                         files_changed=["calculator.py"],
+                         questions=[
+                             {"id": "machinery_trust", "answer": "Checked."},
+                             {"id": "environment_fit", "answer": "Checked."},
+                             {"id": "human_scale", "answer": "Checked."},
+                         ],
+                     ),
+                     family="codex",
+                     side_effect=write_file(
+                         "calculator.py", "def add(a, b):\n    return a + b\n")),
+                step("review_round",
+                     report("review_round", [finding(
+                         "F1", "rare implementation edge", severity="P1"
+                     )]),
+                     family="codex"),
+                reclassify(
+                    True, family="claude", reason="bounded later repair"
+                ),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: bool(state["units"][-1].get("debt")),
+                max_steps=200,
+            )
+            impl = st.load(path)["units"][-1]
+            self.assertEqual(mock.script, [])
+            self.assertEqual(impl["debt"][0]["severity"], "P1")
+            self.assertEqual(impl["fix_queue"], [])
+
+    def test_configured_p3_impl_floor_keeps_p2_for_the_fixer(self):
+        # A narrower operator floor remains possible per run.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = self._impl_pending(ws, impl_reclassify_from="P3")
             mock = runners.MockRunner([
                 step("implement",
                      ok(

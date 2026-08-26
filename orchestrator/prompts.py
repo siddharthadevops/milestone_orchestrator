@@ -2174,7 +2174,7 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
 
 
 # ---------------------------------------------------------------------------
-# Reclassify kind (opposite-family second opinion for debt deferral)
+# Reclassify kind (driver-owned rating for debt deferral)
 
 
 RECLASSIFY_CONTRACT = """OUTPUT CONTRACT (mandatory)
@@ -2237,10 +2237,9 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
     systematically answers no (conceding risk costs it nothing; ruling
     risk out feels like signing). Asked for a graded rating with no
     decision attached, it stays calibrated. The driver compares the
-    rating against the run's p3_defer_max_risk threshold. Used for lone
-    P3s (the pre-reform gate) and, under a reform profile, for the P2/P3
-    findings the profile's doc-gate threshold decides between fix and
-    debt — the rating question is the same at any severity.
+    rating against the run's p3_defer_max_risk threshold. The independent
+    doc/implementation severity floors choose which findings are rated; the
+    rating question is the same at any severity.
 
     Reform-only calibration (the reform's central bargain, encoded in
     the judge — operator, 2026-07-09): builder_desc names WHO actually
@@ -2262,8 +2261,9 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
             "Another reviewer (the opposite family) raised the finding below\n"
         )
         + "on %s. The orchestrator is deciding whether to fix it now or defer\n"
-        "it as TRACKED DEBT — recorded per unit, revisited later; deferred\n"
-        "never means silently dropped.\n\n"
+        "it as TRACKED DEBT. A deferred finding remains recorded and available\n"
+        "for operator review after milestone completion. Deferral neither\n"
+        "discards it nor blocks milestone completion.\n\n"
         % (artifact,)
         + "You do NOT make that decision. Your job is a single calibrated\n"
         "measurement: IF this finding were deferred, how much risk of\n"
@@ -2298,8 +2298,9 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
         + "Rate the finding AS RAISED against the artifact AS IT IS. If it\n"
         "touches correctness, behaviour, or test coverage (more than its\n"
         "severity label suggests), say so in the reason and rate high or\n"
-        "xhigh. Do not inflate the rating to be safe and do not deflate\n"
-        "it to be agreeable — a wrong rating in either direction corrupts\n"
+        "xhigh. Rate the requested axes as they actually stand: do not inflate\n"
+        "a rating to force immediate repair or deflate it to be agreeable —\n"
+        "a wrong rating in either direction corrupts\n"
         "the decision this feeds.\n\n"
         + "FINDING (severity %s, id %s):\n%s\n"
         % (finding.get("severity"), finding.get("id"),

@@ -769,6 +769,19 @@ class TestPortedCanonContentRules(unittest.TestCase):
         )
         self.assertIn("Another reviewer raised the finding below", prompt)
         self.assertNotIn("opposite family) raised", prompt)
+        flat = normalized(prompt)
+        self.assertIn(
+            "available for operator review after milestone completion",
+            flat,
+        )
+        self.assertIn(
+            "Deferral neither discards it nor blocks milestone completion",
+            flat,
+        )
+        self.assertIn(
+            "do not inflate a rating to force immediate repair",
+            flat,
+        )
 
     def test_new_machinery_needs_an_authority_outside_this_plan(self):
         # Reform layer: a reuse posture that answers "why is this machinery

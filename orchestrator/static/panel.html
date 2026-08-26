@@ -615,10 +615,10 @@
       content becomes the goal, snapshotted at launch.</p>
     <p><b>Strategy profile</b> — governs the run's review depth.
       <b>legacy</b> preserves the pre-reform review policy; <b>strict</b> /
-      <b>light</b> set the doc-review threshold (what a finding must exceed
-      to open a fix cycle vs record as tracked debt). Every profile uses the
-      same deterministic seal. No seed is pre-selected on purpose — the
-      choice is explicit.</p>
+      <b>light</b> set separate documentation/implementation classification
+      floors and the risk threshold that chooses fixing versus tracked debt.
+      Every profile uses the same deterministic seal. No seed is pre-selected
+      on purpose — the choice is explicit.</p>
     <p><b>Staffing document</b> — the document and rigor this run is
       staffed from: every call it makes resolves through the staffing
       session opened here, and no seat, model or effort is chosen at
@@ -4162,10 +4162,10 @@ async function showStory(item) {
         esc(d.raw_text != null ? d.raw_text : "(raw file no longer on disk)")}</pre>`;
     }
   } else if (d.story === "debt") {
-    title = `${d.unit} — P3 drift-risk reclassification`;
+    title = `${d.unit} — tracked-debt classification`;
     const debt = d.debt || [];
     body += debt.length ? debt.map(x => `<div class="story-finding">
-        <span class="sev P3">P3</span> <b>${esc(x.id || "")}</b> ${esc(x.summary || "")}
+        <span class="sev ${esc(x.severity || "P3")}">${esc(x.severity || "P3")}</span> <b>${esc(x.id || "")}</b> ${esc(x.summary || "")}
         <div class="story-disp">raised by ${esc(x.raised_by || "?")} → rated ${esc(x.drift_risk || "n/a")}${x.drift_damage ? " risk / " + esc(x.drift_damage) + " damage" : ""} by ${esc(x.cleared_by || "?")}, deferred: ${esc(x.reason || "")}</div>
       </div>`).join("") : `<div class="story-finding">no deferred debt</div>`;
     const kept = (d.reclassify || []).filter(e => !e.defer_ok);

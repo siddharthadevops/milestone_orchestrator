@@ -219,12 +219,11 @@ DEFAULT_CONFIG = {
     # stops for the operator (the same gap bouncing = a real stall, not
     # convergence). Amnesty on resume, like the other convergence caps.
     "max_gap_repairs": 3,
-    # Rated DOC-debt deferral. Eligible doc findings (P3 in legacy, P2/P3 in
-    # a reform profile), whether raised in rounds or seals, are rated
-    # independently. Findings below the threshold become tracked debt; only
-    # retained findings enter a fix cycle. Implementation and delta findings
-    # always enter the normal fix/reject flow. A refused verdict or failed
-    # rating retains that finding for the fixer.
+    # Classification floors include that severity and every less-severe one:
+    # P2 => P2+P3; P1 => P1+P2+P3. Full and delta reviews consume the same
+    # per-phase floor. A refused/failed rating retains the finding for fixing.
+    "doc_reclassify_from": "P2",
+    "impl_reclassify_from": "P1",
     "p3_reclassify_debt": True,
     # Deferral threshold over the reclassifier's drift-risk rating
     # (low|medium|high|xhigh): an eligible finding defers at/below this.
@@ -12396,12 +12395,9 @@ class Driver(object):
             self.state, getattr(result, "task_id", None)
         )
         result_policy = self._worker_task_result_policy(review_task, unit)
-        # Debt deferral: the task's admitted profile/phase chooses the
-        # deferrable severity scope. The DOC phase rates P3
-        # (legacy) or P2/P3 (reform); the IMPL phase rates P3 only (a code
-        # P2 always fixes). P0/P1 always fix. Candidates are rated
-        # independently: one serious finding must not drag cheap, accepted
-        # debt into the fix queue with it.
+        # The admitted task freezes the per-phase classification floor.
+        # Candidates are rated independently: one retained finding must not
+        # drag accepted debt into the fix queue with it.
         defer_scope = tuple(result_policy["defer_scope"])
         deferred = []
         fix_findings = list(findings)

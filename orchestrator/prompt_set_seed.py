@@ -3268,6 +3268,19 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                     'contact), never '
                                                                     'the',
                                                                     'probability.',
+                                                                    'A deferred '
+                                                                    'finding remains '
+                                                                    'recorded as '
+                                                                    'tracked debt and '
+                                                                    'available',
+                                                                    'for operator '
+                                                                    'review after '
+                                                                    'milestone '
+                                                                    'completion. '
+                                                                    'Deferral neither',
+                                                                    'discards it nor '
+                                                                    'blocks milestone '
+                                                                    'completion.',
                                                                     '',
                                                                     'WHO BUILDS ON IT: '
                                                                     '{{builders}} — '
@@ -3289,10 +3302,15 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                     'suggests, say so '
                                                                     'in `reason` and',
                                                                     'rate accordingly. '
-                                                                    'Do not inflate to '
-                                                                    'be safe or '
-                                                                    'deflate to be',
-                                                                    'agreeable — a '
+                                                                    'Rate the '
+                                                                    'requested axes as '
+                                                                    'they actually '
+                                                                    'stand:',
+                                                                    'do not inflate a '
+                                                                    'rating to force '
+                                                                    'immediate repair '
+                                                                    'or deflate it to',
+                                                                    'be agreeable — a '
                                                                     'wrong rating in '
                                                                     'either direction '
                                                                     'corrupts the',

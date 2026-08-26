@@ -34,6 +34,9 @@ the run with the explanation recorded.
 import os
 
 SEVERITIES = ("P0", "P1", "P2", "P3")
+# Operator-facing classification floor, narrowest to broadest. P2 means
+# P2+P3; P0 means every finding severity.
+RECLASSIFY_FROM_LEVELS = ("disabled", "P3", "P2", "P1", "P0")
 
 # The finding lay-mirror bound: the PROMPT still asks for ~500 chars;
 # the VALIDATOR tolerates 10x. An LLM cannot count characters reliably,
@@ -1161,11 +1164,9 @@ def all_p3(findings):
 def all_in_severity(findings, scope):
     """True when there is at least one finding and EVERY finding's severity
     is in `scope` — the round is eligible for the reclassify/debt path.
-    Any finding whose severity is OUTSIDE scope (e.g. a P0/P1 when scope is
-    the reform's {P2,P3}) means a fix round fires anyway. Generalizes
-    all_p3 from the pre-reform P3-only gate to a profile-chosen scope; the
-    canonical rule that P0/P1 ALWAYS fix (spec decision 1) is the invariant
-    that P0/P1 are never in any deferral scope."""
+    Any finding whose severity is outside the configured per-phase scope goes
+    directly to fixing. Generalizes all_p3 from the original P3-only gate to
+    the operator's configured floor."""
     findings = list(findings or [])
     scope = set(scope)
     return bool(findings) and all(

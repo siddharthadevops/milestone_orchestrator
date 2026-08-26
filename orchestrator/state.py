@@ -2935,7 +2935,7 @@ def summary(state, acts_overlay=None, current_review_model=None):
                     }
                     for s in u["seals"]
                 ],
-                # Deferred debt (opposite-family reclassification). The
+                # Deferred debt (driver-owned classification). The
                 # reclassify calls leave no round, so without this the panel
                 # loses the resolution once the in-flight chip clears.
                 "debt": [
