@@ -20,7 +20,7 @@ cat > "$CFG" <<EOF
   "verification": ["python3 run_checks.py"],
   "max_rounds_per_family": 6,
   "git": {"enabled": true},
-  "acts": {"fixer": "codex", "consultation": "opposite"},
+  "acts": {"fixer": "codex"},
   "max_fix_loops": 4,
   "docs_dir": "docs",
   "guarantee_calibration": {"enabled": false}

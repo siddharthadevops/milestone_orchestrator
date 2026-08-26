@@ -642,7 +642,8 @@ class TestDefaultsPrecedence(RunInitTestCase):
         self.assertEqual(acts["fixer"], "codex-mini")  # launch wins
         self.assertNotIn("delta_review", acts)
         self.assertNotIn("delta_review", base)
-        self.assertEqual(acts["consultation"], base["consultation"])
+        self.assertNotIn("consultation", acts)
+        self.assertNotIn("consultation", base)
 
     def test_absent_defaults_effective_config_is_exactly_todays(self):
         self.seed()

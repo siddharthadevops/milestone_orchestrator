@@ -139,7 +139,6 @@ def fix_fixed(*ids, **extra):
                 "severity": "P1",
                 "summary": "queued finding %s addressed" % fid,
                 "disposition": "fixed",
-                "consultation": None,
                 "validity": fixer_validity(True),
             }
             for fid in ids

@@ -3,9 +3,8 @@
 Every worker call the driver makes takes its family, model and effort from
 the run's staffing session and from nothing else — the skeleton draft, the
 slice-note draft, the implementation, the fixer, the failure classifier, the
-debt rater, the fixer's consultation, every review round and every delta
-review. The run gets that session at launch, or at the first resume that
-finds none (amendment A2).
+debt rater, every review round and every delta review. The run gets that
+session at launch, or at the first resume that finds none (amendment A2).
 
 Part 4a built the single-seat calls and the binding. Part 4b is here too:
 the review cycle is the document's assigned `review` seats in index order,
@@ -25,7 +24,6 @@ import urllib.request
 from unittest import mock
 
 from orchestrator import contracts
-from orchestrator import current_model_call
 from orchestrator import driver as drv
 from orchestrator import model_profiles
 from orchestrator import registry
@@ -60,7 +58,6 @@ DRAFT = ("codex", "gpt-5.6-sol", "xhigh")
 IMPLEMENT = ("claude", "claude-fable-5", "max")
 FIX = ("codex", "gpt-5.6-sol", "xhigh")
 CLASSIFY = ("codex", "gpt-5.6-sol", "xhigh")
-CONSULT = ("claude", "claude-opus-5", "xhigh")
 # The two `review` seats the converted `default` assigns, in index order.
 REVIEW_1 = ("codex", "gpt-5.6-sol", "xhigh")
 REVIEW_2 = ("claude", "claude-opus-5", "xhigh")
@@ -345,7 +342,6 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         self.assertIn(("draft", 1, 1), seats)
         self.assertIn(("implement", 1, 1), seats)
         self.assertIn(("fix", 1, 1), seats)
-        self.assertIn(("consult", 1, 1), seats)
         # Reviews ask for the seats the document assigns, in index order,
         # and a delta review asks at a review seat like any other review.
         self.assertIn(("review", 1, 1), seats)
@@ -354,7 +350,7 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         # carries a material or a brief before slice 9.
         self.assertEqual(
             sorted({role for role, _index, _round in seats}),
-            ["consult", "draft", "fix", "implement", "plan", "review"],
+            ["draft", "fix", "implement", "plan", "review"],
         )
         for request in requests:
             self.assertEqual(request["session"], session)
@@ -470,7 +466,6 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
                 unit, contracts.KIND_FIX_FINDINGS
             )()
             restarted._dispatch_for_role("classify")()
-            restarted._dispatch_for_role("consult")()
             # Full and delta review use the same material-free review seat
             # resolver; take one request for each reviewed call shape.
             restarted._review_dispatch(unit, 1)()
@@ -544,8 +539,8 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         self.assertEqual(
             sorted(request["role"] for request in adjacent),
             [
-                "classify", "consult", "fix", "implement", "plan",
-                "review", "review", "sync",
+                "classify", "fix", "implement", "plan", "review",
+                "review", "sync",
             ],
         )
         self.assertTrue(all(
@@ -2000,68 +1995,6 @@ class StoppingConditions(StaffingCutoverTestCase):
             dispatch_resolver=subject._dispatch_for_role("implement"),
         )
         self.assertNotIn("staffing_fallback", markers[1])
-
-
-# ---------------------------------------------------------------------------
-# The consultation
-
-
-class ConsultationCommand(StaffingCutoverTestCase):
-    def test_the_command_resolves_the_consult_seat_when_it_runs(self):
-        path = self.run_state("ws-consult")
-        subject = self.driver_for(path)
-        argv = subject._consultation_command("ignored", "ignored")
-        self.assertEqual(argv[2:], [
-            "--state", os.path.abspath(path),
-            "--home", os.path.abspath(self.home),
-        ])
-        self.assertEqual(
-            current_model_call.consultation_command(path, self.home),
-            runners.apply_model_effort(
-                subject.config["commands"][CONSULT[0]], CONSULT[1], CONSULT[2]),
-        )
-
-        # It resolves when the FIXER runs it, so a session edit reaches it.
-        stf.save(self.home, restaffed_document("codex-only", "codex"))
-        stf.edit_session(self.home, self.session_of(path),
-                         {"document": "codex-only"})
-        rebound = current_model_call.consultation_command(path, self.home)
-        self.assertEqual(rebound[0], subject.config["commands"]["codex"][0])
-        # The command line is unchanged: it never carried a family.
-        self.assertEqual(
-            subject._consultation_command("ignored", "ignored"), argv)
-
-    def test_a_pre_cutover_command_line_still_runs(self):
-        """A fixer admitted BEFORE the cutover keeps a runnable prompt.
-
-        Its stored prompt is immutable and still passes the caller
-        derivation this slice retired. The flags now decide nothing — the
-        run's `consult` seat does — but they must not make the mandatory
-        consultation unrunnable, or an obedient fixer returns the retry
-        envelope forever from a prompt it cannot change.
-        """
-        path = self.run_state("ws-old-consult")
-        subject = self.driver_for(path)
-        expected = current_model_call.consultation_command(path, self.home)
-        for legacy in (
-            ["--caller-act", "fixer"],
-            ["--caller-act", "skeletoner"],
-            ["--caller-act", "fixer", "--caller-origin", "codex"],
-        ):
-            with self.subTest(argv=" ".join(legacy)):
-                with mock.patch.object(
-                    current_model_call.os, "execvp"
-                ) as execvp:
-                    current_model_call.main(
-                        ["--state", path, "--home", self.home] + legacy
-                    )
-                execvp.assert_called_once_with(expected[0], expected)
-        self.assertEqual(
-            expected,
-            runners.apply_model_effort(
-                subject.config["commands"][CONSULT[0]], CONSULT[1],
-                CONSULT[2]),
-        )
 
 
 # ---------------------------------------------------------------------------

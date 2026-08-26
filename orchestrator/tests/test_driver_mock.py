@@ -13,8 +13,8 @@ Covers here:
       the milestone-final suite failure path (unit sequence, statuses, exact round
       kind/id sequences including fix_findings and delta_review records,
       derived seal records, gate_commit fields, ledgers, milestone closed);
-  (i) fixer coverage violation / rejected-without-consultation protocol
-      failure / unknown adjudication_ref / unknown contests reference;
+  (i) fixer coverage violation / retired retry protocol failure / direct
+      rejection / unknown adjudication_ref / unknown contests reference;
   (l) resume mid-flow with a fresh Driver; decide() totality at every step.
 
 The fix-loop mechanics themselves — delta-dirty loops, caps, verification
@@ -64,8 +64,8 @@ def make_config(**overrides):
         "verification_timeout": 60,
         "max_rounds_per_family": 6,
         "git": {"enabled": True},
-        "acts": {"skeletoner": "codex", "fixer": "codex", "delta_review": "codex",
-                 "consultation": "opposite"},
+        "acts": {"skeletoner": "codex", "fixer": "codex",
+                 "delta_review": "codex"},
         "max_fix_loops": 6,
         "snapshot_exclude_dirs": [],
         # Most driver tests exercise another state-machine seam and use a
@@ -208,13 +208,12 @@ def battery_entries(ids):
 
 
 def triaged(fid, disposition, summary="triaged finding", severity="P3",
-            consultation=None, prevention=None, adjudication_ref=None):
+            prevention=None, adjudication_ref=None):
     entry = {
         "id": fid,
         "severity": severity,
         "summary": summary,
         "disposition": disposition,
-        "consultation": consultation,
         "validity": fixer_validity(disposition in ("fixed", "blocked")),
     }
     if prevention is not None:
@@ -410,7 +409,7 @@ def canonical_skeleton_document():
 
 def skeleton_script():
     """codex finding -> fix -> delta clean -> codex clean; claude finding ->
-    reject (consultation + prevention edit) -> delta clean; claude stubborn
+    direct reject + prevention edit -> delta clean; claude stubborn
     duplicate -> rejected_adjudicated by pointer (no edit, no delta call);
     claude clean; deterministic seal."""
     return [
@@ -444,9 +443,6 @@ def skeleton_script():
              fix_ok([triaged(
                  "F1", "rejected",
                  "goal wording is ambiguous about float support",
-                 consultation={
-                     "resolution": "opposite family agreed the goal was "
-                     "already float-typed by the CLI contract"},
                  prevention={"documented_in": "docs/skeleton.md",
                              "note": "explicit float-support note added"},
              )], files_changed=["docs/skeleton.md"]),
@@ -754,7 +750,8 @@ class TestHappyLifecycle(DriverTestCase):
                       encoding="utf-8") as fh:
                 adjudications = fh.read()
             self.assertIn("[skeleton-claude-r1/F1]", adjudications)
-            self.assertIn("opposite family agreed", adjudications)
+            self.assertIn("no harm beyond the documented behavior",
+                          adjudications)
             self.assertIn("docs/skeleton.md", adjudications)
             self.assertIn("explicit float-support note added", adjudications)
 
@@ -1453,19 +1450,22 @@ class TestFixerProtocolFailures(DriverTestCase):
             self.assertEqual(len(fix_calls), 2)
             self.assertIn("CONTRACT CORRECTION", fix_calls[-1][2])
 
-    def test_unavailable_consultation_retries_the_same_fix_episode(self):
+    def test_retired_retry_status_is_protocol_error(self):
         retry = {
             "status": "retry",
             "kind": contracts.KIND_FIX_FINDINGS,
-            "retry_reason": contracts.RETRY_CONSULTATION_UNAVAILABLE,
-            "notes": "opposite family did not return a clear result",
+            "retry_reason": "consultation_unavailable",
+            "notes": "legacy nested consultation did not return",
             "questions": questions(contracts.KIND_FIX_FINDINGS),
         }
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
             mock = runners.MockRunner(
                 self._dirty_round_prefix()
-                + [step("fix_findings", retry, family="codex")]
+                + [
+                    step("fix_findings", retry, family="codex"),
+                    step("fix_findings", retry, family="codex"),
+                ]
             )
             driver = drv.Driver(path, runner=mock)
             _actions, final = self.drive(driver)
@@ -1473,8 +1473,8 @@ class TestFixerProtocolFailures(DriverTestCase):
 
             state = st.load(path)
             unit = state["units"][0]
-            self.assertEqual(state["failure"]["type"], "unknown")
-            self.assertIn("consultation unavailable",
+            self.assertEqual(state["failure"]["type"], "worker_protocol")
+            self.assertIn("status 'retry' not in",
                           state["failure"]["reason"])
             self.assertEqual(unit["status"], st.U_FAILED)
             self.assertEqual(unit["failed_from"], st.U_FIXING)
@@ -1483,42 +1483,44 @@ class TestFixerProtocolFailures(DriverTestCase):
                 r for r in unit["rounds"]
                 if r["kind"] == contracts.KIND_FIX_FINDINGS
             ])
-            self.assertTrue(unit.get("killed_fix_notice"))
+            self.assertFalse(unit.get("killed_fix_notice"))
+            self.assertEqual(
+                len([c for c in mock.calls if c[1] == "fix_findings"]), 2
+            )
 
-            st.resume_run(state)
-            self.assertEqual(unit["status"], st.U_FIXING)
-            self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F1"])
-            self.assertIsNone(state["failure"])
-
-    def test_rejected_without_consultation_is_protocol_error(self):
-        bad = fix_ok([triaged("F1", "rejected",
-                              "skeleton lacks explicit non-goals",
-                              consultation=None)])
+    def test_rejected_directly_without_consultation(self):
+        rejected = fix_ok([triaged(
+            "F1", "rejected", "skeleton lacks explicit non-goals"
+        )])
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
             mock = runners.MockRunner(self._dirty_round_prefix() + [
-                step("fix_findings", bad, family="codex"),
-                step("fix_findings", bad, family="codex"),  # repair retry
+                step("fix_findings", rejected, family="codex"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
-            _actions, final = self.drive(driver)
-            self.assertEqual(final.type, drv.A_FAILED)
-            self.assertEqual(mock.script, [])
-            # Exactly one repair retry happened.
-            fix_calls = [c for c in mock.calls if c[1] == "fix_findings"]
-            self.assertEqual(len(fix_calls), 2)
-            self.assertIn("CONTRACT CORRECTION", fix_calls[1][2])
-            self.assert_failed(
-                path, driver,
-                ["fix_findings call failed",
-                 "contract-violating output twice",
-                 "consultation"],
-                unit_key="skeleton",
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
             )
-            # Raw texts of both violating attempts were persisted.
-            raw_dir = os.path.join(ws, ".orchestrator", "raw")
-            protoerrs = [n for n in os.listdir(raw_dir) if "protoerr" in n]
-            self.assertEqual(len(protoerrs), 2)
+            self.assertEqual(mock.script, [])
+            state = st.load(path)
+            self.assertIsNone(state["failure"])
+            rounds = state["units"][0]["rounds"]
+            self.assertEqual(
+                [round_["kind"] for round_ in rounds],
+                ["review_round", "fix_findings", "review_round",
+                 "review_round"],
+            )
+            result = rounds[1]["result"]["findings"][0]
+            self.assertEqual(result["disposition"], "rejected")
+            self.assertNotIn("consultation", result)
+            self.assertEqual(st.registry_ids(state), {"skeleton-codex-r1/F1"})
+            fix_prompt = next(c[2] for c in mock.calls
+                              if c[1] == "fix_findings")
+            self.assertIn("Never invoke, spawn, or consult another LLM",
+                          fix_prompt)
 
     def test_rejected_adjudicated_with_unknown_ref_fails_run(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

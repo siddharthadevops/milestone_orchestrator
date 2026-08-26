@@ -4007,8 +4007,6 @@ async function showStory(item) {
   const findingRow = f => {
     const bits = [];
     if (f.disposition) bits.push(`<b>${esc(f.disposition)}</b>`);
-    if (f.consultation && f.consultation.resolution)
-      bits.push(`consultation: ${esc(f.consultation.resolution)}`);
     if (f.prevention)
       bits.push(`prevention → ${esc(f.prevention.documented_in || "")}: ${esc(f.prevention.note || "")}`);
     if (f.adjudication_ref)

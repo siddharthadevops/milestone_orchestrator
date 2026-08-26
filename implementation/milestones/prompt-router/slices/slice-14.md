@@ -64,9 +64,11 @@ Delete the now-unreachable milestone runtime and contract surfaces for:
 - resume/default adapters whose only purpose is accepting pre-activation run
   shapes.
 
-Keep ordinary fixer consultation, staffing/rigor/model selection, project
-safeguards, caller-authored standalone orders, Git gate commits, immutable
-history, and the finite canonical-plan/reconciliation boundaries.
+Retire ordinary fixer consultation: workers never dispatch other models, and
+eligible findings from both full and delta reviews use the driver-owned
+classifier. Keep staffing/rigor/model selection, project safeguards,
+caller-authored standalone orders, Git gate commits, immutable history, and
+the finite canonical-plan/reconciliation boundaries.
 
 ## Conformance evidence
 

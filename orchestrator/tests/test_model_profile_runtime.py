@@ -5,7 +5,6 @@ import copy
 import io
 import json
 import os
-import shlex
 import subprocess
 import tempfile
 import time
@@ -16,7 +15,7 @@ from unittest import mock
 from orchestrator import contracts, driver, gitops
 from orchestrator import model_profiles
 from orchestrator import brainstorming_lifecycle
-from orchestrator import prompts, registry, runners, service, staffing
+from orchestrator import registry, runners, service, staffing
 from orchestrator import state, tasks
 from orchestrator import verifiers
 
@@ -572,8 +571,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             (act, copy.deepcopy(entry))
             for act in model_profiles.MODEL_EFFORT_ACTS
             for entry in model_effort_objects
-        ] + [
-            ("consultation", entry) for entry in family_policies
         ]
 
         def effective_result(act):
@@ -588,8 +585,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 return (
                     resolved["agent"], resolved["model"], resolved["effort"]
                 )
-            if act == "consultation":
-                return (subject._resolve_act(act, "codex"),)
             return subject._act_profile(act, origin_family="codex")
 
         real_seam = driver._resolve_act_from_layers
@@ -643,11 +638,8 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             subject._delta_review_profile("codex"),
             ("codex", "review-live", "medium"),
         )
-        # `consultation` remains an ACT the profile layer resolves; the
-        # command line the fixer runs is the router's `consult` seat after
-        # slice 4 and is pinned there, not here.
-        self.assertEqual(subject._resolve_act("consultation", "claude"),
-                         "codex")
+        # `consultation` remains accepted configuration but is inert: the
+        # active staffing assertions above deliberately do not resolve it.
         self.assertEqual(subject._act_profile("fixer"),
                          ("claude", None, "high"))
 
@@ -673,9 +665,8 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                     ),
                 model_profiles.ModelProfileError,
             ),
-            # `consultation` is deliberately absent: after slice 4 the
-            # command line the fixer runs resolves through the run's
-            # staffing session, so no profile act can make it raise.
+            # `consultation` is deliberately absent because it is accepted
+            # configuration with no runtime consumer.
         )
         for source in ("profile", "override"):
             for index, (seat, act, entry, resolve, error) in enumerate(
@@ -740,7 +731,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         self.assertEqual(counterpart,
                          {"agent": "codex", "model": "counterpart-model",
                           "effort": "medium"})
-        self.assertEqual(d._resolve_act("consultation", "claude"), "claude")
 
     def test_brainstorming_turns_read_current_profile_and_overrides(self):
         model_profiles.ensure_default(self.home)
@@ -1281,28 +1271,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             continuation.session_calls[0][:2], ("start", "claude")
         )
         self.assertIn("\nFAMILY: claude\n", continuation.calls[0][2])
-
-    def test_consultation_command_round_trips_spaced_paths(self):
-        spaced_home = os.path.join(self.tmp.name, "profile home")
-        spaced_workspace = os.path.join(self.tmp.name, "run workspace")
-        model_profiles.ensure_default(spaced_home)
-        path = driver.init_run(
-            "spaced consultation",
-            spaced_workspace,
-            config=copy.deepcopy(driver.DEFAULT_CONFIG),
-            model_profiles_home=spaced_home,
-        )
-        subject = driver.Driver(
-            path,
-            runner=runners.MockRunner([]),
-            model_profiles_home=spaced_home,
-        )
-        argv = subject._consultation_command("claude", "high")
-        block = prompts._consultation_block("claude", argv)
-        rendered = block.split("Command (prompt on stdin):\n  ", 1)[1].split(
-            "\n", 1
-        )[0]
-        self.assertEqual(shlex.split(rendered), argv)
 
     def test_infrastructure_retry_reresolves_current_staffing(self):
         model_profiles.ensure_default(self.home)

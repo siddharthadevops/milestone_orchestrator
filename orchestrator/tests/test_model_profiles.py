@@ -436,8 +436,7 @@ class ModelProfileStoreTest(unittest.TestCase):
         """Every configurable act's effective staffing: family plus
         model/effort with family defaults filled (as _call fills them),
         across both origin families where the act is origin-sensitive,
-        plus the fixed reviews and the derived delta, counterpart, and
-        consultation seats."""
+        plus the fixed reviews and the derived delta and counterpart seats."""
 
         def filled(family, model, effort):
             default_model, default_effort = d._family_defaults(family)
@@ -458,16 +457,6 @@ class ModelProfileStoreTest(unittest.TestCase):
                 default_family=d._opposite(origin)))
             snap["delta_review/%s" % origin] = filled(
                 *d._delta_review_profile(origin))
-            # Consultation: derived family, model from the consulted
-            # family's defaults, effort from the calling fixer — compare
-            # the fully resolved command line the fixer would run.
-            consulted = d._resolve_act("consultation", origin)
-            _model, fixer_family_effort = d._family_defaults(fix_family)
-            snap["consultation/%s" % origin] = (
-                consulted,
-                d._consultation_command(
-                    consulted, fix_effort or fixer_family_effort),
-            )
         for family in d.config["families_order"]:
             snap["review_%s" % family] = (family,) + d._review_profile(
                 family)
@@ -493,11 +482,7 @@ class ModelProfileStoreTest(unittest.TestCase):
         # The comparison must be over fully resolved staffing — no seat
         # may have been left as a None placeholder on either side.
         for key, value in expected.items():
-            if key.startswith("consultation/"):
-                family, command = value
-                self.assertTrue(family and command, key)
-            else:
-                self.assertTrue(all(value), key)
+            self.assertTrue(all(value), key)
 
 
 if __name__ == "__main__":

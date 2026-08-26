@@ -18,7 +18,6 @@ from orchestrator import brainstorming
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import contracts
-from orchestrator import current_model_call
 from orchestrator import driver as drv
 from orchestrator import runners
 from orchestrator import service
@@ -172,10 +171,6 @@ class StaffingConformanceTest(driver_cases.StaffingCutoverTestCase):
                 standalone_cases.GitAlignmentStaffingTest,
                 "test_git_sync_resolves_live_after_ownership_checks",
             ),
-            (
-                driver_cases.ConsultationCommand,
-                "test_the_command_resolves_the_consult_seat_when_it_runs",
-            ),
         )
 
     def _create_split_brainstorming_session(self):
@@ -273,42 +268,8 @@ class StaffingConformanceTest(driver_cases.StaffingCutoverTestCase):
             (store.read_activity(created["id"]) or {}).get("events", []), []
         )
 
-    def _assert_consultation_falls_back(self):
-        path = self.run_state("consultation-fallback")
-        subject = self.driver_for(path)
-        session = self.session_of(path)
-        document = staffing.load(self.home, staffing.DEFAULT_DOCUMENT_NAME)
-        document["name"] = "unreadable-consultation"
-        staffing.save(self.home, document)
-        staffing.edit_session(
-            self.home, session, {"document": document["name"]}
-        )
-        pathlib.Path(staffing._path(self.home, document["name"])).write_text(
-            "{ not json", encoding="utf-8"
-        )
-        resolved = staffing.resolve(
-            self.home,
-            session,
-            "consult",
-            families=list(subject.config["families_order"]),
-        )
-        self.assertEqual(
-            resolved.staffing_fallback,
-            staffing.STAFFING_FALLBACK_DEFAULT_DOCUMENT,
-        )
-        expected = resolved.answer
-        self.assertEqual(
-            current_model_call.consultation_command(path, self.home),
-            runners.apply_model_effort(
-                subject.config["commands"][expected["agent"]],
-                expected["model"],
-                expected["effort"],
-            ),
-        )
-
     def test_fallback_and_condition_placement_conforms_across_consumers(self):
         self._create_split_brainstorming_session()
-        self._assert_consultation_falls_back()
         self._assert_existing_cases(
             (
                 driver_cases.StoppingConditions,
@@ -398,7 +359,6 @@ class StaffingConformanceTest(driver_cases.StaffingCutoverTestCase):
             "brainstorming": self._resolve_sites(lifecycle),
             "direct": self._resolve_sites(task_api),
             "service": self._resolve_sites(service),
-            "consultation": self._resolve_sites(current_model_call),
         }, {
             "driver": [
                 "resolve_current_review_model.answer",
@@ -408,7 +368,6 @@ class StaffingConformanceTest(driver_cases.StaffingCutoverTestCase):
             "brainstorming": ["_SeatStaffing.__call__"],
             "direct": ["_dispatch"],
             "service": ["resolve_staffing_request", "sync_project_git"],
-            "consultation": ["consultation_command"],
         })
         self._assert_existing_cases(
             (
@@ -442,10 +401,6 @@ class StaffingConformanceTest(driver_cases.StaffingCutoverTestCase):
             (
                 standalone_cases.GitAlignmentStaffingTest,
                 "test_git_sync_resolves_live_after_ownership_checks",
-            ),
-            (
-                driver_cases.ConsultationCommand,
-                "test_the_command_resolves_the_consult_seat_when_it_runs",
             ),
         )
 

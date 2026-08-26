@@ -65,11 +65,13 @@
         "text": [
           "FIX DECISION TABLE (exactly once per queued finding)",
           "- valid -> `fixed`; apply the fix now.",
-          "- invalid -> `rejected` after consultation. If ambiguity caused the",
+          "- invalid -> `rejected` directly. If ambiguity caused the",
           "  false finding, add the smallest clarifying `prevention` edit.",
           "- settled duplicate without new evidence -> `rejected_adjudicated`",
-          "  with adjudication_ref; no consultation. CONTESTS means reassess",
-          "  the new evidence and consult again if rejecting.",
+          "  with adjudication_ref. CONTESTS means reassess the new evidence",
+          "  directly if rejecting.",
+          "- Never invoke, spawn, or consult another LLM or agent; only the",
+          "  deterministic driver dispatches model calls.",
           "- confirmed and impossible -> per-finding `blocked`."
         ],
         "variables": []
@@ -105,7 +107,7 @@
           "  `fixed` or `blocked`.",
           "- Invalid finding: no exact violated guarantee, no concrete party",
           "  with observable damage, or harm inside the baseline — use",
-          "  `rejected` after consultation, or `rejected_adjudicated` for a",
+          "  `rejected` directly, or `rejected_adjudicated` for a",
           "  settled duplicate.",
           "- Do not triage from memory, chat, or prior review authority. Use",
           "  the finding only to locate evidence; decide from the current",
@@ -141,42 +143,6 @@
       },
       {
         "ref": "process_authority"
-      },
-      {
-        "text": [
-          "CONSULTATION PROTOCOL (for rejections)",
-          "Before `rejected`, consult the {{consultation_family}} family with the artifact/path,",
-          "finding, proposed resolution, and checked evidence. Compare",
-          "affected_party, observable_damage, violated_guarantee,",
-          "permitted_baseline, incremental_harm, and exceeds_baseline;",
-          "permitted operation is not damage by itself.",
-          "Command (prompt on stdin):",
-          "  {{consultation_command}}",
-          "Save the transcript under {{scratch_path}}; summarize",
-          "it in consultation.resolution. Run at most five dialogue rounds,",
-          "stopping earlier on clear agreement. Never reject P0/P1 without a",
-          "clear resolution. If consultation is unavailable or unresolved, do",
-          "not block, concede, or reject: return only the retry envelope; the",
-          "guard retries this fixer after 15 minutes. `rejected_adjudicated`",
-          "needs no consultation; cite adjudication_ref."
-        ],
-        "variables": [
-          {
-            "name": "consultation_family",
-            "required": true,
-            "description": "The opposite family to consult."
-          },
-          {
-            "name": "consultation_command",
-            "required": true,
-            "description": "The exact consultation command line for this run."
-          },
-          {
-            "name": "scratch_path",
-            "required": true,
-            "description": "Driver-provided ignored runtime scratch directory for consultation transcripts."
-          }
-        ]
       }
     ]
   },
@@ -212,17 +178,17 @@
           "             \"violated_guarantee\":\"...\",\"permitted_baseline\":\"...\",",
           "             \"incremental_harm\":\"...\",\"exceeds_baseline\":true|false},",
           " \"disposition\":\"fixed|rejected|rejected_adjudicated|blocked\",",
-          " \"consultation\":null|{\"resolution\":\"...\"},",
           " \"prevention\":null|{\"documented_in\":\"<edited path>\",\"note\":\"...\"},",
           " \"adjudication_ref\":null|\"<settled rejection id>\"}",
           "`fixed`/`blocked` require a concrete, evidence-backed affected party,",
           "observable damage, and violated guarantee, plus exceeds_baseline=true. If any",
-          "cannot be demonstrated, the finding is invalid: `rejected` requires its",
-          "consultation (`rejected_adjudicated` remains the settled-duplicate path), and",
+          "cannot be demonstrated, the finding is invalid: use `rejected`",
+          "(`rejected_adjudicated` remains the settled-duplicate path), and",
           "both rejection dispositions require exceeds_baseline=false. Include any extra",
           "field explicitly required by an active project-safeguard or",
           "active project block above. Plan edits live only in the canonical skeleton",
-          "block; never duplicate them in the reply."
+          "block; never duplicate them in the reply. A fixer never invokes, spawns,",
+          "or consults another LLM or agent; rejection is its own evidence-backed judgment."
         ],
         "variables": []
       },
@@ -232,16 +198,6 @@
           "Impossible worker task (not a finding disposition):",
           "{\"status\":\"blocked\",\"kind\":\"fix_findings\",\"blocked_reason\":\"...\",",
           " \"questions\":[...]}   (the QUESTIONS entries are required in EVERY reply)"
-        ],
-        "variables": []
-      },
-      {
-        "id": "fix_retry",
-        "text": [
-          "Unavailable or unresolved mandatory consultation:",
-          "{\"status\":\"retry\",\"kind\":\"fix_findings\",",
-          " \"retry_reason\":\"consultation_unavailable\",\"notes\":\"<optional>\",",
-          " \"questions\":[...]}   (required in EVERY reply)"
         ],
         "variables": []
       },

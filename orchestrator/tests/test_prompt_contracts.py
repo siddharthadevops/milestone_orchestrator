@@ -54,7 +54,7 @@ def report_finding():
     }
 
 
-def fix_finding(disposition="rejected", resolution="Consulted and rejected"):
+def fix_finding(disposition="rejected"):
     return {
         "id": "F1",
         "severity": "P2",
@@ -68,9 +68,6 @@ def fix_finding(disposition="rejected", resolution="Consulted and rejected"):
             "exceeds_baseline": disposition in ("fixed", "blocked"),
         },
         "disposition": disposition,
-        "consultation": (
-            {"resolution": resolution} if disposition == "rejected" else None
-        ),
         "prevention": None,
         "adjudication_ref": None,
     }
@@ -130,11 +127,6 @@ class PromptContractsTest(unittest.TestCase):
              {"status": "blocked", "kind": "fix_findings",
               "blocked_reason": "Cannot fix"},
              {"status": "blocked", "kind": "fix_findings"}),
-            ("fix_retry", "fix_findings",
-             {"status": "retry", "kind": "fix_findings",
-              "retry_reason": "consultation_unavailable"},
-             {"status": "retry", "kind": "fix_findings",
-              "retry_reason": "later"}),
             ("fix_need_rethink", "fix_findings",
              dict(review_rethink, kind="fix_findings"),
              dict(review_rethink, kind="fix_findings", finding={})),
@@ -457,20 +449,22 @@ class PromptContractsTest(unittest.TestCase):
             configured_suite_commands=commands,
         )
 
-    def test_rejected_fix_requires_nonempty_consultation_resolution(self):
+    def test_rejected_fix_is_direct_and_rejects_retired_consultation(self):
         bound = prompt_contracts.bind(
             prompt("fix_findings", ("fix_results",))
         )
         reply = {
             "status": "ok",
             "kind": "fix_findings",
-            "findings": [fix_finding(resolution="")],
+            "findings": [fix_finding()],
             "files_changed": [],
+        }
+        prompt_contracts.validate(bound, reply)
+        reply["findings"][0]["consultation"] = {
+            "resolution": "retired nested dialogue"
         }
         with self.assertRaises(contracts.ContractError):
             prompt_contracts.validate(bound, reply)
-        reply["findings"][0]["consultation"]["resolution"] = "Agreed invalid"
-        prompt_contracts.validate(bound, reply)
 
     def test_contested_review_requires_meaningful_new_evidence(self):
         bound = prompt_contracts.bind(
@@ -619,12 +613,9 @@ class PromptContractsTest(unittest.TestCase):
                         },
                     )
 
-        retry_bound = prompt_contracts.bind(
-            prompt("fix_findings", ("fix_retry",))
-        )
         with self.assertRaises(contracts.ContractError):
             prompt_contracts.validate(
-                retry_bound,
+                fix_bound,
                 {
                     "status": "retry",
                     "kind": "fix_findings",

@@ -72,7 +72,7 @@ skeleton frames downstream kinds as **BASELINE** (adapted-kinds decision 20).
   presence check, no validator).
 - Not here: need_rethink (the whole design is in its hands — a contradictory
   GOAL is `blocked`, an open design question is its own to settle), review
-  rubric, severity, fix dispositions, consultation, deferred debt,
+  rubric, severity, fix dispositions, deferred debt,
   adjudications (none exist yet — the skeleton FIXER sees them, not the first
   drafter), delta rules, suite duties.
 
@@ -92,9 +92,9 @@ skeleton frames downstream kinds as **BASELINE** (adapted-kinds decision 20).
 
 ### Job 3 — Skeleton fix
 - Purpose: triage exactly the queued skeleton findings.
-- Inputs: skeleton, goal, queued findings, adjudications, consultation seat.
+- Inputs: skeleton, goal, queued findings, adjudications.
 - Own law: fix core (adversarial validation, decision table, verdict account,
-  consultation protocol), the skeleton as primary target (fences are
+  and the prohibition on worker-owned model calls), the skeleton as primary target (fences are
   down: touching siblings is legitimate when the fix requires it;
   reviews judge the result), the slice-table
   duty (any table change returns the FULL plan in `slices`), doc-altitude fix
@@ -172,7 +172,7 @@ skeleton frames downstream kinds as **BASELINE** (adapted-kinds decision 20).
 
 ### Job 9 — Implementation fix
 - Fix core + code specifics: focused checks, scope
-  authority (as job 8), consultation, need_rethink. No doc-altitude tail; a
+  authority (as job 8), direct evidence-backed rejection, need_rethink. No doc-altitude tail; a
   `prevention` edit lands where the misreading lives (comment or doc).
 
 ### Job 10 — Delta review (three unit routes; document law / implementation law)
@@ -189,7 +189,8 @@ skeleton frames downstream kinds as **BASELINE** (adapted-kinds decision 20).
 - Flavor difference is exactly the target-type law: doc deltas mount the
   doc-altitude review unit; impl deltas mount scope authority.
 - Not here: re-judging the whole artifact (the STANDARD line says so), fix
-  law.
+  law. Eligible findings enter the same driver-owned rating gate as findings
+  from a full review before any fixer is queued.
 
 ### Job 11 — Drift rating (reclassify)
 - Purpose: one calibrated two-axis measurement of one finding.

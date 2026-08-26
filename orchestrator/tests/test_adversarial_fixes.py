@@ -8,7 +8,7 @@ Covers, in order of severity:
       workspace is left untouched.
   (2) P2 — a fixer cannot kill a CONTESTS-carrying finding by pointer
       (rejected_adjudicated): the contest re-opened the adjudication, so
-      it must be fixed or rejected with a fresh consultation.
+      it must be fixed or rejected directly from current evidence.
   (3) P2 — a fixer that claims edits ('fixed' dispositions, files_changed,
       a prevention edit) while the worktree delta is empty fails the run:
       no phantom fixes, no phantom prevention pointers in the registry.
@@ -180,11 +180,10 @@ class TestContestedFindingNotKillableByPointer(DriverTestCase):
             step("review_round",
                  report("review_round", [finding("F1", "wording ambiguous")]),
                  family="codex"),
-            # Rejection (consultation, no edit) -> empty delta closes the
-            # episode without a delta call -> registry entry exists.
+            # Direct rejection with no edit -> empty delta closes the episode
+            # without a delta call -> registry entry exists.
             step("fix_findings", fix_ok([triaged(
                 "F1", "rejected", "wording ambiguous",
-                consultation={"resolution": "settled: wording is fine"},
             )])),
             step("review_round",
                  report("review_round", [finding(
@@ -211,11 +210,11 @@ class TestContestedFindingNotKillableByPointer(DriverTestCase):
             self.assert_failed(
                 path, driver,
                 ["rejected_adjudicated", "CONTESTS adjudication",
-                 self.REJECTION_ID, "fresh consultation"],
+                 self.REJECTION_ID, "directly rejected from current evidence"],
                 unit_key="skeleton",
             )
 
-    def test_contested_finding_rejected_with_fresh_consultation_is_legal(self):
+    def test_contested_finding_can_be_rejected_directly(self):
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
             path = init_state(ws, make_config())
             driver = drv.Driver(path, runner=runners.MockRunner(
@@ -223,8 +222,6 @@ class TestContestedFindingNotKillableByPointer(DriverTestCase):
                     step("fix_findings", fix_ok([triaged(
                         "F2", "rejected", "broken per the new spec",
                         severity="P2",
-                        consultation={"resolution": "fresh dialogue: the "
-                                      "new evidence misreads section 3"},
                     )])),
                 ]
             ))
@@ -329,7 +326,6 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                 ws,
                 fix_ok([triaged(
                     "F1", "rejected", "missing non-goals",
-                    consultation={"resolution": "not a defect"},
                 )], files_changed=["docs/skeleton.md"]),
             )
             self.assert_failed(
@@ -344,7 +340,6 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                 ws,
                 fix_ok([triaged(
                     "F1", "rejected", "missing non-goals",
-                    consultation={"resolution": "not a defect"},
                     prevention={"documented_in": "docs/skeleton.md",
                                 "note": "phantom"},
                 )], files_changed=["docs/skeleton.md"]),
@@ -362,9 +357,7 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             self.assertEqual(state["milestone"]["status"], st.M_FAILED)
 
     def test_pure_rejection_episode_still_closes_green(self):
-        """The legitimate empty-delta case: all rejections, no edit claims
-        (consultation transcripts under .orchestrator/ are bookkeeping,
-        not workspace edits)."""
+        """The legitimate empty-delta case: direct rejection, no edits."""
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
             path = init_state(ws, make_config())
             driver = drv.Driver(path, runner=runners.MockRunner([
@@ -374,9 +367,8 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                             [finding("F1", "missing non-goals")]),
                      family="codex"),
                 step("fix_findings", fix_ok(
-                    [triaged("F1", "rejected", "missing non-goals",
-                             consultation={"resolution": "not a defect"})],
-                    files_changed=[".orchestrator/scratch/consult-1.txt"],
+                    [triaged("F1", "rejected", "missing non-goals")],
+                    files_changed=[],
                 )),
             ]))
             self.step_until(
@@ -483,7 +475,6 @@ class TestOverturnedAdjudication(DriverTestCase):
                      family="codex"),
                 step("fix_findings", fix_ok([triaged(
                     "F1", "rejected", "wording ambiguous",
-                    consultation={"resolution": "settled: wording fine"},
                 )])),
                 # Contested with new evidence and CONCEDED (fixed, real
                 # edit): the adjudication is overturned.
@@ -598,7 +589,7 @@ class TestPromptSanitizationAndBounds(unittest.TestCase):
                 "contests": {"rejection_id": "skeleton-claude-r1/F1",
                              "new_evidence": "line one\nline two"},
             }],
-            [], "claude", ["claude"],
+            [],
         )
         self.assertNotIn("\n- F9 [P0]", prompt)
         self.assertIn(

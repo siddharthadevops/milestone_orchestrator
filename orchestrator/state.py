@@ -1583,8 +1583,14 @@ def adjudicated_rejections(state):
                             "unit": unit_key(unit),
                             "severity": f.get("severity"),
                             "summary": f.get("summary"),
-                            "rationale": (f.get("consultation") or {}).get(
-                                "resolution"
+                            "rationale": (
+                                (f.get("validity") or {}).get(
+                                    "incremental_harm"
+                                )
+                                or (f.get("validity") or {}).get(
+                                    "permitted_baseline"
+                                )
+                                or f.get("summary")
                             ),
                             "prevention": f.get("prevention"),
                         }

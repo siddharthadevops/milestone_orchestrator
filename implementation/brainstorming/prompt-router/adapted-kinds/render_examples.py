@@ -47,7 +47,6 @@ CATALOGUE = '''[
 ADJUDICATIONS = cap(1480, 1481)
 DEBT = cap(1792, 1795)
 QUEUED = cap(2318, 2331)
-CONSULT_CMD = cap(2458).strip()
 WS = '/Users/siddhartha/Development/source/milestone_orchestrator_impl'
 GOAL = 'implementation/milestones/staffing-router/goal.md'
 SKELETON = 'implementation/milestones/staffing-router/skeleton.md'
@@ -208,8 +207,6 @@ RUNS = {
                    'project': 'orchestrators', 'work_area': 'implementation', 'ecosystem_map': ECOSYSTEM,
                    'queued_findings': QUEUED,
                    'deferred_debt': DEBT, 'adjudicated_rejections': ADJUDICATIONS,
-                   'consultation_family': 'claude', 'consultation_command': CONSULT_CMD,
-                   'scratch_path': '/Users/siddhartha/Development/source/milestone_orchestrator_impl/.orchestrator/scratch/',
                    'brainstorming_max_rounds': ROUNDS},
         'options': {'altitude_fix': True},  # doc target
     },

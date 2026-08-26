@@ -795,7 +795,6 @@ class TestMergedOutputValidation(FilesystemCase):
                 "summary": "Apply the accepted correction.",
                 "validity": validity,
                 "disposition": "fixed",
-                "consultation": None,
                 "prevention": None,
                 "adjudication_ref": None,
             }],
@@ -924,27 +923,20 @@ class TestMergedOutputValidation(FilesystemCase):
             )
             self.assertEqual(out["status"], "gap")
 
-    def test_retry_output_is_exempt_but_cannot_claim_extension_work(self):
+    def test_retired_fixer_retry_is_rejected_by_the_base_contract(self):
         ext = verifiers.compile_policy(
             make_policy(kinds=["fix_findings"], unit_kinds=["skeleton"])
         )
         retry = {
             "status": "retry",
             "kind": "fix_findings",
-            "retry_reason": contracts.RETRY_CONSULTATION_UNAVAILABLE,
+            "retry_reason": "consultation_unavailable",
         }
-        self.assertIs(
-            verifiers.validate_merged_output(
-                retry, "fix_findings", [ext], self.roots
-            ),
-            retry,
-        )
-        claimed = dict(retry, reuse_audit=[])
         with self.assertRaisesRegex(
-            contracts.ContractError, "must not include project-contract field"
+            contracts.ContractError, "status 'retry' not in"
         ):
             verifiers.validate_merged_output(
-                claimed, "fix_findings", [ext], self.roots
+                retry, "fix_findings", [ext], self.roots
             )
 
     def test_no_extensions_is_the_base_validation(self):

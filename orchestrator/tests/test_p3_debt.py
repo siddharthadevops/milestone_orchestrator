@@ -1,12 +1,12 @@
-"""Finding-debt deferral with opposite-family reclassification.
+"""Finding-debt deferral with driver-owned independent classification.
 
-When `p3_reclassify_debt` is on, eligible whole-artifact review findings receive a
-reclassification one by one. Ratings below the configured threshold become
-tracked debt; only the remaining findings reach the fixer. One blocking
+When `p3_reclassify_debt` is on, eligible full- and delta-review findings
+receive classification one by one. Ratings below the configured threshold
+become tracked debt; only the remaining findings reach the fixer. One blocking
 finding never drags accepted debt into its fix cycle. The deferrable scope is
 phase-dependent (interpreter.defer_scope_for): the DOC phase defers P3 (legacy)
 or P2/P3 (reform); the IMPL phase defers cosmetic P3s only (a code P2 always
-fixes). Delta findings always take the normal fix/reject path.
+fixes).
 """
 
 import copy
@@ -616,6 +616,129 @@ class TestP3Debt(DriverTestCase):
             self.assertNotIn("EXAMPLE_DEBT_SENTINEL", claude_review)
             self.assertNotIn("seal_half", [kind for _fam, kind, _p in mock.calls])
             self.assertEqual(unit["seals"][0]["halves"], {})
+
+    def test_delta_p3_is_classified_and_deferred_before_another_fixer(self):
+        with tempfile.TemporaryDirectory(prefix="orch-delta-debt-") as ws:
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            fixed_document = canonical_skeleton_document("Calculator core") + (
+                "\nThe reviewed wording is now explicit.\n"
+            )
+            mock_runner = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [
+                        finding("F1", "material defect", severity="P2")
+                    ]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("F1", "fixed", severity="P2")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=write_file(
+                        "docs/skeleton.md", fixed_document
+                    ),
+                ),
+                step(
+                    "delta_review",
+                    report("delta_review", [
+                        finding("F2", "tiny follow-up wording")
+                    ]),
+                    family="codex",
+                ),
+                reclassify(
+                    True, family="claude", reason="negligible and visible"
+                ),
+            ])
+            subject = drv.Driver(path, runner=mock_runner)
+            self.step_until(
+                subject,
+                lambda current: bool(current["units"][0].get("debt")),
+            )
+
+            current = st.load(path)
+            unit = current["units"][0]
+            self.assertEqual(mock_runner.script, [])
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertEqual(unit["fix_queue"], [])
+            self.assertIsNone(unit["fix_source"])
+            self.assertEqual([item["id"] for item in unit["debt"]], [
+                "codex-F2"
+            ])
+            delta_round = [
+                round_ for round_ in unit["rounds"]
+                if round_["kind"] == contracts.KIND_DELTA_REVIEW
+            ][0]
+            self.assertTrue(delta_round["deferred_clean"])
+            rating = [
+                event for event in current["events"]
+                if event["type"] == "reclassify_recorded"
+                and event["finding_id"] == "codex-F2"
+            ][0]
+            self.assertEqual(rating["source_round"], delta_round["id"])
+
+    def test_delta_mixture_defers_only_the_low_risk_finding(self):
+        with tempfile.TemporaryDirectory(prefix="orch-delta-mixed-") as ws:
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            fixed_document = canonical_skeleton_document("Calculator core") + (
+                "\nThe reviewed wording is now explicit.\n"
+            )
+            mock_runner = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [
+                        finding("F1", "material defect", severity="P2")
+                    ]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("F1", "fixed", severity="P2")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=write_file(
+                        "docs/skeleton.md", fixed_document
+                    ),
+                ),
+                step(
+                    "delta_review",
+                    report("delta_review", [
+                        finding("F2", "tiny follow-up wording"),
+                        finding("F3", "hidden follow-up defect"),
+                    ]),
+                    family="codex",
+                ),
+                reclassify(True, family="claude", reason="negligible"),
+                reclassify(False, family="claude", reason="material drift"),
+            ])
+            subject = drv.Driver(path, runner=mock_runner)
+            self.step_until(
+                subject,
+                lambda current: current["units"][0]["status"] == st.U_FIXING
+                and (current["units"][0].get("fix_source") or {}).get("type")
+                == "delta",
+            )
+
+            current = st.load(path)
+            unit = current["units"][0]
+            self.assertEqual(mock_runner.script, [])
+            self.assertEqual(
+                [item["id"] for item in unit["fix_queue"]], ["F3"]
+            )
+            self.assertEqual(
+                [item["id"] for item in unit["debt"]], ["codex-F2"]
+            )
+            self.assertEqual(len([
+                event for event in current["events"]
+                if event["type"] == "reclassify_recorded"
+            ]), 2)
 
     def test_reclassifier_refusal_routes_to_the_fixer(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

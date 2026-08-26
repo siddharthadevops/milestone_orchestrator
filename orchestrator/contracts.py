@@ -15,15 +15,13 @@ Role separation (the core rule): WHOEVER DETECTS NEVER FIXES.
   the real code/doc, and either concedes-and-fixes or dissents-and-
   justifies. Dispositions:
     fixed                 the finding was right; corrected in this pass.
-    rejected              the finding is wrong; REQUIRES the opposite-family
-                          consultation resolution, and, when the artifact
-                          was correct-but-misreadable, a `prevention` edit
-                          documented in the target so the finding cannot
-                          keep being reborn.
+    rejected              the finding is wrong under the fixer's verified
+                          validity account; when the artifact was correct-
+                          but-misreadable, a `prevention` edit documents the
+                          decision in the target so it cannot keep rebirthing.
     rejected_adjudicated  the finding duplicates an already-adjudicated
                           rejection; REQUIRES `adjudication_ref` (validated
-                          by the driver against the milestone registry);
-                          costs no new consultation.
+                          by the driver against the milestone registry).
     blocked               neither fixing nor a justified rejection is
                           possible; the run stops with the explanation.
 - Draft kinds (draft_skeleton, draft_slice_note, implement): produce the
@@ -47,7 +45,6 @@ SEVERITIES = ("P0", "P1", "P2", "P3")
 FINDING_TEXT_MAX = 5000
 FINDING_ID_MAX = 200
 DISPOSITIONS = ("fixed", "rejected", "rejected_adjudicated", "blocked")
-RETRY_CONSULTATION_UNAVAILABLE = "consultation_unavailable"
 
 # Worker call kinds. Every prompt carries a `KIND:` header with one of these.
 KIND_DRAFT_SKELETON = "draft_skeleton"
@@ -56,8 +53,8 @@ KIND_IMPLEMENT = "implement"
 KIND_REVIEW_ROUND = "review_round"
 KIND_DELTA_REVIEW = "delta_review"
 KIND_FIX_FINDINGS = "fix_findings"
-# Opposite-family second opinion on whether an eligible finding is safe to
-# DEFER as tracked debt. The worker RATES drift risk on a fixed
+# Driver-dispatched independent rating of whether an eligible finding is safe
+# to DEFER as tracked debt. The worker RATES drift risk on a fixed
 # scale; it never decides — the driver compares the rating against the
 # run's configured threshold (a binary "is it safe?" question biases an
 # LLM to the safe answer; a graded rating keeps it calibrated).
@@ -410,6 +407,11 @@ def validate_fix_finding(finding, ctx):
     disposition and its per-disposition obligations."""
     if not isinstance(finding, dict):
         raise ContractError("%s: finding must be an object" % ctx)
+    if "consultation" in finding:
+        raise ContractError(
+            "%s: consultation is retired; a fixer must decide directly "
+            "from current evidence" % ctx
+        )
     finding_id = _require(finding, "id", str, ctx)
     if len(finding_id) > FINDING_ID_MAX:
         raise ContractError(
@@ -434,7 +436,6 @@ def validate_fix_finding(finding, ctx):
         expected_exceeds_baseline=disp in ("fixed", "blocked"),
         text_fields=FIX_VALIDITY_TEXT_FIELDS,
     )
-    consultation = _optional(finding, "consultation", dict, ctx)
     prevention = _optional(finding, "prevention", dict, ctx)
     if prevention is not None:
         if not isinstance(prevention.get("documented_in"), str) or not isinstance(
@@ -443,14 +444,6 @@ def validate_fix_finding(finding, ctx):
             raise ContractError(
                 "%s: prevention requires string 'documented_in' (workspace-"
                 "relative path edited) and 'note'" % ctx
-            )
-    if disp == "rejected":
-        if not consultation or not isinstance(
-            consultation.get("resolution"), str
-        ):
-            raise ContractError(
-                "%s: a rejected finding requires a consultation object with "
-                "a string 'resolution' (opposite-family dialogue result)" % ctx
             )
     if disp == "rejected_adjudicated":
         ref = finding.get("adjudication_ref")
@@ -897,7 +890,7 @@ def validate_worker_output(obj, kind, require_plain=False,
     on every reviewer finding. battery_questions: when non-None, a doc
     draft (skeleton/slice note) must carry a `battery` answering exactly
     these question ids (reform §4). Both checks run only on `ok` outputs
-    — blocked, retry, and gap outputs are exempt (none finishes work).
+    — blocked and gap outputs are exempt (neither finishes work).
 
     Returns the object unchanged on success; raises ContractError otherwise.
     """
@@ -908,10 +901,10 @@ def validate_worker_output(obj, kind, require_plain=False,
         raise ContractError("%s: output must be a JSON object" % ctx)
 
     status = _require(obj, "status", str, ctx)
-    if status not in ("ok", "blocked", "retry", "gap", "need_rethink"):
+    if status not in ("ok", "blocked", "gap", "need_rethink"):
         raise ContractError(
             "%s: status %r not in "
-            "('ok','blocked','retry','gap','need_rethink')"
+            "('ok','blocked','gap','need_rethink')"
             % (ctx, status)
         )
     echoed = _require(obj, "kind", str, ctx)
@@ -942,29 +935,6 @@ def validate_worker_output(obj, kind, require_plain=False,
             raise ContractError(
                 "%s: blocked status requires a non-empty blocked_reason" % ctx
             )
-        return obj
-    if status == "retry":
-        if kind != KIND_FIX_FINDINGS:
-            raise ContractError(
-                "%s: retry status is only allowed for fix_findings" % ctx
-            )
-        reason = _require(obj, "retry_reason", str, ctx)
-        if reason != RETRY_CONSULTATION_UNAVAILABLE:
-            raise ContractError(
-                "%s: retry_reason must be %r"
-                % (ctx, RETRY_CONSULTATION_UNAVAILABLE)
-            )
-        for claim in (
-            "findings", "files_changed", "slices", "artifact", "gaps",
-            "battery",
-            "design_correction", "design_correction_verdict",
-            "implementation_cut",
-        ):
-            if claim in obj:
-                raise ContractError(
-                    "%s: a retry response must not include %r "
-                    "(nothing was finished)" % (ctx, claim)
-                )
         return obj
     if status == "gap":
         if kind not in GAP_ELIGIBLE_KINDS:
@@ -1137,6 +1107,8 @@ KIND_OUTPUT_KEYS = {
     KIND_FIX_FINDINGS: frozenset(
         {
             "findings", "files_changed", "slices", "design_correction",
+            # Retired names stay reserved so project extensions cannot
+            # quietly repurpose old protocol vocabulary.
             "retry_reason", "brainstorming_application",
         }
     ),
@@ -1215,18 +1187,12 @@ Respond with EXACTLY ONE JSON object and nothing else: no prose before or
 after it, no markdown fences. The object must satisfy:
 
 Common fields (all kinds):
-  "status": "ok" | "blocked" | "retry" | "need_rethink"
+  "status": "ok" | "blocked" | "need_rethink"
   "kind": "<echo the KIND header of this prompt>"
   "blocked_reason": string    (required when status is "blocked": explain
                                precisely what stops you; the run will end
                                with this explanation in the log)
   "notes": string             (optional, short)
-
-`status: "retry"` is allowed ONLY for kind fix_findings when its mandatory
-opposite-family consultation could not run or ended without a clear result:
-  "retry_reason": "consultation_unavailable"
-Return no findings or work claims with it. The driver records a transient
-failure and the process guard retries the same fix episode after 15 minutes.
 
 `status: "need_rethink"` is allowed ONLY for draft_slice_note, implement,
 fix_findings, review_round and delta_review when one focused design request
@@ -1348,8 +1314,6 @@ Kind fix_findings adds:
                             there is none>",
        "exceeds_baseline": true | false},
      "disposition": "fixed" | "rejected" | "rejected_adjudicated" | "blocked",
-     "consultation": null | {"resolution": "<one-paragraph outcome of the
-                              opposite-family dialogue you ran>"},
      "prevention": null | {"documented_in": "<path you edited>",
                            "note": "<what now documents the decision>"},
      "adjudication_ref": null | "<registry id of the prior rejection>"}
@@ -1372,19 +1336,19 @@ Kind fix_findings adds:
   Verify each against the real code/doc before deciding. A finding is valid
   only when affected_party, observable_damage, and violated_guarantee are
   concrete and evidence-backed and `exceeds_baseline` is true. If any cannot
-  be demonstrated, the finding is invalid: use `rejected` and its mandatory
-  consultation (or `rejected_adjudicated` for a settled duplicate). `fixed`
+  be demonstrated, the finding is invalid: use `rejected`
+  (or `rejected_adjudicated` for a settled duplicate). `fixed`
   and `blocked` require `validity.exceeds_baseline: true`; `rejected` and
   `rejected_adjudicated` require false. "rejected"
-  REQUIRES the consultation; when the target was correct but misreadable,
-  ALSO make the minimal clarifying edit and record it in `prevention` so
-  the finding cannot keep being reborn. "rejected_adjudicated" is for
+  is the fixer's direct evidence-backed decision; do not invoke, spawn, or
+  consult another LLM or agent. When the target was correct but misreadable,
+  ALSO make the minimal clarifying edit and record it in `prevention` so the
+  finding cannot keep being reborn. "rejected_adjudicated" is for
   findings duplicating an entry of the ADJUDICATED REJECTIONS list without
-  new evidence: cite it in adjudication_ref, no consultation needed, do
+  new evidence: cite it in adjudication_ref, do
   not re-litigate. Use "blocked" only when neither fixing nor a justified
   rejection is possible for a CONFIRMED finding; the run will stop and show
-  your reason. An unresolved or unavailable consultation is NOT a finding
-  disposition: return top-level `status: "retry"` as specified above.
+  your reason.
 """
 
 
@@ -1439,22 +1403,18 @@ Return one result for every queued id, and no others:
              "violated_guarantee":"...","permitted_baseline":"...",
              "incremental_harm":"...","exceeds_baseline":true|false},
  "disposition":"fixed|rejected|rejected_adjudicated|blocked",
- "consultation":null|{"resolution":"..."},
  "prevention":null|{"documented_in":"<edited path>","note":"..."},
  "adjudication_ref":null|"<settled rejection id>"}
 `fixed`/`blocked` require a concrete, evidence-backed affected party,
 observable damage, and violated guarantee, plus exceeds_baseline=true. If any
-cannot be demonstrated, the finding is invalid: `rejected` requires its
-consultation (`rejected_adjudicated` remains the settled-duplicate path), and
+cannot be demonstrated, the finding is invalid: use `rejected`
+(`rejected_adjudicated` remains the settled-duplicate path), and
 both rejection dispositions require exceeds_baseline=false. Include extra
-fields required by an active block.
+fields required by an active block. A fixer never invokes, spawns, or consults
+another LLM or agent; rejection is its own evidence-backed judgment.
 
 Impossible worker task (not a finding disposition):
 {"status":"blocked","kind":"fix_findings","blocked_reason":"..."}
-
-Unavailable or unresolved mandatory consultation:
-{"status":"retry","kind":"fix_findings",
- "retry_reason":"consultation_unavailable","notes":"<optional>"}
 
 Focused discussion before deciding one queued finding:
 {"status":"need_rethink","kind":"fix_findings","request":"...",

@@ -13,11 +13,11 @@ Covers here:
   (f) review-round tampering: output discarded, workspace restored,
       invalidated round recorded, retried; the cap includes it;
   (g) delta-review tampering -> run fails 'entangled';
-  (j) adjudication circuit end to end: rejection with consultation +
-      prevention -> registry entry -> a valid `contests` re-raise reaches
+  (j) adjudication circuit end to end: direct rejection + prevention ->
+      registry entry -> a valid `contests` re-raise reaches
       the fixer with the contests visible in the prompt;
   (k) acts resolution: "opposite" / literal / "self" fixer and delta
-      families, asserted through the families MockRunner saw.
+      families, plus the ban on worker-dispatched model calls.
 
 All git activity happens inside tempfile.TemporaryDirectory workspaces —
 NEVER against the canon repository.
@@ -415,13 +415,12 @@ class TestRejectionRegistry(DriverTestCase):
                             [finding("F1", "goal wording is ambiguous about "
                                      "float support")]),
                      family="claude"),
-                # Reject: consultation + prevention edit.
+                # Reject directly, with a prevention edit that makes the
+                # already-correct contract easier to read.
                 step("fix_findings",
                      fix_ok([triaged(
                          "F1", "rejected",
                          "goal wording is ambiguous about float support",
-                         consultation={"resolution": "opposite family agreed "
-                                       "the goal was already float-typed"},
                          prevention={"documented_in": "docs/skeleton.md",
                                      "note": "explicit float note added"},
                      )], files_changed=["docs/skeleton.md"]),
@@ -538,7 +537,6 @@ class TestActsResolution(DriverTestCase):
             "review_claude": {
                 "model": "claude-fable-5", "effort": "medium",
             },
-            "consultation": "self",
         }
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             mock = self._run_skeleton(ws, acts, draft_family="claude", script_tail=[
@@ -582,15 +580,17 @@ class TestActsResolution(DriverTestCase):
                 [("claude-fable-5", "medium"),
                  ("gpt-5.6-sol", "high")],
             )
-            # consultation "self" resolves to the fixer's own family.
             fix_prompts = [c[2] for c in mock.calls
                            if c[1] == "fix_findings"]
-            self.assertIn("consult the claude family", fix_prompts[0])
-            self.assertIn("consult the codex family", fix_prompts[1])
+            for prompt in fix_prompts:
+                self.assertIn(
+                    "Never invoke, spawn, or consult another LLM", prompt
+                )
+                self.assertNotIn("CONSULTATION PROTOCOL", prompt)
 
     def test_literal_fixer_selects_same_family_delta(self):
         acts = {"fixer": "claude", "skeletoner": "claude",
-                "delta_review": "self", "consultation": "opposite"}
+                "delta_review": "self"}
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             mock = self._run_skeleton(ws, acts, draft_family="claude", script_tail=[
                 step("review_round",
@@ -612,19 +612,15 @@ class TestActsResolution(DriverTestCase):
                 fix_delta_calls,
                 [("fix_findings", "claude"), ("delta_review", "claude")],
             )
-            # consultation "opposite" of the claude fixer is codex.
             fix_prompt = [c[2] for c in mock.calls
                           if c[1] == "fix_findings"][0]
-            self.assertIn("consult the codex family", fix_prompt)
+            self.assertIn("Never invoke, spawn, or consult another LLM",
+                          fix_prompt)
+            self.assertNotIn("CONSULTATION PROTOCOL", fix_prompt)
 
-    def test_consultation_command_carries_the_callers_effort(self):
-        # The fixer runs the consultation line VERBATIM, so it must reach
-        # the prompt resolved: the consulted family's default model at the
-        # CALLER'S effort — a rejection argued by a lighter opponent than
-        # the one rejecting is not a second opinion, and a literal
-        # {model}/{effort} would reach the CLI as a brace-string.
+    def test_fix_prompt_forbids_worker_dispatched_model_calls(self):
         acts = {"fixer": "claude", "skeletoner": "claude",
-                "delta_review": "self", "consultation": "opposite"}
+                "delta_review": "self"}
         config = make_config(
             acts=acts,
             commands=drv.DEFAULT_CONFIG["commands"],
@@ -652,13 +648,14 @@ class TestActsResolution(DriverTestCase):
                 ])
             fix_prompt = [c[2] for c in mock.calls
                           if c[1] == "fix_findings"][0]
-            # A skeleton fix runs the `skeletoner`, which re-asserts max —
-            # so the consultation runs at max too, not at the consulted
-            # family's own default effort.
-            self.assertIn("model_reasoning_effort=max", fix_prompt)
-            self.assertIn("gpt-5.6-sol", fix_prompt)
-            self.assertNotIn("{model}", fix_prompt)
-            self.assertNotIn("{effort}", fix_prompt)
+            normalized_prompt = " ".join(fix_prompt.split())
+            self.assertIn("Never invoke, spawn, or consult another LLM",
+                          fix_prompt)
+            self.assertIn("deterministic driver dispatches model calls",
+                          normalized_prompt)
+            self.assertNotIn("CONSULTATION PROTOCOL", fix_prompt)
+            self.assertNotIn("current_model_call.py", fix_prompt)
+            self.assertNotIn("Command (prompt on stdin)", fix_prompt)
 
     def test_skeleton_fix_routes_through_skeletoner_not_fixer(self):
         # Routing check with the two acts set to DIFFERENT families: the
@@ -667,7 +664,6 @@ class TestActsResolution(DriverTestCase):
             "fixer": "codex",
             "skeletoner": {"agent": "claude", "model": "claude-fable-5",
                            "effort": "max"},
-            "consultation": "opposite",
         }
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             mock = self._run_skeleton(ws, acts, draft_family="claude",

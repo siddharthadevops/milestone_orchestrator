@@ -73,7 +73,7 @@ captured evidence it was pruned from.
   synthetic `code` layer to pin the data-only extension seam.
 - **Dynamic payloads are variables, never stored text.** Operator amendments,
   project context, adjudicated rejections, deferred
-  debt, queued findings, catalogues, consultation commands: all `{{variables}}`.
+  debt, queued findings, and catalogues are all `{{variables}}`.
   Only their framing lines are template text.
 - The existing engineering gates (victim/machinery/…, consumers_touched/…)
   are **task description**, named **DUE DILIGENCE**: they live inside
@@ -557,8 +557,7 @@ captured evidence it was pruned from.
     targets (F6); the rationale enumerates the complete canonical job-id
     set, delta_review@skeleton and merge_repair included (F7); both
     session kinds mount PROCESS AUTHORITY like every other kind (F8); the
-    agent-name veto is scoped to headers/routing — the consultation
-    variable is run data (F9); the README layout lists merge_repair and
+    agent-name veto is scoped to headers/routing (F9); the README layout lists merge_repair and
     its observations dropped the retired kinds (F10).
 
 61. **Round-7 P1 rulings** (operator, 2026-08-23): rethink charges get
@@ -613,9 +612,9 @@ captured evidence it was pruned from.
     are stable (F5); scope_authority speaks of "a later accepted design
     change", not the retired amendment concept (F6).
 
-66. **Round-10 F1+F2 rulings** (operator, 2026-08-23): fixer
-    consultations are the ONE declared exception to served-only routing —
-    worker-initiated sub-dialogues, traced by their transcript (F1).
+66. **Round-10 F1+F2 rulings, superseded in part** (operator, 2026-08-26):
+    fixer-initiated consultations are retired. No worker invokes another LLM;
+    the driver-owned classifier is the only independent finding-rating call.
     RESOLUTION is deleted outright: the rethink charge's header already
     says "fix this"; the git facts moved up top as the WORK AREA block
     (turn = driver-made commit, chat = why, diff = letter), and the

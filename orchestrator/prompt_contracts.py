@@ -23,7 +23,7 @@ _AUTHOR_STATUSES = {
     "implement": ("ok", "blocked", "need_rethink"),
 }
 _REVIEW_KINDS = ("review_round", "delta_review")
-_FIX_STATUSES = ("ok", "blocked", "retry", "need_rethink")
+_FIX_STATUSES = ("ok", "blocked", "need_rethink")
 
 
 def _require(obj, key, types, ctx):
@@ -278,13 +278,6 @@ def _fix_result(obj, bound, options, ctx):
     findings = _require(obj, "findings", list, ctx)
     for index, finding in enumerate(findings):
         _fix_finding(finding, "%s.findings[%d]" % (ctx, index))
-        if finding["disposition"] == "rejected":
-            consultation = finding["consultation"]
-            _text(
-                consultation,
-                "resolution",
-                "%s.findings[%d].consultation" % (ctx, index),
-            )
     contracts._assert_unique_finding_ids(findings, ctx)
     files_changed = _relative_paths(
         _require(obj, "files_changed", list, ctx), "%s.files_changed" % ctx
@@ -320,27 +313,6 @@ def _fix_blocked(obj, bound, options, ctx):
     status = _status(obj, bound, _FIX_STATUSES, ctx, ("fix_findings",))
     if status == "blocked":
         _text(obj, "blocked_reason", ctx)
-
-
-def _fix_retry(obj, bound, options, ctx):
-    del options
-    status = _status(obj, bound, _FIX_STATUSES, ctx, ("fix_findings",))
-    if status != "retry":
-        return
-    if _require(obj, "retry_reason", str, ctx) != (
-        contracts.RETRY_CONSULTATION_UNAVAILABLE
-    ):
-        raise contracts.ContractError(
-            "%s: retry_reason must be %r"
-            % (ctx, contracts.RETRY_CONSULTATION_UNAVAILABLE)
-        )
-    for claim in ("findings", "files_changed", "artifact"):
-        if claim in obj:
-            raise contracts.ContractError(
-                "%s: retry must not claim %r" % (ctx, claim)
-            )
-    if "notes" in obj:
-        _require(obj, "notes", str, ctx)
 
 
 def _fix_rethink(obj, bound, options, ctx):
@@ -600,7 +572,6 @@ REGISTERED_SECTIONS = {
     "fix_blocked": _fix_blocked,
     "fix_need_rethink": _fix_rethink,
     "fix_results": _fix_result,
-    "fix_retry": _fix_retry,
     "merge_repair_result": _merge_repair,
     "questioner_turn_envelope": _turn("questioner_turn", False),
     "reclassify_result": _reclassify,
@@ -674,10 +645,6 @@ def _allowed_fields(bound, obj):
             allowed.update(("status", "kind"))
             if status == "blocked":
                 allowed.add("blocked_reason")
-        elif section_id == "fix_retry":
-            allowed.update(("status", "kind"))
-            if status == "retry":
-                allowed.update(("retry_reason", "notes"))
         elif section_id == "fix_need_rethink":
             allowed.update(("status", "kind"))
             if status == "need_rethink":

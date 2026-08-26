@@ -251,12 +251,7 @@ def render_review_log(state):
             ]
             for r in unit["rounds"]:
                 result = r["result"]
-                consultations = sum(
-                    1 for f in result.get("findings", []) if f.get("consultation")
-                )
                 triage = _fmt_dispositions(_dispositions(result))
-                if consultations:
-                    triage += " (%d consulted)" % consultations
                 if r.get("invalidated"):
                     triage = "INVALIDATED: %s" % r["invalidated"]
                 elif r.get("deferred_clean"):
@@ -342,7 +337,7 @@ def render_review_log(state):
         if debt:
             lines += [
                 "",
-                "**Deferred debt (opposite-family verified):**",
+                "**Deferred debt (independently classified):**",
             ]
             for d in debt:
                 lines.append(

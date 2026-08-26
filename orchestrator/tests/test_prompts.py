@@ -14,8 +14,8 @@ every one of the 7 prompt builders inherits. These tests pin:
       phrases and contain NO instruction to record verdicts in repo
       logs — the only VERDICT mention is the bookkeeping BAN;
   (4) existing invariants: the adjudicated-rejections registry block is
-      injected in review/delta/fix only, and the consultation
-      protocol block appears only in fix prompts.
+      injected in review/delta/fix only, and every worker is forbidden
+      from dispatching another model call.
 """
 
 import json
@@ -95,8 +95,6 @@ def build_all():
             UNIT,
             FINDINGS,
             [],
-            "claude",
-            ["claude", "-p"],
         ),
         "reclassify": prompts.build_reclassify(
             FAMILY,
@@ -134,8 +132,6 @@ class TestNaturalRethinkExit(unittest.TestCase):
             UNIT,
             FINDINGS,
             [],
-            "claude",
-            ["claude", "-p"],
             gap_enabled=gap_enabled,
         )
 
@@ -206,7 +202,7 @@ class TestNaturalRethinkExit(unittest.TestCase):
                 editable_design_paths=paths,
             ),
             prompts.build_fix_findings(
-                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude", [],
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
                 editable_design_paths=paths,
             ),
             prompts.build_review_round(
@@ -238,7 +234,7 @@ class TestNaturalRethinkExit(unittest.TestCase):
             skeleton_path="docs/skeleton.md", remodeled=True,
         )
         modern["fix_compat_args_ignored"] = prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude", [],
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
             repair_artifact="docs/slice-01.md",
             repair_wave_docs=["docs/slice-01.md"],
             design_correction={
@@ -453,8 +449,8 @@ class TestReviewOverridesVendoredCanonBookkeeping(unittest.TestCase):
 
 class TestExistingPromptInvariants(unittest.TestCase):
     """(4) Pre-fix invariants that must survive: the registry block is
-    injected in review/delta/fix prompts only, and the consultation
-    protocol appears only in fix prompts."""
+    injected in review/delta/fix prompts only, while model dispatch remains
+    exclusively driver-owned."""
 
     # CONTRACT_TEXT (appended to every prompt) also says "ADJUDICATED
     # REJECTIONS" when describing the output rules, so presence/absence
@@ -465,7 +461,8 @@ class TestExistingPromptInvariants(unittest.TestCase):
     NONEMPTY_REGISTRY_MARKER = (
         "ADJUDICATED REJECTIONS (milestone-wide; settled unless NEW evidence)"
     )
-    CONSULTATION_MARKER = "CONSULTATION PROTOCOL"
+    NESTED_CALL_BAN = "Never invoke, spawn, or consult another LLM or agent"
+    RETIRED_CONSULTATION_MARKER = "CONSULTATION PROTOCOL"
 
     def test_registry_block_in_review_delta_fix(self):
         built = build_all()
@@ -480,22 +477,29 @@ class TestExistingPromptInvariants(unittest.TestCase):
                 self.assertNotIn(self.EMPTY_REGISTRY_MARKER, built[name])
                 self.assertNotIn(self.NONEMPTY_REGISTRY_MARKER, built[name])
 
-    def test_consultation_block_only_in_fix(self):
+    def test_every_worker_forbids_nested_model_calls(self):
         built = build_all()
-        self.assertIn(self.CONSULTATION_MARKER, built["fix_findings"])
-        for name in built:
-            if name == "fix_findings":
-                continue
+        for name, prompt in built.items():
             with self.subTest(builder=name):
-                self.assertNotIn(self.CONSULTATION_MARKER, built[name])
+                self.assertIn(self.NESTED_CALL_BAN, prompt)
+                self.assertIn(
+                    "Only the deterministic driver dispatches model calls",
+                    normalized(prompt),
+                )
 
-    def test_consultation_rechecks_baseline_relative_damage(self):
+    def test_retired_consultation_protocol_is_absent_everywhere(self):
+        for name, prompt in build_all().items():
+            with self.subTest(builder=name):
+                self.assertNotIn(self.RETIRED_CONSULTATION_MARKER, prompt)
+                self.assertNotIn("Command (prompt on stdin)", prompt)
+
+    def test_direct_fixer_decision_rechecks_baseline_relative_damage(self):
         prompt = normalized(build_all()["fix_findings"])
         for field in ("permitted_baseline", "actual_outcome",
                       "incremental_harm", "exceeds_baseline"):
             self.assertIn(field, prompt)
-        self.assertIn("permitted operation is not damage by itself", prompt)
         self.assertIn("delta BEYOND the permitted baseline", prompt)
+        self.assertIn("invalid: use `rejected` directly", prompt)
         for value in ("BASELINE_SENTINEL", "OUTCOME_SENTINEL",
                       "HARM_SENTINEL"):
             self.assertIn(value, prompt)
@@ -531,13 +535,12 @@ class TestExistingPromptInvariants(unittest.TestCase):
         # note" is exactly what a malicious finding would say. The
         # sealed block itself must announce the reopened artifact.
         base = prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-            ["claude", "-p"],
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
         )
         self.assertNotIn("REOPENED FOR REPAIR", base)
         repair = prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-            ["claude", "-p"], repair_artifact="docs/slice-02.md",
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
+            repair_artifact="docs/slice-02.md",
             legacy_design_process=True,
         )
         self.assertIn("REOPENED FOR REPAIR", repair)
@@ -569,8 +572,7 @@ class TestDeferredDebtPrompts(unittest.TestCase):
                 FAMILY, WORKSPACE, GOAL, UNIT, [],
                 debt=debt),
             "fix": prompts.build_fix_findings(
-                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-                ["claude", "-p"], debt=debt),
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], debt=debt),
         }
 
     def test_compact_debt_reaches_every_later_judgment_prompt(self):
@@ -620,7 +622,7 @@ class TestDeferredDebtPrompts(unittest.TestCase):
 
 class TestPortedCanonContentRules(unittest.TestCase):
     """The manual canon's refined CONTENT rules (altitude, reuse gate,
-    evidence discipline, exhaustiveness, consultation caps) ported
+    evidence discipline, exhaustiveness, direct fixer judgment) ported
     verbatim from canon/process/*.md. Process rules stay dead — the
     driver enforces them — but these judgment rules must reach the
     right workers with the canon's exact wording."""
@@ -645,8 +647,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def fix(self, kind):
         return normalized(prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-            ["claude", "-p"], unit_kind=kind,
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], unit_kind=kind,
         ))
 
     def delta(self, kind, reform=False):
@@ -988,7 +989,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
         for family in ("codex", "claude"):
             with self.subTest(family=family):
                 prompt = normalized(prompts.build_fix_findings(
-                    family, WORKSPACE, GOAL, UNIT, FINDINGS, [], family, []
+                    family, WORKSPACE, GOAL, UNIT, FINDINGS, []
                 ))
                 self.assertIn(
                     "This finding was produced by a non-authoritative automated "
@@ -1015,11 +1016,15 @@ class TestPortedCanonContentRules(unittest.TestCase):
                       "additional harm", prompt)
         self.assertIn("claim survives falsification, fix it", prompt)
 
-    def test_consultation_cap_and_severity_gate(self):
+    def test_fixer_forbids_nested_model_calls(self):
         prompt = self.fix("slice_impl")
-        self.assertIn("Run at most five dialogue rounds, stopping earlier on "
-                      "clear agreement", prompt)
-        self.assertIn("Never reject P0/P1 without a clear resolution", prompt)
+        self.assertIn(
+            "Never invoke, spawn, or consult another LLM or agent", prompt
+        )
+        self.assertIn("only the driver dispatches model calls", prompt)
+        self.assertIn("invalid -> `rejected` directly", prompt)
+        self.assertNotIn("Run at most five dialogue rounds", prompt)
+        self.assertNotIn("Never reject P0/P1 without a clear resolution", prompt)
 
     def test_modern_contract_scrubs_legacy_round_wording(self):
         fixed_rounds = (
@@ -1059,20 +1064,19 @@ class TestPortedCanonContentRules(unittest.TestCase):
                     expected,
                 )
 
-    def test_unresolved_consultation_retries_never_concedes(self):
-        # An unresolved dispute is a transient CALL failure, not evidence
-        # that the finding exceeds its permitted baseline. The fixer returns
-        # no disposition; the guard retries the same queue after 15 minutes.
+    def test_fixer_contract_has_no_consultation_retry(self):
         prompt = self.fix("slice_impl")
-        self.assertIn("consultation is unavailable or unresolved", prompt)
-        self.assertIn("do not block, concede, or reject", prompt)
-        self.assertIn("return only the retry envelope", prompt)
-        self.assertIn("after 15 minutes", prompt)
-        self.assertNotIn("reasonably fixable", prompt)
         contract = normalized(contracts.prompt_contract(
             contracts.KIND_FIX_FINDINGS))
-        self.assertIn('"status":"retry"', contract)
-        self.assertIn('"retry_reason":"consultation_unavailable"', contract)
+        for retired in (
+            '"status":"retry"',
+            '"retry_reason":"consultation_unavailable"',
+            "consultation is unavailable or unresolved",
+            "return only the retry envelope",
+            "after 15 minutes",
+        ):
+            self.assertNotIn(retired, prompt)
+            self.assertNotIn(retired, contract)
 
     def test_delta_review_is_exhaustive_and_knows_its_standard(self):
         prompt = normalized(prompts.build_delta_review(
@@ -1107,14 +1111,13 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def test_killed_notice_reaches_the_fixer(self):
         prompt = normalized(prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-            ["claude", "-p"], killed_notice=True))
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
+            killed_notice=True))
         self.assertIn("KILLED-CALL NOTICE", prompt)
         self.assertIn("the pending diff may contain its PARTIAL work",
                       prompt)
         clean = prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-            ["claude", "-p"])
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [])
         self.assertNotIn("KILLED-CALL NOTICE", clean)
 
     def test_fixer_prompt_preserves_exact_finding_for_rethink_echo(self):
@@ -1151,8 +1154,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
             UNIT,
             [finding],
             [],
-            "claude",
-            ["claude", "-p"],
         )
         exact = json.dumps(
             [finding],
@@ -1169,8 +1170,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def test_phantom_retry_requires_a_real_fix_delta(self):
         prompt = normalized(prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-            ["claude", "-p"], phantom_retry=True,
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], phantom_retry=True,
         ))
         self.assertIn("RETRY NOTICE", prompt)
         self.assertIn("A second empty-delta claim fails the run", prompt)
@@ -1238,8 +1238,7 @@ class TestOperatorAmendments(unittest.TestCase):
                 FAMILY, WORKSPACE, GOAL, UNIT, [],
                 amendments=a),
             "fix_findings": prompts.build_fix_findings(
-                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-                ["claude", "-p"], amendments=a),
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], amendments=a),
         }
 
     def test_every_builder_carries_amendments_verbatim(self):
@@ -1336,8 +1335,8 @@ class TestVerificationProtocol(unittest.TestCase):
 
     def test_fixer_never_runs_the_full_suite(self):
         prompt = normalized(prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-            ["claude", "-p"], unit_kind="slice_impl"))
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
+            unit_kind="slice_impl"))
         self.assertIn("never the repo's full suite", prompt)
         self.assertIn("the driver runs it at scheduled checkpoints", prompt)
 
@@ -1358,7 +1357,7 @@ class TestSequentialImplementationScope(unittest.TestCase):
                 implementation_scope=scope,
             ),
             "fix": prompts.build_fix_findings(
-                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude", [],
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
                 implementation_scope=scope,
             ),
         }
@@ -1426,8 +1425,8 @@ class TestPlannerMaterialChannel(unittest.TestCase):
                 materials=materials,
             ),
             "fix_findings": prompts.build_fix_findings(
-                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-                ["claude", "-p"], unit_kind="skeleton", materials=materials,
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
+                unit_kind="skeleton", materials=materials,
             ),
             "rethink_continuation": prompts.build_rethink_continuation(
                 contracts.KIND_IMPLEMENT,
@@ -1560,8 +1559,8 @@ class TestPlannerMaterialChannel(unittest.TestCase):
                 materials=self.MATERIALS,
             ),
             "fix_findings": prompts.build_fix_findings(
-                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-                ["claude", "-p"], unit_kind="slice_impl",
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
+                unit_kind="slice_impl",
                 materials=self.MATERIALS,
             ),
             "review_round": prompts.build_review_round(
@@ -1803,7 +1802,8 @@ class TestPromptCompression(unittest.TestCase):
             self.assertNotIn("<workspace path>", prompt)
         self.assertNotIn('"disposition":"fixed', review)
         self.assertIn('"disposition":"fixed|rejected', fix)
-        self.assertIn('"retry_reason":"consultation_unavailable"', fix)
+        self.assertNotIn('"retry_reason":"consultation_unavailable"', fix)
+        self.assertNotIn('"status":"retry"', fix)
 
     def test_static_prompt_budgets(self):
         limits = {
@@ -1822,8 +1822,8 @@ class TestPromptCompression(unittest.TestCase):
                 governing="docs/skeleton.md", gap_enabled=True,
             )
             fix = prompts.build_fix_findings(
-                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-                ["claude", "-p"], unit_kind=kind, gap_enabled=True,
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
+                unit_kind=kind, gap_enabled=True,
             )
             with self.subTest(kind=kind, surface="review"):
                 self.assertLessEqual(len(review.encode()), review_limit)

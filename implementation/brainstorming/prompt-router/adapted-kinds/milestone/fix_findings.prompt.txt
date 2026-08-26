@@ -57,11 +57,13 @@ if you request `need_rethink`, copy exactly one complete object into
 
 FIX DECISION TABLE (exactly once per queued finding)
 - valid -> `fixed`; apply the fix now.
-- invalid -> `rejected` after consultation. If ambiguity caused the
+- invalid -> `rejected` directly. If ambiguity caused the
   false finding, add the smallest clarifying `prevention` edit.
 - settled duplicate without new evidence -> `rejected_adjudicated`
-  with adjudication_ref; no consultation. CONTESTS means reassess
-  the new evidence and consult again if rejecting.
+  with adjudication_ref. CONTESTS means reassess the new evidence
+  directly if rejecting.
+- Never invoke, spawn, or consult another LLM or agent; only the
+  deterministic driver dispatches model calls.
 - confirmed and impossible -> per-finding `blocked`.
 
 EVIDENCE
@@ -92,7 +94,7 @@ FIX RULES
   `fixed` or `blocked`.
 - Invalid finding: no exact violated guarantee, no concrete party
   with observable damage, or harm inside the baseline — use
-  `rejected` after consultation, or `rejected_adjudicated` for a
+  `rejected` directly, or `rejected_adjudicated` for a
   settled duplicate.
 - Do not triage from memory, chat, or prior review authority. Use
   the finding only to locate evidence; decide from the current
@@ -163,22 +165,8 @@ PROCESS AUTHORITY
 - Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)
   and the entire .orchestrator/ directory: they do not govern this
   run and are not yours to edit.
-
-CONSULTATION PROTOCOL (for rejections)
-Before `rejected`, consult the claude family with the artifact/path,
-finding, proposed resolution, and checked evidence. Compare
-affected_party, observable_damage, violated_guarantee,
-permitted_baseline, incremental_harm, and exceeds_baseline;
-permitted operation is not damage by itself.
-Command (prompt on stdin):
-  /usr/local/bin/python3 /Users/siddhartha/Development/source/milestone_orchestrator/orchestrator/current_model_call.py --state /Users/siddhartha/Development/source/milestone_orchestrator_impl/implementation/milestones/staffing-router/.run/state.json --home /Users/siddhartha/.impl_roadmap --caller-act fixer --caller-origin codex
-Save the transcript under /Users/siddhartha/Development/source/milestone_orchestrator_impl/.orchestrator/scratch/; summarize
-it in consultation.resolution. Run at most five dialogue rounds,
-stopping earlier on clear agreement. Never reject P0/P1 without a
-clear resolution. If consultation is unavailable or unresolved, do
-not block, concede, or reject: return only the retry envelope; the
-guard retries this fixer after 15 minutes. `rejected_adjudicated`
-needs no consultation; cite adjudication_ref.
+- Never invoke, spawn, or consult another LLM or agent. Only the
+  deterministic driver dispatches model calls.
 
 QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
 - environment_fit: What standard does the surrounding work live at, and do any fixes you applied exceed it where the mandate did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found.
@@ -196,26 +184,21 @@ Return one result for every queued id, and no others:
              "violated_guarantee":"...","permitted_baseline":"...",
              "incremental_harm":"...","exceeds_baseline":true|false},
  "disposition":"fixed|rejected|rejected_adjudicated|blocked",
- "consultation":null|{"resolution":"..."},
  "prevention":null|{"documented_in":"<edited path>","note":"..."},
  "adjudication_ref":null|"<settled rejection id>"}
 `fixed`/`blocked` require a concrete, evidence-backed affected party,
 observable damage, and violated guarantee, plus exceeds_baseline=true. If any
-cannot be demonstrated, the finding is invalid: `rejected` requires its
-consultation (`rejected_adjudicated` remains the settled-duplicate path), and
+cannot be demonstrated, the finding is invalid: use `rejected`
+(`rejected_adjudicated` remains the settled-duplicate path), and
 both rejection dispositions require exceeds_baseline=false. Include any extra
 field explicitly required by an active project-safeguard or
 active project block above. Plan edits live only in the canonical skeleton
-block; never duplicate them in the reply.
+block; never duplicate them in the reply. A fixer never invokes, spawns,
+or consults another LLM or agent; rejection is its own evidence-backed judgment.
 
 Impossible worker task (not a finding disposition):
 {"status":"blocked","kind":"fix_findings","blocked_reason":"...",
  "questions":[...]}   (the QUESTIONS entries are required in EVERY reply)
-
-Unavailable or unresolved mandatory consultation:
-{"status":"retry","kind":"fix_findings",
- "retry_reason":"consultation_unavailable","notes":"<optional>",
- "questions":[...]}   (required in EVERY reply)
 
 Focused discussion before deciding one queued finding:
 {"status":"need_rethink","kind":"fix_findings",

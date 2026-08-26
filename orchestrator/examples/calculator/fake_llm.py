@@ -12,10 +12,10 @@ separation model (reviewers report only; a fixer triages):
   skeleton:
     codex round 1 reports a missing-non-goals finding -> fixer fixes it ->
     delta review clean -> amend -> codex round 2 clean -> claude round 1
-    reports an "ambiguous goal wording" finding -> fixer REJECTS it with a
-    consultation and a prevention edit -> claude round 2 stubbornly
+    reports an "ambiguous goal wording" finding -> fixer REJECTS it directly
+    with a prevention edit -> claude round 2 stubbornly
     re-raises the same complaint without contests -> fixer kills it by
-    pointer (rejected_adjudicated, zero consultations) -> claude round 3
+    pointer (rejected_adjudicated) -> claude round 3
     clean -> deterministic seal from the current reviews -> gate.
   slice note: both reviews clean on the same bytes -> deterministic seal.
   implementation:
@@ -400,7 +400,6 @@ def respond(kind, family, workspace, count, prompt):
                     "severity": f["severity"],
                     "summary": f["summary"],
                     "disposition": disposition,
-                    "consultation": None,
                     "validity": {
                         "affected_party": (
                             "calculator users"
@@ -450,11 +449,6 @@ def respond(kind, family, workspace, count, prompt):
                 kind,
                 findings=echo(
                     "rejected",
-                    consultation={
-                        "resolution": "opposite family agreed the goal was "
-                        "already float-typed by the CLI contract; wording "
-                        "clarified for readability only"
-                    },
                     prevention={
                         "documented_in": "docs/skeleton.md",
                         "note": "explicit float-support note added",

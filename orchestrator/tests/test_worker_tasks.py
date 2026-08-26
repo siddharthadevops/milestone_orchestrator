@@ -1206,6 +1206,10 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             "frozen delta-review prompt",
             "codex",
         )
+        self.assertEqual(
+            task["order"]["request"]["context"]["worker_result_policy"],
+            driver._worker_result_policy(st.current_unit(driver.state)),
+        )
         amendments_path = driver._amendments_path()
         os.makedirs(os.path.dirname(amendments_path), exist_ok=True)
         with open(amendments_path, "w", encoding="utf-8") as handle:

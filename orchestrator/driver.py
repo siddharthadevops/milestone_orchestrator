@@ -24,7 +24,6 @@ import json
 import math
 import os
 import re
-import shlex
 import signal
 import subprocess
 import sys
@@ -197,10 +196,6 @@ DEFAULT_CONFIG = {
             "model": "claude-fable-5",
             "effort": "max",
         },
-        # The consulted family is the opposite of the fixer's; it runs at
-        # the CALLER'S effort (see _consultation_command) so a rejection
-        # is never argued by a lighter opponent than the one rejecting.
-        "consultation": "opposite",
         # Who RATES findings for debt deferral: a fixed family (operator
         # 2026-07-09: an 8-minute opposite-family rating of a
         # 4-minute review's findings is upside down; a fixed fast
@@ -1580,39 +1575,6 @@ class Driver(object):
     def _opposite_cmd(self, family):
         return self.config["commands"].get(self._opposite(family), [])
 
-    def _consultation_command(self, family, caller_effort):
-        """The consulted family's command line, ready to run.
-
-        The fixer runs this line VERBATIM, so the template must arrive
-        resolved: an unsubstituted {model}/{effort} would reach the CLI
-        as a literal brace-string. Homed, the line resolves the `consult 1`
-        seat through the run's session AT THE MOMENT the fixer runs it, so a
-        session or document edit reaches the consultation like every other
-        call and nothing is derived from the caller. Without a home there is
-        no session to read: the model comes from the consulted family's
-        defaults and the effort is the CALLER'S, so a rejection is never
-        argued by a lighter opponent than the one rejecting.
-        """
-        if self.model_profiles_home is not None:
-            return [
-                sys.executable,
-                os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "current_model_call.py",
-                ),
-                "--state",
-                os.path.abspath(self.state_path),
-                "--home",
-                os.path.abspath(self.model_profiles_home),
-            ]
-        template = self.config["commands"].get(family) or []
-        if not template:
-            return []
-        model, family_effort = self._family_defaults(family)
-        return runners.apply_model_effort(
-            template, model, caller_effort or family_effort
-        )
-
     def _runtime_dir(self):
         # All runtime bookkeeping lives beside the state file: for a
         # per-milestone run that is <milestone>/.run/, for a legacy run
@@ -2035,15 +1997,6 @@ class Driver(object):
                     else self._slice_note_artifact(unit["slice_id"])
                 )
         elif kind == contracts.KIND_FIX_FINDINGS:
-            values.update({
-                "consultation_family": context["consultation_family"],
-                "consultation_command": shlex.join(
-                    context["consultation_command"]
-                ),
-                "scratch_path": os.path.join(
-                    self.workspace, ".orchestrator", "scratch"
-                ) + os.sep,
-            })
             if unit["kind"] != st.UNIT_SKELETON:
                 values.update({
                     "task_subject": self._unit_desc(unit),
@@ -3662,7 +3615,10 @@ class Driver(object):
                 allow_nan=False,
             )),
         }
-        if kind == contracts.KIND_REVIEW_ROUND:
+        if kind in (
+            contracts.KIND_REVIEW_ROUND,
+            contracts.KIND_DELTA_REVIEW,
+        ):
             # Freeze only the strategy decisions this review consumes after a
             # validated result. Live model-profile dispatch and hot authority
             # retain their separate call-time/episode boundaries.
@@ -7724,42 +7680,6 @@ class Driver(object):
         )
 
     def _check_worker_blocked(self, unit, output, kind, family, result):
-
-        if output["status"] == "retry":
-            self._record_worker_unaccepted(
-                unit, kind, family, result, "worker requested retry"
-            )
-            # A fixer could not complete its mandatory opposite-family
-            # consultation. This is neither a finding disposition nor an
-            # operator decision: fail through the established `unknown`
-            # lane so the service guard restores failed_from=U_FIXING and
-            # retries the same queue after its 15-minute emergency interval.
-            # Preserve any partial delta for the next fixer to inspect, just
-            # like a killed fixer call.
-            unit["killed_fix_notice"] = "consultation unavailable"
-            detail = str(output.get("notes") or "").strip()
-            reason = (
-                "%s consultation unavailable; transient retry requested"
-                % kind
-            )
-            if detail:
-                reason += ": %s" % detail[:500]
-            self._terminalize_worker_task(
-                unit,
-                output,
-                result=result,
-                status="failure",
-                reason=reason,
-            )
-            st.fail_run(
-                self.state,
-                reason,
-                unit=unit,
-                type_="unknown",
-                evidence="worker reported consultation_unavailable",
-            )
-            self._save()
-            raise StopStep("consultation unavailable")
         # type_="worker_blocked": a blocked worker is an OPERATOR-gated
         # stop (like goal_gap/gap_stall), not an unclassified transient —
         # left untyped it defaults to "unknown" and the service guard
@@ -10273,7 +10193,7 @@ class Driver(object):
     def _validate_contested_dispositions(self, unit, output):
         """A queued finding carrying `contests` re-opened that adjudication
         with structurally validated new evidence; the fixer must weigh it
-        on the merits — fix, or reject with a FRESH consultation (the
+        on the merits — fix, or reject directly from current evidence (the
         prompt contract: a CONTESTS finding "re-opens that adjudication").
         Disposing it rejected_adjudicated — killing the new evidence by
         pointer, typically citing the very adjudication under contest — is
@@ -10291,8 +10211,8 @@ class Driver(object):
                     "fixer disposed finding %s as rejected_adjudicated "
                     "(ref %r), but that finding CONTESTS adjudication %r "
                     "with new evidence: a contested adjudication is "
-                    "re-opened and must be fixed or rejected with a fresh "
-                    "consultation, never killed by pointer"
+                    "re-opened and must be fixed or directly rejected from "
+                    "current evidence, never killed by pointer"
                     % (f.get("id"), f.get("adjudication_ref"),
                        contested[f.get("id")]),
                     unit=unit,
@@ -10390,22 +10310,12 @@ class Driver(object):
             fix_model = carrier.get("model")
             fix_effort = carrier.get("effort")
             dispatch_resolver = None
-            consultation_family = family
-            consultation_cmd = None
         elif self.model_profiles_home is not None:
             family, fix_model, fix_effort = self._worker_staffing(
                 unit, contracts.KIND_FIX_FINDINGS
             )
             dispatch_resolver = self._dispatch_for_worker_kind(
                 unit, contracts.KIND_FIX_FINDINGS
-            )
-            # The prompt names the family the `consult` seat resolves to now;
-            # the command line resolves it again when the fixer runs it. An
-            # Routed fixer attempts always mount the current consultation
-            # command, including a resumed admitted task.
-            consultation_family, _cm, _ce = self._staff("consult")
-            consultation_cmd = self._consultation_command(
-                consultation_family, None
             )
         else:
             if unit["kind"] == st.UNIT_SKELETON:
@@ -10422,13 +10332,6 @@ class Driver(object):
                 unit,
                 contracts.KIND_FIX_FINDINGS,
                 origin_family=source.get("family"),
-            )
-            consultation_family = self._resolve_act("consultation", family)
-            # Consultation uses the fixer's effort, or its family default.
-            _fixer_model, fixer_family_effort = self._family_defaults(family)
-            consultation_cmd = self._consultation_command(
-                consultation_family,
-                fix_effort or fixer_family_effort,
             )
         authority = None
         if not has_validated_carrier:
@@ -10497,8 +10400,6 @@ class Driver(object):
             self._unit_desc(unit),
             unit.get("fix_queue") or [],
             self._registry(),
-            consultation_family,
-            consultation_cmd,
             unit_kind=unit["kind"],
             amendments=(authority or {}).get("amendments"),
             phantom_retry=bool(unit.get("phantom_retried")),
@@ -10643,8 +10544,6 @@ class Driver(object):
                         contracts.KIND_FIX_FINDINGS,
                         raw_name,
                         context={
-                            "consultation_family": consultation_family,
-                            "consultation_command": consultation_cmd,
                             **(
                                 {
                                     "fixer_recovery_state": (
@@ -11095,8 +10994,8 @@ class Driver(object):
     def _phantom_edit_claims(self, unit):
         """Edit claims made by the unit's LAST fix call: any 'fixed'
         disposition, any prevention edit, or a non-empty files_changed
-        (entries under .orchestrator/ are ignored — consultation
-        transcripts are bookkeeping, excluded from diffs by design).
+        (entries under .orchestrator/ are runtime bookkeeping, excluded from
+        diffs by design).
         Cross-checked against an empty worktree delta in _do_delta_review."""
         last_fix = None
         for r in reversed(unit["rounds"]):
@@ -11481,7 +11380,57 @@ class Driver(object):
             )
             self._save()
             raise
-        st.record_round(
+        findings = list(output.get("findings") or [])
+        delta_task = tasks.task_record(
+            self.state, getattr(result, "task_id", None)
+        )
+        result_policy = self._worker_task_result_policy(delta_task, unit)
+        defer_scope = tuple(result_policy["defer_scope"])
+        deferred = []
+        fix_findings = list(findings)
+        if (
+            not provisional
+            and findings
+            and result_policy["p3_reclassify_debt"]
+            and defer_scope
+        ):
+            candidates = [
+                (finding, family)
+                for finding in findings
+                if finding.get("severity") in defer_scope
+                and not finding.get("contests")
+            ]
+            if candidates:
+                source_round = "%s-%s-r%d" % (
+                    st.unit_key(unit),
+                    family,
+                    len(st.family_rounds(unit, family)) + 1,
+                )
+                deferred, retained = self._partition_defer_candidates(
+                    unit,
+                    candidates,
+                    source_round=source_round,
+                    parent_call=(
+                        contracts.KIND_DELTA_REVIEW, family, result
+                    ),
+                    defer_threshold=result_policy["p3_defer_max_risk"],
+                    gap_backstop=result_policy["gap_backstop"],
+                )
+                retained_ids = {
+                    finding.get("id") for finding, _family in retained
+                }
+                fix_findings = [
+                    finding
+                    for finding in findings
+                    if (
+                        finding.get("severity") not in defer_scope
+                        or finding.get("id") in retained_ids
+                    )
+                ]
+        round_meta = {"model": delta_model, "effort": delta_effort}
+        if deferred and not fix_findings:
+            round_meta["deferred_clean"] = True
+        rec = st.record_round(
             self.state,
             unit,
             family,
@@ -11499,10 +11448,12 @@ class Driver(object):
                 getattr(result, "cost_partial", False)
                 or getattr(result, "cost", None) is None
             ),
-            meta={"model": delta_model, "effort": delta_effort},
+            meta=round_meta,
             task_id=getattr(result, "task_id", None),
         )
         self._terminalize_worker_task(unit, output, result=result)
+        if deferred:
+            st.record_debt(self.state, unit, deferred, "delta", rec["id"])
         if provisional:
             verdict = output["design_correction_verdict"]
             decision = verdict["decision"]
@@ -11558,7 +11509,7 @@ class Driver(object):
                 )
             # retry intentionally falls through to the existing dirty-delta
             # path below; the contract requires actionable findings.
-        if contracts.findings_clean(output):
+        if not findings or not fix_findings:
             try:
                 sha = gitops.amend(self.workspace)
             except gitops.GitError as exc:
@@ -11578,6 +11529,11 @@ class Driver(object):
                 self.state, unit, return_to, reason="delta green; amended"
             )
             unit.pop("phantom_retried", None)
+            if deferred:
+                return (
+                    "delta review: %d finding(s) deferred as debt; amended "
+                    "(%s)" % (len(deferred), sha)
+                )
             return "delta review clean; amended (%s)" % sha
         # Dirty delta: its findings become the new fix queue (same episode).
         unit["fix_queue"] = [
@@ -11588,18 +11544,19 @@ class Driver(object):
                 "validity": copy.deepcopy(f["validity"]),
                 "contests": f.get("contests"),
             }
-            for f in output["findings"]
+            for f in fix_findings
         ]
         st.reopen_contested_debt(self.state, unit["fix_queue"])
         source["type"] = "delta"
         source["family"] = family
-        source["source_round_id"] = st.family_rounds(unit, family)[-1]["id"]
+        source["source_round_id"] = rec["id"]
         unit["fix_source"] = source
         st.transition_unit(
             self.state, unit, st.U_FIXING, reason="delta findings queued"
         )
-        return "delta review: %d finding(s); back to the fixer" % len(
-            output["findings"]
+        return (
+            "delta review: %d finding(s) queued for the fixer; %d deferred"
+            % (len(fix_findings), len(deferred))
         )
 
     def _complete_seal_from_reviews(self, unit, verification_event=None):

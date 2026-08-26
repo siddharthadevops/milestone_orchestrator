@@ -144,8 +144,6 @@ def build_all_bound(project_context=_OMIT_PROJECT_CONTEXT, amendments=None):
             tp.UNIT,
             tp.FINDINGS,
             [],
-            "claude",
-            ["claude", "-p"],
             **kw
         ),
     }

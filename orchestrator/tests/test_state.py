@@ -105,15 +105,16 @@ def fixed_finding(fid="F1", severity="P1"):
     }
 
 
-def rejected_finding(fid="F1", resolution="the artifact is correct",
+def rejected_finding(fid="F1", rationale="the artifact is correct",
                      prevention=None, severity="P1", summary=None):
+    validity = fixer_validity(False)
+    validity["incremental_harm"] = rationale
     f = {
         "id": fid,
         "severity": severity,
         "summary": summary or "issue %s" % fid,
         "disposition": "rejected",
-        "consultation": {"resolution": resolution},
-        "validity": fixer_validity(False),
+        "validity": validity,
     }
     if prevention is not None:
         f["prevention"] = prevention
@@ -1368,7 +1369,7 @@ class TestAdjudicationRegistry(TempWorkspaceCase):
             state, skel, "codex", contracts.KIND_FIX_FINDINGS,
             fix_result([
                 rejected_finding(
-                    "F1", resolution="the skeleton is correct",
+                    "F1", rationale="the skeleton is correct",
                     prevention=prevention, severity="P2",
                     summary="claimed missing slice",
                 ),
@@ -1381,7 +1382,7 @@ class TestAdjudicationRegistry(TempWorkspaceCase):
         doc["status"] = st.U_FIXING
         st.record_round(
             state, doc, "codex", contracts.KIND_FIX_FINDINGS,
-            fix_result([rejected_finding("F3", resolution="note is right")]),
+            fix_result([rejected_finding("F3", rationale="note is right")]),
             meta={"source_round_id": "slice_doc-01-claude-r1"},
         )
         entries = st.adjudicated_rejections(state)

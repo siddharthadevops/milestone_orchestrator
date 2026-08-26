@@ -14,7 +14,6 @@ mechanically and their output discarded.
 
 import json
 import re
-import shlex
 
 from . import contracts, tasks
 
@@ -144,7 +143,7 @@ def _access_block(edit_allowed):
     # by operator decision after 6,326 rounds without a single catch.
     lines += [
         "- Never include secrets, credentials, tokens, private keys, raw PII,",
-        "  or sensitive operational data in output, edits, or consultations.",
+        "  or sensitive operational data in output or edits.",
         "",
         "PROCESS AUTHORITY",
         "- .orchestrator/state.json and the GENERATED milestone ledgers",
@@ -162,6 +161,8 @@ def _access_block(edit_allowed):
         "- A completed review cycle does NOT grant permanent ownership of",
         "  files or code. Later in-goal work may change earlier code; the",
         "  historical unit's record is preserved and is not rerun.",
+        "- Never invoke, spawn, or consult another LLM or agent. Only the",
+        "  deterministic driver dispatches model calls.",
         '- Missing or stale process records are NEVER grounds for "blocked".',
         "  Block only when your own task is truly impossible, never for",
         "  process-state concerns. In fix calls the per-finding \"blocked\"",
@@ -243,27 +244,6 @@ def _debt_block(debt):
             )
         )
     return "\n".join(lines) + "\n"
-
-
-def _consultation_block(opposite_family, opposite_cmd):
-    cmd = shlex.join(opposite_cmd) if opposite_cmd else "(not configured)"
-    return (
-        "CONSULTATION PROTOCOL (for rejections)\n"
-        "Before `rejected`, consult the %s family with the artifact/path,\n"
-        "finding, proposed resolution, and checked evidence. Compare\n"
-        "affected_party, observable_damage, violated_guarantee,\n"
-        "permitted_baseline, incremental_harm, and exceeds_baseline;\n"
-        "permitted operation is not damage by itself.\n"
-        "Command (prompt on stdin):\n"
-        "  %s\n"
-        "Save the transcript under WORKSPACE/.orchestrator/scratch/; summarize\n"
-        "it in consultation.resolution. Run at most five dialogue rounds,\n"
-        "stopping earlier on clear agreement. Never reject P0/P1 without a\n"
-        "clear resolution. If consultation is unavailable or unresolved, do\n"
-        "not block, concede, or reject: return only the retry envelope; the\n"
-        "guard retries this fixer after 15 minutes. `rejected_adjudicated`\n"
-        "needs no consultation; cite adjudication_ref.\n"
-    ) % (opposite_family, cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -599,8 +579,9 @@ FIX_VERDICT_ACCOUNT_BLOCK = (
     "`fixed` or `blocked`.\n"
     "If no exact violated guarantee exists, no concrete party suffers\n"
     "observable damage, or the harm does not exceed the baseline, the finding\n"
-    "is invalid: use `rejected` after consultation, or\n"
-    "`rejected_adjudicated` for a settled duplicate.\n"
+    "is invalid: use `rejected` directly, or `rejected_adjudicated` for a\n"
+    "settled duplicate. Never invoke, spawn, or consult another LLM or\n"
+    "agent; only the driver dispatches model calls.\n"
 )
 
 FIX_SELF_CHECK_BLOCK = (
@@ -1744,9 +1725,9 @@ def _brainstorming_application_order(fixer=False):
         "    \"implementation_required\": false, \"reason\": \"...\"}\n"
         "Use `fixed` when the finding is valid but the agreed outcome needs no\n"
         "workspace change. Use ordinary `rejected` when the agreement instead\n"
-        "establishes that the finding was wrong or already satisfied. In both\n"
-        "cases the completed Brainstorming session supplies the consultation;\n"
-        "summarize its resolution and do not run another consultation.\n"
+        "establishes that the finding was wrong or already satisfied. Decide\n"
+        "that disposition directly from the accepted result; do not invoke\n"
+        "another LLM or agent.\n"
         if fixer else ""
     )
     return (
@@ -1767,9 +1748,9 @@ def _brainstorming_application_order(fixer=False):
 
 
 def _brainstorming_application_override(fixer=False):
-    consultation = (
-        " The completed Brainstorming session is the required consultation for\n"
-        "the source finding; do not request or run another one."
+    nested_call_rule = (
+        " Do not invoke another LLM or agent; the driver alone dispatches "
+        "model calls."
         if fixer else ""
     )
     return (
@@ -1778,7 +1759,7 @@ def _brainstorming_application_override(fixer=False):
         "`need_rethink` or `gap` is inapplicable. Finish the accepted result\n"
         "now; if it truly cannot be applied, return `blocked` rather than\n"
         "starting or routing another design process."
-        + consultation
+        + nested_call_rule
         + "\n"
     )
 
@@ -2359,8 +2340,6 @@ def build_fix_findings(
     unit_desc,
     findings,
     registry,
-    consultation_family,
-    consultation_cmd,
     unit_kind=None,
     amendments=None,
     phantom_retry=False,
@@ -2404,7 +2383,7 @@ def build_fix_findings(
             "delta was EMPTY — nothing was actually written, and those\n"
             "claims were discarded. This is your one retry: either apply\n"
             "the edits to disk for real, or dispose honestly ('rejected'\n"
-            "with its consultation, or 'blocked'). A second empty-delta\n"
+            "from current evidence, or 'blocked'). A second empty-delta\n"
             "claim fails the run.\n\n"
         )
     correction_block = ""
@@ -2615,17 +2594,16 @@ def build_fix_findings(
     decision_block = (
         "FIX DECISION TABLE (exactly once per queued finding)\n"
         "- valid -> `fixed`; apply the fix now.\n"
-        "- invalid -> `rejected` after consultation. If ambiguity caused the\n"
+        "- invalid -> `rejected` directly. If ambiguity caused the\n"
         "  false finding, add the smallest clarifying `prevention` edit.\n"
         "- settled duplicate without new evidence -> `rejected_adjudicated`\n"
-        "  with adjudication_ref; no consultation. CONTESTS means reassess\n"
-        "  the new evidence and consult again if rejecting.\n"
+        "  with adjudication_ref. CONTESTS means reassess the new evidence\n"
+        "  directly if rejecting.\n"
+        "- Never invoke, spawn, or consult another LLM or agent; only the\n"
+        "  driver dispatches model calls.\n"
         "- confirmed and impossible -> per-finding `blocked`.\n\n"
     )
     quality_block = _fix_quality_block(unit_kind)
-    consultation_block = (
-        _consultation_block(consultation_family, consultation_cmd) + "\n"
-    )
     output_contract = (
         contracts.prompt_contract(
             contracts.KIND_FIX_FINDINGS, gap_enabled=gap_enabled
@@ -2654,7 +2632,6 @@ def build_fix_findings(
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
-        + consultation_block
         + output_contract
     )
 

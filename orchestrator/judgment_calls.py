@@ -64,17 +64,14 @@ _REQUIRED_JOB_PAYLOADS = {
     )),
     "fix_findings@skeleton": frozenset((
         "workspace", "goal_path", "skeleton_path", "queued_findings",
-        "consultation_family", "consultation_command", "scratch_path",
     )),
     "fix_findings@slice_doc": frozenset((
         "workspace", "task_subject", "goal_path", "skeleton_path",
-        "editable_path", "queued_findings", "consultation_family",
-        "consultation_command", "scratch_path",
+        "editable_path", "queued_findings",
     )),
     "fix_findings@slice_impl": frozenset((
         "workspace", "task_subject", "goal_path", "skeleton_path",
-        "editable_path", "queued_findings", "consultation_family",
-        "consultation_command", "scratch_path",
+        "editable_path", "queued_findings",
     )),
     "reclassify@doc": frozenset((
         "workspace", "artifact_path", "builders",
@@ -102,7 +99,7 @@ _REQUIRED_CONTRACT_SECTIONS = {
         "review_contract", "review_blocked", "review_need_rethink",
     )),
     "fix_findings": frozenset((
-        "fix_results", "fix_blocked", "fix_retry", "fix_need_rethink",
+        "fix_results", "fix_blocked", "fix_need_rethink",
     )),
     "reclassify": frozenset(("reclassify_result",)),
     "merge_repair": frozenset(("merge_repair_result",)),

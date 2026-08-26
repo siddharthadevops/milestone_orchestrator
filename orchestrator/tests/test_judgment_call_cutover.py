@@ -61,11 +61,6 @@ def values_for(workspace, job):
                     "implementation/milestones/router/slice-06.md"
                 ),
             })
-        values.update({
-            "consultation_family": "claude",
-            "consultation_command": "consult --family claude",
-            "scratch_path": ".orchestrator/scratch/",
-        })
     elif kind == "merge_repair":
         values = {
             "workspace": workspace,
@@ -436,21 +431,6 @@ class JudgmentCallPreparationTest(unittest.TestCase):
                     "slice_unit",
                     {"text": ["TASK: fix queued findings."],
                      "variables": []},
-                ),
-                {},
-            ),
-            (
-                "fix-without-consultation",
-                "fix_findings@slice_impl",
-                lambda document: document["instructions"].__setitem__(
-                    "parts",
-                    [
-                        part for part in document["instructions"]["parts"]
-                        if not any(
-                            variable.get("name") == "consultation_command"
-                            for variable in part.get("variables", [])
-                        )
-                    ],
                 ),
                 {},
             ),
@@ -1280,22 +1260,14 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
         self.assertEqual(self.subject.runner.calls, [])
         self.assertEqual(self.subject.state["failure"]["type"], "orchestrator")
 
-    def test_fixer_values_use_the_ignored_runtime_scratch_directory(self):
+    def test_fixer_values_expose_no_worker_owned_model_dispatch(self):
         unit = state.current_unit(self.subject.state)
         values = self.subject._judgment_values(
-            unit,
-            contracts.KIND_FIX_FINDINGS,
-            {
-                "consultation_family": "claude",
-                "consultation_command": ["claude"],
-            },
+            unit, contracts.KIND_FIX_FINDINGS, {},
         )
-
-        self.assertEqual(
-            values["scratch_path"],
-            os.path.join(self.workspace, ".orchestrator", "scratch")
-            + os.sep,
-        )
+        self.assertFalse({
+            "consultation_family", "consultation_command", "scratch_path"
+        } & set(values))
 
     def test_driver_supplies_the_exact_part_scope_to_owned_judgments(self):
         unit = state._new_unit(state.UNIT_SLICE_IMPL, 1)
@@ -1309,13 +1281,7 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
 
         for kind, context in (
             (contracts.KIND_REVIEW_ROUND, {}),
-            (
-                contracts.KIND_FIX_FINDINGS,
-                {
-                    "consultation_family": "claude",
-                    "consultation_command": ["claude"],
-                },
-            ),
+            (contracts.KIND_FIX_FINDINGS, {}),
             (
                 contracts.KIND_DELTA_REVIEW,
                 {"delta_base_revision": "a" * 40},
@@ -1346,10 +1312,7 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
                 "codex", "legacy", "fix_findings", "invalid-fix",
                 prepare_call=self.subject._judgment_prepare_call(
                     unit, "fix_findings", "invalid-fix",
-                    context={
-                        "consultation_family": "claude",
-                        "consultation_command": ["claude"],
-                    },
+                    context={},
                     queued_findings=[],
                 ),
                 episode_unit=unit,
@@ -1410,7 +1373,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
                     "findings": [{
                         **copy.deepcopy(finding),
                         "disposition": "fixed",
-                        "consultation": None,
                         "prevention": None,
                         "adjudication_ref": None,
                     }],
@@ -1523,10 +1485,7 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
                         unit,
                         "fix_findings",
                         "protocol-fixer",
-                        context={
-                            "consultation_family": "claude",
-                            "consultation_command": ["claude"],
-                        },
+                        context={},
                         queued_findings=[],
                     ),
                     episode_unit=unit,

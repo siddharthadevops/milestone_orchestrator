@@ -5,7 +5,7 @@ of the state dict (no generation-time clock), stamped with a GENERATED
 marker, written under docs/ by generate(). These tests drive them with
 small handcrafted states covering the interesting shapes under the
 review/fix separation model: a reported review finding, a fix_findings
-round (fixed / rejected-with-consultation), a clean delta review, an
+round (fixed / directly rejected), a clean delta review, an
 ordered same-byte review cycle, a deterministic seal citing those reviews,
 a closed slice_impl, a failed run, and the adjudications ledger derived from
 the rejected findings. Legacy seal-attempt shapes live only in the explicitly
@@ -91,7 +91,6 @@ def make_state():
                                     "severity": "P3",
                                     "summary": "skeleton lacked non-goals",
                                     "disposition": "fixed",
-                                    "consultation": None,
                                 }
                             ]
                         },
@@ -140,8 +139,8 @@ def make_state():
                                     "summary": "goal wording is ambiguous "
                                     "about float support",
                                     "disposition": "rejected",
-                                    "consultation": {
-                                        "resolution": ADJ_RATIONALE,
+                                    "validity": {
+                                        "incremental_harm": ADJ_RATIONALE,
                                     },
                                     "prevention": {
                                         "documented_in": "docs/skeleton.md",
@@ -247,7 +246,6 @@ def make_state():
                                     "severity": "P1",
                                     "summary": "div() multiplied",
                                     "disposition": "fixed",
-                                    "consultation": None,
                                 }
                             ]
                         },
@@ -385,17 +383,16 @@ class TestRenderReviewLog(unittest.TestCase):
             self.text,
         )
 
-    def test_fix_round_rows_with_triage_and_consultation(self):
+    def test_fix_round_rows_with_direct_triage(self):
         self.assertIn(
             "| skeleton-codex-r2 | fix_findings | codex | 1 "
             "| 1 fixed "
             "| `.orchestrator/raw/skeleton-fix1.txt` |",
             self.text,
         )
-        # The rejection carries its consultation.
         self.assertIn(
             "| skeleton-codex-r5 | fix_findings | codex | 1 "
-            "| 1 rejected (1 consulted) "
+            "| 1 rejected "
             "| `.orchestrator/raw/skeleton-fix2.txt` |",
             self.text,
         )
@@ -574,7 +571,7 @@ class TestRenderAdjudications(unittest.TestCase):
             self.text,
         )
 
-    def test_rationale_comes_from_the_consultation_resolution(self):
+    def test_rationale_comes_from_the_fixers_validity_judgment(self):
         self.assertIn("- rationale: %s" % ADJ_RATIONALE, self.text)
 
     def test_prevention_line_rendered_when_present(self):
@@ -599,12 +596,15 @@ class TestRenderAdjudications(unittest.TestCase):
         self.assertIn("## [%s]" % ADJ_ID, text)
         self.assertNotIn("- prevention:", text)
 
-    def test_missing_rationale_renders_placeholder(self):
+    def test_missing_validity_rationale_falls_back_to_summary(self):
         state = make_state()
         rejected = state["units"][0]["rounds"][5]["result"]["findings"][0]
-        rejected["consultation"] = None
+        rejected["validity"] = {}
         text = ledgers.render_adjudications(state)
-        self.assertIn("- rationale: (none)", text)
+        self.assertIn(
+            "- rationale: goal wording is ambiguous about float support",
+            text,
+        )
 
     def test_empty_case(self):
         state = make_state()

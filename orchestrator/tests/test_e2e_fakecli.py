@@ -9,7 +9,7 @@ cwd at the repo root, exactly like an operator would.
 
 The scenario exercises the review/fix separation model end to end:
   skeleton: codex reported finding -> fixer fixes -> clean delta -> amend;
-    claude reported finding -> fixer REJECTS (consultation + prevention);
+    claude reported finding -> fixer REJECTS directly with prevention;
     claude stubbornly re-raises without contests -> fixer kills it by
     pointer (rejected_adjudicated citing skeleton-claude-r1/F1); claude
     clean; the same-byte review predicate seals deterministically.
@@ -116,7 +116,6 @@ class TestCalculatorE2E(unittest.TestCase):
                 "skeletoner": "codex",
                 "fixer": "codex",
                 "delta_review": "codex",
-                "consultation": "opposite",
             },
             "max_fix_loops": 4,
             # The fake CLI scenario hardcodes docs/ artifact paths; the
@@ -438,15 +437,15 @@ class TestCalculatorE2E(unittest.TestCase):
             ],
         )
         rejected = fixes[1]["result"]["findings"][0]
-        self.assertTrue(rejected["consultation"]["resolution"])
+        self.assertNotIn("consultation", rejected)
         self.assertEqual(
             rejected["prevention"]["documented_in"], "docs/skeleton.md"
         )
         # The stubborn duplicate died by pointer: the exact registry ref,
-        # zero new consultations.
+        # without reopening the settled adjudication.
         duplicate = fixes[2]["result"]["findings"][0]
         self.assertEqual(duplicate["adjudication_ref"], ADJ_ID)
-        self.assertIsNone(duplicate["consultation"])
+        self.assertNotIn("consultation", duplicate)
 
     def test_adjudication_registry_derived_from_state(self):
         state = self.disk_state()
@@ -476,7 +475,7 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertIn("# Adjudicated Rejections", adjudications)
         self.assertIn("## [%s]" % ADJ_ID, adjudications)
         self.assertIn("- unit: skeleton", adjudications)
-        self.assertIn("opposite family agreed", adjudications)
+        self.assertIn("no harm beyond the documented behavior", adjudications)
         self.assertIn(
             "- prevention: docs/skeleton.md (explicit float-support note "
             "added)",

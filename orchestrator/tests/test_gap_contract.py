@@ -153,7 +153,7 @@ class GapPromptGatingTest(unittest.TestCase):
         fix = prompts.build_fix_findings(
             "codex", "/ws", "goal", "skeleton",
             [{"id": "GAP1", "severity": "P1", "summary": "objective"}],
-            [], "claude", ["claude"], unit_kind="skeleton",
+            [], unit_kind="skeleton",
             repair_artifact="docs/skeleton.md", repair_wave_docs=docs,
             legacy_design_process=True)
         self.assertIn("RE-DOCUMENTATION WAVE", fix)
@@ -187,7 +187,7 @@ class GapPromptGatingTest(unittest.TestCase):
         empty_fix = prompts.build_fix_findings(
             "codex", "/ws", "goal", "skeleton",
             [{"id": "GAP1", "severity": "P1", "summary": "objective"}],
-            [], "claude", ["claude"], unit_kind="skeleton",
+            [], unit_kind="skeleton",
             repair_artifact="docs/skeleton.md", repair_wave_docs=[],
             legacy_design_process=True)
         self.assertIn("RE-DOCUMENTATION WAVE", empty_fix)
@@ -207,7 +207,7 @@ class GapPromptGatingTest(unittest.TestCase):
         plain_fix = prompts.build_fix_findings(
             "codex", "/ws", "goal", "skeleton",
             [{"id": "F1", "severity": "P1", "summary": "s"}],
-            [], "claude", ["claude"], unit_kind="skeleton",
+            [], unit_kind="skeleton",
             repair_artifact="docs/skeleton.md",
             legacy_design_process=True)
         self.assertNotIn("RE-DOCUMENTATION WAVE", plain_fix)

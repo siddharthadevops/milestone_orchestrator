@@ -442,8 +442,7 @@ def report_finding(severity="P2", contests=None):
     return f
 
 
-def full_finding(disposition="fixed", severity="P2", consultation=None,
-                 **extra):
+def full_finding(disposition="fixed", severity="P2", **extra):
     """A fixer triage entry (kind fix_findings): carries the disposition."""
     f = {
         "id": "F1",
@@ -454,8 +453,6 @@ def full_finding(disposition="fixed", severity="P2", consultation=None,
             disposition in ("fixed", "blocked")
         ),
     }
-    if consultation is not None:
-        f["consultation"] = consultation
     f.update(extra)
     return f
 
@@ -660,7 +657,6 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
             full_finding("blocked", validity=fix_finding_validity(False)),
             full_finding(
                 "rejected",
-                consultation={"resolution": "both families agree"},
                 validity=fix_finding_validity(True),
             ),
             full_finding(
@@ -829,18 +825,18 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
                 )
                 self.assertIs(contracts.validate_worker_output(obj, kind), obj)
 
-    def test_rejected_with_consultation_is_valid_for_the_fixer(self):
-        # fix_findings is the only kind that triages (dispositions).
-        obj = ok_output(
-            contracts.KIND_FIX_FINDINGS,
-            findings=[
-                full_finding(
-                    "rejected",
-                    consultation={"resolution": "both families agree"},
+    def test_rejected_is_a_direct_fixer_decision_at_every_severity(self):
+        # No second worker is needed: the fixer owns its evidence-backed
+        # rejection directly, including for P0/P1 findings.
+        for severity in contracts.SEVERITIES:
+            with self.subTest(severity=severity):
+                obj = ok_output(
+                    contracts.KIND_FIX_FINDINGS,
+                    findings=[full_finding("rejected", severity=severity)],
                 )
-            ],
-        )
-        contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
+                contracts.validate_worker_output(
+                    obj, contracts.KIND_FIX_FINDINGS
+                )
 
     def test_rejected_with_prevention_edit(self):
         obj = ok_output(
@@ -848,7 +844,6 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
             findings=[
                 full_finding(
                     "rejected",
-                    consultation={"resolution": "target was correct"},
                     prevention={
                         "documented_in": "docs/skeleton.md",
                         "note": "clarifying sentence added",
@@ -859,9 +854,8 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         )
         contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
 
-    def test_rejected_adjudicated_with_ref_needs_no_consultation(self):
-        # A duplicate of a settled rejection dies by pointer: registry ref,
-        # zero new consultations.
+    def test_rejected_adjudicated_with_ref_is_valid(self):
+        # A duplicate of a settled rejection dies by registry pointer.
         obj = ok_output(
             contracts.KIND_FIX_FINDINGS,
             findings=[
@@ -873,7 +867,7 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         )
         contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
 
-    def test_blocked_disposition_needs_no_consultation(self):
+    def test_blocked_disposition_is_valid(self):
         obj = ok_output(
             contracts.KIND_FIX_FINDINGS, findings=[full_finding("blocked")]
         )
@@ -902,21 +896,6 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
                 }
                 # Blocked outputs need no kind-specific payload.
                 self.assertIs(contracts.validate_worker_output(obj, kind), obj)
-
-    def test_fixer_may_request_a_consultation_retry(self):
-        obj = {
-            "status": "retry",
-            "kind": contracts.KIND_FIX_FINDINGS,
-            "retry_reason": contracts.RETRY_CONSULTATION_UNAVAILABLE,
-            "notes": "opposite family did not return a clear result",
-        }
-        self.assertIs(
-            contracts.validate_worker_output(
-                obj, contracts.KIND_FIX_FINDINGS
-            ),
-            obj,
-        )
-
 
 class TestValidateWorkerOutputViolations(unittest.TestCase):
     def assertContract(self, obj, kind, fragment=None):
@@ -998,25 +977,18 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
             "blocked_reason",
         )
 
-    def test_retry_is_only_for_a_bare_consultation_failure(self):
-        base = {
-            "status": "retry",
-            "kind": contracts.KIND_FIX_FINDINGS,
-            "retry_reason": contracts.RETRY_CONSULTATION_UNAVAILABLE,
-        }
-        wrong_kind = dict(base, kind=contracts.KIND_IMPLEMENT)
-        self.assertContract(
-            wrong_kind, contracts.KIND_IMPLEMENT, "only allowed"
-        )
-        wrong_reason = dict(base, retry_reason="something_else")
-        self.assertContract(
-            wrong_reason, contracts.KIND_FIX_FINDINGS,
-            "consultation_unavailable",
-        )
-        with_claim = dict(base, findings=[])
-        self.assertContract(
-            with_claim, contracts.KIND_FIX_FINDINGS, "must not include"
-        )
+    def test_retry_status_is_retired_for_every_kind(self):
+        for kind in contracts.KINDS:
+            with self.subTest(kind=kind):
+                self.assertContract(
+                    {
+                        "status": "retry",
+                        "kind": kind,
+                        "retry_reason": "consultation_unavailable",
+                    },
+                    kind,
+                    "status",
+                )
 
     def test_skeleton_missing_artifact(self):
         obj = ok_output(
@@ -1126,41 +1098,26 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
                 )
                 self.assertContract(obj, kind, "file changes")
 
-    def test_rejected_without_consultation_all_severities(self):
-        # Encodes the never-solo-rejected rule: the contract requires a
-        # consultation for EVERY severity, hence in particular P0/P1.
-        for sev in contracts.SEVERITIES:
-            with self.subTest(severity=sev):
+    def test_retired_consultation_field_is_always_rejected(self):
+        for consultation in (
+            {},
+            {"resolution": "another worker agreed"},
+            {"resolution": 42},
+            "we talked",
+        ):
+            with self.subTest(consultation=consultation):
                 obj = ok_output(
                     contracts.KIND_FIX_FINDINGS,
-                    findings=[full_finding("rejected", severity=sev)],
+                    findings=[
+                        full_finding(
+                            "rejected", consultation=consultation
+                        )
+                    ],
                 )
                 self.assertContract(
-                    obj, contracts.KIND_FIX_FINDINGS, "consultation"
+                    obj, contracts.KIND_FIX_FINDINGS,
+                    "consultation is retired",
                 )
-
-    def test_rejected_with_consultation_missing_resolution(self):
-        obj = ok_output(
-            contracts.KIND_FIX_FINDINGS,
-            findings=[full_finding("rejected", consultation={})],
-        )
-        self.assertContract(obj, contracts.KIND_FIX_FINDINGS, "resolution")
-
-    def test_rejected_with_non_string_resolution(self):
-        obj = ok_output(
-            contracts.KIND_FIX_FINDINGS,
-            findings=[
-                full_finding("rejected", consultation={"resolution": 42})
-            ],
-        )
-        self.assertContract(obj, contracts.KIND_FIX_FINDINGS)
-
-    def test_rejected_with_consultation_wrong_type(self):
-        obj = ok_output(
-            contracts.KIND_FIX_FINDINGS,
-            findings=[full_finding("rejected", consultation="we talked")],
-        )
-        self.assertContract(obj, contracts.KIND_FIX_FINDINGS)
 
     def test_rejected_adjudicated_without_ref(self):
         obj = ok_output(
@@ -1183,7 +1140,6 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
                     findings=[
                         full_finding(
                             "rejected",
-                            consultation={"resolution": "agreed"},
                             prevention=prevention,
                         )
                     ],

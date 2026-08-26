@@ -47,10 +47,10 @@ Not owned here:
 - migration of pre-activation runs into the new schema.
 
 The panel may show projected plan state and select the prompt set, but it does
-not mutate producers or materials. Fixer consultations remain the one
-worker-owned dialogue outside served routing. Prompt prose is trusted authoring
-content; code enforces registered reply obligations and structural boundaries,
-not whether the prose means what its author intended.
+not mutate producers or materials. No worker invokes another LLM; all model
+calls, including finding classification, are dispatched by the driver. Prompt
+prose is trusted authoring content; code enforces registered reply obligations
+and structural boundaries, not whether the prose means what its author intended.
 
 ### Planning-context disposition
 
@@ -65,7 +65,7 @@ legacy resume. **Uses** older analysis and captures only as historical evidence.
   one complete readable rung, rejects missing required job payloads, assembles
   applicable variables, and records the exact prompt. Accepted replies validate
   exactly the registered mounted or appended sections and all mounted question
-  answers. Fixer consultation is the sole unserved exception.
+  answers. There is no worker-owned model-call exception.
 - **Strict canonical plan boundary:** exactly one `## Canonical slice plan`
   heading and its immediately following fenced JSON object are authoritative.
   The first valid block establishes the anchor and immediately refreshes the
@@ -148,7 +148,7 @@ document reads and existing Git operations, without a daemon or dual authority.
   {"id":3,"title":"Registered contracts, QUESTIONS, and plan boundary","intent":"Register reply contracts and mounted question answers; extract, validate, anchor, and project the canonical plan; block unexplained pre-dispatch drift before any consumer cutover.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":4,"title":"Prompt-set binding and operator surface","intent":"Bind a named prompt set at launch, expose prompt-set selection and read-only plan projection, and keep absent legacy binding on default until activation retires legacy runs.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":5,"title":"Milestone author-call cutover","intent":"Serve skeleton, slice-note, and implementation author calls through the router and canonical-plan boundary; remove producer/material mutation controls and author reply-plan transport in the same cut.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
-  {"id":6,"title":"Milestone judgment-call cutover","intent":"Serve review, delta review, fixing, and rating through their canonical jobs and plan boundary; retain consultations as the sole unserved exception and retire judgment reply-plan transport.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
+  {"id":6,"title":"Milestone judgment-call cutover","intent":"Serve review, delta review, fixing, and driver-owned rating through their canonical jobs and plan boundary; prohibit worker-initiated model calls, classify eligible findings from both full and delta reviews, and retire judgment reply-plan transport.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":7,"title":"Session charge and seat composition","intent":"Admit only planned producer sessions and the single orchestrator-opened rethink session; compose author, contrary, and questioner turns from tagged job law and seat coordinates with applicable QUESTIONS.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":8,"title":"Repository-backed session turns","intent":"Run sessions in the project repository, commit editing turns, restore ordinary read-only mutations, and preserve only a valid canonical-plan block change under the narrow read-only exception.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":9,"title":"Anchored readiness and session seal","intent":"Close when discussion seats are ready on one current commit, invalidate readiness after any new commit, derive delivery from Git, and apply nothing at close.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},

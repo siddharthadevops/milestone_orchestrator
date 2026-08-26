@@ -80,8 +80,7 @@ ignored by validation (§2). Nothing else is stitched by hand.
   conversion of the shipped corpus, the staffing pattern) — always with a
   fallback note BESIDE the answer, never inside the prompt. The word "family" belongs to staffing
   alone: headers and routing carry KIND and WORKSPACE, never an agent
-  name — run data inside a prompt (the fixer's consultation target) is
-  legal, it is a variable value, not routing.
+  name. Workers never receive a command for launching another model.
 - **Served, never read**: consumers obtain prompts only through the
   service API. Moving storage to the cloud later (agent_99) must change
   no consumer.
@@ -324,10 +323,9 @@ verification is the direct `suite_checkpoint` call instead.
   need_rethink finding. Everything else —
   reviews, fixes, ratings, and suite checkpoints — runs as direct agent_call; a session triple
   for them is invalid, not improvised.
-- Fixer consultations are the ONE declared exception to served-only
-  routing: worker-initiated sub-dialogues with the opposite family, run
-  by the fixer itself — the router serves no prompt for them, and their
-  trace is the transcript at the driver-provided scratch path.
+- Workers never invoke another LLM. Finding ratings, including eligible
+  delta-review findings, are independent calls dispatched by the driver;
+  fixer rejections use the fixer's own evidence-backed validity account.
 - Staffing, rigor, and the model router are untouched.
 - The panel exposes charge decisions (job, executor, material, prompt
   set), not machinery.

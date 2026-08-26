@@ -535,7 +535,14 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                  'directory: they do '
                                                                  'not govern this',
                                                                  '  run and are not '
-                                                                 'yours to edit.'],
+                                                                 'yours to edit.',
+                                                                 '- Never invoke, '
+                                                                 'spawn, or consult '
+                                                                 'another LLM or '
+                                                                 'agent. Only the',
+                                                                 '  deterministic '
+                                                                 'driver dispatches '
+                                                                 'model calls.'],
                                                         'variables': []},
                                   'bs_sources': {'text': ['SOURCES',
                                                           '- Brainstorming chat: '
@@ -3547,9 +3554,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'the fix now.',
                                                                       '- invalid -> '
                                                                       '`rejected` '
-                                                                      'after '
-                                                                      'consultation. '
-                                                                      'If ambiguity '
+                                                                      'directly. If '
+                                                                      'ambiguity '
                                                                       'caused the',
                                                                       '  false '
                                                                       'finding, add '
@@ -3563,15 +3569,21 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'evidence -> '
                                                                       '`rejected_adjudicated`',
                                                                       '  with '
-                                                                      'adjudication_ref; '
-                                                                      'no '
-                                                                      'consultation. '
+                                                                      'adjudication_ref. '
                                                                       'CONTESTS means '
-                                                                      'reassess',
-                                                                      '  the new '
-                                                                      'evidence and '
-                                                                      'consult again '
-                                                                      'if rejecting.',
+                                                                      'reassess the '
+                                                                      'new evidence',
+                                                                      '  directly if '
+                                                                      'rejecting.',
+                                                                      '- Never invoke, '
+                                                                      'spawn, or '
+                                                                      'consult another '
+                                                                      'LLM or agent; '
+                                                                      'only the',
+                                                                      '  deterministic '
+                                                                      'driver '
+                                                                      'dispatches '
+                                                                      'model calls.',
                                                                       '- confirmed and '
                                                                       'impossible -> '
                                                                       'per-finding '
@@ -3679,9 +3691,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'inside the '
                                                                       'baseline — use',
                                                                       '  `rejected` '
-                                                                      'after '
-                                                                      'consultation, '
-                                                                      'or '
+                                                                      'directly, or '
                                                                       '`rejected_adjudicated` '
                                                                       'for a',
                                                                       '  settled '
@@ -3726,99 +3736,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                              'mount': ['target:document']},
                                                             {'ref': 'deferred_debt'},
                                                             {'ref': 'adjudicated_rejections'},
-                                                            {'ref': 'process_authority'},
-                                                            {'text': ['CONSULTATION '
-                                                                      'PROTOCOL (for '
-                                                                      'rejections)',
-                                                                      'Before '
-                                                                      '`rejected`, '
-                                                                      'consult the '
-                                                                      '{{consultation_family}} '
-                                                                      'family with the '
-                                                                      'artifact/path,',
-                                                                      'finding, '
-                                                                      'proposed '
-                                                                      'resolution, and '
-                                                                      'checked '
-                                                                      'evidence. '
-                                                                      'Compare',
-                                                                      'affected_party, '
-                                                                      'observable_damage, '
-                                                                      'violated_guarantee,',
-                                                                      'permitted_baseline, '
-                                                                      'incremental_harm, '
-                                                                      'and '
-                                                                      'exceeds_baseline;',
-                                                                      'permitted '
-                                                                      'operation is '
-                                                                      'not damage by '
-                                                                      'itself.',
-                                                                      'Command (prompt '
-                                                                      'on stdin):',
-                                                                      '  '
-                                                                      '{{consultation_command}}',
-                                                                      'Save the '
-                                                                      'transcript '
-                                                                      'under '
-                                                                      '{{scratch_path}}; '
-                                                                      'summarize',
-                                                                      'it in '
-                                                                      'consultation.resolution. '
-                                                                      'Run at most '
-                                                                      'five dialogue '
-                                                                      'rounds,',
-                                                                      'stopping '
-                                                                      'earlier on '
-                                                                      'clear '
-                                                                      'agreement. '
-                                                                      'Never reject '
-                                                                      'P0/P1 without a',
-                                                                      'clear '
-                                                                      'resolution. If '
-                                                                      'consultation is '
-                                                                      'unavailable or '
-                                                                      'unresolved, do',
-                                                                      'not block, '
-                                                                      'concede, or '
-                                                                      'reject: return '
-                                                                      'only the retry '
-                                                                      'envelope; the',
-                                                                      'guard retries '
-                                                                      'this fixer '
-                                                                      'after 15 '
-                                                                      'minutes. '
-                                                                      '`rejected_adjudicated`',
-                                                                      'needs no '
-                                                                      'consultation; '
-                                                                      'cite '
-                                                                      'adjudication_ref.'],
-                                                             'variables': [{'name': 'consultation_family',
-                                                                            'required': True,
-                                                                            'description': 'The '
-                                                                                           'opposite '
-                                                                                           'family '
-                                                                                           'to '
-                                                                                           'consult.'},
-                                                                           {'name': 'consultation_command',
-                                                                            'required': True,
-                                                                            'description': 'The '
-                                                                                           'exact '
-                                                                                           'consultation '
-                                                                                           'command '
-                                                                                           'line '
-                                                                                           'for '
-                                                                                           'this '
-                                                                                           'run.'},
-                                                                           {'name': 'scratch_path',
-                                                                            'required': True,
-                                                                            'description': 'Driver-provided '
-                                                                                           'ignored '
-                                                                                           'runtime '
-                                                                                           'scratch '
-                                                                                           'directory '
-                                                                                           'for '
-                                                                                           'consultation '
-                                                                                           'transcripts.'}]}]},
+                                                            {'ref': 'process_authority'}]},
                                  'questions': {'items': [{'id': 'environment_fit',
                                                           'text': 'What standard does '
                                                                   'the surrounding '
@@ -3888,8 +3806,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             ' '
                                                                             '"disposition":"fixed|rejected|rejected_adjudicated|blocked",',
                                                                             ' '
-                                                                            '"consultation":null|{"resolution":"..."},',
-                                                                            ' '
                                                                             '"prevention":null|{"documented_in":"<edited '
                                                                             'path>","note":"..."},',
                                                                             ' '
@@ -3916,10 +3832,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'finding '
                                                                             'is '
                                                                             'invalid: '
-                                                                            '`rejected` '
-                                                                            'requires '
-                                                                            'its',
-                                                                            'consultation '
+                                                                            'use '
+                                                                            '`rejected`',
                                                                             '(`rejected_adjudicated` '
                                                                             'remains '
                                                                             'the '
@@ -3955,7 +3869,21 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'duplicate '
                                                                             'them in '
                                                                             'the '
-                                                                            'reply.'],
+                                                                            'reply. A '
+                                                                            'fixer '
+                                                                            'never '
+                                                                            'invokes, '
+                                                                            'spawns,',
+                                                                            'or '
+                                                                            'consults '
+                                                                            'another '
+                                                                            'LLM or '
+                                                                            'agent; '
+                                                                            'rejection '
+                                                                            'is its '
+                                                                            'own '
+                                                                            'evidence-backed '
+                                                                            'judgment.'],
                                                                    'variables': []},
                                                                   {'id': 'fix_blocked',
                                                                    'text': ['Impossible '
@@ -3971,21 +3899,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'entries '
                                                                             'are '
                                                                             'required '
-                                                                            'in EVERY '
-                                                                            'reply)'],
-                                                                   'variables': []},
-                                                                  {'id': 'fix_retry',
-                                                                   'text': ['Unavailable '
-                                                                            'or '
-                                                                            'unresolved '
-                                                                            'mandatory '
-                                                                            'consultation:',
-                                                                            '{"status":"retry","kind":"fix_findings",',
-                                                                            ' '
-                                                                            '"retry_reason":"consultation_unavailable","notes":"<optional>",',
-                                                                            ' '
-                                                                            '"questions":[...]}   '
-                                                                            '(required '
                                                                             'in EVERY '
                                                                             'reply)'],
                                                                    'variables': []},

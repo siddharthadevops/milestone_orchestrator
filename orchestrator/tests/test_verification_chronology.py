@@ -727,12 +727,6 @@ class TestVerificationChronology(DriverTestCase):
                             "rejected",
                             summary=queued["summary"],
                             severity="P1",
-                            consultation={
-                                "resolution": (
-                                    "The reported diagnosis does not require "
-                                    "a repository edit."
-                                ),
-                            },
                         )],
                         questions=_questions(contracts.KIND_FIX_FINDINGS),
                     ),

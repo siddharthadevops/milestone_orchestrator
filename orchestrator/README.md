@@ -3,10 +3,10 @@
 A deterministic driver for the canon delivery flow. The control loop that
 used to be an LLM following prose rules — sequencing phases, launching
 reviews, keeping bookkeeping consistent — is now hardcoded, tested Python.
-LLM CLI workers keep all content judgment: they draft, review, fix, and run
-opposite-family consultations themselves; the driver only decides *which*
-call is legal next, records immutable history, and enforces gates
-mechanically.
+LLM CLI workers keep all content judgment: they draft, review, fix, and rate
+findings when dispatched. Workers never launch other LLMs; the driver alone
+decides *which* model call is legal next, records immutable history, and
+enforces gates mechanically.
 
 Motivation, from the field: mid-2026 milestone logs showed repeated gate
 failures caused purely by orchestrator bookkeeping drift (stale work-log rows,
@@ -22,7 +22,8 @@ those rules is enforced here structurally.
 | Family order; changed candidate bytes restart review at the first family | review-cycle freshness is reset whenever an accepted fix changes the candidate |
 | Seal is a deterministic result, not another review | every family must be clean or debt-clean on the same current bytes; scheduled verification must also pass when due |
 | Whoever detects never fixes: ALL reviews are report-only | `contracts.REPORT_KINDS` forbid dispositions and file changes; the report-only contract is carried by prompt and envelope, not re-verified by snapshot (see Review/fix separation) |
-| A rejected finding requires an opposite-family consultation | `contracts.validate_fix_finding()` (P0-P3; therefore also P0/P1) |
+| A rejected finding requires a concrete fixer validity account, never another LLM call | `contracts.validate_fix_finding()` plus the routed fixer prompt |
+| Eligible delta-review findings receive the same driver-owned classification as full-review findings | `_partition_defer_candidates()` partitions debt from fixer work before either review kind queues findings |
 | Settled findings stay settled | milestone-global adjudication registry injected into every prompt; `contests` and `rejected_adjudicated` references validated against it; misreadable-target rejections carry a `prevention` edit |
 | The fixer triages exactly what was queued | `contracts.validate_fix_coverage()` (same ids, nothing invented) |
 | Round/verification-fix caps | driver executors fail the run with the explanation in the event log |
@@ -473,8 +474,8 @@ kind so a dirty-delta re-queue cannot disable it. Verification and gap-repair
 episodes keep their real delta reviews. The threshold is configurable with
 `delta_full_review_after_fixes` (zero disables it).
 
-Per-act family policy (config "acts"): fixer and consultation are a fixed
-family name, "self", or "opposite" (relative to the act's origin). The
+Per-act family policy (config "acts"): fixer is a fixed family name, "self",
+or "opposite" (relative to the act's origin). The
 `skeletoner` act drives all skeleton content work — its draft, re-drafts, and
 fixes — with one operator-chosen model (default claude-fable-5/max); only
 skeleton reviews stay on the review families. Delta review has no independent
@@ -490,17 +491,18 @@ touched. Set the window to zero to disable it.
 
 ### Adjudicated rejections (no infinite finding loops)
 
-A fixer rejection requires the opposite-family consultation, and when the
-target was correct-but-misreadable, a `prevention` edit documented in the
-target itself. Every rejection lands in the milestone-global registry
+A fixer rejects directly from its concrete validity account; it never invokes
+another model. When the target was correct-but-misreadable, a `prevention`
+edit documents the decision in the target itself. Every rejection lands in
+the milestone-global registry
 (derived from the append-only rounds; ids like `skeleton-claude-r1/F1`)
 and is injected into EVERY subsequent review and fix prompt. Re-raising a
 settled finding requires `contests` with the registry id and genuinely new
 evidence — both validated structurally (unknown ids fail the run). A
 duplicate without new evidence dies by pointer: `rejected_adjudicated`
-citing the registry entry, zero new consultations. A contested finding is
+citing the registry entry. A contested finding is
 never killable by pointer — the contest re-opened that adjudication, so the
-fixer must fix or reject it with a fresh consultation (enforced
+fixer must fix or reject it directly from current evidence (enforced
 structurally). When the fixer CONCEDES a contested finding (`fixed`), the
 contested adjudication is overturned: it leaves the registry, no longer
 satisfies `adjudication_ref`, and the finding may be re-raised freely. The
@@ -607,9 +609,6 @@ Tiers:
   no concurrency mode.
 - The pre-relaunch self-review disappears as a bookkeeping device: every
   round already is a fresh stateless agent, and bookkeeping is code now.
-- Consultation transcripts are saved by workers under
-  `.orchestrator/scratch/` on the honor system; only the JSON resolution is
-  recorded structurally.
 - Gate commits, the amend discipline, and delta reviews require `git.enabled`
   (off by default for pure-state CLI runs; the demo config and service-panel
   launches enable it); pushing is not automated — the operator pushes.
