@@ -129,12 +129,8 @@ PreparedJudgmentCall = collections.namedtuple(
 PreparedJudgmentCall.__new__.__defaults__ = (None,)
 
 
-def _current_amendments(amendments, operator_complete):
+def _current_amendments(amendments):
     """Render one unconditional, replacing mutable-authority block."""
-    if operator_complete is not True:
-        raise prompt_router.PromptRouterError(
-            "current mutable operator amendments are unavailable"
-        )
     if not isinstance(amendments, (list, tuple)):
         raise prompt_router.PromptRouterError(
             "current amendments must be a sequence"
@@ -213,7 +209,6 @@ def prepare(
     material,
     values,
     amendments,
-    operator_complete,
     prompt_set="default",
     project_context=None,
     workspace=None,
@@ -336,9 +331,7 @@ def prepare(
             sort_keys=True,
             indent=2,
         )
-    amendments_block = _current_amendments(
-        amendments, operator_complete
-    )
+    amendments_block = _current_amendments(amendments)
     charge_values["operator_amendments"] = amendments_block
     if frozen_suite_commands is not None:
         charge_values["verification_commands"] = json.dumps(

@@ -26,7 +26,7 @@ from unittest import mock
 
 from orchestrator import access
 from orchestrator import driver as drv
-from orchestrator import kvstore, projects, registry, runners, service, workareas
+from orchestrator import kvstore, ledgers, projects, registry, runners, service, workareas
 from orchestrator import state as st
 from orchestrator.tests.test_driver_mock import ok, step, write_file
 
@@ -72,17 +72,39 @@ def draft_step():
     """One scripted skeleton draft: the MockRunner step that proves a
     bound run is drivable and moves the summary for change-driven
     projection tests."""
+    response = ok(
+        "draft_skeleton",
+        artifact="pending",
+    )
+
+    def write_skeleton(workspace):
+        document = st.load(_ws_state(workspace))
+        artifact = ledgers.skeleton_path(document)
+        response["artifact"] = artifact
+        plan = {
+            "slices": [{
+                "id": 1,
+                "title": "One",
+                "intent": "Exercise the bound service run.",
+                "producer_task_executor": {
+                    "draft_slice_note": "agent_call",
+                    "implement": "agent_call",
+                },
+            }],
+        }
+        write_file(
+            artifact,
+            "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+            % json.dumps(plan),
+        )(workspace)
+
     return step(
         "draft_skeleton",
-        ok(
-            "draft_skeleton",
-            artifact="docs/skeleton.md",
-            slices=[{"id": 1, "title": "One"}],
-        ),
+        response,
         # The service config inherits the skeletoner default (claude), so a
         # real bound run drafts the skeleton with claude.
         family="claude",
-        side_effect=write_file("docs/skeleton.md", "# Skeleton\n"),
+        side_effect=write_skeleton,
     )
 
 
@@ -1489,7 +1511,9 @@ class TestLaunchBinding(ProjectsServiceTestCase):
         self.drive(self.primary)
         state = st.load(_ws_state(self.primary))
         self.assertIsNone(state["failure"])
-        self.assertEqual(state["units"][0]["artifact"], "docs/skeleton.md")
+        self.assertEqual(
+            state["units"][0]["artifact"], ledgers.skeleton_path(state)
+        )
 
     def test_relaunch_after_purge_is_version_silent_across_restart(self):
         status, body = self.launch()
@@ -2204,7 +2228,7 @@ class TestStatusHandlesAndInertness(ProjectsServiceTestCase):
         self.assertEqual(rec["retained_states"], [])
         self.expect(200, "DELETE", self.project_path("unrelated"))
 
-    def test_attached_unreadable_state_keeps_unproven_claim(self):
+    def test_attach_refuses_unreadable_state_without_registering_it(self):
         self.create_project("unrelated")
         ws = self.repo("attached-corrupt-forget")
         state_path = drv.default_state_path(ws)
@@ -2216,14 +2240,8 @@ class TestStatusHandlesAndInertness(ProjectsServiceTestCase):
             "POST", "/api/runs",
             {"workspace": ws, "attach": True, "autostart": False},
         )
-        self.assertEqual(status, 201, body)
-        self.expect(200, "DELETE", "/api/runs/%s" % body["run"]["id"])
-        rec = registry.load_projects_record(self.home)
-        self.assertEqual(rec["retained_states"], [state_path])
-        self.refused(409, "project_in_use", "DELETE",
-                     self.project_path("unrelated"))
-
-        os.unlink(state_path)
+        self.assertEqual(status, 400, body)
+        self.assertEqual(self.expect(200, "GET", "/api/runs")["runs"], [])
         self.expect(200, "DELETE", self.project_path("unrelated"))
 
 
@@ -2373,22 +2391,18 @@ class TestGuardedDelete(ProjectsServiceTestCase):
         self.expect(200, "DELETE", "/api/runs/%s?purge=1" % run_id)
         self.expect(200, "DELETE", self.project_path("other"))
 
-    def test_attached_unreadable_registered_state_blocks(self):
-        # An attach of an already-unreadable state carries no proof either
-        # way, so the guard stays fail-closed while the run is registered.
-        ws = self.repo("guard-attached-corrupt")
+    def test_attach_refuses_incompatible_state_without_registering_it(self):
+        ws = self.repo("guard-attached-incompatible")
         state_path = drv.default_state_path(ws)
         os.makedirs(os.path.dirname(state_path))
         with open(state_path, "w", encoding="utf-8") as fh:
-            fh.write("{ not json")
+            json.dump({"schema_version": st.SCHEMA_VERSION - 1}, fh)
         status, body = self.request_json(
             "POST", "/api/runs",
             {"workspace": ws, "attach": True, "autostart": False},
         )
-        self.assertEqual(status, 201, body)
-        run_id = body["run"]["id"]
-        self.refused(409, "project_in_use", "DELETE", self.project_path())
-        self.expect(200, "DELETE", "/api/runs/%s?purge=1" % run_id)
+        self.assertEqual(status, 400, body)
+        self.assertEqual(self.expect(200, "GET", "/api/runs")["runs"], [])
         self.expect(200, "DELETE", self.project_path())
 
     def test_forgotten_bound_state_blocks_until_purged(self):

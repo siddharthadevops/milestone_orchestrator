@@ -184,7 +184,6 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             ),
             "values": values_for(self.temp.name, job),
             "amendments": [],
-            "operator_complete": True,
         }
         if job.startswith("fix_findings"):
             options["queued_findings"] = list(queued or ())
@@ -324,7 +323,7 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             self.temp.name, "delta_review@slice_impl"
         )
         expected_values["operator_amendments"] = (
-            judgment_calls._current_amendments([], True)
+            judgment_calls._current_amendments([])
         )
         self.assertEqual(
             prepared.prompt,
@@ -358,9 +357,7 @@ class JudgmentCallPreparationTest(unittest.TestCase):
         )
         expected_values = dict(values)
         expected_values.update({
-            "operator_amendments": judgment_calls._current_amendments(
-                [], True
-            ),
+            "operator_amendments": judgment_calls._current_amendments([]),
             "queued_findings": json.dumps(
                 queued, ensure_ascii=False, sort_keys=True, indent=2
             ),
@@ -389,7 +386,6 @@ class JudgmentCallPreparationTest(unittest.TestCase):
                 material="code",
                 values=values,
                 amendments=[],
-                operator_complete=True,
                 queued_findings=[],
             )
 
@@ -628,17 +624,12 @@ class JudgmentCallPreparationTest(unittest.TestCase):
         )
         expected_values = dict(values)
         expected_values["operator_amendments"] = (
-            judgment_calls._current_amendments(amendments, True)
+            judgment_calls._current_amendments(amendments)
         )
         self.assertEqual(
             current.prompt,
             prompt_router.render(current.bound.prompt, expected_values),
         )
-
-        with self.assertRaises(ValueError):
-            self.prepare(
-                "review_round@skeleton", operator_complete=False
-            )
 
     def test_dynamic_scope_correction_and_fixer_recovery_are_routed_values(self):
         scope = {
@@ -671,9 +662,7 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             "implementation_scope": prompts._implementation_scope_block(
                 scope
             ).rstrip("\n"),
-            "operator_amendments": judgment_calls._current_amendments(
-                [], True
-            ),
+            "operator_amendments": judgment_calls._current_amendments([]),
             "queued_findings": "[]",
             "contract_correction": (
                 "reply.findings must cover the queued ids"
@@ -842,9 +831,7 @@ class JudgmentCallPreparationTest(unittest.TestCase):
         )
         expected_values = dict(values)
         expected_values.update({
-            "operator_amendments": judgment_calls._current_amendments(
-                [], True
-            ),
+            "operator_amendments": judgment_calls._current_amendments([]),
             "ecosystem_map": prompts.project_context_body(authority),
         })
         self.assertEqual(
@@ -1048,7 +1035,6 @@ class JudgmentCallPreparationTest(unittest.TestCase):
                     self.temp.name, "fix_findings@skeleton"
                 ),
                 amendments=[],
-                operator_complete=True,
             )
 
 
@@ -1277,34 +1263,8 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
         self.subject._save()
         return unit
 
-    def test_pre_activation_run_without_mutable_authority_still_dispatches(self):
+    def test_run_without_mutable_authority_fails_before_dispatch(self):
         os.unlink(self.subject._amendments_path())
-        self.subject.runner = runners.MockRunner([{
-            "expect_kind": "review_round",
-            "response": {
-                "status": "ok", "kind": "review_round", "findings": [],
-                "questions": self.questions(),
-            },
-        }])
-        unit = state.current_unit(self.subject.state)
-
-        output, _result, _raw = self.subject._call(
-            "codex", "legacy", "review_round", "legacy-compatible-review",
-            prepare_call=self.subject._judgment_prepare_call(
-                unit, "review_round", "legacy-compatible-review"
-            ),
-            episode_unit=unit,
-        )
-
-        self.assertEqual(output["findings"], [])
-        self.assertEqual(len(self.subject.runner.calls), 1)
-        self.assertIsNone(self.subject.state.get("failure"))
-
-    def test_activated_run_without_mutable_authority_fails_before_dispatch(self):
-        os.unlink(self.subject._amendments_path())
-        self.subject.state["schema_version"] = (
-            state.PROMPT_ROUTER_ACTIVATION_SCHEMA_VERSION
-        )
         self.subject.runner = runners.MockRunner([])
         unit = state.current_unit(self.subject.state)
 
@@ -1402,124 +1362,6 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
         self.assertFalse(
             os.path.exists(os.path.join(self.workspace, "discarded.txt"))
         )
-
-    def test_fixer_restoration_prevents_need_rethink_handoff(self):
-        skeleton_unit = state.current_unit(self.subject.state)
-        skeleton_unit["status"] = state.U_SEALED
-        skeleton_unit["gate_commit"] = self.subject.state["milestone"][
-            canonical_plan.ANCHOR_KEY
-        ]["revision"]
-        slice_path = "implementation/slices/slice-01.md"
-        full_slice_path = os.path.join(self.workspace, slice_path)
-        os.makedirs(os.path.dirname(full_slice_path), exist_ok=True)
-        with open(full_slice_path, "w", encoding="utf-8") as handle:
-            handle.write("# Slice 01\n")
-        subprocess.run(
-            ["git", "add", slice_path], cwd=self.workspace, check=True
-        )
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "slice note"],
-            cwd=self.workspace,
-            check=True,
-        )
-        unit = state.ensure_next_unit(self.subject.state)
-        unit["artifact"] = slice_path
-        unit["status"] = state.U_FIXING
-        finding = {
-            "id": "F1",
-            "severity": "P2",
-            "summary": "The implementation contradicts its design.",
-            "validity": {
-                "permitted_baseline": "The implementation follows its design.",
-                "actual_outcome": "The implementation contradicts its design.",
-                "incremental_harm": "The contradiction blocks a valid fix.",
-                "exceeds_baseline": True,
-            },
-            "plain": "The implementation cannot satisfy the current design.",
-            "example": "The required outputs conflict.",
-            "contests": None,
-        }
-        unit["fix_queue"] = [copy.deepcopy(finding)]
-        unit["fix_source"] = {
-            "type": "round",
-            "family": "codex",
-            "return_to": state.U_ROUNDS,
-        }
-        self.subject._save()
-
-        def tamper_with_sealed_skeleton(workspace):
-            path = os.path.join(workspace, self.skeleton)
-            with open(path, encoding="utf-8") as handle:
-                document = handle.read()
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(document.replace("# Skeleton", "# Tampered", 1))
-
-        self.subject.runner = runners.MockRunner([{
-            "expect_kind": "fix_findings",
-            "side_effect": tamper_with_sealed_skeleton,
-            "response": {
-                "status": "need_rethink",
-                "kind": "fix_findings",
-                "finding": copy.deepcopy(finding),
-                "target_path": slice_path,
-                "questions": self.questions(),
-            },
-        }])
-
-        with mock.patch.object(self.subject, "_start_rethink") as start_rethink:
-            with self.assertRaises(driver.StopStep):
-                self.subject._do_fix()
-
-        start_rethink.assert_not_called()
-        self.assertEqual(
-            self.subject.state["failure"]["type"], "worker_blocked"
-        )
-        restored = [
-            event for event in self.subject.state["events"]
-            if event["type"] == "sealed_artifact_restored"
-        ]
-        self.assertEqual([event["artifact"] for event in restored], [self.skeleton])
-
-    def test_suite_repair_keeps_its_delegated_empty_findings_contract(self):
-        unit = state.current_unit(self.subject.state)
-        unit["status"] = state.U_FIXING
-        unit["fix_queue"] = [{
-            "id": "V1",
-            "severity": "P1",
-            "summary": "The configured full suite is not green.",
-            "validity": {},
-            "contests": None,
-        }]
-        unit["fix_source"] = {
-            "type": "verification",
-            "family": "codex",
-            "source_round_id": "skeleton-verify-pre_seal-1",
-            "return_to": state.U_PRE_REVIEW_VERIFY,
-        }
-        self.subject.config["verification"] = ["true"]
-        self.subject.runner = runners.MockRunner([{
-            "expect_kind": "fix_findings",
-            "response": {
-                "status": "ok",
-                "kind": "fix_findings",
-                "findings": [],
-                "files_changed": [],
-                "tests_modified": False,
-                "tests_changed": [],
-            },
-        }])
-
-        with mock.patch.object(
-            judgment_calls,
-            "prepare",
-            side_effect=AssertionError("suite repair entered routed triage"),
-        ):
-            note = self.subject._do_fix()
-
-        self.assertIn("full suite green", note)
-        self.assertEqual(len(self.subject.runner.calls), 1)
-        self.assertEqual(unit["fix_queue"], [])
-        self.assertIsNone(unit["fix_source"])
 
     def test_fixer_commit_survives_and_is_reviewed_from_pre_fix_revision(self):
         unit = state.current_unit(self.subject.state)

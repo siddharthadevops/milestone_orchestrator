@@ -41,11 +41,7 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX keeps existing fallback
     fcntl = None
 
-SCHEMA_VERSION = 2
-# Slice 14 activates the canonical prompt runtime by assigning this version to
-# SCHEMA_VERSION.  Until then schema-2 runs retain their pre-activation
-# compatibility posture.
-PROMPT_ROUTER_ACTIVATION_SCHEMA_VERSION = 3
+SCHEMA_VERSION = 3
 
 # Unit kinds
 UNIT_SKELETON = "skeleton"
@@ -172,10 +168,6 @@ def new_state(goal, workspace, config, name=None, slug=None, project=None,
             _new_unit(UNIT_SKELETON, None),
         ],
         "events": [],
-        # The repo's official full-suite command, discovered by an implement
-        # worker (its contract's suite_command field). Scheduled checkpoints
-        # use it when config verification is not explicitly set.
-        "suite_command": None,
         "failure": None,
         "config": config,
     }
@@ -248,6 +240,14 @@ def load(path):
         raise RuntimeError(
             "state schema_version %r != %d" % (state.get("schema_version"), SCHEMA_VERSION)
         )
+    try:
+        prompt_set = prompt_sets.validate_name(state[PROMPT_SET_KEY])
+    except (KeyError, prompt_sets.PromptSetError) as exc:
+        raise RuntimeError(
+            "state prompt_set is missing or invalid"
+        ) from exc
+    if prompt_set != state[PROMPT_SET_KEY]:
+        raise RuntimeError("state prompt_set is missing or invalid")
     return state
 
 
@@ -853,34 +853,6 @@ def transition_unit(state, unit, new_status, reason=None):
         to_status=new_status,
         reason=reason,
     )
-
-
-def set_discovered_suite(state, command, replace=False):
-    """Record the official suite command discovered for this run.
-
-    The first implementer arms the zero-config gate.  A later implementer
-    reporting a different command cannot silently replace an already proven
-    gate; the discrepancy is recorded and needs an explicit fixer correction.
-    ``replace`` is that correction lane.  Explicit config verification still
-    wins at gate time.
-    """
-    command = str(command or "").strip()
-    if not command or state.get("suite_command") == command:
-        return False
-    previous = state.get("suite_command")
-    if previous and not replace:
-        append_event(
-            state,
-            "suite_discovery_ignored",
-            command=command,
-            established=previous,
-        )
-        return False
-    state["suite_command"] = command
-    append_event(
-        state, "suite_discovered", command=command, previous=previous
-    )
-    return True
 
 
 def record_draft(state, unit, kind, result, raw_path=None, family=None,
@@ -1838,8 +1810,6 @@ def requeue_implementation_after_reconciliation(
         "design_correction_attempted",
         "baseline_verification",
         "baseline_unstable_runs",
-        "suite_verification_pending",
-        "suite_armed_by_fix",
         "skip_next_verify",
         "phantom_retried",
         "deferred_fix_episode",
@@ -2249,14 +2219,9 @@ def _work_durations(state):
                 totals[key] += _completed_duration(event.get("duration_s"))
             continue
         if etype == "verification":
-            # A fixer-certified event describes the suite work already
-            # counted in that fix round; reused events execute no new work.
-            if not event.get("fixer_certified") and not event.get("reused"):
-                key = event.get("unit")
-                if key in totals:
-                    totals[key] += _completed_duration(
-                        event.get("duration_s")
-                    )
+            key = event.get("unit")
+            if key in totals:
+                totals[key] += _completed_duration(event.get("duration_s"))
             continue
         if etype != "worker_malformed":
             continue
@@ -2617,8 +2582,6 @@ _BRAINSTORMING_OUTCOMES = {
     "brainstorming_failure_routed": "failed",
     "brainstorming_operational_detached": "detached",
     "brainstorming_missing_detached": "detached",
-    "guarantee_calibration_completed": "continued",
-    "guarantee_calibration_failed": "failed",
 }
 
 
@@ -2768,9 +2731,7 @@ def summary(state, acts_overlay=None, current_review_model=None):
                     "cadence": e.get("cadence"),
                     "ok": e.get("ok"),
                     "stable": e.get("stable"),
-                    "reused": bool(e.get("reused")),
                     "vacuous": bool(e.get("vacuous")),
-                    "fixer_certified": bool(e.get("fixer_certified")),
                     "duration_s": e.get("duration_s"),
                 }
             )
@@ -3037,20 +2998,13 @@ def summary(state, acts_overlay=None, current_review_model=None):
     total_cost = unassigned_cost
     for unit_cost in cost_by_unit.values():
         total_cost = _add_cost(total_cost, unit_cost)
-    # Producer defaults are a read-time compatibility rule.  Keep old and
-    # partial durable plans byte-stable while every current projection exposes
-    # the complete pair.
     effective_slices = tasks.effective_slice_plan(
         state["milestone"]["slices"]
     )
     out = {
         "goal": state["goal"],
         "workspace": state["workspace"],
-        PROMPT_SET_KEY: (
-            state[PROMPT_SET_KEY]
-            if PROMPT_SET_KEY in state
-            else prompt_sets.DEFAULT_SET_NAME
-        ),
+        PROMPT_SET_KEY: state[PROMPT_SET_KEY],
         "milestone_status": state["milestone"]["status"],
         "slices": effective_slices,
         "current_unit": unit_key(unit) if unit else None,
@@ -3065,7 +3019,6 @@ def summary(state, acts_overlay=None, current_review_model=None):
         ),
         "current_family": current_fam,
         "current_model": current_model,
-        "suite_command": state.get("suite_command"),
         "name": state.get("name"),
         "docs_dir": state.get("docs_dir") or "docs",
         "created_epoch": _epoch(state.get("created_at")),

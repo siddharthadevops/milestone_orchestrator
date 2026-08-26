@@ -38,6 +38,7 @@ from orchestrator import tasks
 
 from orchestrator.tests.test_driver_mock import (
     DriverTestCase,
+    append_file,
     finding,
     fix_ok,
     init_state,
@@ -63,6 +64,31 @@ CONSULT = ("claude", "claude-opus-5", "xhigh")
 # The two `review` seats the converted `default` assigns, in index order.
 REVIEW_1 = ("codex", "gpt-5.6-sol", "xhigh")
 REVIEW_2 = ("claude", "claude-opus-5", "xhigh")
+
+SLICE_PLAN = {
+    "slices": [{
+        "id": 1,
+        "title": "One",
+        "intent": "Exercise the staffing cutover.",
+        "producer_task_executor": {
+            "draft_slice_note": "agent_call",
+            "implement": "agent_call",
+        },
+    }],
+}
+
+
+def routed_skeleton_step(family):
+    return step(
+        "draft_skeleton",
+        ok("draft_skeleton", artifact="docs/skeleton.md"),
+        family=family,
+        side_effect=write_file(
+            "docs/skeleton.md",
+            "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+            % json.dumps(SLICE_PLAN),
+        ),
+    )
 
 
 def read_bytes(path):
@@ -262,11 +288,7 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
     def test_every_driver_call_asks_the_router(self):
         path = self.run_state("ws-requests")
         script = [
-            step("draft_skeleton",
-                 ok("draft_skeleton", artifact="docs/skeleton.md",
-                    slices=[{"id": 1, "title": "One"}]),
-                 family=PLAN[0],
-                 side_effect=write_file("docs/skeleton.md", "# Skeleton\n")),
+            routed_skeleton_step(PLAN[0]),
             step("review_round",
                  report("review_round", [finding("F1", "no non-goals")]),
                  family="codex"),
@@ -275,8 +297,9 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
                  fix_ok([triaged("F1", "fixed", "no non-goals")],
                         files_changed=["docs/skeleton.md"]),
                  family=PLAN[0],
-                 side_effect=write_file("docs/skeleton.md",
-                                        "# Skeleton\n\n## Non-goals\n")),
+                 side_effect=append_file(
+                     "docs/skeleton.md", "\n## Non-goals\n"
+                 )),
             # The delta resolves the lowest-index `review` seat whose family
             # is the fixer's; the skeleton's fixer is the `plan` seat, whose
             # family the `default` document seats at review index 2.
@@ -587,74 +610,6 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         self.assertIsNone(st.load(path)["failure"])
         self.assertEqual(subject.runner.calls, [])
 
-    def test_a_resumed_fixer_asks_only_for_the_seat_it_runs_on(self):
-        """The same rule on the fix path: an ADMITTED fixer reuses its
-        frozen prompt, so it builds no consultation text and asks the
-        router for `fix` alone.
-
-        `consult` is resolved only to NAME the consulted family in a fix
-        prompt this branch never builds; the command line the frozen
-        prompt already carries resolves that seat when the fixer runs it.
-        So a `consult` role this machine cannot split stops a resumed
-        fixer no more than an unsatisfiable `classify` stops a failure the
-        classifier never sees.
-        """
-        path = self.run_state(
-            "ws-resumed-fixer", families_order=["codex"], fix_family="codex",
-        )
-        state = st.load(path)
-        state["milestone"]["slices"] = [{"id": 1, "title": "impl"}]
-        state["units"][0].update(
-            {"status": st.U_SEALED, "artifact": "docs/skeleton.md"}
-        )
-        note = st.ensure_next_unit(state)
-        note.update({"status": st.U_SEALED, "artifact": "docs/note.md"})
-        unit = st.ensure_next_unit(state)
-        unit["status"] = st.U_FIXING
-        unit["fix_queue"] = [finding("F1", "repair it", severity="P1")]
-        unit["fix_source"] = {
-            "type": "round", "origin_type": "round", "family": "codex",
-            "source_round_id": "slice_impl-01-codex-r1",
-            "return_to": st.U_ROUNDS,
-        }
-        st.save(path, state)
-        subject = self.driver_for(path)
-        subject._admit_worker_task(
-            st.current_unit(subject.state),
-            contracts.KIND_FIX_FINDINGS,
-            "frozen admitted prompt",
-            "codex",
-        )
-
-        # A `consult` role the one available family cannot split. The fix
-        # seat itself resolves; only the unused seat is unsatisfiable.
-        document = stf.default_document_seed()
-        document["name"] = "split-consult"
-        document["roles"]["consult"] = {"distinct_families": True}
-        document["assignment"]["consult"] = {"1": 1, "2": 2}
-        stf.save(self.home, document)
-        stf.edit_session(
-            self.home, self.session_of(path), {"document": "split-consult"})
-
-        resumed = self.driver_for(path)
-        dispatched = []
-
-        def reached(_family, prompt, *_args, **_kwargs):
-            dispatched.append(prompt)
-            raise RuntimeError("dispatch reached")
-
-        requests, patched = self.captured()
-        with (
-            patched,
-            mock.patch.object(resumed, "_call", side_effect=reached),
-            self.assertRaisesRegex(RuntimeError, "dispatch reached"),
-        ):
-            resumed._do_fix()
-
-        self.assertEqual([request["role"] for request in requests], ["fix"])
-        self.assertTrue(dispatched[0].startswith("frozen admitted prompt"))
-        self.assertIsNone(st.load(path)["failure"])
-
     def test_a_stuck_fixer_counts_its_round(self):
         """`fix` is the one driver role whose round is not always 1."""
         path = self.run_state("ws-fix-round")
@@ -843,13 +798,7 @@ class ReviewCycleTestCase(StaffingCutoverTestCase):
     THREE = ("codex", "claude", "gemini")
 
     def draft(self, family="codex"):
-        return step(
-            "draft_skeleton",
-            ok("draft_skeleton", artifact="docs/skeleton.md",
-               slices=[{"id": 1, "title": "One"}]),
-            family=family,
-            side_effect=write_file("docs/skeleton.md", "# Skeleton\n"),
-        )
+        return routed_skeleton_step(family)
 
     def clean_rounds(self, families):
         return [
@@ -1307,8 +1256,9 @@ class ReviewCycleFollowsTheSeats(ReviewCycleTestCase):
                  fix_ok([triaged("F1", "fixed", "no non-goals")],
                         files_changed=["docs/skeleton.md"]),
                  family="codex",
-                 side_effect=write_file("docs/skeleton.md",
-                                        "# Skeleton\n\n## Non-goals\n")),
+                 side_effect=append_file(
+                     "docs/skeleton.md", "\n## Non-goals\n"
+                 )),
             step("delta_review", report("delta_review"), family="codex"),
         ] + self.clean_rounds(self.THREE))
         self.step_until(subject, self.sealed, max_steps=60)
@@ -1804,8 +1754,9 @@ class DeltaReviewChoosesAReviewSeat(ReviewCycleTestCase):
                  fix_ok([triaged("F1", "fixed", "no non-goals")],
                         files_changed=["docs/skeleton.md"]),
                  family=plan_family,
-                 side_effect=write_file("docs/skeleton.md",
-                                        "# Skeleton\n\n## Non-goals\n")),
+                 side_effect=append_file(
+                     "docs/skeleton.md", "\n## Non-goals\n"
+                 )),
         ]
 
     def test_delta_review_uses_the_fixers_review_seat(self):
@@ -1899,11 +1850,7 @@ class StoppingConditions(StaffingCutoverTestCase):
             commands={"codex": ["fake-codex"]},
         )
         subject = self.driver_for(path, [
-            step("draft_skeleton",
-                 ok("draft_skeleton", artifact="docs/skeleton.md",
-                    slices=[{"id": 1, "title": "One"}]),
-                 family="codex",
-                 side_effect=write_file("docs/skeleton.md", "# Skeleton\n")),
+            routed_skeleton_step("codex"),
         ])
         self.step_until(
             subject,
@@ -1926,11 +1873,7 @@ class StoppingConditions(StaffingCutoverTestCase):
             families=("codex",), name="ws-split-one-seat",
         )
         subject = self.driver_for(path, [
-            step("draft_skeleton",
-                 ok("draft_skeleton", artifact="docs/skeleton.md",
-                    slices=[{"id": 1, "title": "One"}]),
-                 family="codex",
-                 side_effect=write_file("docs/skeleton.md", "# Skeleton\n")),
+            routed_skeleton_step("codex"),
             step("review_round", report("review_round"), family="codex"),
         ])
         self.step_until(

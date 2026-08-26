@@ -13,19 +13,21 @@ import unittest
 from unittest import mock
 
 from orchestrator import contracts
+from orchestrator import canonical_plan
 from orchestrator import driver as drv
+from orchestrator import gitops
 from orchestrator import runners
 from orchestrator import state as st
 from orchestrator import task_api
 from orchestrator import tasks
 from orchestrator.tests import test_brainstorming_slice_production as production_cases
 from orchestrator.tests import test_brainstorming_tasks as brainstorming_cases
-from orchestrator.tests import test_producer_selection as producer_cases
 from orchestrator.tests import test_task_activity as activity_cases
 from orchestrator.tests import test_task_api as api_cases
 from orchestrator.tests import test_tasks as task_cases
 from orchestrator.tests import test_worker_tasks as worker_cases
 from orchestrator.tests.test_driver_mock import ok
+from orchestrator.tests.test_driver_mock import git_init_workspace
 
 
 class TaskConformanceTest(unittest.TestCase):
@@ -66,9 +68,11 @@ class TaskConformanceTest(unittest.TestCase):
 
     def _milestone(self, label, slice_plan, task_kind):
         workspace = os.path.join(self.tmp.name, label)
+        os.makedirs(workspace, exist_ok=True)
+        git_init_workspace(workspace)
         config = copy.deepcopy(drv.DEFAULT_CONFIG)
         config.update({
-            "git": {"enabled": False},
+            "git": {"enabled": True},
             "verification": [],
             "guarantee_calibration": {"enabled": False},
             "p3_reclassify_debt": False,
@@ -78,12 +82,27 @@ class TaskConformanceTest(unittest.TestCase):
         path = drv.init_run("Prove old task compatibility.", workspace, config=config)
         docs = os.path.join(workspace, "docs")
         os.makedirs(docs, exist_ok=True)
-        for name in ("skeleton.md", "note.md"):
-            with open(os.path.join(docs, name), "w", encoding="utf-8") as handle:
-                handle.write("# %s\n" % name)
+        current_slice = copy.deepcopy(slice_plan)
+        current_slice.setdefault("intent", "Exercise the task boundary.")
+        current_slice.setdefault("producer_task_executor", {
+            "draft_slice_note": "agent_call",
+            "implement": "agent_call",
+        })
+        with open(
+            os.path.join(docs, "skeleton.md"), "w", encoding="utf-8"
+        ) as handle:
+            handle.write(
+                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps({"slices": [current_slice]})
+            )
+        with open(
+            os.path.join(docs, "note.md"), "w", encoding="utf-8"
+        ) as handle:
+            handle.write("# Note\n")
+        gitops.ensure_repo(workspace)
 
         state = st.load(path)
-        state["milestone"]["slices"] = [copy.deepcopy(slice_plan)]
+        canonical_plan.establish_current_plan(state, "docs/skeleton.md")
         state["units"][0].update({
             "status": st.U_SEALED,
             "artifact": "docs/skeleton.md",
@@ -96,89 +115,6 @@ class TaskConformanceTest(unittest.TestCase):
         st.save(path, state)
         return path
 
-    def test_old_plan_defaults_to_agent_call_without_migration(self):
-        agent_call = {"task_executor": "agent_call"}
-        brainstorming = {"task_executor": "brainstorming"}
-        cases = (
-            (
-                "absent-map",
-                {"id": 1, "title": "old plan"},
-                contracts.KIND_DRAFT_SLICE_NOTE,
-                ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact="docs/note.md"),
-                {"draft_slice_note": agent_call, "implement": agent_call},
-            ),
-            (
-                "partial-map",
-                {
-                    "id": 1,
-                    "title": "partial plan",
-                    "producer_task_executor": {
-                        "draft_slice_note": {"task_executor": "brainstorming"}
-                    },
-                },
-                contracts.KIND_IMPLEMENT,
-                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
-                {"draft_slice_note": brainstorming, "implement": agent_call},
-            ),
-            (
-                # The shape every run planned before the rename stores.
-                "retired-id",
-                {
-                    "id": 1,
-                    "title": "plan naming the retired executor",
-                    "producer_task_executor": {
-                        "draft_slice_note": {"task_executor": "worker"},
-                        "implement": {"task_executor": "worker"},
-                    },
-                },
-                contracts.KIND_DRAFT_SLICE_NOTE,
-                ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact="docs/note.md"),
-                {"draft_slice_note": agent_call, "implement": agent_call},
-            ),
-        )
-        for label, plan, kind, native, projected in cases:
-            with self.subTest(label=label):
-                path = self._milestone(label, plan, kind)
-                before = json.dumps(
-                    st.load(path)["milestone"]["slices"],
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-                runner = runners.MockRunner([
-                    {"expect_kind": kind, "response": native}
-                ])
-                drv.Driver(path, runner=runner).step()
-                state = st.load(path)
-                record = tasks.task_records(state)[0]
-                unit_kind = (
-                    st.UNIT_SLICE_DOC
-                    if kind == contracts.KIND_DRAFT_SLICE_NOTE
-                    else st.UNIT_SLICE_IMPL
-                )
-                unit = next(item for item in state["units"]
-                            if item["kind"] == unit_kind)
-                after = json.dumps(
-                    state["milestone"]["slices"],
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-
-                self.assertEqual(after, before)
-                self.assertEqual(record["order"]["task_executor"], "agent_call")
-                self.assertEqual(record["order"]["request"]["request"],
-                                 runner.calls[0][2])
-                self.assertEqual(record["result"]["native_result"], native)
-                self.assertEqual(unit["draft"]["task_id"], record["id"])
-                self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
-                summary = st.summary(state)
-                self.assertEqual(
-                    summary["slices"][0]["producer_task_executor"], projected
-                )
-                self.assertEqual(summary["work_duration_s"],
-                                 record["result"]["duration_s"])
-                self.assertTrue(summary["work_token_usage_partial"])
-                self.assertTrue(summary["work_cost_partial"])
-
     def test_mixed_producer_paths_remain_independent_without_spillover(self):
         self._assert_existing_cases(
             (
@@ -190,147 +126,10 @@ class TaskConformanceTest(unittest.TestCase):
                 "test_worker_note_then_target_free_brainstorming_implementation",
             ),
             (
-                producer_cases.ProducerSelectionTest,
-                "test_review_and_fixer_orders_remain_worker_only",
-            ),
-            (
                 activity_cases.TaskActivityProjectionTests,
                 "test_draft_and_implementation_tasks_render_separately",
             ),
         )
-
-    def test_worker_rethink_cardinality_and_abandonment_matrix(self):
-        usage = task_cases.token_usage()
-        persisted_abandonments = {}
-        original_call = runners.MockRunner.call
-        original_save = st.save
-
-        def accounted_call(subject, *args, **kwargs):
-            result = original_call(subject, *args, **kwargs)
-            result.token_usage = copy.deepcopy(usage)
-            result.cost_payloads = [{"total_cost_usd": 0.25}]
-            return result
-
-        def capture_save(state_path, state):
-            original_save(state_path, state)
-            persisted = st.load(state_path)
-            for record in tasks.task_records(persisted):
-                result = record.get("result")
-                native = (result or {}).get("native_result")
-                if (
-                    (result or {}).get("status") == "failure"
-                    and isinstance(native, dict)
-                    and native.get("status") == "need_rethink"
-                    and native.get("kind")
-                    in contracts.RETHINK_CONTINUATION_KINDS
-                ):
-                    persisted_abandonments[(state_path, record["id"])] = (
-                        copy.deepcopy(result)
-                    )
-
-        with mock.patch.object(
-            runners.MockRunner, "call", new=accounted_call
-        ), mock.patch.object(
-            st, "save", new=capture_save
-        ), mock.patch.object(
-            drv.Driver,
-            "_price_call",
-            return_value={"api_usd": 0.25, "real_usd": 0.0},
-        ):
-            self._assert_existing_cases(
-                (
-                    worker_cases.WorkerTaskCutoverTest,
-                    "test_builder_cannot_chain_brainstorming_after_an_agreement",
-                ),
-                (
-                    worker_cases.WorkerTaskCutoverTest,
-                    "test_fixer_cannot_chain_brainstorming_after_an_agreement",
-                ),
-                (
-                    worker_cases.WorkerTaskCutoverTest,
-                    "test_continuable_worker_abandonments_fail_and_"
-                    "reentry_succeeds_new_task",
-                ),
-                (
-                    worker_cases.WorkerTaskCutoverTest,
-                    "test_continuation_abandonment_preserves_origin_rethink_signal",
-                ),
-            )
-
-        signatures = sorted(
-            (
-                round(result["duration_s"], 6),
-                result["token_usage"]["total_tokens"],
-                result["cost"]["api_usd"],
-                result["cost"]["real_usd"],
-                result["token_usage_partial"],
-                result["cost_partial"],
-            )
-            for result in persisted_abandonments.values()
-        )
-        self.assertEqual(
-            signatures,
-            [(0.01, 15, 0.25, 0.0, False, False)] * 5,
-        )
-
-    def test_review_rethink_origin_and_successor_are_distinct(self):
-        original_step = drv.Driver.step
-        resumed_kinds = []
-        resumed_ids = set()
-
-        def resume_before_successor(subject):
-            records = tasks.task_records(subject.state)
-            if (
-                len(records) == 1
-                and records[0]["result"] is not None
-                and records[0]["result"]["status"] == "failure"
-                and records[0]["id"] not in resumed_ids
-                and records[0]["order"]["request"]["context"].get(
-                    "task_kind"
-                ) in contracts.REPORT_KINDS
-                and subject.state.get("failure") is None
-            ):
-                predecessor = copy.deepcopy(records[0])
-                kind = records[0]["order"]["request"]["context"]["task_kind"]
-                st.fail_run(
-                    subject.state,
-                    "transient stop after review help-seeking",
-                    unit=st.current_unit(subject.state),
-                    type_="worker",
-                )
-                st.resume_run(subject.state)
-                subject._save()
-                self.assertEqual(tasks.task_records(subject.state), [predecessor])
-                resumed_kinds.append(kind)
-                resumed_ids.add(records[0]["id"])
-            return original_step(subject)
-
-        with mock.patch.object(
-            drv.Driver, "step", new=resume_before_successor
-        ):
-            self._assert_existing_cases(
-                (
-                    worker_cases.WorkerTaskCutoverTest,
-                    "test_review_rethink_preserves_failed_origin_and_"
-                    "distinct_successor",
-                ),
-                (
-                    worker_cases.WorkerTaskCutoverTest,
-                    "test_review_rethink_crash_cannot_reuse_failed_origin_task",
-                ),
-            )
-        self.assertEqual(
-            sorted(resumed_kinds),
-            sorted([
-                contracts.KIND_REVIEW_ROUND,
-                contracts.KIND_REVIEW_ROUND,
-                contracts.KIND_DELTA_REVIEW,
-            ]),
-        )
-        self._assert_existing_cases((
-            activity_cases.TaskActivityProjectionTests,
-            "test_failed_review_origin_and_later_review_have_distinct_chips",
-        ))
 
     def test_executor_cardinality_native_results_and_totals_conform(self):
         direct_snapshots = []
@@ -419,7 +218,7 @@ class TaskConformanceTest(unittest.TestCase):
         output = os.path.join(workspace, "output")
         os.makedirs(output)
         outside_claim = os.path.join(workspace, "outside.txt")
-        native = {"files_changed": [outside_claim]}
+        native = {"files_changed": ["outside.txt"]}
         runner = runners.MockRunner([{
             "expect_kind": contracts.KIND_IMPLEMENT,
             "response": ok(contracts.KIND_IMPLEMENT, **native),
@@ -432,6 +231,9 @@ class TaskConformanceTest(unittest.TestCase):
             "KIND: implement\nFAMILY: codex\n\nApply the requested effect.",
             "codex",
             output_directory=output,
+            author_coordinates=driver._author_coordinates(
+                unit, contracts.KIND_IMPLEMENT
+            ),
         )
         drv.Driver(path, runner=runner).step()
         state = st.load(path)

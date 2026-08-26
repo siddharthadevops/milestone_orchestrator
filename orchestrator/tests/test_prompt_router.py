@@ -232,6 +232,7 @@ class PromptRouterTest(unittest.TestCase):
         self.assertTrue(prompt_router.render(prompt, values))
 
     def test_canonical_charge_matrix_and_session_target_mounts(self):
+        self.assertEqual(len(prompt_router.DIRECT_ROUTES), 15)
         for job, (kind, unused_target) in prompt_router.DIRECT_ROUTES.items():
             del unused_target
             with self.subTest(job=job):

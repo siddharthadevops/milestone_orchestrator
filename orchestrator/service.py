@@ -2386,18 +2386,17 @@ def create_run(home, payload):
             state_path = driver.default_state_path(workspace)
         if not os.path.exists(state_path):
             raise ApiError(400, "attach requested but no state at %s" % state_path)
-        # The adopted state must belong to THIS workspace: otherwise the
-        # driver would run against `workspace` while mutating another repo's
-        # ledger. (Guards an explicit cross-workspace state_path.) An
-        # UNREADABLE state proves nothing either way and stays adoptable:
-        # the delete-guard machinery depends on re-attaching corrupt
-        # states to purge them (refusing here would strand them forever).
-        adopted_ws = None
+        # Attach is a run-admission path. Incompatible or unreadable state is
+        # refused here instead of being registered and failed later.
         try:
             adopted_ws = st.load(state_path).get("workspace")
-        except Exception:
-            pass
-        if adopted_ws is not None and (
+        except Exception as exc:
+            raise ApiError(
+                400,
+                "attach state is not an active schema-%d run: %s"
+                % (st.SCHEMA_VERSION, exc),
+            ) from exc
+        if (
             os.path.abspath(adopted_ws or "") != os.path.abspath(workspace)
         ):
             raise ApiError(

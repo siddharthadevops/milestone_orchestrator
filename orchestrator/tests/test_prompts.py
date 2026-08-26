@@ -80,7 +80,7 @@ def build_all():
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md"
         ),
         "implement": prompts.build_implement(
-            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md", ["make test"]
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md"
         ),
         "review_round": prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", []
@@ -118,7 +118,7 @@ def build_all_reform():
             gap_enabled=True),
         "implement": prompts.build_implement(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
-            ["make test"], gap_enabled=True),
+            gap_enabled=True),
     }
 
 
@@ -183,25 +183,6 @@ class TestNaturalRethinkExit(unittest.TestCase):
         self.assertIn("requires no workspace change", continuation)
         self.assertNotIn("It is a proposal, not approval", continuation)
 
-        suite_continuation = prompts.build_rethink_continuation(
-            contracts.KIND_FIX_FINDINGS,
-            FAMILY,
-            WORKSPACE,
-            {
-                "session_id": "brainstorming-2",
-                "accepted_target_revision": 3,
-                "result": {"outcome": "success"},
-                "retained_target": {"content": "accepted suite decision"},
-            },
-            verification_repair=True,
-            verification_commands=["python3 -m unittest"],
-        )
-        self.assertNotIn("another valid `need_rethink`", suite_continuation)
-        self.assertNotIn("copy this complete object", suite_continuation)
-        self.assertNotIn('"brainstorming_application"', suite_continuation)
-        self.assertTrue(suite_continuation.rstrip().endswith(
-            "starting or routing another design process."
-        ))
         self.assertIn("`need_rethink` or `gap` is inapplicable", continuation)
 
         ordinary_fixer = self.fixer(gap_enabled=False)
@@ -253,7 +234,7 @@ class TestNaturalRethinkExit(unittest.TestCase):
         )
         modern = build_all()
         modern["implement_updated_design"] = prompts.build_implement(
-            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md", [],
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
             skeleton_path="docs/skeleton.md", remodeled=True,
         )
         modern["fix_compat_args_ignored"] = prompts.build_fix_findings(
@@ -349,7 +330,7 @@ class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
     def test_updated_assignment_can_modify_earlier_code(self):
         prompt = normalized(prompts.build_implement(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
-            ["make test"], skeleton_path="docs/skeleton.md",
+            skeleton_path="docs/skeleton.md",
             remodeled=True,
         ))
         self.assertIn("File provenance is not scope ownership", prompt)
@@ -666,14 +647,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
         return normalized(prompts.build_fix_findings(
             FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
             ["claude", "-p"], unit_kind=kind,
-        ))
-
-    def suite_fix(self, kind="slice_impl"):
-        return normalized(prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-            ["claude", "-p"], unit_kind=kind,
-            verification_repair=True,
-            verification_commands=["make check"],
         ))
 
     def delta(self, kind, reform=False):
@@ -1042,25 +1015,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
                       "additional harm", prompt)
         self.assertIn("claim survives falsification, fix it", prompt)
 
-    def test_suite_fixer_owns_full_run_without_losing_judgment_rules(self):
-        prompt = self.suite_fix()
-        self.assertIn("FULL-SUITE REPAIR", prompt)
-        self.assertIn("make check", prompt)
-        self.assertIn("complete suite passes", prompt)
-        self.assertIn("final workspace bytes", prompt)
-        self.assertIn("violated guarantee", prompt)
-        self.assertIn("actual posture", prompt)
-        self.assertIn("permitted baseline", prompt)
-        self.assertIn("affected party", prompt)
-        self.assertIn("observable damage", prompt)
-        self.assertIn("scope, and altitude", prompt)
-        self.assertIn("cheapest sufficient repair", prompt)
-        self.assertIn("Do not weaken behavior or tests", prompt)
-        self.assertNotIn("VERIFICATION OUTPUT", prompt)
-        self.assertNotIn("FIX DECISION TABLE", prompt)
-        self.assertNotIn("CONSULTATION PROTOCOL", prompt)
-        self.assertIn('"findings":[]', prompt)
-
     def test_consultation_cap_and_severity_gate(self):
         prompt = self.fix("slice_impl")
         self.assertIn("Run at most five dialogue rounds, stopping earlier on "
@@ -1213,17 +1167,15 @@ class TestPortedCanonContentRules(unittest.TestCase):
             prompt,
         )
 
-    def test_phantom_retry_explains_suite_state_fix_exception(self):
+    def test_phantom_retry_requires_a_real_fix_delta(self):
         prompt = normalized(prompts.build_fix_findings(
             FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
             ["claude", "-p"], phantom_retry=True,
         ))
         self.assertIn("RETRY NOTICE", prompt)
-        self.assertIn("that is a real DRIVER-STATE fix", prompt)
-        self.assertIn("may correctly have `files_changed: []`", prompt)
-        self.assertIn("Do not edit a generated ledger or manufacture a "
-                      "repository change for it", prompt)
-        self.assertIn("credits only that one bound finding", prompt)
+        self.assertIn("A second empty-delta claim fails the run", prompt)
+        self.assertNotIn("suite_command", prompt)
+        self.assertNotIn("DRIVER-STATE fix", prompt)
 
     def test_never_send_secrets_in_every_builder(self):
         for name, prompt in build_all().items():
@@ -1278,7 +1230,7 @@ class TestOperatorAmendments(unittest.TestCase):
                 amendments=a),
             "implement": prompts.build_implement(
                 FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
-                ["make test"], amendments=a),
+                amendments=a),
             "review_round": prompts.build_review_round(
                 FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", [],
                 amendments=a),
@@ -1341,9 +1293,7 @@ class TestOperatorAmendments(unittest.TestCase):
 
 
 class TestVerificationProtocol(unittest.TestCase):
-    """Zero-config verification: the implementer reports suite_command,
-    the driver reserves it for scheduled checkpoints, and reviewers receive
-    only the generic boundary needed for independent judgment."""
+    """Suite checkpoints are independent from implementer/fixer replies."""
 
     def test_impl_review_carries_only_generic_verification_boundary(self):
         prompt = normalized(prompts.build_review_round(
@@ -1366,9 +1316,9 @@ class TestVerificationProtocol(unittest.TestCase):
         self.assertIn("Do NOT run the repository's full suite", prompt)
         self.assertIn("Use focused checks only when necessary", prompt)
 
-    def test_implement_reports_suite_and_skips_full_run(self):
+    def test_implement_skips_full_run_and_has_no_suite_transport(self):
         prompt = normalized(prompts.build_implement(
-            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md", []))
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md"))
         self.assertIn("do NOT run the repo's full test suite at the end",
                       prompt)
         self.assertNotIn("pre-implementation baseline", prompt)
@@ -1381,15 +1331,8 @@ class TestVerificationProtocol(unittest.TestCase):
         self.assertIn("Include `implementation_cut` proactively", prompt)
         self.assertIn("reviews this part before opening the next", prompt)
         self.assertIn("Cut at the first natural boundary", prompt)
-        self.assertIn("Report the repo's official full-suite command",
-                      prompt)
-        self.assertIn("your suite_command will arm scheduled checkpoints",
-                      prompt)
-        armed = normalized(prompts.build_implement(
-            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
-            ["mix test"]))
-        self.assertIn("Scheduled full-suite commands currently armed: mix test",
-                      armed)
+        self.assertNotIn("suite_command", prompt)
+        self.assertNotIn("Scheduled full-suite commands", prompt)
 
     def test_fixer_never_runs_the_full_suite(self):
         prompt = normalized(prompts.build_fix_findings(
@@ -1404,7 +1347,7 @@ class TestSequentialImplementationScope(unittest.TestCase):
         return {
             "implement": prompts.build_implement(
                 FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
-                ["make test"], implementation_scope=scope,
+                implementation_scope=scope,
             ),
             "review": prompts.build_review_round(
                 FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", [],
@@ -1479,7 +1422,7 @@ class TestPlannerMaterialChannel(unittest.TestCase):
             ),
             "implement": prompts.build_implement(
                 FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
-                ["make test"], editable_design_paths=["docs/skeleton.md"],
+                editable_design_paths=["docs/skeleton.md"],
                 materials=materials,
             ),
             "fix_findings": prompts.build_fix_findings(
@@ -1614,7 +1557,7 @@ class TestPlannerMaterialChannel(unittest.TestCase):
             ),
             "implement": prompts.build_implement(
                 FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
-                ["make test"], materials=self.MATERIALS,
+                materials=self.MATERIALS,
             ),
             "fix_findings": prompts.build_fix_findings(
                 FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",

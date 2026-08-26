@@ -189,22 +189,8 @@ class PromptSetBindingTests(unittest.TestCase):
             "attach": True,
             "autostart": False,
         })
-        self.assertEqual(status, 201, response)
-        status, detail = self.request(
-            "GET", "/api/runs/%s" % response["run"]["id"]
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(detail["summary"]["prompt_set"], "default")
+        self.assertEqual(status, 400, response)
         self.assertEqual(Path(legacy_path).read_bytes(), legacy_before)
-
-        unrelated = st.load(legacy_path)
-        st.append_event(unrelated, "unrelated_test_event")
-        st.save(legacy_path, unrelated)
-        self.assertNotIn(st.PROMPT_SET_KEY, st.load(legacy_path))
-        rewritten = st.load(legacy_path)
-        rewritten[st.PROMPT_SET_KEY] = "operator"
-        with self.assertRaisesRegex(st.HistoryRewriteError, "prompt_set"):
-            st.save(legacy_path, rewritten)
 
         rewritten = st.load(explicit_path)
         rewritten[st.PROMPT_SET_KEY] = "default"

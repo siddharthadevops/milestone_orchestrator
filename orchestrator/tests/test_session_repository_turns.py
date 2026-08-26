@@ -257,18 +257,11 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
             "target_path": self.target_path,
         }
         milestone_state = state.load(self.state_path)
-        with (
-            mock.patch.object(
-                brainstorming_milestone,
-                "_materialize_target",
-                side_effect=AssertionError("private target was materialized"),
-            ),
-            mock.patch.object(
-                brainstorming_milestone,
-                "_launch_repository_session",
-                return_value={"id": "session-1"},
-            ) as launch,
-        ):
+        with mock.patch.object(
+            brainstorming_milestone,
+            "_launch_repository_session",
+            return_value={"id": "session-1"},
+        ) as launch:
             created = brainstorming_milestone.create_session(
                 milestone_state,
                 driver.load_config(None),
@@ -860,6 +853,9 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
             brainstorming_coordination.ExternalInterventionPending
         ) as first_pending:
             coordinator.run_next_turn("repository-session", {})
+        first_revision = first_pending.exception.intervention[
+            "target_revision"
+        ]
         record = {
             "id": "repository-session",
             "runtime": {
@@ -878,6 +874,13 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         )
         advanced = store.read("repository-session")
         self.assertEqual(len(advanced.state["completed_turns"]), 2)
+        self.assertNotEqual(
+            advanced.state["accepted_target_revision"], first_revision
+        )
+        self.assertEqual(
+            advanced.state["accepted_target_revision"],
+            gitops.head_full_sha(self.workspace),
+        )
         self.assertIsNone(
             store.read_external_intervention("repository-session")
         )
@@ -902,7 +905,7 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         self.assertEqual(len(accepted.state["completed_turns"]), 3)
         self.assertEqual(
             accepted.state["completed_turns"][-1]["target_revision"],
-            advanced.state["accepted_target_revision"],
+            accepted.state["accepted_target_revision"],
         )
 
     def test_questioner_uses_the_same_read_only_boundary(self):

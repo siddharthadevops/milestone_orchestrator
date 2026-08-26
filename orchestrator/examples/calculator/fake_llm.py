@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 
 
@@ -74,6 +75,8 @@ def parse_first_registry_id(prompt):
             continue
         if in_block:
             m = re.match(r"^- \[([^\]]+)\]", line)
+            if m is None:
+                m = re.search(r'"id"\s*:\s*"([^"]+)"', line)
             if m:
                 return m.group(1)
             if line.startswith(("ACCESS", "PROCESS AUTHORITY", "OUTPUT CONTRACT")):
@@ -220,6 +223,8 @@ AUTHOR_QUESTIONS = {
     ),
 }
 
+JUDGMENT_QUESTION_IDS = ("environment_fit", "human_scale")
+
 
 def author_questions(kind):
     return [
@@ -228,14 +233,25 @@ def author_questions(kind):
     ]
 
 
+def judgment_questions():
+    return [
+        {"id": question_id, "answer": "Checked by the calculator fixture."}
+        for question_id in JUDGMENT_QUESTION_IDS
+    ]
+
+
 def ok(kind, **extra):
     payload = {"status": "ok", "kind": kind}
+    if kind in ("review_round", "delta_review", "fix_findings", "reclassify"):
+        payload["questions"] = judgment_questions()
     payload.update(extra)
     return payload
 
 
 def report(kind, findings):
     for finding in findings:
+        finding["plain"] = "In plain terms: %s" % finding["summary"]
+        finding["example"] = "Example: %s" % finding["summary"]
         finding["validity"] = {
             "permitted_baseline": "the documented calculator behavior",
             "actual_outcome": finding["summary"],
@@ -290,6 +306,44 @@ def respond(kind, family, workspace, count, prompt):
             files_changed=["calculator.py", "test_calculator.py"],
             questions=author_questions(kind),
         )
+
+    # ---- scheduled complete-suite checkpoint ----------------------------
+    if kind == "suite_checkpoint":
+        command = "python3 run_checks.py"
+        completed = subprocess.run(
+            command,
+            cwd=workspace,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        evidence = (completed.stdout + completed.stderr).strip()
+        if not evidence:
+            evidence = (
+                "complete suite passed"
+                if completed.returncode == 0
+                else "complete suite failed"
+            )
+        response = {
+            "status": "passed" if completed.returncode == 0 else "failed",
+            "kind": kind,
+            "commands": [command],
+            "results": [{
+                "command": command,
+                "exit_code": completed.returncode,
+                "evidence": evidence,
+            }],
+            "authority": {"source": "operator_config", "evidence": []},
+        }
+        if completed.returncode != 0:
+            response["failure_account"] = {
+                "command": command,
+                "exit_code": completed.returncode,
+                "diagnostics": evidence,
+                "affected_tests": ["test_calculator"],
+            }
+        return response
 
     # ---- report-only reviews --------------------------------------------
     if kind == "review_round" and family == "codex":
@@ -432,20 +486,27 @@ def respond(kind, family, workspace, count, prompt):
                       files_changed=["README.md"])
         return ok(kind, findings=echo("fixed"), files_changed=[])
 
-    return {
+    blocked = {
         "status": "blocked",
         "kind": kind,
         "blocked_reason": "fake_llm has no script for kind %r" % kind,
     }
+    if kind in AUTHOR_QUESTIONS:
+        blocked["questions"] = author_questions(kind)
+    elif kind in ("review_round", "delta_review", "fix_findings", "reclassify"):
+        blocked["questions"] = judgment_questions()
+    return blocked
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", required=True)
+    parser.add_argument("--family", choices=("codex", "claude"))
     args = parser.parse_args()
 
     prompt = sys.stdin.read()
     kind, family, workspace = read_headers(prompt)
+    family = family or args.family
     workspace = workspace or args.workspace
     if kind is None:
         print(json.dumps({"status": "blocked", "kind": "unknown",

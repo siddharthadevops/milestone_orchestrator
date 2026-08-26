@@ -325,7 +325,7 @@ def validate_producer_selection(value, context="producer selection"):
 
 
 def validate_producer_map(value, context="producer_task_executor"):
-    """Read a partial/raw producer map; omissions retain agent-call defaults."""
+    """Read a generic producer map without mutating its stored shape."""
     try:
         _exact_keys(value, (), PRODUCER_TASK_KINDS, context)
         checked = {}
@@ -342,7 +342,7 @@ def validate_producer_map(value, context="producer_task_executor"):
 
 
 def effective_slice_producers(slice_plan):
-    """Project both effective choices without rewriting the stored slice plan."""
+    """Resolve generic task orders; canonical milestone plans are complete."""
     if not isinstance(slice_plan, dict):
         raise TaskRequestError(INVALID_TASK_REQUEST, "slice plan must be an object")
     raw = slice_plan.get("producer_task_executor", _MISSING)

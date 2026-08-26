@@ -14,11 +14,10 @@ import time
 import unittest
 from unittest import mock
 
-from orchestrator import brainstorming_milestone
+from orchestrator import canonical_plan
 from orchestrator import contracts
 from orchestrator import driver as drv
 from orchestrator import gitops
-from orchestrator import prompts
 from orchestrator import runners
 from orchestrator import state as st
 from orchestrator.tests.test_driver_mock import (
@@ -240,33 +239,6 @@ class PersistedEventProbeRunner(LiveControlRunner):
         )
 
 
-class ContinuationControlProbeRunner(runners.MockRunner):
-    """Accept a Brainstorming continuation only when live control survives."""
-
-    def __init__(self, response, require_steer=False):
-        super().__init__([])
-        self.response = response
-        self.require_steer = require_steer
-        self.controlled_calls = 0
-
-    def call(self, family, prompt, workspace, model=None, effort=None,
-             timeout_override=None, active_control=None):
-        if active_control is None:
-            raise AssertionError(
-                "implementation continuation lost its size control"
-            )
-        self.controlled_calls += 1
-        active_control._bind(lambda _text: True, lambda _reason: True)
-        if self.require_steer:
-            LiveControlRunner._wait_for(
-                lambda: bool(active_control.steers),
-                "Brainstorming continuation did not receive its soft steer",
-            )
-        active_control._close()
-        self.calls.append((family, runners.prompt_kind(prompt), prompt))
-        return runners.RunnerResult(json.dumps(self.response), 0, 0.02)
-
-
 class InfraRetryControlRunner(object):
     def __init__(self, raw_texts=None):
         self.controls = []
@@ -475,15 +447,37 @@ class DriverImplementationSizeTest(unittest.TestCase):
         if git_enabled:
             git_init_workspace(workspace)
         os.makedirs(os.path.join(workspace, "docs"), exist_ok=True)
+        plan = {
+            "slices": [{
+                "id": 1,
+                "title": "Feature",
+                "intent": "Build the bounded feature.",
+                "material": "code",
+                "producer_task_executor": {
+                    "draft_slice_note": "agent_call",
+                    "implement": "agent_call",
+                },
+            }],
+        }
         with open(os.path.join(workspace, "docs", "skeleton.md"), "w",
                   encoding="utf-8") as handle:
-            handle.write("# Skeleton\n")
+            handle.write(
+                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps(plan)
+            )
         with open(os.path.join(workspace, "docs", "slice-01.md"), "w",
                   encoding="utf-8") as handle:
             handle.write("# Slice 01\n")
+        if git_enabled:
+            gitops.ensure_repo(workspace)
 
         state = st.new_state("Build the feature", workspace, config)
-        state["milestone"]["slices"] = [{"id": 1, "title": "Feature"}]
+        if git_enabled:
+            canonical_plan.establish_current_plan(
+                state, "docs/skeleton.md"
+            )
+        else:
+            state["milestone"]["slices"] = plan["slices"]
         skeleton = st.current_unit(state)
         skeleton["artifact"] = "docs/skeleton.md"
         skeleton["status"] = st.U_SEALED
@@ -492,6 +486,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
         note["status"] = st.U_SEALED
         implementation = st.ensure_next_unit(state)
         path = drv.default_state_path(workspace)
+        drv._write_initial_amendments(path)
         st.save(path, state)
 
         driver = drv.Driver(path, runner=runner)
@@ -546,52 +541,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 "remaining_scope": remaining,
             },
         )
-
-    @staticmethod
-    def _brainstorming_handoff():
-        return {
-            "session_id": "brainstorming-size-control",
-            "accepted_target_revision": 1,
-            "result": {"outcome": "success"},
-            "retained_target": {
-                "exists": True,
-                "encoding": "utf-8",
-                "content": "Continue the bounded implementation.",
-            },
-        }
-
-    @staticmethod
-    def _attach_brainstorming_wait(unit, base_tree, handoff):
-        unit["brainstorming_wait"] = {
-            "session_id": handoff["session_id"],
-            "signal": {
-                "status": "need_rethink",
-                "kind": contracts.KIND_IMPLEMENT,
-                "request": "Choose the bounded implementation to continue.",
-                "finding": {
-                    "id": "F1",
-                    "summary": "the implementation choice needs agreement",
-                },
-                "target_path": "docs/slice-01.md",
-                "max_rounds": 20,
-                "result_mode": contracts.RETHINK_RESULT_PROPOSAL,
-            },
-            "references": ["docs/slice-01.md"],
-            "origin": {
-                "unit": st.unit_key(unit),
-                "kind": contracts.KIND_IMPLEMENT,
-                "family": "codex",
-                "model": "gpt-5.6-sol",
-                "effort": "max",
-                "raw_path": "raw/origin.txt",
-                "raw_name": "slice_impl-01-draft",
-                "provider_session_ref": "codex-thread-7",
-                "duration_s": 0.02,
-                "pre_snapshot": {
-                    "tree": base_tree,
-                },
-            },
-        }
 
     def test_normal_implementation_finishes_without_creating_a_part(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-normal-") as ws:
@@ -672,46 +621,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 ws, "log", "--format=%s"
             ).stdout.splitlines()
             self.assertEqual(subjects.count("wip: slice_impl-01"), 1)
-
-    def test_failed_wip_intent_preparation_is_retried_before_review(self):
-        with tempfile.TemporaryDirectory(prefix="orch-wip-prepare-") as ws:
-            runner = LiveControlRunner(
-                "normal",
-                ok(contracts.KIND_IMPLEMENT,
-                   files_changed=["implementation.py"]),
-            )
-            path, driver, _unit = self._ready_driver(ws, runner)
-
-            with mock.patch.object(
-                gitops,
-                "snapshot_worktree_tree",
-                side_effect=gitops.GitError("temporary tree failure"),
-            ):
-                action, _note = driver.step()
-
-            self.assertEqual(action.type, drv.A_DRAFT)
-            failed = st.load(path)
-            failed_unit = st.current_unit(failed)
-            self.assertIsNotNone(failed_unit["draft"])
-            self.assertNotIn("pending_wip", failed_unit)
-            self.assertIn("implementation_attempt_snapshot", failed_unit)
-
-            st.resume_run(failed)
-            st.save(path, failed)
-            recovered = drv.Driver(path, runner=runner)
-            resumed_action, _resumed_note = recovered.step()
-
-            self.assertEqual(resumed_action.type, drv.A_DRAFT)
-            state = st.load(path)
-            unit = st.current_unit(state)
-            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
-            self.assertNotIn("pending_wip", unit)
-            self.assertEqual(len(runner.calls), 1)
-            self.assertEqual(len([
-                event for event in state["events"]
-                if event.get("type") == "wip_commit"
-                and event.get("unit") == "slice_impl-01"
-            ]), 1)
 
     def test_resume_adopts_landed_pending_wip_without_second_commit(self):
         with tempfile.TemporaryDirectory(prefix="orch-wip-adopt-") as ws:
@@ -1220,37 +1129,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 ws, "log", "-1", "--format=%s"
             ).stdout.strip()
             self.assertEqual(subject, "wip: slice_impl-01-a")
-
-    def test_rethink_resume_may_return_a_proactive_cut(self):
-        with tempfile.TemporaryDirectory(prefix="orch-size-rethink-") as ws:
-            _path, driver, unit = self._ready_driver(
-                ws, runners.MockRunner([]), git_enabled=False
-            )
-            output = self._cut_response()
-            result = runners.RunnerResult(json.dumps(output), 0, 0.02)
-            result.origin_family = "codex"
-            result.origin_model = "gpt-5.6-sol"
-            result.origin_effort = "max"
-            result.origin_pre_snapshot = {}
-
-            with mock.patch.object(
-                driver,
-                "_take_brainstorming_resume",
-                return_value=(output, result, "raw/resumed.txt"),
-            ), mock.patch.object(
-                driver, "_finish_draft", return_value="drafted"
-            ):
-                self.assertEqual(driver._do_draft(), "drafted")
-
-            self.assertEqual(st.display_unit_key(unit), "slice_impl-01-a")
-            self.assertEqual(
-                unit["implementation_cut"]["cut_scope"], "coherent core"
-            )
-            self.assertEqual(
-                unit["implementation_cut"]["remaining_scope"],
-                "remaining wiring",
-            )
-            self.assertIsNotNone(unit["draft"])
 
     def test_contract_repair_may_return_a_proactive_cut(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-repair-") as ws:
@@ -2022,353 +1900,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
             summary = st.summary(recovered.state)
             self.assertEqual(summary["work_token_usage"], usage)
             self.assertTrue(summary["work_token_usage_partial"])
-
-    def test_brainstorming_implementation_continuation_keeps_size_control(self):
-        with tempfile.TemporaryDirectory(prefix="orch-size-brainstorm-") as ws:
-            runner = ContinuationControlProbeRunner(
-                ok(contracts.KIND_IMPLEMENT, files_changed=[])
-            )
-            _path, driver, unit = self._ready_driver(
-                ws,
-                runner,
-                {"soft_lines": 2, "hard_lines": 6,
-                 "poll_interval_s": 0.005},
-            )
-            base_tree = gitops.snapshot_index_tree(ws)
-            handoff = self._brainstorming_handoff()
-            self._attach_brainstorming_wait(unit, base_tree, handoff)
-            driver._save()
-
-            with mock.patch.object(
-                brainstorming_milestone,
-                "terminal_handoff",
-                return_value=handoff,
-            ), mock.patch.object(
-                brainstorming_milestone,
-                "prompt_handoff",
-                return_value=handoff,
-            ):
-                note = driver._do_brainstorming_wait()
-
-            self.assertEqual(runner.controlled_calls, 1)
-            self.assertIn("origin conversation continued", note)
-            self.assertIn("brainstorming_resume", unit)
-
-    def test_brainstorming_continuation_uses_durable_stabilizer_after_crash(
-        self,
-    ):
-        with tempfile.TemporaryDirectory(prefix="orch-size-brain-stable-") \
-                as ws:
-            crashed_runner = LiveControlRunner(
-                "normal",
-                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
-                recovery_lines=8,
-                recovery_script=[_PromptReached("continuation crash")],
-            )
-            path, driver, unit = self._ready_driver(
-                ws,
-                crashed_runner,
-                {"soft_lines": 2, "hard_lines": 6,
-                 "poll_interval_s": 0.005},
-            )
-            base_tree = gitops.snapshot_index_tree(ws)
-            handoff = self._brainstorming_handoff()
-            self._attach_brainstorming_wait(unit, base_tree, handoff)
-            origin_pre = unit["brainstorming_wait"]["origin"]["pre_snapshot"]
-            origin_pre["implementation_stabilized"] = False
-            durable_size = {
-                "soft_lines": 2,
-                "hard_lines": 6,
-                "steer_delivered": True,
-                "steer_lines": 3,
-                "interrupt_lines": 8,
-                "last_lines": 8,
-            }
-            unit["implementation_stabilization"] = {
-                "implementation_size": durable_size,
-            }
-            driver._save()
-
-            with mock.patch.object(
-                brainstorming_milestone,
-                "terminal_handoff",
-                return_value=handoff,
-            ), mock.patch.object(
-                brainstorming_milestone,
-                "prompt_handoff",
-                return_value=handoff,
-            ):
-                with self.assertRaisesRegex(_PromptReached, "continuation"):
-                    driver._do_brainstorming_wait()
-
-            self.assertEqual(
-                crashed_runner.session_calls,
-                [("start", "codex", "mock-session-1")],
-            )
-
-            persisted = st.load(path)
-            persisted_unit = st.current_unit(persisted)
-            self.assertIn("brainstorming_wait", persisted_unit)
-            self.assertEqual(
-                persisted_unit["implementation_stabilization"]
-                ["implementation_size"],
-                durable_size,
-            )
-
-            runner = LiveControlRunner(
-                "normal",
-                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
-                recovery_response=self._cut_response(
-                    "continued coherent work", "remaining wiring"
-                ),
-                recovery_lines=8,
-            )
-            resumed = drv.Driver(path, runner=runner)
-            unit = st.current_unit(resumed.state)
-            with mock.patch.object(
-                brainstorming_milestone,
-                "terminal_handoff",
-                return_value=handoff,
-            ), mock.patch.object(
-                brainstorming_milestone,
-                "prompt_handoff",
-                return_value=handoff,
-            ):
-                note = resumed._do_brainstorming_wait()
-
-            self.assertIn("origin conversation continued", note)
-            self.assertEqual(runner.controls, [None])
-            self.assertIn(
-                "FORCED CONTROLLED-CUTOFF RECOVERY", runner.calls[0][2]
-            )
-            self.assertEqual(
-                runner.session_calls,
-                [("start", "codex", "mock-session-1")],
-            )
-            self.assertNotIn(
-                prompts.IMPLEMENTATION_SIZE_GUIDANCE, runner.calls[0][2]
-            )
-            resumed_pre = unit["brainstorming_resume"]["pre_snapshot"]
-            self.assertTrue(resumed_pre["implementation_stabilized"])
-            self.assertEqual(
-                resumed_pre["implementation_size"], durable_size
-            )
-
-    def test_brainstorming_rethink_from_stabilizer_continues_its_session(self):
-        with tempfile.TemporaryDirectory(prefix="orch-size-brain-resume-") \
-                as ws:
-            runner = LiveControlRunner(
-                "normal",
-                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
-                recovery_response=self._cut_response(
-                    "continued stabilizer work", "remaining wiring"
-                ),
-                recovery_lines=8,
-            )
-            _path, driver, unit = self._ready_driver(
-                ws,
-                runner,
-                {"soft_lines": 2, "hard_lines": 6,
-                 "poll_interval_s": 0.005},
-            )
-            base_tree = gitops.snapshot_index_tree(ws)
-            handoff = self._brainstorming_handoff()
-            self._attach_brainstorming_wait(unit, base_tree, handoff)
-            origin_pre = unit["brainstorming_wait"]["origin"]["pre_snapshot"]
-            origin_pre["implementation_stabilized"] = True
-            durable_size = {
-                "soft_lines": 2,
-                "hard_lines": 6,
-                "steer_delivered": True,
-                "steer_lines": 3,
-                "interrupt_lines": 8,
-                "last_lines": 8,
-            }
-            unit["implementation_stabilization"] = {
-                "implementation_size": durable_size,
-            }
-            driver._save()
-
-            with mock.patch.object(
-                brainstorming_milestone,
-                "terminal_handoff",
-                return_value=handoff,
-            ), mock.patch.object(
-                brainstorming_milestone,
-                "prompt_handoff",
-                return_value=handoff,
-            ):
-                note = driver._do_brainstorming_wait()
-
-            self.assertIn("origin conversation continued", note)
-            self.assertEqual(
-                runner.session_calls,
-                [("continue", "codex", "codex-thread-7")],
-            )
-            self.assertIn(
-                "FORCED CONTROLLED-CUTOFF RECOVERY", runner.calls[0][2]
-            )
-            self.assertEqual(
-                unit["brainstorming_resume"]["provider_session_ref"],
-                "codex-thread-7",
-            )
-
-    def test_brainstorming_soft_steer_cut_keeps_metrics_on_resume(
-        self,
-    ):
-        with tempfile.TemporaryDirectory(prefix="orch-size-brain-cut-") as ws:
-            runner = ContinuationControlProbeRunner(
-                self._cut_response("agreed cut", "remaining wiring"),
-                require_steer=True,
-            )
-            path, driver, unit = self._ready_driver(
-                ws,
-                runner,
-                {"soft_lines": 2, "hard_lines": 6,
-                 "poll_interval_s": 0.005},
-            )
-            base_tree = gitops.snapshot_index_tree(ws)
-            handoff = self._brainstorming_handoff()
-            self._attach_brainstorming_wait(unit, base_tree, handoff)
-
-            with mock.patch.object(
-                brainstorming_milestone,
-                "terminal_handoff",
-                return_value=handoff,
-            ), mock.patch.object(
-                brainstorming_milestone,
-                "prompt_handoff",
-                return_value=handoff,
-            ), mock.patch.object(
-                gitops, "reviewable_line_count", return_value=3
-            ):
-                wait_action, _wait_note = driver.step()
-
-            self.assertEqual(wait_action.type, drv.A_BRAINSTORM_WAIT)
-
-            resume_pre = unit["brainstorming_resume"]["pre_snapshot"]
-            self.assertNotIn("implementation_cut_authorized", resume_pre)
-            self.assertFalse(resume_pre["implementation_stabilized"])
-            self.assertTrue(
-                resume_pre["implementation_size"]["steer_delivered"]
-            )
-            self.assertEqual(
-                resume_pre["implementation_size"]["steer_lines"], 3
-            )
-
-            action, _note = driver.step()
-
-            self.assertEqual(action.type, drv.A_DRAFT)
-            state = st.load(path)
-            unit = st.current_unit(state)
-            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
-            self.assertEqual(st.display_unit_key(unit), "slice_impl-01-a")
-            self.assertEqual(
-                unit["implementation_cut"]["cut_scope"], "agreed cut"
-            )
-            self.assertEqual(unit["implementation_cut"]["steer_lines"], 3)
-
-    def test_part_scope_is_wired_to_every_implementation_prompt(self):
-        with tempfile.TemporaryDirectory(prefix="orch-size-scope-") as ws:
-            _path, driver, first = self._ready_driver(
-                ws, runners.MockRunner([]), git_enabled=False
-            )
-            st.record_implementation_cut(
-                driver.state, first, "coherent core", "remaining wiring"
-            )
-            first["status"] = st.U_SEALED
-            continuation = st.ensure_next_unit(driver.state)
-            expected = st.implementation_scope(driver.state, continuation)
-
-            with mock.patch.object(
-                prompts, "build_implement", wraps=prompts.build_implement
-            ) as builder, mock.patch.object(
-                driver, "_call_implementation", side_effect=_PromptReached
-            ):
-                with self.assertRaises(_PromptReached):
-                    driver._do_draft()
-                self.assertEqual(
-                    builder.call_args.kwargs["implementation_scope"], expected
-                )
-
-            # The injected call stopped after task admission. This test now
-            # changes lifecycle stages only to inspect prompt wiring, so close
-            # that synthetic probe without rewriting append-only task history.
-            admitted = continuation["active_task"]["id"]
-            driver._terminalize_worker_task(
-                continuation,
-                {"probe": "implementation prompt reached"},
-                status="failure",
-                reason="synthetic prompt-wiring probe stopped",
-                task_id=admitted,
-            )
-            driver._save()
-
-            continuation["status"] = st.U_ROUNDS
-            continuation["family_index"] = 0
-            with mock.patch.object(
-                driver, "_review_evidence_inputs",
-                return_value=("fingerprint", None, [], [], []),
-            ), mock.patch.object(
-                prompts, "build_review_round",
-                wraps=prompts.build_review_round,
-            ) as builder, mock.patch.object(
-                driver, "_report_call", side_effect=_PromptReached
-            ):
-                with self.assertRaises(_PromptReached):
-                    driver._do_review_round()
-                self.assertEqual(
-                    builder.call_args.kwargs["implementation_scope"], expected
-                )
-
-            continuation["status"] = st.U_FIXING
-            continuation["fix_queue"] = [{
-                "id": "F1",
-                "severity": "P2",
-                "summary": "fix the bounded defect",
-            }]
-            continuation["fix_source"] = {
-                "type": "round",
-                "family": "claude",
-                "source_round_id": "slice_impl-01-b-claude-r1",
-                "return_to": st.U_ROUNDS,
-            }
-            with mock.patch.object(
-                prompts, "build_fix_findings",
-                wraps=prompts.build_fix_findings,
-            ) as builder, mock.patch.object(
-                driver, "_call", side_effect=_PromptReached
-            ):
-                with self.assertRaises(_PromptReached):
-                    driver._do_fix()
-                self.assertEqual(
-                    builder.call_args.kwargs["implementation_scope"], expected
-                )
-
-            admitted = continuation["active_task"]["id"]
-            driver._terminalize_worker_task(
-                continuation,
-                {"probe": "fix prompt reached"},
-                status="failure",
-                reason="synthetic prompt-wiring probe stopped",
-                task_id=admitted,
-            )
-            driver._save()
-
-            continuation["status"] = st.U_DELTA_REVIEW
-            with mock.patch.object(
-                gitops, "worktree_diff", return_value="one bounded delta"
-            ), mock.patch.object(
-                prompts, "build_delta_review",
-                wraps=prompts.build_delta_review,
-            ) as builder, mock.patch.object(
-                driver, "_report_call", side_effect=_PromptReached
-            ):
-                with self.assertRaises(_PromptReached):
-                    driver._do_delta_review()
-                self.assertEqual(
-                    builder.call_args.kwargs["implementation_scope"], expected
-                )
 
     def test_continuation_opens_only_after_predecessor_gate(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-gate-") as ws:

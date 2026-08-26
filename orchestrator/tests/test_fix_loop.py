@@ -36,7 +36,6 @@ from orchestrator.tests.test_driver_mock import (
     append_file,
     finding,
     fix_ok,
-    suite_fix_ok,
     init_state,
     make_config,
     ok,
@@ -358,145 +357,6 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                 1,
             )
 
-    def test_verification_episode_keeps_real_delta_review(self):
-        # The bypass is safe only when an active whole-commit reviewer will
-        # immediately take over. Final-verification episodes keep real deltas.
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_final_impl_state(
-                ws,
-                make_config(
-                    verification=["test -f marker.txt"],
-                    delta_full_review_after_fixes=1,
-                ),
-            )
-            mock = runners.MockRunner([
-                implement_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step(
-                    "fix_findings",
-                    # Declaring that the tests WERE touched is what keeps a
-                    # real delta review in the episode: the certification
-                    # cannot be taken at its word when the suite may have
-                    # been bent to produce it.
-                    suite_fix_ok(
-                        files_changed=["marker.txt"],
-                        tests_modified=True,
-                        tests_changed=["test/marker_test.exs"],
-                    ),
-                    family="codex",
-                    side_effect=write_file("marker.txt", "fixed\n"),
-                ),
-                step("delta_review", report("delta_review"), family="codex"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            driver.step()  # implementation
-            driver.step()  # full suite deferred to its scheduled checkpoint
-            driver.step()  # codex clean
-            driver.step()  # claude clean
-            driver.step()  # scheduled verification fails
-            driver.step()  # fix #1
-            driver.step()  # real delta review, despite threshold=1
-            self.assertEqual(mock.calls[-1][1], "delta_review")
-            state = st.load(path)
-            self.assertFalse(any(
-                event["type"] == "delta_checkpoint"
-                for event in state["events"]
-            ))
-
-    def test_checkpoint_fires_even_with_suite_verify_pending(self):
-        # Live bug (2026-07-21): a fixer that also corrected the suite
-        # command sets suite_verification_pending, which redirects the delta
-        # loop's return_to from rounds to the pre_review compatibility
-        # waypoint. The checkpoint
-        # keyed off that redirected target, so it was silently disabled and
-        # the review-originated loop ran to max_fix_loops instead of
-        # escalating to a full review after N fixes (a slice ran 8 dirty
-        # deltas this way). The
-        # checkpoint must key off where the episode was BORN (a review
-        # round), not the suite redirect.
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(
-                ws, make_config(delta_full_review_after_fixes=2)
-            )
-            mock = runners.MockRunner([
-                draft_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step(
-                    "review_round",
-                    report("review_round", [finding("F1", "first defect")]),
-                    family="claude",
-                ),
-                step(
-                    "fix_findings",
-                    fix_ok(
-                        [triaged("F1", "fixed", "first defect")],
-                        files_changed=["docs/skeleton.md"],
-                    ),
-                    family="codex",
-                    side_effect=append_file("docs/skeleton.md", "\nfix1\n"),
-                ),
-                step(
-                    "delta_review",
-                    report("delta_review", [finding("D1", "delta defect")]),
-                    family="codex",
-                ),
-                step(
-                    "fix_findings",
-                    fix_ok(
-                        [triaged("D1", "fixed", "delta defect")],
-                        files_changed=["docs/skeleton.md"],
-                    ),
-                    family="codex",
-                    side_effect=append_file("docs/skeleton.md", "\nfix2\n"),
-                ),
-                # After the checkpoint the redirect crosses the no-suite
-                # pre_review waypoint, then whole-commit review restarts from
-                # the first family. The corrected suite waits for final.
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver,
-                lambda state: (
-                    state["units"][0]["status"] == st.U_FIXING
-                    and any(
-                        round_["kind"] == "delta_review"
-                        for round_ in state["units"][0]["rounds"]
-                    )
-                ),
-            )
-            # A suite-correcting fixer earlier in this same review episode
-            # would have set this; inject it to prove it no longer suppresses
-            # the checkpoint.
-            driver.state["units"][0]["suite_verification_pending"] = True
-            st.save(path, driver.state)
-            self.step_until(
-                driver,
-                lambda state: state["units"][0]["status"] == st.U_SEALED,
-            )
-            self.assertEqual(mock.script, [])
-            state = st.load(path)
-            checkpoint = [
-                e for e in state["events"] if e["type"] == "delta_checkpoint"
-            ]
-            self.assertEqual(len(checkpoint), 1)
-            self.assertEqual(checkpoint[0]["fixes"], 2)
-            # It followed the REDIRECTED compatibility edge, proving the flag
-            # was set yet the checkpoint still fired without a suite run.
-            self.assertEqual(checkpoint[0]["return_to"], st.U_PRE_REVIEW_VERIFY)
-            # The pending flag clears only when scheduled verification passes.
-            self.assertFalse(
-                state["units"][0].get("suite_verification_pending")
-            )
-            # Exactly one delta: the loop escalated instead of running on.
-            self.assertEqual(
-                len([r for r in state["units"][0]["rounds"]
-                     if r["kind"] == "delta_review"]),
-                1,
-            )
-
 # ---------------------------------------------------------------------------
 # (c) fix-loop cap
 
@@ -534,183 +394,6 @@ class TestFixLoopCap(DriverTestCase):
                  "source: delta"],
                 unit_key="skeleton",
             )
-
-
-# ---------------------------------------------------------------------------
-# (d) verification failure episodes
-
-
-class TestVerificationFixEpisode(DriverTestCase):
-    def test_suite_fixer_delta_amend_reviews_then_reuses_green(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_final_impl_state(
-                ws, make_config(verification=["test -f marker.txt"]))
-            mock = runners.MockRunner([
-                implement_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("fix_findings",
-                     suite_fix_ok(files_changed=["marker.txt"]),
-                     family="codex",
-                     side_effect=write_file("marker.txt", "repaired\n")),
-                # No delta review: the repair declared it did not touch the
-                # tests, so its certification is taken at its word. The
-                # changed bytes are still reviewed — as a whole artifact,
-                # by the fresh rounds below.
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-
-            driver.step()  # implementation
-            driver.step()  # full suite deferred to its scheduled checkpoint
-            driver.step()  # codex clean
-            driver.step()  # claude clean
-            driver.step()  # scheduled verification fails
-            unit = driver.state["units"][-1]
-            self.assertEqual(unit["status"], st.U_FIXING)
-            self.assertEqual(len(unit["fix_queue"]), 1)
-            v1 = unit["fix_queue"][0]
-            self.assertEqual((v1["id"], v1["severity"]), ("V1", "P1"))
-            self.assertIn("verification suite is not green", v1["summary"])
-            self.assertEqual(unit["fix_source"]["type"], "verification")
-            self.assertIsNone(unit["fix_source"]["family"])
-            self.assertEqual(unit["fix_source"]["source_round_id"],
-                             "slice_impl-01-verify-pre_seal-1")
-            self.assertEqual(unit["fix_source"]["return_to"],
-                             st.U_PRE_SEAL_VERIFY)
-
-            self.step_until(driver,
-                            lambda s: s["units"][-1]["status"] == st.U_SEALED)
-            self.assertEqual(mock.script, [])
-
-            # The fixer diagnoses the live suite; no parsed/truncated failure
-            # output is supplied.
-            fix_prompt = [c[2] for c in mock.calls
-                          if c[1] == "fix_findings"][0]
-            self.assertIn("FULL-SUITE REPAIR", fix_prompt)
-            self.assertIn("test -f marker.txt", fix_prompt)
-            self.assertNotIn("VERIFICATION OUTPUT", fix_prompt)
-            self.assertIn("affected party", fix_prompt)
-            self.assertIn("permitted", fix_prompt)
-            self.assertIn("altitude", fix_prompt)
-
-            state = st.load(path)
-            unit = state["units"][-1]
-            # Episode closed: counter reset when the stage passed.
-            self.assertEqual(unit["verify_fix_attempts"],
-                             {"pre_review": 0, "pre_seal": 0})
-            self.assertEqual(
-                [r["kind"] for r in unit["rounds"]],
-                ["review_round", "review_round", "fix_findings",
-                 "review_round", "review_round"],
-            )
-            # Order: final FAIL -> fixer certifies green (declaring it did
-            # not touch the tests) -> amend -> fresh reviews -> exact
-            # certification reused. No delta review stands between the
-            # certification and the reviews, so nothing can force an edit
-            # that would invalidate it; the driver never executes the suite
-            # a second time.
-            events = state["events"]
-
-            def index_of(pred):
-                for i, e in enumerate(events):
-                    if pred(e):
-                        return i
-                self.fail("event not found")
-
-            i_fail = index_of(lambda e: e["type"] == "verification"
-                              and not e["ok"])
-            i_fix = index_of(lambda e: e["type"] == "round_recorded"
-                             and e["kind"] == "fix_findings")
-            self.assertEqual(
-                [e for e in events if e["type"] == "round_recorded"
-                 and e["kind"] == "delta_review"],
-                [],
-                "a suite repair that left the tests alone is not delta-reviewed",
-            )
-            i_amend = index_of(lambda e: e["type"] == "amended")
-            i_cert = index_of(lambda e: e["type"] == "verification"
-                              and e.get("fixer_certified")
-                              and not e.get("reused"))
-            i_ok = index_of(lambda e: e["type"] == "verification"
-                            and e.get("reused")
-                            and e.get("fixer_certified"))
-            i_review_after = index_of(
-                lambda e: e["type"] == "round_recorded"
-                and e["kind"] == "review_round"
-                and events.index(e) > i_amend
-            )
-            self.assertLess(i_fail, i_fix)
-            self.assertLess(i_fix, i_cert)
-            self.assertLess(i_fix, i_amend)
-            self.assertLess(i_amend, i_review_after)
-            self.assertLess(i_review_after, i_ok)
-
-    def test_no_delta_suite_success_continues_without_rerun(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_final_impl_state(
-                ws,
-                make_config(verification=["false"]),
-            )
-            mock = runners.MockRunner([
-                implement_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("fix_findings", suite_fix_ok(), family="codex"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver,
-                lambda state: state["units"][-1]["status"] == st.U_SEALED,
-            )
-            self.assertEqual(mock.script, [])
-            state = st.load(path)
-            unit = state["units"][-1]
-            self.assertEqual(unit["status"], st.U_SEALED)
-            self.assertEqual(unit["verify_fix_attempts"]["pre_seal"], 0)
-            self.assertEqual([r["kind"] for r in unit["rounds"]],
-                             ["review_round", "review_round", "fix_findings"])
-            actual = [
-                e for e in state["events"]
-                if e["type"] == "verification"
-                and not e.get("fixer_certified")
-                and not e.get("reused")
-            ]
-            self.assertEqual(len(actual), 1)
-            self.assertFalse(actual[0]["ok"])
-
-    def test_suite_fixer_blocked_stops_without_retrying_verification(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_final_impl_state(
-                ws, make_config(verification=["false"])
-            )
-            mock = runners.MockRunner([
-                implement_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step(
-                    "fix_findings",
-                    {
-                        "status": "blocked",
-                        "kind": "fix_findings",
-                        "blocked_reason": "the configured suite cannot run",
-                    },
-                    family="codex",
-                ),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            _actions, final = self.drive(driver)
-            self.assertEqual(final.type, drv.A_FAILED)
-            self.assertEqual(mock.script, [])
-            self.assertIn("configured suite cannot run", final.params["reason"])
-            state = st.load(path)
-            actual = [
-                e for e in state["events"]
-                if e["type"] == "verification"
-            ]
-            self.assertEqual(len(actual), 1)
-            self.assertFalse(actual[0]["ok"])
 
 
 # ---------------------------------------------------------------------------
@@ -787,12 +470,17 @@ class TestRejectionRegistry(DriverTestCase):
             claude_reviews = [c[2] for c in mock.calls
                               if c[0] == "claude" and c[1] == "review_round"]
             self.assertEqual(len(claude_reviews), 3)
-            self.assertIn("(none so far in this milestone)", claude_reviews[0])
-            self.assertIn("- [%s]" % self.REJECTION_ID, claude_reviews[1])
-            self.assertIn("[documented in docs/skeleton.md]",
-                          claude_reviews[1])
+            self.assertNotIn("ADJUDICATED REJECTIONS", claude_reviews[0])
+            self.assertIn("ADJUDICATED REJECTIONS", claude_reviews[1])
+            self.assertIn(
+                '"id": "%s"' % self.REJECTION_ID, claude_reviews[1]
+            )
+            self.assertIn(
+                '"documented_in": "docs/skeleton.md"',
+                claude_reviews[1],
+            )
             # The review AFTER the concession no longer sees settled law.
-            self.assertIn("(none so far in this milestone)", claude_reviews[2])
+            self.assertNotIn("ADJUDICATED REJECTIONS", claude_reviews[2])
 
             # The contesting finding reached the fixer with the contests
             # visible in the prompt.

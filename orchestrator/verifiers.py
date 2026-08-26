@@ -489,7 +489,6 @@ def validate_merged_output(obj, kind, extensions, roots,
                            allow_design_correction=False,
                            require_design_correction_verdict=False,
                            require_failure_gap=False,
-                           verification_repair=False,
                            base_validator=None):
     """Validate a worker output against the base kind contract PLUS the
     in-scope compiled extensions.
@@ -532,7 +531,6 @@ def validate_merged_output(obj, kind, extensions, roots,
                 require_design_correction_verdict
             ),
             require_failure_gap=require_failure_gap,
-            verification_repair=verification_repair,
         )
 
     if isinstance(obj, dict) and obj.get("status") in (

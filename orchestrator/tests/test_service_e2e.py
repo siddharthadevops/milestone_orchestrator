@@ -140,11 +140,16 @@ class TestServicePanelE2E(unittest.TestCase):
             return exc.code, parsed
 
     def _config(self):
-        worker_cmd = ["python3", FAKE_LLM, "--workspace", "{workspace}"]
         return {
             "commands": {
-                "codex": list(worker_cmd),
-                "claude": list(worker_cmd),
+                "codex": [
+                    "python3", FAKE_LLM, "--workspace", "{workspace}",
+                    "--family", "codex",
+                ],
+                "claude": [
+                    "python3", FAKE_LLM, "--workspace", "{workspace}",
+                    "--family", "claude",
+                ],
             },
             "timeouts": {"codex": 60, "claude": 60},
             # The skeleton defaults to claude/opus-5/max in real runs; in this
@@ -152,6 +157,8 @@ class TestServicePanelE2E(unittest.TestCase):
             # review work, not skeleton drafting/fixing).
             "acts": {"skeletoner": "codex"},
             "verification": ["python3 run_checks.py"],
+            # The calculator fake writes its canonical artifacts under docs/.
+            "docs_dir": "docs",
             "guarantee_calibration": {"enabled": False},
         }
 

@@ -323,8 +323,8 @@ class TempWorkspaceCase(unittest.TestCase):
 
 
 class TestNewState(TempWorkspaceCase):
-    def test_schema_version_is_2(self):
-        self.assertEqual(st.SCHEMA_VERSION, 2)
+    def test_schema_version_is_3(self):
+        self.assertEqual(st.SCHEMA_VERSION, 3)
 
     def test_top_level_shape(self):
         state = st.new_state("Build X", self.workspace, make_config())
@@ -339,7 +339,6 @@ class TestNewState(TempWorkspaceCase):
                 "milestone",
                 "units",
                 "events",
-                "suite_command",
                 "name",
                 "docs_dir",
                 "orchestrator_rev",
@@ -2067,9 +2066,9 @@ class TestSaveAtomicity(TempWorkspaceCase):
         self.assertEqual(self._tmp_leftovers(), [])
 
     def test_load_rejects_wrong_schema_versions(self):
-        # v1 (pre-redesign) states and anything else non-v2 are refused:
+        # Pre-activation states and anything else non-v3 are refused:
         # there is no migration path; the operator starts a fresh run.
-        for version in (0, 1, 3, "2", None):
+        for version in (0, 1, 2, 4, "3", None):
             with open(self.path, "w", encoding="utf-8") as fh:
                 json.dump({"schema_version": version}, fh)
             with self.assertRaises(RuntimeError, msg=repr(version)):
@@ -2284,7 +2283,6 @@ class TestReconciliationStateSeams(TempWorkspaceCase):
             "implementation_attempt_snapshot": {"revision": "old"},
             "implementation_stabilization": {"status": "waiting"},
             "brainstorming_review_handoff": {"session_id": "old"},
-            "suite_verification_pending": True,
             "has_gap_remodel": True,
         })
         return state, unit
@@ -2320,7 +2318,7 @@ class TestReconciliationStateSeams(TempWorkspaceCase):
             "pending_wip", "preserved_candidate",
             "implementation_attempt_snapshot",
             "implementation_stabilization", "brainstorming_review_handoff",
-            "suite_verification_pending", "has_gap_remodel",
+            "has_gap_remodel",
         ):
             self.assertNotIn(key, unit)
         event = state["events"][-1]
@@ -2538,7 +2536,6 @@ class TestSummary(TempWorkspaceCase):
                 "current_model",
                 "created_epoch",
                 "last_event_epoch",
-                "suite_command",
                 "name",
                 "docs_dir",
                 "failure",
@@ -2809,9 +2806,8 @@ class TestSummary(TempWorkspaceCase):
             state, "worker_malformed", label="legacy-unknown",
             duration_s=90,
         )
-        # Fatal calls still consumed provider work. A suite execution is
-        # completed work; reused and fixer-certified proof events execute no
-        # additional work.
+        # Fatal calls and the routed suite checkpoint both consumed provider
+        # work and are counted once.
         st.append_event(
             state, "worker_malformed", unit="skeleton", fatal=True,
             label="skeleton-fatal", duration_s=100,
@@ -2822,15 +2818,6 @@ class TestSummary(TempWorkspaceCase):
             cadence="milestone_final", ok=True, stable=True,
             duration_s=110,
         )
-        st.append_event(
-            state, "verification", unit="skeleton", reused=True,
-            ok=True, stable=True, duration_s=120,
-        )
-        st.append_event(
-            state, "verification", unit="skeleton", fixer_certified=True,
-            ok=True, stable=True, duration_s=130,
-        )
-
         summ = st.summary(state)
 
         self.assertEqual(summ["units"][0]["work_duration_s"], 593.0)
@@ -2845,20 +2832,16 @@ class TestSummary(TempWorkspaceCase):
             summ["units"][0]["brainstormings"][0]["duration_s"], 12
         )
         verifications = summ["units"][0]["verifications"]
-        self.assertEqual(len(verifications), 3)
+        self.assertEqual(len(verifications), 1)
         self.assertEqual(
             set(verifications[0]),
             {
                 "seq", "at", "stage", "boundary", "cadence", "ok",
-                "stable", "reused", "vacuous", "fixer_certified",
-                "duration_s",
+                "stable", "vacuous", "duration_s",
             },
         )
         self.assertEqual(verifications[0]["cadence"], "milestone_final")
         self.assertEqual(verifications[0]["duration_s"], 110)
-        self.assertFalse(verifications[0]["reused"])
-        self.assertTrue(verifications[1]["reused"])
-        self.assertTrue(verifications[2]["fixer_certified"])
 
     def test_summary_preserves_implementation_history_after_redraft(self):
         state = make_state(self.workspace)

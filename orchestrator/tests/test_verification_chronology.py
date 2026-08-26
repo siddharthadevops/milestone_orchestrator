@@ -607,21 +607,6 @@ class TestVerificationChronology(DriverTestCase):
             self.assertIsNone(
                 driver._full_verification_cadence(driver.state["units"][4])
             )
-
-    def test_review_evidence_preserves_command_boundaries(self):
-        split = ["export ORCH_FLAG=1", 'test "$ORCH_FLAG" = 1']
-        joined = ['export ORCH_FLAG=1 && test "$ORCH_FLAG" = 1']
-        with tempfile.TemporaryDirectory(prefix="orch-review-commands-") as ws:
-            path = init_state(ws, make_config(verification=split))
-            driver = drv.Driver(path, runner=runners.MockRunner([]))
-            unit = st.current_unit(driver.state)
-
-            split_fingerprint = driver._review_evidence_fingerprint(unit)
-            driver.config["verification"] = joined
-            joined_fingerprint = driver._review_evidence_fingerprint(unit)
-
-            self.assertNotEqual(split_fingerprint, joined_fingerprint)
-
     def test_due_suite_failure_fixes_then_rereviews_before_seal(self):
         marker = "suite-green.marker"
         command = "test -f %s" % marker
@@ -880,6 +865,7 @@ class TestVerificationChronology(DriverTestCase):
                 timeout=60,
             ).stdout
             self.assertIn("fixer-owned repair", subjects)
+
 
 
 if __name__ == "__main__":

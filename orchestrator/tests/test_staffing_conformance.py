@@ -24,14 +24,11 @@ from orchestrator import runners
 from orchestrator import service
 from orchestrator import staffing
 from orchestrator import task_api
-from orchestrator.tests import test_producer_selection as producer_cases
 from orchestrator.tests import test_staffing_api as api_cases
 from orchestrator.tests import test_staffing_brainstorming_cutover as brainstorming_cases
 from orchestrator.tests import test_staffing_driver_cutover as driver_cases
 from orchestrator.tests import test_staffing_sessions as session_cases
 from orchestrator.tests import test_staffing_standalone_cutover as standalone_cases
-from orchestrator.tests import test_task_api as task_api_cases
-from orchestrator.tests import test_task_conformance as task_conformance_cases
 
 
 class StaffingConformanceTest(driver_cases.StaffingCutoverTestCase):
@@ -360,34 +357,6 @@ class StaffingConformanceTest(driver_cases.StaffingCutoverTestCase):
             (
                 driver_cases.RunBinding,
                 "test_a_session_that_cannot_be_created_never_blocks_resume",
-            ),
-        )
-
-    def test_pre_cutover_records_and_worker_alias_remain_read_only(self):
-        self._assert_existing_cases(
-            (
-                standalone_cases.TaskCompatibilityBoundaryTest,
-                "test_direct_task_compatibility_boundary_is_field_presence",
-            ),
-            (
-                brainstorming_cases.BrainstormingCutoverTest,
-                "test_pre_cutover_brainstorming_bindings_resume_without_rewrite",
-            ),
-            (
-                task_api_cases.TaskApiTest,
-                "test_retired_executor_is_refused_on_write_and_read_from_storage",
-            ),
-            (
-                task_api_cases.TaskApiTest,
-                "test_task_reads_name_a_stored_retired_executor_as_agent_call",
-            ),
-            (
-                producer_cases.ProducerSelectionTest,
-                "test_retired_producer_id_projects_without_rewriting_its_plan",
-            ),
-            (
-                task_conformance_cases.TaskConformanceTest,
-                "test_old_plan_defaults_to_agent_call_without_migration",
             ),
         )
 

@@ -791,24 +791,6 @@ def validate_battery(battery, required_questions, ctx):
     return battery
 
 
-def validate_suite_command(command, ctx):
-    if not isinstance(command, str) or not command.strip():
-        raise ContractError(
-            "%s: suite_command, when present, must be a non-empty string"
-            % ctx
-        )
-    lowered = command.strip().lower()
-    if (
-        lowered in ("true", "false", ":", "exit 0", "exit")
-        or lowered.startswith("echo ")
-        or lowered.startswith("printf ")
-    ):
-        raise ContractError(
-            "%s: suite_command %r is a no-op, not a test suite"
-            % (ctx, command)
-        )
-
-
 def validate_need_rethink(
     obj, kind, ctx, require_plain=False, require_failure_gap=False
 ):
@@ -908,8 +890,7 @@ def validate_worker_output(obj, kind, require_plain=False,
                            require_drift_damage=False,
                            allow_design_correction=False,
                            require_design_correction_verdict=False,
-                           require_failure_gap=False,
-                           verification_repair=False):
+                           require_failure_gap=False):
     """Validate the full worker JSON output for a call of `kind`.
 
     require_plain: reform runs hard-require the plain/example lay mirror
@@ -922,10 +903,6 @@ def validate_worker_output(obj, kind, require_plain=False,
     """
     if kind not in KINDS:
         raise ContractError("unknown kind %r" % (kind,))
-    if verification_repair and kind != KIND_FIX_FINDINGS:
-        raise ContractError(
-            "verification_repair is only valid for fix_findings"
-        )
     ctx = "worker[%s]" % kind
     if not isinstance(obj, dict):
         raise ContractError("%s: output must be a JSON object" % ctx)
@@ -967,10 +944,6 @@ def validate_worker_output(obj, kind, require_plain=False,
             )
         return obj
     if status == "retry":
-        if verification_repair:
-            raise ContractError(
-                "%s: verification repair does not support retry" % ctx
-            )
         if kind != KIND_FIX_FINDINGS:
             raise ContractError(
                 "%s: retry status is only allowed for fix_findings" % ctx
@@ -983,7 +956,7 @@ def validate_worker_output(obj, kind, require_plain=False,
             )
         for claim in (
             "findings", "files_changed", "slices", "artifact", "gaps",
-            "battery", "suite_command", "suite_command_finding_id",
+            "battery",
             "design_correction", "design_correction_verdict",
             "implementation_cut",
         ):
@@ -1052,8 +1025,6 @@ def validate_worker_output(obj, kind, require_plain=False,
                     "%s: slices, when present, must be non-empty" % ctx
                 )
             validate_slices(slices, "%s.slices" % ctx)
-        if obj.get("suite_command") is not None:
-            validate_suite_command(obj["suite_command"], ctx)
     elif kind in REPORT_KINDS:
         findings = _require(obj, "findings", list, ctx)
         for i, f in enumerate(findings):
@@ -1079,11 +1050,6 @@ def validate_worker_output(obj, kind, require_plain=False,
             )
     elif kind == KIND_FIX_FINDINGS:
         findings = _require(obj, "findings", list, ctx)
-        if verification_repair and findings:
-            raise ContractError(
-                "%s: verification repair requires an empty findings list; "
-                "ok certifies the live full suite" % ctx
-            )
         for i, f in enumerate(findings):
             validate_fix_finding(f, "%s.findings[%d]" % (ctx, i))
         _assert_unique_finding_ids(findings, ctx)
@@ -1093,74 +1059,6 @@ def validate_worker_output(obj, kind, require_plain=False,
             validate_brainstorming_application(
                 application, "%s.brainstorming_application" % ctx
             )
-        if verification_repair:
-            if application is not None:
-                raise ContractError(
-                    "%s: verification repair cannot claim a Brainstorming "
-                    "application" % ctx
-                )
-            for claim in ("suite_command", "suite_command_finding_id"):
-                if claim in obj:
-                    raise ContractError(
-                        "%s: verification repair must not include %r"
-                        % (ctx, claim)
-                    )
-            # The suite is certified by this envelope alone, so the ONE
-            # thing that decides whether the certification can be trusted
-            # is whether the tests themselves were altered to obtain it.
-            # Declared, never inferred: "a test" is language-specific and
-            # in Rust or Elixir lives INSIDE the source file, so no path
-            # rule could decide it without inventing false violations.
-            # The declaration is therefore trusted, like the rest of the
-            # report-only contract — it only routes the review.
-            tests_modified = obj.get("tests_modified")
-            if not isinstance(tests_modified, bool):
-                raise ContractError(
-                    "%s: verification repair must declare tests_modified "
-                    "as a boolean" % ctx
-                )
-            changed_tests = _optional(obj, "tests_changed", list, ctx)
-            if tests_modified:
-                if not changed_tests:
-                    raise ContractError(
-                        "%s: tests_modified requires tests_changed naming "
-                        "every altered test file" % ctx
-                    )
-                for i, path in enumerate(changed_tests):
-                    if not isinstance(path, str) or not path.strip():
-                        raise ContractError(
-                            "%s.tests_changed[%d] must be a non-empty path"
-                            % (ctx, i)
-                        )
-            elif changed_tests:
-                raise ContractError(
-                    "%s: tests_changed contradicts tests_modified false"
-                    % ctx
-                )
-        else:
-            suite_command = obj.get("suite_command")
-            suite_finding_id = obj.get("suite_command_finding_id")
-            if suite_command is not None:
-                validate_suite_command(suite_command, ctx)
-                suite_finding_id = _require(
-                    obj, "suite_command_finding_id", str, ctx
-                )
-                matches = [
-                    finding for finding in findings
-                    if finding.get("id") == suite_finding_id
-                ]
-                if (
-                    len(matches) != 1
-                    or matches[0].get("disposition") != "fixed"
-                ):
-                    raise ContractError(
-                        "%s: suite_command_finding_id must name exactly one "
-                        "finding disposed 'fixed'" % ctx
-                    )
-            elif suite_finding_id is not None:
-                raise ContractError(
-                    "%s: suite_command_finding_id requires suite_command" % ctx
-                )
         # Optional updated slice plan: only meaningful when the fix touched
         # the milestone skeleton's slice table (before the skeleton seals).
         slices = _optional(obj, "slices", list, ctx)
@@ -1230,18 +1128,15 @@ KIND_OUTPUT_KEYS = {
     KIND_DRAFT_SKELETON: frozenset({"artifact", "slices", "battery"}),
     KIND_DRAFT_SLICE_NOTE: frozenset({"artifact", "battery", "slices"}),
     KIND_IMPLEMENT: frozenset(
-        {"files_changed", "suite_command", "slices", "implementation_cut"}
+        {"files_changed", "slices", "implementation_cut"}
     ),
     KIND_REVIEW_ROUND: frozenset({"findings", "files_changed"}),
     KIND_DELTA_REVIEW: frozenset(
         {"findings", "files_changed", "design_correction_verdict"}
     ),
-    # fix_findings may also carry suite_command (the driver adopts it when
-    # correcting/arming the verification gate).
     KIND_FIX_FINDINGS: frozenset(
         {
-            "findings", "files_changed", "slices", "suite_command",
-            "suite_command_finding_id", "design_correction",
+            "findings", "files_changed", "slices", "design_correction",
             "retry_reason", "brainstorming_application",
         }
     ),
@@ -1383,10 +1278,6 @@ Kind implement adds:
   "files_changed": ["<workspace-relative paths you created or edited>", ...]
   When the prompt includes SLICE PRODUCER PLANNING, also return the complete
   updated plan in "slices", using the same shape as draft_skeleton above.
-  "suite_command": "<the repo's official full-test-suite command, exactly
-   as you would run it from the workspace root; it must
-   be non-interactive and run the suite exactly ONCE and exit — never a
-   watch mode; null or omitted if the repo has no suite>"
   "implementation_cut": {"cut_scope": "<the coherent functional cut now
                             complete and ready for review>",
                          "remaining_scope": "<the original slice obligations
@@ -1399,14 +1290,6 @@ Kind implement adds:
    field reports the boundary; it does not let you choose labels or
    create/renumber design slices. The orchestrator derives a/b/c sequentially
    and opens the next part only after this one completes its full review cycle.
-
-Kind fix_findings may ALSO include "suite_command" when a queued finding
-identifies a missing, narrowed, or wrong final verification command — whether the
-finding came from verification or review. The driver adopts that
-state correction, makes the updated command part of review evidence, and
-runs it at the final boundary after current-byte reviews are clean.
-It must also include "suite_command_finding_id", naming that queued finding;
-the referenced finding must be disposed "fixed".
 
 REVIEW kinds (review_round / delta_review) add:
   "findings": [
@@ -1565,9 +1448,6 @@ cannot be demonstrated, the finding is invalid: `rejected` requires its
 consultation (`rejected_adjudicated` remains the settled-duplicate path), and
 both rejection dispositions require exceeds_baseline=false. Include extra
 fields required by an active block.
-When fixing a queued final-suite-command finding, also return `suite_command`
-and `suite_command_finding_id`; the command must run the official full suite
-once, non-interactively, from the workspace root.
 
 Impossible worker task (not a finding disposition):
 {"status":"blocked","kind":"fix_findings","blocked_reason":"..."}
@@ -1586,43 +1466,12 @@ findings with this status.
 """
 
 
-SUITE_FIX_CONTRACT_TEXT = """OUTPUT CONTRACT (mandatory)
-Return exactly one JSON object; no prose or markdown fences.
-
-Completed suite repair:
-{"status":"ok","kind":"fix_findings","findings":[],
- "files_changed":["..."],"tests_modified":false,"tests_changed":[],
- "notes":"<optional short note>"}
-`status: "ok"` certifies that you ran the configured full suite on the final
-workspace bytes and it passed. `findings` must be empty: this task repairs the
-live suite result, not a stored review finding.
-`tests_modified` is REQUIRED and boolean: true if you altered any test CODE to
-reach green — wherever it lives, including tests embedded in a source file —
-false otherwise, naming what you altered in `tests_changed`. It is taken at
-its word: a false `no` skips the review that would have caught it.
-When the prompt explicitly requires slice-plan synchronization or offers a
-legacy design correction, include its normal `slices` or `design_correction`
-field as well; those fields receive their ordinary validation.
-
-Impossible worker task:
-{"status":"blocked","kind":"fix_findings","blocked_reason":"..."}
-
-Focused discussion before completing a required in-goal design change:
-{"status":"need_rethink","kind":"fix_findings","request":"...",
- "finding":{<copy the complete SOURCE SIGNAL from the prompt>},
- "target_path":"<normalized workspace-relative path>",
- "max_rounds":__ROUNDS__,"result_mode":"proposal|design_amendment"}
-The session may close earlier on agreement. Return no work claims with this
-status.
-"""
-
 # One source for the milestone Brainstorming round limit inside the contract
 # texts: substituted here so the number can never drift from the validator.
-CONTRACT_TEXT, REPORT_CONTRACT_TEXT, FIX_CONTRACT_TEXT, SUITE_FIX_CONTRACT_TEXT = (
+CONTRACT_TEXT, REPORT_CONTRACT_TEXT, FIX_CONTRACT_TEXT = (
     _text.replace("__ROUNDS__", str(MILESTONE_BRAINSTORMING_ROUNDS))
     for _text in (
         CONTRACT_TEXT, REPORT_CONTRACT_TEXT, FIX_CONTRACT_TEXT,
-        SUITE_FIX_CONTRACT_TEXT,
     )
 )
 
@@ -1657,17 +1506,3 @@ def prompt_contract(kind, gap_enabled=False):
         else ""
     )
     return CONTRACT_TEXT + legacy_rethink
-
-
-def suite_fix_contract(gap_enabled=False):
-    """Output contract for a fixer that owns full-suite convergence."""
-    gap = (
-        "\nDesign contradiction:\n"
-        "When GAP EXIT applies, return exactly "
-        "{\"status\":\"gap\",\"kind\":\"fix_findings\","
-        "\"gaps\":[<one or more gap entries>]}; no findings or work "
-        "claims.\n"
-        if gap_enabled else ""
-    )
-    legacy_rethink = LEGACY_FAILURE_GAP_CONTRACT if gap_enabled else ""
-    return SUITE_FIX_CONTRACT_TEXT + gap + legacy_rethink

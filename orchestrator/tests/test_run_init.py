@@ -22,13 +22,16 @@ import unittest
 
 from orchestrator import driver as drv
 from orchestrator import kvstore
+from orchestrator import ledgers
 from orchestrator import projects
 from orchestrator import runners
 from orchestrator import state as st
 from orchestrator import workareas
 from orchestrator.tests.test_driver_mock import (
+    git_init_workspace,
     make_config,
     ok,
+    questions,
     report,
     step,
     write_file,
@@ -65,22 +68,42 @@ def _ws_state(workspace):
 def draft_step():
     """A scripted skeleton draft: the one MockRunner step AC1 needs to
     show a project-bound run is drivable."""
+    response = ok(
+        "draft_skeleton",
+        artifact="pending",
+    )
+
+    def write_skeleton(workspace):
+        document = st.load(_ws_state(workspace))
+        artifact = ledgers.skeleton_path(document)
+        response["artifact"] = artifact
+        write_file(
+            artifact,
+            "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+            % json.dumps({
+                "slices": [{
+                    "id": 1,
+                    "title": "One",
+                    "intent": "Exercise bound run initialization.",
+                    "producer_task_executor": {
+                        "draft_slice_note": "agent_call",
+                        "implement": "agent_call",
+                    },
+                }],
+            }),
+        )(workspace)
+
     return step(
         "draft_skeleton",
-        ok(
-            "draft_skeleton",
-            artifact="docs/skeleton.md",
-            slices=[{"id": 1, "title": "One"}],
-        ),
+        response,
         family="codex",
-        side_effect=write_file("docs/skeleton.md", "# Skeleton\n"),
+        side_effect=write_skeleton,
     )
 
 
 def mock_config():
-    """Deterministic driver config for bound runs: fake commands, git
-    disabled (the ledger repo is not under test here)."""
-    return make_config(git={"enabled": False})
+    """Deterministic driver config for bound runs."""
+    return make_config(git={"enabled": True})
 
 
 class RunInitTestCase(unittest.TestCase):
@@ -96,6 +119,7 @@ class RunInitTestCase(unittest.TestCase):
         self.lib = os.path.join(root, "lib")
         os.makedirs(self.repo)
         os.makedirs(self.lib)
+        git_init_workspace(self.repo)
         self.primary = {"path": self.repo, "device": 1}
         self.additional = [{"path": self.lib, "device": "dev-lib"}]
 
@@ -219,7 +243,9 @@ class TestHappyPath(RunInitTestCase):
         state = st.load(path)
         self.assertIsNone(state["failure"])
         self.assertEqual(state["units"][0]["status"], st.U_PRE_REVIEW_VERIFY)
-        self.assertEqual(state["units"][0]["artifact"], "docs/skeleton.md")
+        self.assertEqual(
+            state["units"][0]["artifact"], ledgers.skeleton_path(state)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +278,7 @@ class TestProjectResolvedEvent(RunInitTestCase):
                     "status": "blocked",
                     "kind": "review_round",
                     "blocked_reason": "operator input needed",
+                    "questions": questions("review_round"),
                 },
                 family="codex",
             ),

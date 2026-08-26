@@ -2140,9 +2140,9 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
 
     def test_only_report_only_kinds_are_recoverable(self):
         # A kind whose optional keys DIRECT the machine must never be
-        # recovered: `implement` carries suite_command, which retargets
-        # the verification gate, so "the required keys are present" does
-        # not prove the object was finished. Those keep the repair retry.
+        # recovered: implement may carry an implementation cut or plan
+        # directive, so "the required keys are present" does not prove the
+        # object was finished. Those keep the repair retry.
         self.assertEqual(
             runners.RECOVERABLE_KINDS, frozenset({"review_round"})
         )
@@ -2150,8 +2150,8 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
             '{"status": "ok", "kind": "implement", '
             '"files_changed": ["calc.py"]'
         )
-        # Recoverable in shape (only the brace is missing) yet refused,
-        # because a `,"suite_command": ...` may have been cut.
+        # Recoverable in shape (only the brace is missing) yet refused because
+        # an optional machine-directing field may have been cut.
         self.assertIsNotNone(runners._repair_unterminated(text))
         with self.assertRaises((ValueError, contracts.ContractError)):
             runners._extract_contract_output(
@@ -2626,77 +2626,6 @@ class TestApplyModelEffort(unittest.TestCase):
         self.assertEqual(
             apply_model_effort(self.CODEX, "sonnet", "high"), self.CODEX
         )
-
-
-# implement suite_command (verification protocol discovery)
-
-
-class TestImplementSuiteCommand(unittest.TestCase):
-    def base(self, **extra):
-        obj = {"status": "ok", "kind": "implement", "files_changed": ["x.py"]}
-        obj.update(extra)
-        return obj
-
-    def test_absent_and_null_are_valid(self):
-        contracts.validate_worker_output(self.base(), "implement")
-        contracts.validate_worker_output(
-            self.base(suite_command=None), "implement")
-
-    def test_string_command_is_valid(self):
-        contracts.validate_worker_output(
-            self.base(suite_command="mix test"), "implement")
-
-    def test_empty_or_nonstring_rejected(self):
-        with self.assertRaises(contracts.ContractError):
-            contracts.validate_worker_output(
-                self.base(suite_command="   "), "implement")
-        with self.assertRaises(contracts.ContractError):
-            contracts.validate_worker_output(
-                self.base(suite_command=42), "implement")
-
-
-class TestFixSuiteCommand(unittest.TestCase):
-    def base(self, **extra):
-        obj = ok_output(
-            contracts.KIND_FIX_FINDINGS,
-            findings=[dict(full_finding("fixed"), id="F1")],
-            files_changed=[],
-        )
-        obj.update(extra)
-        return obj
-
-    def test_command_is_bound_to_fixed_finding(self):
-        contracts.validate_worker_output(
-            self.base(
-                suite_command="mix precommit",
-                suite_command_finding_id="F1",
-            ),
-            contracts.KIND_FIX_FINDINGS,
-        )
-
-    def test_command_without_finding_binding_is_rejected(self):
-        with self.assertRaises(contracts.ContractError):
-            contracts.validate_worker_output(
-                self.base(suite_command="mix precommit"),
-                contracts.KIND_FIX_FINDINGS,
-            )
-
-    def test_binding_must_name_fixed_finding(self):
-        with self.assertRaises(contracts.ContractError):
-            contracts.validate_worker_output(
-                self.base(
-                    suite_command="mix precommit",
-                    suite_command_finding_id="F2",
-                ),
-                contracts.KIND_FIX_FINDINGS,
-            )
-
-    def test_binding_without_command_is_rejected(self):
-        with self.assertRaises(contracts.ContractError):
-            contracts.validate_worker_output(
-                self.base(suite_command_finding_id="F1"),
-                contracts.KIND_FIX_FINDINGS,
-            )
 
 
 # snapshot_workspace

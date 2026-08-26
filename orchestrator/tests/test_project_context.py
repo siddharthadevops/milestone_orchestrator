@@ -16,6 +16,7 @@ through Slice 5's init_run and driven over MockRunner. Policies here are
 ILLUSTRATIVE (slice-03's rule): the real reuse-audit content is Slice 10's.
 """
 
+import json
 import os
 import shutil
 import tempfile
@@ -48,6 +49,17 @@ from orchestrator.tests.test_prompts import normalized
 
 GOAL = "Exercise the project context block"
 _OMIT_PROJECT_CONTEXT = object()
+PLAN = {
+    "slices": [{
+        "id": 1,
+        "title": "One",
+        "intent": "Exercise the project context boundary.",
+        "producer_task_executor": {
+            "draft_slice_note": "agent_call",
+            "implement": "agent_call",
+        },
+    }],
+}
 
 
 def policy_value(pid="ctx-guard", version=1, enabled=True,
@@ -108,7 +120,7 @@ def build_all_bound(project_context=_OMIT_PROJECT_CONTEXT, amendments=None):
         ),
         "implement": prompts.build_implement(
             tp.FAMILY, tp.WORKSPACE, tp.GOAL, tp.SLICE, "docs/slice-01.md",
-            ["make test"], **kw
+            **kw
         ),
         "review_round": prompts.build_review_round(
             tp.FAMILY, tp.WORKSPACE, tp.GOAL, tp.UNIT, "docs/slice-01.md",
@@ -143,7 +155,6 @@ def skeleton_ok(**extra):
     return ok(
         "draft_skeleton",
         artifact="docs/skeleton.md",
-        slices=[{"id": 1, "title": "One"}],
         **extra
     )
 
@@ -152,7 +163,11 @@ def skeleton_draft_step(**extra):
     return step(
         "draft_skeleton",
         skeleton_ok(**extra),
-        side_effect=write_file("docs/skeleton.md", "# Skeleton\n"),
+        side_effect=write_file(
+            "docs/skeleton.md",
+            "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+            % json.dumps(PLAN),
+        ),
     )
 
 
@@ -271,7 +286,7 @@ class TestSafeguardRendering(unittest.TestCase):
     def one_prompt(self, ctx):
         return prompts.build_implement(
             tp.FAMILY, tp.WORKSPACE, tp.GOAL, tp.SLICE, "docs/slice-01.md",
-            ["make test"], project_context=ctx,
+            project_context=ctx,
         )
 
     def test_renders_id_version_text_obligation_and_checks(self):
@@ -386,7 +401,7 @@ class ProjectRunTestCase(unittest.TestCase):
             "work_area": self.WORK_AREA,
         }
 
-    def init_bound(self, git=False):
+    def init_bound(self, git=True):
         if git:
             git_init_workspace(self.repo)
         # This scenario exercises PROJECT CONTEXT rendering, not the P3
@@ -546,9 +561,9 @@ class TestSeenEvents(ProjectRunTestCase):
             event for event in refreshed["events"]
             if event.get("type") == "review_cycle_restarted"
         ])
-        self.assertIn("WORKER EPISODE AUTHORITY REFRESH", resumed.runner.calls[-1][2])
-        self.assertIn("SAFEGUARD ctx-guard v2", resumed.runner.calls[-1][2])
-        self.assertIn("replaces rather than unions", resumed.runner.calls[-1][2])
+        refreshed_prompt = resumed.runner.calls[-1][2]
+        self.assertIn("SAFEGUARD ctx-guard v2", refreshed_prompt)
+        self.assertNotIn("SAFEGUARD ctx-guard v1", refreshed_prompt)
 
     def test_disabled_and_out_of_scope_render_nothing_and_record_zero(self):
         self.put_policy(pid="disabled-p", enabled=False)
@@ -658,14 +673,14 @@ class TestEnforcementBinding(ProjectRunTestCase):
         driver = self.make_driver(
             path,
             [
-                step("draft_skeleton", skeleton_ok()),  # omits context_ack
+                skeleton_draft_step(),  # omits context_ack
                 skeleton_draft_step(context_ack=[{"evidence": citation}]),
             ],
         )
         driver.step()
         self.assertIsNone(driver.state["failure"])
         self.assertEqual(len(driver.runner.calls), 2)
-        self.assertIn("REPAIR", driver.runner.calls[1][2])
+        self.assertIn("CONTRACT CORRECTION", driver.runner.calls[1][2])
         self.assertIn(
             "context_ack", driver.runner.calls[1][2]
         )  # the repair names the missing slot
@@ -680,11 +695,17 @@ class TestEnforcementBinding(ProjectRunTestCase):
         outside = os.path.join(self._tmp.name, "outside.py")
         with open(outside, "w", encoding="utf-8") as fh:
             fh.write("# real but ungranted\n")
-        bad = skeleton_ok(context_ack=[{"evidence": outside + ":1"}])
         path = self.init_bound()
         driver = self.make_driver(
             path,
-            [step("draft_skeleton", bad), step("draft_skeleton", bad)],
+            [
+                skeleton_draft_step(
+                    context_ack=[{"evidence": outside + ":1"}]
+                ),
+                skeleton_draft_step(
+                    context_ack=[{"evidence": outside + ":1"}]
+                ),
+            ],
         )
         driver.step()
         failure = driver.state["failure"]
@@ -707,33 +728,6 @@ class TestEnforcementBinding(ProjectRunTestCase):
         self.assertEqual(
             driver.state["units"][0]["status"], st.U_PRE_REVIEW_VERIFY
         )
-
-    def test_blocked_output_is_exempt_from_extension_enforcement(self):
-        self.cite_policy()
-        path = self.init_bound()
-        driver = self.make_driver(
-            path,
-            [
-                step(
-                    "draft_skeleton",
-                    {
-                        "status": "blocked",
-                        "kind": "draft_skeleton",
-                        "blocked_reason": "cannot proceed",
-                    },
-                )
-            ],
-        )
-        driver.step()
-        failure = driver.state["failure"]
-        self.assertIsNotNone(failure)
-        self.assertIn("worker blocked: cannot proceed", failure["reason"])
-        self.assertNotIn("contract-violating", failure["reason"])
-        # Operator-gated type: the guard must never emergency-probe a
-        # worker that stopped to ask the operator (would default to
-        # "unknown" and be resumed every 15 min forever).
-        self.assertEqual(failure["type"], "worker_blocked")
-        self.assertEqual(len(driver.runner.calls), 1)  # no repair burned
 
     def test_descriptor_replacement_mid_run_changes_nothing(self):
         self.cite_policy(kinds=("review_round",))
@@ -931,7 +925,7 @@ class TestFailClosed(ProjectRunTestCase):
         driver = self.step_and_expect_failure(
             path,
             "does not exist under the granted work-area roots",
-            script=[step("draft_skeleton", skeleton_ok(context_ack=[]))],
+            script=[skeleton_draft_step(context_ack=[])],
         )
         # One worker call, no repair retry: the fault is the environment's.
         self.assertEqual(len(driver.runner.calls), 1)
@@ -962,9 +956,10 @@ class TestProjectlessInertness(ProjectRunTestCase):
         self.put_policy()
         ws = os.path.join(self._tmp.name, "plain-ws")
         os.makedirs(ws)
+        git_init_workspace(ws)
         path = drv.init_run(
             GOAL, ws,
-            config=make_config(git={"enabled": False}, docs_dir="docs"),
+            config=make_config(git={"enabled": True}, docs_dir="docs"),
         )
         driver = self.make_driver(
             path,
@@ -1020,11 +1015,27 @@ class TestNoPolicyProjectEndToEnd(ProjectRunTestCase):
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
             step("implement",
-                 ok("implement", files_changed=["main.py"],
-                    suite_command=None),
+                 ok("implement", files_changed=["main.py"]),
                  side_effect=write_file("main.py", "print('hi')\n")),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
+            step(
+                "suite_checkpoint",
+                {
+                    "status": "no_suite",
+                    "kind": "suite_checkpoint",
+                    "commands": [],
+                    "results": [],
+                    "authority": {
+                        "source": "repository",
+                        "evidence": [{
+                            "path": "docs/skeleton.md",
+                            "basis": "The fixture declares no complete suite.",
+                        }],
+                    },
+                },
+                family="claude",
+            ),
         ]
         driver = self.make_driver(path, script)
         for _ in range(60):
@@ -1041,7 +1052,8 @@ class TestNoPolicyProjectEndToEnd(ProjectRunTestCase):
         # build_all_bound tests.
         self.assertEqual(
             kinds_called,
-            set(contracts.KINDS) - {contracts.KIND_RECLASSIFY},
+            (set(contracts.KINDS) - {contracts.KIND_RECLASSIFY})
+            | {"suite_checkpoint"},
         )
         for _family, kind, prompt in driver.runner.calls:
             flat = normalized(prompt)

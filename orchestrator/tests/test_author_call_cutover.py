@@ -658,6 +658,15 @@ class DriverAuthorActivationTest(unittest.TestCase):
                 "KIND: draft_skeleton", "WORKSPACE: %s" % ws,
             ])
             self.assertNotIn("FAMILY:", runner.calls[0][2])
+            self.assertIn(
+                "This set replaces every mutable operator amendment shown "
+                "earlier.",
+                runner.calls[0][2],
+            )
+            self.assertIn(
+                "CURRENT MUTABLE OPERATOR AMENDMENTS: none.",
+                runner.calls[0][2],
+            )
             self.assertEqual(
                 [item["id"] for item in persisted["milestone"]["slices"]],
                 [1],
@@ -841,212 +850,6 @@ class DriverAuthorActivationTest(unittest.TestCase):
                 for event in reloaded["events"]
             ))
             self.assertIsNone(reloaded["tasks"][0]["result"])
-
-    def test_sealed_guard_keeps_an_accepted_author_plan_delta(self):
-        with tempfile.TemporaryDirectory(prefix="orch-author-plan-") as ws, \
-                tempfile.TemporaryDirectory(prefix="orch-author-home-") as home:
-            subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
-            subprocess.run(
-                ["git", "config", "user.email", "test@example.com"],
-                cwd=ws,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.name", "Test"],
-                cwd=ws,
-                check=True,
-            )
-            config = driver.load_config(None)
-            driver.merge_config(config, {
-                "git": {"enabled": True},
-                "docs_dir": "milestone",
-                "error_classifier": False,
-                "infra_retry_backoff_s": [],
-            })
-            state_path = driver.init_run(
-                "Build one slice.",
-                ws,
-                config=config,
-                model_profiles_home=home,
-                prompt_set="missing",
-            )
-            persisted = state.load(state_path)
-            skeleton_path = ledgers.skeleton_path(persisted)
-            skeleton_file = os.path.join(ws, skeleton_path)
-            os.makedirs(os.path.dirname(skeleton_file), exist_ok=True)
-
-            def document(title, prose, slice_ids=(1,)):
-                plan = {"slices": [{
-                    "id": slice_id,
-                    "title": title if index == 0 else "Old",
-                    "intent": "Build one thing.",
-                    "producer_task_executor": {
-                        "draft_slice_note": "agent_call",
-                        "implement": "agent_call",
-                    },
-                } for index, slice_id in enumerate(slice_ids)]}
-                return (
-                    "%s\n\n## Canonical slice plan\n```json\n%s\n```\n"
-                    % (prose, json.dumps(plan))
-                )
-
-            with open(skeleton_file, "w", encoding="utf-8") as handle:
-                handle.write(document("Old", "SEALED PROSE"))
-            subprocess.run(
-                ["git", "add", skeleton_path], cwd=ws, check=True
-            )
-            subprocess.run(
-                ["git", "commit", "-qm", "reviewed skeleton"],
-                cwd=ws,
-                check=True,
-            )
-            gate = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=ws, text=True
-            ).strip()
-            canonical_plan.establish_current_plan(persisted, skeleton_path)
-            skeleton = persisted["units"][0]
-            skeleton.update({
-                "status": state.U_SEALED,
-                "artifact": skeleton_path,
-                "gate_commit": gate,
-            })
-            state.ensure_next_unit(persisted)
-            state.save(state_path, persisted)
-
-            subject = driver.Driver(
-                state_path,
-                runner=runners.MockRunner([]),
-                model_profiles_home=home,
-            )
-            unit = state.current_unit(subject.state)
-            kind = contracts.KIND_DRAFT_SLICE_NOTE
-            authority = subject._worker_episode_authority(unit, kind)
-            prepared = subject._prepare_author_package(
-                unit, kind, "document", authority
-            )
-            note_path = ledgers.slice_note_path(subject.state, 1)
-            reply = {
-                "status": "ok",
-                "kind": kind,
-                "artifact": note_path,
-                "questions": answered(prepared.bound),
-            }
-
-            def edit_plan(workspace):
-                with open(skeleton_file, "w", encoding="utf-8") as handle:
-                    handle.write(document(
-                        "New", "UNAUTHORIZED PROSE", slice_ids=(1, 2)
-                    ))
-                note_file = os.path.join(workspace, note_path)
-                os.makedirs(os.path.dirname(note_file), exist_ok=True)
-                with open(note_file, "w", encoding="utf-8") as handle:
-                    handle.write("# Slice note\n")
-
-            subject.runner = runners.MockRunner([{
-                "expect_kind": kind,
-                "side_effect": edit_plan,
-                "response": reply,
-            }])
-            subject.step()
-
-            reloaded = state.load(state_path)
-            with open(skeleton_file, "rb") as handle:
-                surviving = handle.read()
-            self.assertIn(b"SEALED PROSE", surviving)
-            self.assertNotIn(b"UNAUTHORIZED PROSE", surviving)
-            self.assertEqual(
-                canonical_plan.canonical_block_bytes(surviving),
-                canonical_plan.canonical_block_bytes(document(
-                    "New", "x", slice_ids=(1, 2)
-                )),
-            )
-            self.assertEqual(
-                reloaded["milestone"]["slices"][0]["title"], "New"
-            )
-            self.assertEqual(
-                state.unit_identity(state.current_unit(reloaded)),
-                (state.UNIT_SLICE_DOC, 1, None),
-            )
-            canonical_plan.guarded_dispatch(reloaded, lambda: None)
-
-            unit = state.current_unit(subject.state)
-            self.assertEqual(
-                state.unit_identity(unit),
-                (state.UNIT_SLICE_DOC, 1, None),
-            )
-            note_path = ledgers.slice_note_path(subject.state, 1)
-            reply = {
-                **reply,
-                "artifact": note_path,
-            }
-
-            def edit_plan_before_rejected_reply(workspace):
-                with open(skeleton_file, "w", encoding="utf-8") as handle:
-                    handle.write(document(
-                        "Newest", "SECOND UNAUTHORIZED PROSE",
-                        slice_ids=(1, 2, 3),
-                    ))
-
-            subject.runner = runners.MockRunner([{
-                "expect_kind": kind,
-                "side_effect": edit_plan_before_rejected_reply,
-                "response": reply,
-            }])
-            prepare_package = subject._prepare_author_package
-
-            def package_with_safeguard_failure(*args, **kwargs):
-                prepared = prepare_package(*args, **kwargs)
-
-                def reject_after_dispatch(_reply):
-                    raise verifiers.OperationalError(
-                        "safeguard source became unavailable"
-                    )
-
-                return prepared._replace(validate=reject_after_dispatch)
-
-            raw_name = "sealed-validation-failure"
-            with mock.patch.object(
-                subject,
-                "_prepare_author_package",
-                side_effect=package_with_safeguard_failure,
-            ), self.assertRaises(driver.StopStep):
-                subject._call(
-                    "codex",
-                    "legacy prompt",
-                    kind,
-                    raw_name,
-                    prepare_call=subject._author_prepare_call(
-                        unit, kind, "document", raw_name
-                    ),
-                    episode_unit=unit,
-                )
-
-            rejected = state.load(state_path)
-            with open(skeleton_file, "rb") as handle:
-                surviving = handle.read()
-            self.assertIn(b"SEALED PROSE", surviving)
-            self.assertNotIn(b"SECOND UNAUTHORIZED PROSE", surviving)
-            self.assertEqual(
-                canonical_plan.canonical_block_bytes(surviving),
-                canonical_plan.canonical_block_bytes(
-                    document("Newest", "ignored", slice_ids=(1, 2, 3))
-                ),
-            )
-            self.assertEqual(
-                rejected["milestone"]["slices"][0]["title"], "Newest"
-            )
-            unaccepted = next(
-                event for event in reversed(rejected["events"])
-                if event["type"] == "worker_unaccepted"
-            )
-            self.assertEqual(unaccepted["unit"], state.unit_key(unit))
-            self.assertEqual(
-                unaccepted["prompt_set_fallback"],
-                prompt_sets.PROMPT_SET_FALLBACK_DEFAULT,
-            )
-            self.assertEqual(
-                rejected["failure"]["unit"], state.unit_key(unit)
-            )
 
 
 class DriverAuthorFindingRegressionTest(unittest.TestCase):

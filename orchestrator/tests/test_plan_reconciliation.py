@@ -111,6 +111,10 @@ class PlanReconciliationTests(unittest.TestCase):
         self._git("commit", "-q", "-m", message)
         return self._git("rev-parse", "HEAD")
 
+    def _initialize_run(self, state_path, run_state):
+        driver._write_initial_amendments(state_path)
+        st.save(state_path, run_state)
+
     def _unit(self, kind, slice_id, gate, status=st.U_SEALED):
         unit = st._new_unit(kind, slice_id)
         unit["status"] = status
@@ -173,7 +177,7 @@ class PlanReconciliationTests(unittest.TestCase):
             sha=self.milestone_start,
         )
         state_path = driver.default_state_path(self.workspace)
-        st.save(state_path, run_state)
+        self._initialize_run(state_path, run_state)
         subject = driver.Driver(state_path)
         unit = next(
             candidate for candidate in subject.state["units"]
@@ -331,7 +335,7 @@ class PlanReconciliationTests(unittest.TestCase):
         )
         st.ensure_due_unit(run_state)
         state_path = driver.default_state_path(self.workspace)
-        st.save(state_path, run_state)
+        self._initialize_run(state_path, run_state)
 
         def append_future_plan(workspace):
             self._write(self.path, _document([
@@ -426,7 +430,7 @@ class PlanReconciliationTests(unittest.TestCase):
             })
             run_state = st.new_state("goal", workspace, config)
             state_path = driver.default_state_path(workspace)
-            st.save(state_path, run_state)
+            self._initialize_run(state_path, run_state)
 
             def write_initial_plan(_workspace):
                 with open(skeleton_path, "w", encoding="utf-8") as handle:

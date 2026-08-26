@@ -118,7 +118,7 @@ class GapPromptGatingTest(unittest.TestCase):
 
     def _implement(self, gap_enabled):
         return prompts.build_implement(
-            "codex", "/ws", "goal", self.SLICE, "n.md", [],
+            "codex", "/ws", "goal", self.SLICE, "n.md",
             gap_enabled=gap_enabled)
 
     def test_gap_block_absent_by_default(self):
@@ -241,11 +241,11 @@ class GapPromptGatingTest(unittest.TestCase):
         # slice note is unchanged, so without this the prompt is byte-identical
         # and the implementer re-gaps until gap_stall (finding 2, round 4).
         base = prompts.build_implement(
-            "codex", "/ws", "goal", self.SLICE, "n.md", [],
+            "codex", "/ws", "goal", self.SLICE, "n.md",
             gap_enabled=True, skeleton_path="docs/skeleton.md",
             remodeled=False)
         redraft = prompts.build_implement(
-            "codex", "/ws", "goal", self.SLICE, "n.md", [],
+            "codex", "/ws", "goal", self.SLICE, "n.md",
             gap_enabled=True, skeleton_path="docs/skeleton.md",
             remodeled=True)
         self.assertNotIn("UPDATED DESIGN ASSIGNMENT", base)

@@ -124,14 +124,14 @@ diagnoses close through the existing operational-failure path. Classifier LLM
 calls are separate activity, never discussion or target authority, and their
 time is included in accumulated LLM work.
 
-A successful milestone `need_rethink` agreement is binding for its application
-step. A builder or fixer resumes its original editable task; an agreement
-requested by a review or delta review queues a fixer immediately, before any
-further review. That worker applies the accepted result to the real workspace
-when it entails implementation. When it entails no workspace change or is
-already satisfied, the worker must say so without manufacturing an edit.
-It cannot open another discussion before completing that application.
-Ordinary verification and review run only after that application step.
+A milestone `need_rethink` discussion works directly in the project repository.
+On agreement, its editing turns are already commits and the terminal handoff
+must name the sealed `source_base_revision..accepted_revision` range. The driver
+observes that range through the ordinary canonical-plan boundary and opens
+reconciliation only when its plan consequence requires it. Nothing is applied
+at close and no old worker continuation resumes: the originating kind runs
+fresh against the resulting repository. A missing range or a discussion that
+ends without agreement fails closed to the operator.
 
 Work starts from a project's **⋯ menu**, never from a standing button:
 "New milestone" and "New brainstorming" are the first two items (every user
@@ -140,18 +140,18 @@ administrative). "New milestone" preselects that project and takes a goal
 text **or a work-description doc path** (its content
 becomes the goal, snapshotted at launch), an optional verification command,
 and an optional advanced config JSON merged over defaults. Verification
-is zero-config by default: the implement worker reports the repo's
-official full-suite command (`suite_command` in its contract), and the driver
-uses it at scheduled implementation checkpoints (explicit config
-`verification` wins; a `fix_findings` `suite_command` that fixes a stale
-explicit gate replaces it for later checkpoints). Documentation does not run
-the full suite. Implementation runs it after every fourth completed logical
-slice and at milestone completion. Split implementation parts (`a`...`z`)
-still count as one logical slice. Focused checks remain the implementer's and
-fixer's ordinary feedback while bytes change; there are no full-suite runs
-between review/fix cycles. Each scheduled execution or reuse
-lands in the ledger, and `verification_timeout` defaults to unlimited —
-suites may legitimately run for hours. Panel launches
+is zero-config by default. At every fourth completed logical implementation
+slice and at milestone completion, the driver dispatches one routed
+`suite_checkpoint` LLM call. Explicit config `verification` supplies the exact
+ordered commands; otherwise the checkpoint agent inspects repository authority
+for the complete suite and may report `no_suite`. The driver executes no shell
+suite and implementers/fixers report no suite command. A failed checkpoint
+enters the ordinary fixer cycle and a fresh unchanged checkpoint remains due.
+Documentation does not run the full suite, and split implementation parts
+(`a`...`z`) still count as one logical slice. Focused checks remain the
+implementer's and fixer's ordinary feedback while bytes change; there are no
+full-suite runs between review/fix cycles. Each scheduled checkpoint lands in
+the ledger. Panel launches
 enable `git.enabled` by default — the full gate/amend/delta-review
 discipline described above; pass `{"git": {"enabled": false}}` in the
 advanced config for a deliberate pure-state run.

@@ -63,7 +63,8 @@ NONDET_FIELDS = frozenset({
     "review_evidence_fingerprint", "evidence_fingerprint",
     # git object ids — different repos, different shas
     "sha", "wip_sha", "gate_sha", "gate_commit", "commit", "parent", "head",
-    "tree",
+    "tree", "accepted_revision", "candidate_before", "candidate_after",
+    "delta_base_revision",
     # The staffing session the run binds: a store-assigned opaque id, so two
     # equivalent runs necessarily hold different ones. WHAT it selects is
     # compared through the staffing the calls actually ran on.
@@ -74,8 +75,16 @@ NONDET_FIELDS = frozenset({
 def _strip(obj):
     """A deep copy with every NONDET_FIELDS key removed at any depth."""
     if isinstance(obj, dict):
-        return {k: _strip(v) for k, v in obj.items()
-                if k not in NONDET_FIELDS}
+        stripped = {
+            k: _strip(v) for k, v in obj.items()
+            if k not in NONDET_FIELDS
+        }
+        # This revision is a Git object id, while unrelated domain/store
+        # `revision` fields remain part of the equivalence contract.
+        anchor = stripped.get("canonical_plan_anchor")
+        if isinstance(anchor, dict):
+            anchor.pop("revision", None)
+        return stripped
     if isinstance(obj, list):
         return [_strip(x) for x in obj]
     return obj
@@ -172,8 +181,14 @@ def _cli(*args):
 def _base_config():
     return {
         "commands": {
-            "codex": ["python3", FAKE_LLM, "--workspace", "{workspace}"],
-            "claude": ["python3", FAKE_LLM, "--workspace", "{workspace}"],
+            "codex": [
+                "python3", FAKE_LLM, "--workspace", "{workspace}",
+                "--family", "codex",
+            ],
+            "claude": [
+                "python3", FAKE_LLM, "--workspace", "{workspace}",
+                "--family", "claude",
+            ],
         },
         "timeouts": {"codex": 60, "claude": 60},
         "verification": ["python3 run_checks.py"],

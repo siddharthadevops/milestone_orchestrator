@@ -854,12 +854,10 @@ _COMPLETE_TOKEN_TAIL = ('"', "}", "]")
 # so an envelope recovered by its closing brace cannot have lost anything
 # that changes what the machine does.
 #
-# Every other kind DIRECTS the machine through optional keys — implement
-# and fix_findings carry `suite_command`, which retargets the verification
-# gate; drafts carry `slices`. For those, "the required keys are present"
-# does NOT mean the object was finished: a truncation just before
-# `,"suite_command": ...` would validate and silently seal against the
-# wrong suite. They keep the repair retry, whose cost is honest.
+# Every other kind DIRECTS the machine through optional keys such as slice
+# plans and design corrections. For those, "the required keys are present"
+# does NOT mean the object was finished: a truncated optional directive could
+# still change what the driver does. They keep the repair retry.
 RECOVERABLE_KINDS = frozenset({contracts.KIND_REVIEW_ROUND})
 
 

@@ -41,7 +41,8 @@ from . import author_calls, brainstorming, brainstorming_lifecycle
 from . import brainstorming_milestone, canonical_plan
 from . import contracts, errclass, gitops, interpreter, judgment_calls
 from . import kvstore, ledgers
-from . import model_profiles, pricing, profiles, projects, prompt_sets, prompts
+from . import model_profiles, pricing, profiles, projects, prompt_authority
+from . import prompt_sets, prompts
 from . import plan_reconciliation, registry, runners
 from . import session_repository
 from . import staffing
@@ -206,13 +207,6 @@ DEFAULT_CONFIG = {
         # rater is still a fresh stateless look). "opposite" remains a
         # valid policy for operators who want the pre-reform doctrine.
         "reclassifier": {"agent": "codex", "effort": "xhigh"},
-    },
-    # New runs calibrate the skeleton's declared guarantees once, before its
-    # ordinary review cycle. Persisted runs created before this key existed
-    # continue without inserting a new stage into their chronology.
-    "guarantee_calibration": {
-        "enabled": True,
-        "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
     },
     # A delta stops being meaningfully incremental after enough cumulative
     # fixes.  After this many fixes in one episode born from a review round
@@ -1367,23 +1361,6 @@ class Driver(object):
             operator_bytes
         ).hexdigest()
 
-    def _matching_fixer_verification(self, commands, fingerprint):
-        """Return a fixer's full-suite success for these exact inputs."""
-        commands = list(commands)
-        for event in reversed(self.state.get("events") or []):
-            if (
-                event.get("type") == "verification"
-                and event.get("boundary") == "final"
-                and event.get("ok") is True
-                and event.get("stable") is True
-                and event.get("fixer_certified") is True
-                and not event.get("vacuous")
-                and event.get("commands") == commands
-                and event.get("candidate_after") == fingerprint
-            ):
-                return event
-        return None
-
     def _latest_full_verification_checkpoint(self):
         """Latest full-suite proof whose logical slice actually closed.
 
@@ -1531,7 +1508,6 @@ class Driver(object):
             extensions,
             roots,
             amendments,
-            authority["operator_complete"],
         )
 
     def _review_evidence_fingerprint(self, unit, snapshot=None):
@@ -1542,11 +1518,6 @@ class Driver(object):
             {
                 "candidate": self._candidate_fingerprint(snapshot),
                 "implementation_scope": self._implementation_scope(unit),
-                # Bind approvals to the exact execution plan, including
-                # command boundaries. Joining with ``&&`` is only a prompt
-                # rendering: separate list items run in separate shells and
-                # therefore are not equivalent to one joined command.
-                "suite_commands": self._verification_commands(unit),
             },
             ensure_ascii=True,
             sort_keys=True,
@@ -1802,11 +1773,20 @@ class Driver(object):
                 "slice_title": coordinates["slice_title"],
                 "slice_note_path": coordinates["slice_note_path"],
             })
-        amendments = prompts._amendments_block(
-            authority.get("amendments") or []
-        ).strip()
-        if amendments:
-            values["operator_amendments"] = amendments
+        current_amendments = authority.get("amendments") or []
+        operator_amendments = [
+            item for item in current_amendments
+            if item.get("authority") != "brainstorming_design"
+        ]
+        accepted_design = [
+            item for item in current_amendments
+            if item.get("authority") == "brainstorming_design"
+        ]
+        values["operator_amendments"] = (
+            prompt_authority.current_amendments(
+                operator_amendments, accepted_design
+            )
+        )
         if kind == contracts.KIND_IMPLEMENT:
             scope = self._implementation_scope(unit)
             if scope is not None:
@@ -1831,9 +1811,7 @@ class Driver(object):
         charge = {
             "job": job,
             "material": material,
-            "prompt_set": self.state.get(
-                st.PROMPT_SET_KEY, prompt_sets.DEFAULT_SET_NAME
-            ),
+            "prompt_set": self.state[st.PROMPT_SET_KEY],
             "values": copy.deepcopy(values),
             "amendments_path": self._amendments_path(),
             "accepted_amendments": accepted,
@@ -1886,9 +1864,7 @@ class Driver(object):
                 meter=meter,
                 author_coordinates=author_coordinates,
             ),
-            prompt_set=self.state.get(
-                st.PROMPT_SET_KEY, prompt_sets.DEFAULT_SET_NAME
-            ),
+            prompt_set=self.state[st.PROMPT_SET_KEY],
             project_context=authority.get("project_context"),
             workspace=self.workspace,
         )
@@ -1942,11 +1918,6 @@ class Driver(object):
                     self.state,
                     snapshot,
                     message="canonical plan after %s" % kind,
-                )
-                self._enforce_sealed_artifacts(
-                    raw_name,
-                    editable_sealed=self._editable_design_paths(unit),
-                    preserve_canonical_plan=True,
                 )
                 plan_result = canonical_plan.finalize_author_range(
                     self.state,
@@ -2128,14 +2099,7 @@ class Driver(object):
                 material=material,
                 values=self._judgment_values(unit, kind, context),
                 amendments=authority["amendments"],
-                operator_complete=(
-                    authority["operator_complete"]
-                    or self.state.get("schema_version", 0)
-                    < st.PROMPT_ROUTER_ACTIVATION_SCHEMA_VERSION
-                ),
-                prompt_set=self.state.get(
-                    st.PROMPT_SET_KEY, prompt_sets.DEFAULT_SET_NAME
-                ),
+                prompt_set=self.state[st.PROMPT_SET_KEY],
                 project_context=authority["project_context"],
                 workspace=self.workspace,
                 queued_findings=queued_findings,
@@ -2160,11 +2124,6 @@ class Driver(object):
                     message="canonical plan after %s" % kind,
                 )
                 if editing:
-                    self._enforce_sealed_artifacts(
-                        raw_name,
-                        editable_sealed=self._editable_design_paths(unit),
-                        preserve_canonical_plan=True,
-                    )
                     plan_result = canonical_plan.finalize_author_range(
                         self.state,
                         plan_result,
@@ -2870,26 +2829,6 @@ class Driver(object):
     def _artifact(self, unit):
         return unit["artifact"] or "(workspace)"
 
-    def _verification_commands(self, unit):
-        """Gate commands for a unit: explicit config verification wins;
-        a fixer-supplied suite correction can replace a stale explicit
-        gate; otherwise use the suite command an implementer discovered.
-
-        Documentation does not run the full suite. The command discovered by
-        implementation is used at the scheduled four-slice checkpoints and
-        at milestone completion.
-        """
-        configured = self.config.get("verification") or []
-        corrected = self._corrected_suite_command()
-        if corrected:
-            return [corrected]
-        if configured:
-            return list(configured)
-        discovered = self.state.get("suite_command")
-        if discovered:
-            return [discovered]
-        return []
-
     def _suite_checkpoint_configured_commands(self, unit):
         """Return only the operator's current explicit suite command list.
 
@@ -2942,14 +2881,7 @@ class Driver(object):
                     "checkpoint_reason": cadence,
                 },
                 amendments=authority["amendments"],
-                operator_complete=(
-                    authority["operator_complete"]
-                    or self.state.get("schema_version", 0)
-                    < st.PROMPT_ROUTER_ACTIVATION_SCHEMA_VERSION
-                ),
-                prompt_set=self.state.get(
-                    st.PROMPT_SET_KEY, prompt_sets.DEFAULT_SET_NAME
-                ),
+                prompt_set=self.state[st.PROMPT_SET_KEY],
                 project_context=authority["project_context"],
                 workspace=self.workspace,
                 correction=repair_error,
@@ -3007,53 +2939,6 @@ class Driver(object):
             return prepared._replace(complete=complete)
 
         return prepare
-
-    def _review_verification_commands(self, unit):
-        """Expose an empty-suite handoff only for Brainstorming production.
-
-        Older drafts without a task link are Worker-produced.  A linked draft
-        uses its frozen task order rather than the current prospective slice
-        choice, which may govern only a later successor.
-        """
-        if unit.get("kind") != st.UNIT_SLICE_IMPL:
-            return None
-        task_id = (unit.get("draft") or {}).get("task_id")
-        if task_id is None:
-            return None
-        record = tasks.task_record(self.state, task_id)
-        if record["order"]["task_executor"] != "brainstorming":
-            return None
-        return self._verification_commands(unit)
-
-    def _corrected_suite_command(self):
-        """A fix_findings output with suite_command is allowed to correct
-        a wrong verification gate. Without this, stale explicit config keeps
-        winning and the same suite-command finding is reborn."""
-        discovered = self.state.get("suite_command")
-        configured = self.config.get("verification") or []
-        if (
-            not discovered
-            or not configured
-            or configured == [discovered]
-        ):
-            return None
-        for unit in self.state.get("units", []):
-            for round_info in unit.get("rounds", []):
-                if round_info.get("kind") != contracts.KIND_FIX_FINDINGS:
-                    continue
-                result = round_info.get("result") or {}
-                reported = result.get("suite_command")
-                if (
-                    not isinstance(reported, str)
-                    or reported.strip() != discovered
-                ):
-                    continue
-                if any(
-                    f.get("disposition") == "fixed"
-                    for f in result.get("findings", [])
-                ):
-                    return discovered
-        return None
 
     def _governing(self, unit):
         """The sealed document the unit's artifact answers to (the
@@ -3375,46 +3260,16 @@ class Driver(object):
                     text=str(amendment.get("text"))[:300],
                 )
 
-    def _amendments_snapshot(
-        self, record_seen=True, retain_valid_operator_siblings=False,
-        unit=None,
-    ):
-        """Return amendments plus mutable-file completeness for one read.
+    def _amendments_snapshot(self, record_seen=True, unit=None):
+        """Read the complete current authority for one physical attempt.
 
-        A complete mutable file is authoritative even when its list is empty.
-        Any absent, unreadable, or malformed shape is incomplete and therefore
-        cannot revoke authority already present in a provider conversation.
-        Non-Worker briefings retain the prior tolerant posture by requesting
-        otherwise-valid entries from a list with malformed siblings.
-        Accepted design amendments come from append-only run state either way.
+        The mutable source is strict and replacing. Accepted Brainstorming
+        decisions remain append-only run authority and are combined with that
+        source after its successful read.
         """
-        operator = []
-        operator_complete = False
-        try:
-            with open(self._amendments_path(), "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            raw = data.get("amendments") if isinstance(data, dict) else None
-            if not isinstance(raw, list):
-                raise ValueError("amendments must be a list")
-            operator = []
-            for item in raw:
-                if (
-                    not isinstance(item, dict)
-                    or not str(item.get("text") or "").strip()
-                ):
-                    continue
-                amendment = copy.deepcopy(item)
-                # Authority comes from the mutable operator file itself, never
-                # from an entry's self-description.  Removing a spoofed tier
-                # keeps the existing operator payload shape while letting the
-                # renderer's absent-authority default classify it correctly.
-                amendment.pop("authority", None)
-                operator.append(amendment)
-            operator_complete = len(operator) == len(raw)
-            if not operator_complete and not retain_valid_operator_siblings:
-                operator = []
-        except (OSError, ValueError, TypeError, UnicodeError):
-            operator = []
+        operator = prompt_authority.read_mutable_amendments(
+            self._amendments_path()
+        )
         if record_seen:
             self._record_amendments_seen(operator)
         design = [
@@ -3447,15 +3302,14 @@ class Driver(object):
             )
             and str(event.get("text") or "").strip()
         ]
-        return operator + design, operator_complete
+        return operator + design
 
     def _amendments(self, record_seen=True, unit=None):
         """Return operator amendments plus accepted design clarifications."""
         return self._amendments_snapshot(
             record_seen=record_seen,
-            retain_valid_operator_siblings=True,
             unit=unit,
-        )[0]
+        )
 
     def _read_standing_law(self, worker_kind, unit_kind):
         """LIVE read of the project's standing law for one worker call:
@@ -3601,7 +3455,7 @@ class Driver(object):
 
     def _worker_episode_authority(self, unit, kind):
         """Take one live authority snapshot for a milestone Worker episode."""
-        amendments, operator_complete = self._amendments_snapshot(
+        amendments = self._amendments_snapshot(
             record_seen=False,
             unit=unit,
         )
@@ -3610,7 +3464,6 @@ class Driver(object):
         )
         return {
             "amendments": amendments,
-            "operator_complete": operator_complete,
             "project_context": project_context,
             "extensions": extensions,
             "roots": roots,
@@ -3619,11 +3472,10 @@ class Driver(object):
     def _activate_worker_episode_authority(self, snapshot):
         """Persist existing seen traces before dispatching this snapshot."""
         before = len(self.state.get("events") or [])
-        if snapshot.get("operator_complete"):
-            self._record_amendments_seen([
-                item for item in snapshot.get("amendments") or []
-                if item.get("authority") != "brainstorming_design"
-            ])
+        self._record_amendments_seen([
+            item for item in snapshot.get("amendments") or []
+            if item.get("authority") != "brainstorming_design"
+        ])
         project_context = snapshot.get("project_context") or {}
         self._record_safeguards_seen(
             project_context.get("safeguards") or []
@@ -3637,7 +3489,6 @@ class Driver(object):
             prompt,
             snapshot.get("amendments") or [],
             snapshot.get("project_context"),
-            bool(snapshot.get("operator_complete")),
         )
 
     def _refresh_worker_episode(self, unit, kind, prompt):
@@ -5112,14 +4963,7 @@ class Driver(object):
                 material=material,
                 values=self._reconciliation_values(record),
                 amendments=authority["amendments"],
-                operator_complete=(
-                    authority["operator_complete"]
-                    or self.state.get("schema_version", 0)
-                    < st.PROMPT_ROUTER_ACTIVATION_SCHEMA_VERSION
-                ),
-                prompt_set=self.state.get(
-                    st.PROMPT_SET_KEY, prompt_sets.DEFAULT_SET_NAME
-                ),
+                prompt_set=self.state[st.PROMPT_SET_KEY],
                 project_context=authority["project_context"],
                 workspace=self.workspace,
             )
@@ -5670,97 +5514,6 @@ class Driver(object):
             parts.append("%s %s (%s, %s effort)" % (label, fam, model, effort))
         return "; ".join(parts)
 
-    def _enforce_sealed_artifacts(
-        self,
-        raw_name,
-        editable_sealed=None,
-        preserve_canonical_plan=False,
-    ):
-        """SEALED units' doc artifacts are read-only for every edit-kind
-        call (found live 2026-07-10: a fixer materially REWROTE the
-        sealed slice-02 note to legalize behaviors the sealed version
-        forbade, then self-declared the note in its expected files — 50
-        rounds of review judged a moving target). After every edit-kind
-        call, each sealed unit's artifact must byte-match the run's
-        NEWEST gate commit (not HEAD: the amend discipline folds
-        tampering into the wip commit, so HEAD can already be tainted;
-        and not each unit's OWN gate: sealed docs carry legal post-seal
-        drift — pre-guard-era `prevention` edits reviewed and folded
-        into later gates, and repair reseals — so the last gate, a
-        deterministically sealed checkpoint of the WHOLE tree, is the canonical
-        baseline; baselining on the own gate fired three false restores
-        on 2026-07-10, each regressing a legally amended note). A
-        mismatch is restored from that gate, the illegal bytes land in
-        raw/ for forensics, and a sealed_artifact_restored event records
-        the violation. Runs without git have no canonical source and
-        skip (their sealed docs are protected by the prompt rule only).
-        A unit under legitimate repair is not SEALED while it is being
-        repaired, so its own repair episode is naturally exempt."""
-        if not gitops.enabled(self.config):
-            return []
-        editable_sealed = set(editable_sealed or ())
-        last_gate = gitops.newest_commit(
-            self.workspace,
-            [u.get("gate_commit") for u in self.state["units"]],
-        )
-        restored = []
-        for u in self.state["units"]:
-            if u["status"] != st.U_SEALED:
-                continue
-            gate, art = u.get("gate_commit"), u.get("artifact")
-            if not gate or not art:
-                continue
-            if art in editable_sealed:
-                continue
-            canonical = gitops.show_file(
-                self.workspace, last_gate or gate, art
-            )
-            if canonical is None:
-                # The artifact is unreadable at the newest gate (e.g. a
-                # foreign-history edge): fall back to the unit's own gate.
-                canonical = gitops.show_file(self.workspace, gate, art)
-            if canonical is None:
-                continue  # unreadable gate/path: nothing to enforce against
-            if preserve_canonical_plan:
-                anchor = self.state["milestone"].get(
-                    canonical_plan.ANCHOR_KEY
-                ) or {}
-                if art == anchor.get("path"):
-                    accepted = gitops.show_file(
-                        self.workspace, anchor.get("revision"), art
-                    )
-                    if accepted is None:
-                        raise canonical_plan.CanonicalPlanError(
-                            "accepted canonical-plan anchor is unreadable"
-                        )
-                    canonical = canonical_plan.preserve_canonical_block(
-                        canonical, accepted
-                    )
-            path = os.path.join(self.workspace, art)
-            try:
-                with open(path, "rb") as fh:
-                    current = fh.read()
-            except OSError:
-                current = None  # deleted: also a violation
-            if current == canonical:
-                continue
-            safe = st.unit_key(u).replace("/", "_")
-            raw = self._save_raw(
-                "%s-sealed-violation-%s" % (raw_name, safe),
-                (current if current is not None else b"(file deleted)")
-                .decode("utf-8", "replace"),
-            )
-            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            with open(path, "wb") as fh:
-                fh.write(canonical)
-            st.append_event(
-                self.state, "sealed_artifact_restored",
-                unit=st.unit_key(u), artifact=art, during=raw_name,
-                raw_path=raw,
-            )
-            restored.append(art)
-        return restored
-
     @staticmethod
     def _safe_design_path(value):
         if not isinstance(value, str) or not value.strip():
@@ -6161,54 +5914,6 @@ class Driver(object):
             reason="own-note correction independently ratified",
         )
         return "design correction ratified; amended (%s)" % sha
-
-    def _maybe_update_slices(self, unit, output):
-        """Keep a legitimately edited skeleton table aligned with state."""
-        slices = output.get("slices")
-        if not slices or (
-            unit["kind"] != st.UNIT_SKELETON
-            and not unit.get("design_update")
-        ):
-            return False
-        slices = copy.deepcopy(slices)
-        contracts.validate_slices(slices, "replacement slice plan")
-        if unit["kind"] != st.UNIT_SKELETON:
-            before = list(self.state["milestone"]["slices"])
-            old_ids = [item["id"] for item in before]
-            new_ids = [item["id"] for item in slices]
-            if [value for value in new_ids if value in old_ids] != old_ids:
-                reason = (
-                    "a lightweight design update may insert future slices, "
-                    "but may not remove, renumber, or reorder existing ones"
-                )
-                st.fail_run(self.state, reason, unit=unit)
-                self._save()
-                raise StopStep(reason)
-            current_id = unit.get("slice_id")
-            if current_id in new_ids:
-                current_index = new_ids.index(current_id)
-                additions_before_current = [
-                    value for value in new_ids[:current_index]
-                    if value not in old_ids
-                ]
-                if additions_before_current:
-                    reason = (
-                        "a lightweight design update may not insert work "
-                        "before the slice currently being completed"
-                    )
-                    st.fail_run(self.state, reason, unit=unit)
-                    self._save()
-                    raise StopStep(reason)
-        if slices != self.state["milestone"]["slices"]:
-            self.state["milestone"]["slices"] = [dict(sl) for sl in slices]
-            st.append_event(
-                self.state,
-                "slices_updated",
-                unit=st.unit_key(unit),
-                slices=copy.deepcopy(self.state["milestone"]["slices"]),
-            )
-            return True
-        return False
 
     def _brainstorming_references(self, unit, signal):
         return brainstorming_milestone.stable_references(
@@ -6764,11 +6469,8 @@ class Driver(object):
             for finding in output.get("findings") or []
         )
         source_state_claim = bool(
-            output.get("suite_command_finding_id") == source_id
-            or (
-                ("slices" in output or "design_correction" in output)
-                and not other_implemented
-            )
+            ("slices" in output or "design_correction" in output)
+            and not other_implemented
         )
         if matching[0].get("prevention") or source_state_claim or (
             (workspace_changed or output.get("files_changed"))
@@ -7279,161 +6981,7 @@ class Driver(object):
             unit["phantom_retried"] = True
         else:
             unit.pop("phantom_retried", None)
-        source = unit.get("fix_source") or {}
-        if candidate_changed and source.get("type") == "verification":
-            source["deferred_candidate_changed"] = True
-            unit["fix_source"] = source
         return True
-
-    def _guarantee_calibration_config(self):
-        value = self.config.get("guarantee_calibration")
-        if not isinstance(value, dict) or value.get("enabled") is not True:
-            return None
-        rounds = value.get(
-            "max_rounds",
-            contracts.MILESTONE_BRAINSTORMING_ROUNDS,
-        )
-        if isinstance(rounds, bool) or not isinstance(rounds, int) \
-                or rounds <= 0:
-            rounds = contracts.MILESTONE_BRAINSTORMING_ROUNDS
-        return {"max_rounds": rounds}
-
-    def _start_guarantee_calibration(self, unit):
-        """Hold a drafted skeleton for one focused guarantee discussion."""
-        settings = self._guarantee_calibration_config()
-        if settings is None:
-            return self._finish_draft(unit, "drafted")
-        skeleton_path = unit.get("artifact") or self._skeleton_artifact()
-        staffing_selection = self._brainstorming_staffing()
-        lead_profile = counterpart_profile = None
-        if staffing_selection is None:
-            lead_profile, counterpart_profile = self._brainstorming_profiles()
-        project_context, _extensions, _roots = self._project_prompt_inputs(
-            unit, contracts.KIND_DRAFT_SKELETON, record_seen=False
-        )
-        references = brainstorming_milestone.stable_references(
-            self.state,
-            [skeleton_path, ledgers.goal_path(self.state)],
-            skeleton_path,
-        )
-        try:
-            created = (
-                brainstorming_milestone.create_guarantee_calibration_session(
-                    self.state,
-                    self.config,
-                    st.unit_key(unit),
-                    skeleton_path,
-                    lead_profile,
-                    counterpart_profile,
-                    references=references,
-                    authority_context={
-                        "amendments": self._amendments(
-                            record_seen=False, unit=unit
-                        ),
-                        "project_context": project_context,
-                    },
-                    max_rounds=settings["max_rounds"],
-                    staffing_selection=staffing_selection,
-                    active_home=self.model_profiles_home,
-                )
-            )
-        except Exception as exc:
-            unit["guarantee_calibration"] = {
-                "status": "failed",
-                "reason": str(exc)[:500],
-            }
-            st.fail_run(
-                self.state,
-                "guarantee calibration could not start: %s" % exc,
-                unit=unit,
-                type_="brainstorming_operational",
-            )
-            self._save()
-            raise StopStep("guarantee calibration creation failed")
-        unit["guarantee_calibration"] = {
-            "status": "running",
-            "session_id": created["id"],
-        }
-        origin = {
-            "unit": st.unit_key(unit),
-            "kind": "guarantee_calibration",
-            "raw_name": "%s-guarantee-calibration" % st.unit_key(unit),
-        }
-        if lead_profile is not None:
-            origin.update({
-                "family": lead_profile["agent"],
-                "model": lead_profile["model"],
-                "effort": lead_profile["effort"],
-            })
-        unit["brainstorming_wait"] = {
-            "session_id": created["id"],
-            "signal": None,
-            "references": list(references),
-            "origin": origin,
-        }
-        st.append_event(
-            self.state,
-            "brainstorming_wait_started",
-            unit=st.unit_key(unit),
-            kind="guarantee_calibration",
-            session_id=created["id"],
-            target_path=skeleton_path,
-            **(
-                {"family": lead_profile["agent"]}
-                if lead_profile is not None else {}
-            ),
-        )
-        return "skeleton drafted; guarantee calibration started"
-
-    def _complete_guarantee_calibration(self, unit, wait, handoff):
-        expanded = brainstorming_milestone.prompt_handoff(
-            self.state,
-            handoff,
-            active_home=self.model_profiles_home,
-        )
-        retained = expanded.get("retained_target") or {}
-        content = retained.get("content")
-        if (
-            retained.get("exists") is not True
-            or retained.get("encoding") != "utf-8"
-            or not isinstance(content, str)
-            or not content.strip()
-            or "\x00" in content
-        ):
-            raise brainstorming_milestone.AdapterError(
-                "guarantee calibration did not retain one complete UTF-8 "
-                "skeleton"
-            )
-        relpath = unit.get("artifact") or self._skeleton_artifact()
-        path = os.path.join(self.workspace, relpath)
-        with open(path, "r", encoding="utf-8") as handle:
-            before = handle.read()
-        changed = before != content
-        if changed:
-            tmp = path + ".guarantee-calibration.tmp"
-            with open(tmp, "w", encoding="utf-8") as handle:
-                handle.write(content)
-            os.replace(tmp, path)
-        unit.pop("brainstorming_wait", None)
-        unit["guarantee_calibration"] = {
-            "status": "complete",
-            "session_id": handoff["session_id"],
-            "accepted_target_revision": handoff[
-                "accepted_target_revision"
-            ],
-            "changed": changed,
-        }
-        st.append_event(
-            self.state,
-            "guarantee_calibration_completed",
-            unit=st.unit_key(unit),
-            session_id=handoff["session_id"],
-            accepted_target_revision=handoff[
-                "accepted_target_revision"
-            ],
-            changed=changed,
-        )
-        return self._finish_draft(unit, "guarantees calibrated")
 
     def _finish_draft(self, unit, reason):
         if gitops.enabled(self.config):
@@ -7925,14 +7473,6 @@ class Driver(object):
                 kind=origin_kind,
                 session_id=session_id,
             )
-            if origin_kind == "guarantee_calibration":
-                unit["guarantee_calibration"] = {
-                    "status": "discarded",
-                    "session_id": session_id,
-                }
-                return self._finish_draft(
-                    unit, "discarded missing guarantee calibration"
-                )
             return (
                 "discarded missing Brainstorming session %s; "
                 "originating action resumed" % session_id
@@ -7957,13 +7497,6 @@ class Driver(object):
                     "attached Brainstorming session ended operationally: %s"
                     % exc,
                 )
-            if (wait.get("origin") or {}).get("kind") \
-                    == "guarantee_calibration":
-                unit["guarantee_calibration"] = {
-                    "status": "failed",
-                    "session_id": session_id,
-                    "reason": str(exc)[:500],
-                }
             st.append_event(
                 self.state,
                 "brainstorming_operational_detached",
@@ -8002,54 +7535,6 @@ class Driver(object):
 
         origin = wait["origin"]
         kind = origin["kind"]
-        if kind == "guarantee_calibration":
-            if handoff["result"]["outcome"] == "failure":
-                unit.pop("brainstorming_wait", None)
-                unit["guarantee_calibration"] = {
-                    "status": "failed",
-                    "session_id": session_id,
-                    "reason": "the participants did not agree",
-                }
-                st.append_event(
-                    self.state,
-                    "guarantee_calibration_failed",
-                    unit=st.unit_key(unit),
-                    session_id=session_id,
-                )
-                st.fail_run(
-                    self.state,
-                    "guarantee calibration ended without agreement",
-                    unit=unit,
-                    type_="guarantee_calibration",
-                )
-                self._save()
-                raise StopStep("guarantee calibration did not agree")
-            try:
-                return self._complete_guarantee_calibration(
-                    unit, wait, handoff
-                )
-            except Exception as exc:
-                unit.pop("brainstorming_wait", None)
-                unit["guarantee_calibration"] = {
-                    "status": "failed",
-                    "session_id": session_id,
-                    "reason": str(exc)[:500],
-                }
-                st.append_event(
-                    self.state,
-                    "guarantee_calibration_failed",
-                    unit=st.unit_key(unit),
-                    session_id=session_id,
-                )
-                st.fail_run(
-                    self.state,
-                    "accepted guarantee calibration could not be applied: "
-                    "%s" % exc,
-                    unit=unit,
-                    type_="brainstorming_operational",
-                )
-                self._save()
-                raise StopStep("guarantee calibration adoption failed")
         if handoff["result"]["outcome"] == "failure":
             if self._modern_design_updates():
                 unit.pop("brainstorming_wait", None)
@@ -8192,521 +7677,17 @@ class Driver(object):
                 % kind
             )
 
-        if kind in contracts.RETHINK_CONTINUATION_KINDS:
-            amendment_mode = self._rethink_requests_design_amendment(
-                wait["signal"]
-            )
-            if amendment_mode:
-                try:
-                    amendment_event = self._adopt_brainstorming_design_amendment(
-                        unit, wait, handoff
-                    )
-                    if self._modern_design_updates():
-                        self._activate_design_update(
-                            unit, handoff, amendment_event
-                        )
-                except brainstorming_milestone.AdapterError as exc:
-                    unit.pop("brainstorming_wait", None)
-                    self._fail_waiting_worker_task(
-                        unit,
-                        wait,
-                        "accepted design amendment could not be adopted: %s"
-                        % exc,
-                    )
-                    st.fail_run(
-                        self.state,
-                        "accepted Brainstorming amendment could not be "
-                        "adopted: %s" % exc,
-                        unit=unit,
-                        type_="brainstorming_operational",
-                    )
-                    self._save()
-                    raise StopStep("Brainstorming amendment adoption failed")
-            if kind == contracts.KIND_FIX_FINDINGS:
-                source = unit.get("fix_source")
-                if not isinstance(source, dict):
-                    source = {
-                        "type": "round",
-                        "origin_type": "round",
-                        "family": origin.get("family"),
-                        "source_round_id": "brainstorming:%s" % session_id,
-                        "return_to": st.U_ROUNDS,
-                    }
-                    unit["fix_source"] = source
-                agreement = source.get("brainstorming_agreement")
-                if (
-                    not isinstance(agreement, dict)
-                    or (agreement.get("handoff") or {}).get("session_id")
-                    != session_id
-                ):
-                    agreement = {
-                        "origin_kind": kind,
-                        "target_path": wait["signal"].get("target_path"),
-                        "handoff": copy.deepcopy(handoff),
-                        "source_finding": copy.deepcopy(
-                            wait["signal"]["finding"]
-                        ),
-                        "baseline_fingerprint": (
-                            self._candidate_fingerprint()
-                        ),
-                    }
-                    source["brainstorming_agreement"] = agreement
-                    authorization = (
-                        self._authorize_brainstorming_application_target(
-                            unit,
-                            agreement["target_path"],
-                            handoff,
-                        )
-                    )
-                    if authorization is not None:
-                        agreement["design_target_authorization"] = (
-                            authorization
-                        )
-            elif "application_target_authorization" not in wait:
-                authorization = self._authorize_brainstorming_application_target(
-                    unit,
-                    wait["signal"].get("target_path"),
-                    handoff,
-                )
-                if authorization is not None:
-                    wait["application_target_authorization"] = authorization
-                    unit["brainstorming_wait"][
-                        "application_target_authorization"
-                    ] = copy.deepcopy(authorization)
-            family = origin["family"]
-            routed_author = kind in (
-                contracts.KIND_DRAFT_SLICE_NOTE,
-                contracts.KIND_IMPLEMENT,
-            )
-            expanded_handoff = brainstorming_milestone.prompt_handoff(
-                self.state,
-                handoff,
-                active_home=self.model_profiles_home,
-            )
-            design_context = (
-                self._design_correction_context(unit)
-                if (
-                    kind == contracts.KIND_FIX_FINDINGS
-                    and (not self._modern_design_updates()
-                         or unit.get("design_correction"))
-                )
-                else None
-            )
-            task_id = origin.get("task_id")
-            task = (
-                tasks.task_record(self.state, task_id)
-                if task_id is not None else None
-            )
-            authority = self._worker_episode_authority(unit, kind)
-            episode_authority = prompts.worker_episode_authority_block(
-                authority["amendments"],
-                authority["project_context"],
-                authority["operator_complete"],
-            )
-            if task is not None:
-                # Keep strategy and the admitted request frozen, while the
-                # continuation itself is a new live-authority episode.
-                validate_opts = self._worker_task_validate_opts(task)
-                project_context = authority["project_context"]
-                extensions = authority["extensions"]
-                roots = authority["roots"]
-                original_request = task["order"]["request"]["request"]
-                amendments = None
-            else:
-                # Compatibility for a pre-task retained wait.
-                amendments = None
-                current_battery = (
-                    interpreter.battery_questions(self.state, unit["kind"])
-                    if kind == contracts.KIND_DRAFT_SLICE_NOTE
-                    else None
-                )
-                current_verification_repair = (
-                    kind == contracts.KIND_FIX_FINDINGS
-                    and (unit.get("fix_source") or {}).get("type")
-                    == "verification"
-                )
-                validate_opts = {
-                    **(
-                        {"allow_design_correction": True}
-                        if design_context
-                        and design_context.get("mode") == "offer"
-                        else {}
-                    ),
-                    **(
-                        {"battery_questions": current_battery}
-                        if current_battery else {}
-                    ),
-                    **(
-                        {"require_failure_gap": True}
-                        if self._legacy_failure_gap_required(unit, kind)
-                        else {}
-                    ),
-                    **(
-                        {"verification_repair": True}
-                        if current_verification_repair else {}
-                    ),
-                } or None
-                project_context = authority["project_context"]
-                extensions = authority["extensions"]
-                roots = authority["roots"]
-                original_request = None
-            validation = validate_opts or {}
-            battery = validation.get("battery_questions")
-            verification_repair = bool(
-                validation.get("verification_repair")
-            )
-            verification_commands = (
-                self._verification_commands(unit)
-                if verification_repair and original_request is None else None
-            )
-            editable_design_paths = (
-                self._editable_design_paths(unit)
-                if (
-                    self._modern_design_updates()
-                    and (
-                        amendment_mode
-                        or kind == contracts.KIND_FIX_FINDINGS
-                    )
-                )
-                else None
-            )
-            if routed_author:
-                author_recovery = prompts.build_author_rethink_recovery(
-                    expanded_handoff,
-                    accepted_design_amendment=amendment_mode,
-                    editable_design_paths=editable_design_paths,
-                )
-                material = self._author_material(unit, kind, task)
-                author_coordinates = self._author_coordinates(
-                    unit, kind, task
-                )
-                # The physical attempt always replaces this legacy argument
-                # with a freshly prepared routed charge.
-                prompt = original_request or ""
-            else:
-                author_recovery = None
-                material = author_coordinates = None
-                prompt = prompts.build_rethink_continuation(
-                    kind,
-                    family,
-                    self.workspace,
-                    expanded_handoff,
-                    allow_design_correction=bool(
-                        validation.get("allow_design_correction")
-                    ),
-                    amendments=amendments,
-                    project_context=project_context,
-                    battery=battery,
-                    accepted_design_amendment=amendment_mode,
-                    editable_design_paths=editable_design_paths,
-                    verification_repair=verification_repair,
-                    verification_commands=verification_commands,
-                    verification_signal=(
-                        wait.get("signal", {}).get("finding")
-                        if verification_repair else None
-                    ),
-                    unit_kind=unit["kind"],
-                    gap_enabled=(
-                        self._fixer_gap_enabled(unit)
-                        if verification_repair and original_request is None
-                        else False
-                    ),
-                    original_request=original_request,
-                    episode_authority=episode_authority,
-                    producer_planning=self._continuation_may_plan_slices(unit),
-                    materials=self._planning_materials(),
-                )
-            durable_stabilization_size = None
-            if kind == contracts.KIND_IMPLEMENT:
-                durable_stabilization = unit.get(
-                    "implementation_stabilization"
-                )
-                if durable_stabilization is not None:
-                    durable_stabilization_size = (
-                        copy.deepcopy(durable_stabilization.get(
-                            "implementation_size"
-                        ))
-                        if isinstance(durable_stabilization, dict)
-                        and isinstance(durable_stabilization.get(
-                            "implementation_size"
-                        ), dict)
-                        else None
-                    )
-                    if durable_stabilization_size is None:
-                        st.fail_run(
-                            self.state,
-                            "implementation stabilization metadata is "
-                            "incomplete",
-                            unit=unit,
-                            type_="orchestrator",
-                        )
-                        self._save()
-                        raise StopStep(
-                            "implementation stabilization metadata incomplete"
-                        )
-                    self._ensure_implementation_stabilization_events(
-                        unit, durable_stabilization_size
-                    )
-            self._activate_worker_episode_authority(authority)
-            raw_name = "%s-rethink-return" % origin["raw_name"]
-            application_before = self._snapshot()
-            design_before = (
-                self._snapshot() if unit.get("design_update") else None
-            )
-            implementation_size = None
-            implementation_stabilized = False
-            seed_usage = getattr(
-                getattr(self, "runner", None),
-                "seed_codex_session_usage",
-                None,
-            )
-            if family == "codex" and callable(seed_usage):
-                seed_usage(
-                    origin["provider_session_ref"],
-                    origin.get("provider_session_token_usage"),
-                    origin.get("provider_session_cost_payload"),
-                )
-            if kind == contracts.KIND_IMPLEMENT:
-                origin_pre_snapshot = origin.get("pre_snapshot") or {}
-                fresh_stabilizer_session = bool(
-                    durable_stabilization_size is not None
-                    and not origin_pre_snapshot.get(
-                        "implementation_stabilized"
-                    )
-                )
-                (
-                    output,
-                    result,
-                    raw_path,
-                    implementation_size,
-                    implementation_stabilized,
-                ) = self._call_implementation(
-                    family,
-                    prompt,
-                    raw_name,
-                    origin.get("model"),
-                    origin.get("effort"),
-                    extensions,
-                    roots,
-                    validate_opts,
-                    fresh_stabilizer_session,
-                    (
-                        unit.get("implementation_attempt_snapshot") or {}
-                    ).get("tree")
-                    or origin_pre_snapshot.get("tree"),
-                    session_ref=(
-                        None if fresh_stabilizer_session
-                        else origin["provider_session_ref"]
-                    ),
-                    stabilizing=bool(
-                        durable_stabilization_size is not None
-                        or origin_pre_snapshot.get(
-                            "implementation_stabilized"
-                        )
-                    ),
-                    dispatch_resolver=self._dispatch_for_worker_kind(
-                        unit, kind
-                    ),
-                    continuation_family=origin["family"],
-                    task_id=origin.get("task_id"),
-                    episode_refresher=lambda next_prompt: (
-                        self._refresh_worker_episode(
-                            unit, kind, next_prompt
-                        )
-                    ),
-                    prepare_author=lambda recovery, meter: (
-                        self._author_prepare_call(
-                            unit,
-                            kind,
-                            material,
-                            raw_name,
-                            recovery=recovery,
-                            meter=meter,
-                            author_coordinates=author_coordinates,
-                        )
-                    ),
-                    author_recovery=author_recovery,
-                    episode_unit=unit,
-                )
-                if durable_stabilization_size is not None:
-                    implementation_size = durable_stabilization_size
-                    implementation_stabilized = True
-            else:
-                output, result, raw_path = self._call(
-                    family,
-                    prompt,
-                    kind,
-                    raw_name,
-                    model=origin.get("model"),
-                    effort=origin.get("effort"),
-                    extensions=extensions,
-                    roots=roots,
-                    validate_opts=validate_opts,
-                    session_ref=origin["provider_session_ref"],
-                    dispatch_resolver=self._dispatch_for_worker_kind(
-                        unit,
-                        kind,
-                        origin_family=(unit.get("fix_source") or {}).get(
-                            "family"
-                        ),
-                    ),
-                    continuation_family=origin["family"],
-                    task_id=origin.get("task_id"),
-                    prepare_call=(
-                        self._author_prepare_call(
-                            unit,
-                            kind,
-                            material,
-                            raw_name,
-                            recovery=author_recovery,
-                            author_coordinates=author_coordinates,
-                        )
-                        if routed_author else None
-                    ),
-                    episode_unit=unit if routed_author else None,
-                )
-            family, current_model, current_effort = self._result_identity(
-                result,
-                family,
-                origin.get("model"),
-                origin.get("effort"),
-            )
-            continued_pre_snapshot = copy.deepcopy(
-                origin.get("pre_snapshot") or {}
-            )
-            if kind == contracts.KIND_IMPLEMENT:
-                if (
-                    implementation_size
-                    and (
-                        implementation_size.get("steer_delivered")
-                        or implementation_size.get("interrupt_lines")
-                    )
-                ) or "implementation_size" not in continued_pre_snapshot:
-                    continued_pre_snapshot["implementation_size"] = (
-                        copy.deepcopy(implementation_size)
-                    )
-                continued_pre_snapshot["implementation_stabilized"] = bool(
-                    continued_pre_snapshot.get("implementation_stabilized")
-                    or implementation_stabilized
-                )
-            if design_before is not None:
-                self._record_design_changes(
-                    unit,
-                    self._snapshot_diff(design_before, self._snapshot()),
-                )
-            application_workspace_changed = bool(
-                self._snapshot_diff(application_before, self._snapshot())
-            )
-            if output.get("status") != "ok":
-                durable_origin = unit["brainstorming_wait"]["origin"]
-                durable_origin["provider_session_ref"] = (
-                    getattr(result, "session_ref", None)
-                    or durable_origin.get("provider_session_ref")
-                )
-                session_usage = getattr(
-                    result, "session_token_usage", None
-                )
-                if session_usage is not None:
-                    durable_origin["provider_session_token_usage"] = (
-                        copy.deepcopy(session_usage)
-                    )
-                session_cost = getattr(
-                    result, "session_cost_payload", None
-                )
-                if family == "codex" and session_cost is not None:
-                    durable_origin["provider_session_cost_payload"] = (
-                        copy.deepcopy(session_cost)
-                    )
-                self._enforce_sealed_artifacts(
-                    raw_name,
-                    editable_sealed=self._editable_design_paths(unit),
-                    preserve_canonical_plan=routed_author,
-                )
-                reason = (
-                    "%s worker did not complete the accepted Brainstorming "
-                    "application (status %s); the same agreement remains "
-                    "pending"
-                    % (kind, output.get("status"))
-                )
-                self._record_worker_unaccepted(
-                    unit, kind, family, result, reason
-                )
-                st.fail_run(
-                    self.state,
-                    reason,
-                    unit=unit,
-                    type_=(
-                        "worker_protocol"
-                        if output.get("status") == "need_rethink"
-                        else "unknown"
-                        if output.get("status") == "retry"
-                        else "worker_blocked"
-                    ),
-                )
-                self._save()
-                raise StopStep(reason)
-            if kind != contracts.KIND_FIX_FINDINGS:
-                authorization = wait.pop(
-                    "application_target_authorization", None
-                )
-                if authorization is not None:
-                    self._retire_unused_brainstorming_target_authorization(
-                        unit,
-                        {"design_target_authorization": authorization},
-                    )
-            unit.pop("brainstorming_wait", None)
-            unit["brainstorming_resume"] = {
-                "kind": kind,
-                "output": copy.deepcopy(output),
-                "raw_path": raw_path,
-                "duration_s": result.duration_s,
-                "token_usage": copy.deepcopy(
-                    getattr(result, "token_usage", None)
-                ),
-                "token_usage_partial": bool(
-                    getattr(result, "token_usage_partial", False)
-                    or getattr(result, "token_usage", None) is None
-                ),
-                "cost": copy.deepcopy(getattr(result, "cost", None)),
-                "cost_partial": bool(
-                    getattr(result, "cost_partial", False)
-                    or getattr(result, "cost", None) is None
-                ),
-                "text": result.text,
-                "provider_session_ref": (
-                    getattr(result, "session_ref", None)
-                    or origin["provider_session_ref"]
-                ),
-                "handoff": copy.deepcopy(handoff),
-                "family": family,
-                "model": current_model,
-                "effort": current_effort,
-                "pre_snapshot": continued_pre_snapshot,
-                "origin_rethink_signal": copy.deepcopy(wait["signal"]),
-                "workspace_changed": application_workspace_changed,
-                "baseline_fingerprint": self._candidate_fingerprint(
-                    application_before
-                ),
-                **self._prompt_set_fallback_fields(result),
-                **(
-                    {"task_id": origin["task_id"]}
-                    if origin.get("task_id") is not None else {}
-                ),
-            }
-            st.append_event(
-                self.state,
-                "brainstorming_builder_continued",
-                unit=st.unit_key(unit),
-                kind=kind,
-                session_id=session_id,
-                accepted_target_revision=handoff[
-                    "accepted_target_revision"
-                ],
-            )
-            return "Brainstorming succeeded; origin conversation continued"
-
+        reason = (
+            "Brainstorming handoff lacks its repository revision range"
+        )
         unit.pop("brainstorming_wait", None)
-        return self._queue_brainstorming_application(unit, wait, handoff)
+        if kind in contracts.RETHINK_CONTINUATION_KINDS:
+            self._fail_waiting_worker_task(unit, wait, reason)
+        st.fail_run(
+            self.state, reason, unit=unit, type_="brainstorming_operational"
+        )
+        self._save()
+        raise StopStep(reason)
 
     def _record_worker_unaccepted(self, unit, kind, family, result, reason):
         call = self._matching_busy_call(kind=kind, family=family)
@@ -8754,8 +7735,7 @@ class Driver(object):
             # lane so the service guard restores failed_from=U_FIXING and
             # retries the same queue after its 15-minute emergency interval.
             # Preserve any partial delta for the next fixer to inspect, just
-            # like a killed fixer call; sealed-doc tampering was already
-            # restored by _enforce_sealed_artifacts before this check.
+            # like a killed fixer call.
             unit["killed_fix_notice"] = "consultation unavailable"
             detail = str(output.get("notes") or "").strip()
             reason = (
@@ -9525,11 +8505,6 @@ class Driver(object):
                 self._snapshot_diff(design_before, self._snapshot()),
             )
         if output.get("status") == "need_rethink":
-            self._enforce_sealed_artifacts(
-                raw_name,
-                editable_sealed=self._editable_design_paths(unit),
-                preserve_canonical_plan=True,
-            )
             return self._start_rethink(
                 unit,
                 kind,
@@ -9573,11 +8548,6 @@ class Driver(object):
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash)
-        self._enforce_sealed_artifacts(
-            raw_name,
-            editable_sealed=self._editable_design_paths(unit),
-            preserve_canonical_plan=True,
-        )
         self._check_worker_blocked(unit, output, kind, family, result)
         implementation_cut = output.get("implementation_cut")
         if implementation_cut is not None:
@@ -9611,8 +8581,6 @@ class Driver(object):
                             result, "prompt_set_fallback", None
                         ))
         self._terminalize_worker_task(unit, output, result=result)
-        if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
-            st.set_discovered_suite(self.state, output["suite_command"])
         return self._finish_draft(unit, "drafted")
 
     # -- gap routing (reform §3: stop-report-repair-resume) -----------------
@@ -10671,57 +9639,6 @@ class Driver(object):
         except staffing.StaffingConditionError as exc:
             self._fail_staffing(exc, episode_unit=episode_unit)
 
-    def _continuation_may_plan_slices(self, unit):
-        """Whether a resumed worker task may still author the slice plan.
-
-        Keyed to what this driver can INSTALL from the continuation's result
-        (`_maybe_update_slices`), never to the discussion's result mode: a
-        skeleton fixer edits its own artifact's slice table under any mode,
-        and a unit already carrying the skeleton among its editable design
-        paths keeps that authority when its discussion returned a proposal
-        rather than an amendment. Either one is a plan-authoring prompt and
-        needs the pair read at THIS boundary, because the catalogue quoted
-        inside its frozen request is the one its first call was dispatched
-        with — a document edited since is otherwise invisible to it, and the
-        retired vocabulary reads as current. This only widens the condition:
-        every amendment case that carried the pair still does.
-        """
-        return (
-            unit["kind"] == st.UNIT_SKELETON
-            or self._skeleton_artifact() in self._editable_design_paths(unit)
-        )
-
-    def _planning_materials(self):
-        """The material vocabulary a plan-authoring prompt shows, live.
-
-        The `materials` of the document this run's session REFERENCES, read
-        at the prompt boundary through the same validated session and
-        document reads every dispatch uses. Guidance only: it names no
-        agent, model or effort and decides no call, so an unreadable
-        session or document leaves it empty and planning continues. That
-        deliberately does NOT borrow the resolver's mandatory fallback — a
-        catalogue from a document this run does not name would be a
-        vocabulary nobody wrote for it, and inventing one is worse than
-        asking for no proposal at all.
-        """
-        if self.model_profiles_home is None:
-            return {}
-        session = st.staffing_session(self.state)
-        if not session:
-            return {}
-        try:
-            record = staffing.read_session(self.model_profiles_home, session)
-            document = staffing.load(
-                self.model_profiles_home, record["document"]
-            )
-        except (staffing.StaffingError, OSError):
-            return {}
-        # Whether the prompt can CARRY a name is the prompt's own question,
-        # not a reason to read less: a document that loads supplies every
-        # name it validated, and `prompts._material_catalogue_json` decides
-        # how to quote one no UTF-8 encoder emits.
-        return copy.deepcopy(document["materials"])
-
     def _staff(self, role, index=1, round=1, material=None,
                episode_unit=None):
         """(family, model, effort) for one driver-made call."""
@@ -11440,10 +10357,6 @@ class Driver(object):
     def _do_fix(self):
         unit = st.current_unit(self.state)
         source = unit.get("fix_source") or {}
-        verification_repair = source.get("type") == "verification"
-        verification_commands = (
-            self._verification_commands(unit) if verification_repair else None
-        )
         max_loops = self.config.get("max_fix_loops", 6)
         cap_agreement = (source.get("brainstorming_agreement") or {})
         mandatory_application_retry = bool(
@@ -11622,14 +10535,7 @@ class Driver(object):
             legacy_design_process=legacy_design_process,
             design_correction=design_context,
             editable_design_paths=editable_design_paths,
-            verification_repair=verification_repair,
-            verification_commands=verification_commands,
             implementation_scope=self._implementation_scope(unit),
-            producer_planning=(
-                unit["kind"] != st.UNIT_SKELETON
-                and self._skeleton_artifact() in editable_design_paths
-            ),
-            materials=self._planning_materials(),
             )
             application_handoff = self._brainstorming_application_handoff(
                 unit
@@ -11664,7 +10570,6 @@ class Driver(object):
             except gitops.GitError:
                 pre_sym = pre_head = pre_tree = pre_worktree_tree = None
         raw_name = "%s-fix%d" % (st.unit_key(unit), n_fix)
-        attempt_event_start = len(self.state.get("events") or [])
         fix_workspace_before = self._snapshot()
         resumed = self._take_brainstorming_resume(
             unit, contracts.KIND_FIX_FINDINGS
@@ -11696,10 +10601,6 @@ class Driver(object):
                             unit, contracts.KIND_FIX_FINDINGS
                         )
                         else {}
-                    ),
-                    **(
-                        {"verification_repair": True}
-                        if verification_repair else {}
                     ),
                 } or None
             )
@@ -11737,33 +10638,25 @@ class Driver(object):
                     start_session=True,
                     dispatch_resolver=dispatch_resolver,
                     task_id=task["id"],
-                    # Suite failure repair and its fresh-checkpoint lifecycle
-                    # remain delegated to the later sequential cut. Until that
-                    # lands, keep its existing empty-findings completion
-                    # contract instead of routing it through the ordinary
-                    # queued-finding judgment envelope.
-                    prepare_call=(
-                        None if verification_repair else
-                        self._judgment_prepare_call(
-                            unit,
-                            contracts.KIND_FIX_FINDINGS,
-                            raw_name,
-                            context={
-                                "consultation_family": consultation_family,
-                                "consultation_command": consultation_cmd,
-                                **(
-                                    {
-                                        "fixer_recovery_state": (
-                                            "pending_partial_delta"
-                                        )
-                                    }
-                                    if killed_notice else {}
-                                ),
-                            },
-                            queued_findings=copy.deepcopy(
-                                unit.get("fix_queue") or []
+                    prepare_call=self._judgment_prepare_call(
+                        unit,
+                        contracts.KIND_FIX_FINDINGS,
+                        raw_name,
+                        context={
+                            "consultation_family": consultation_family,
+                            "consultation_command": consultation_cmd,
+                            **(
+                                {
+                                    "fixer_recovery_state": (
+                                        "pending_partial_delta"
+                                    )
+                                }
+                                if killed_notice else {}
                             ),
-                        )
+                        },
+                        queued_findings=copy.deepcopy(
+                            unit.get("fix_queue") or []
+                        ),
                     ),
                     episode_unit=unit,
                 )
@@ -11777,41 +10670,8 @@ class Driver(object):
             family, fix_model, fix_effort = self._result_identity(
                 result, family, fix_model, fix_effort
             )
-        # The sealed-artifact guard runs on EVERY outcome (gap or not, in
-        # envelope or not) BEFORE any branch returns: a fixer that tampered with
-        # a sealed doc and then gapped must still be caught and restored — the
-        # gap must never be a side door around tamper detection.
         declaration = output.get("design_correction")
         active_correction = unit.get("design_correction") or {}
-        editable_note = None
-        if active_correction.get("phase") == "proposed":
-            editable_note = active_correction.get("artifact")
-        elif declaration is not None and design_context:
-            editable_note = design_context.get("artifact")
-        editable_documents = self._editable_design_paths(unit)
-        if editable_note:
-            editable_documents.append(editable_note)
-        # The per-physical-attempt completion boundary already restores sealed
-        # artifacts before reply validation.  Keep those durable affected-path
-        # events visible to the result consumer; a second live guard alone sees
-        # clean bytes and must not let a tampering fixer open Brainstorming.
-        restored = []
-        for event in self.state.get("events", [])[attempt_event_start:]:
-            artifact = event.get("artifact")
-            if (
-                event.get("type") == "sealed_artifact_restored"
-                and event.get("during") == raw_name
-                and isinstance(artifact, str)
-                and artifact not in restored
-            ):
-                restored.append(artifact)
-        for artifact in self._enforce_sealed_artifacts(
-            raw_name,
-            editable_sealed=editable_documents,
-            preserve_canonical_plan=True,
-        ):
-            if artifact not in restored:
-                restored.append(artifact)
         post_guard_snapshot = self._snapshot()
         fix_workspace_delta = self._snapshot_diff(
             fix_workspace_before, post_guard_snapshot
@@ -11834,7 +10694,7 @@ class Driver(object):
                     if resumed is None
                     else getattr(
                         result, "brainstorming_workspace_changed", False
-                    ) and not restored
+                    )
                 )
             )
         else:
@@ -11864,8 +10724,6 @@ class Driver(object):
                 # The ordinary fixer boundary will fail at its next concrete
                 # Git consumer; this marker adds no recovery inference.
                 pass
-        if verification_repair and source.get("deferred_candidate_changed"):
-            fix_workspace_changed = True
         self._record_design_changes(unit, fix_workspace_delta)
         if output.get("status") == "need_rethink":
             pending_agreement = self._fixer_brainstorming_agreement(
@@ -11900,26 +10758,6 @@ class Driver(object):
                 )
                 self._save()
                 raise StopStep(reason)
-            if restored:
-                self._record_worker_unaccepted(
-                    unit, contracts.KIND_FIX_FINDINGS, family, result,
-                    "rethink requester modified protected artifacts",
-                )
-                self._fail_worker_task_if_open(
-                    unit,
-                    output,
-                    result=result,
-                    reason="rethink requester modified protected artifacts",
-                )
-                st.fail_run(
-                    self.state,
-                    "fixer requested Brainstorming after modifying sealed "
-                    "artifacts: %s" % ", ".join(restored),
-                    unit=unit,
-                    type_="worker_blocked",
-                )
-                self._save()
-                raise StopStep("rethink requester modified sealed artifacts")
             return self._start_rethink(
                 unit,
                 contracts.KIND_FIX_FINDINGS,
@@ -12037,67 +10875,44 @@ class Driver(object):
             unit, output, contracts.KIND_FIX_FINDINGS, family, result
         )
         brainstorming_no_implementation_finding_id = None
-        if verification_repair:
-            if output.get("findings") != []:
-                reason = (
-                    "verification repair must return an empty findings list; "
-                    "its ok status certifies the live full suite"
+        try:
+            contracts.validate_fix_coverage(
+                output, unit.get("fix_queue") or []
+            )
+            brainstorming_no_implementation_finding_id = (
+                self._validate_brainstorming_application_claim(
+                    unit,
+                    output,
+                    result,
+                    bool(fix_workspace_changed),
                 )
-                self._record_worker_unaccepted(
-                    unit, contracts.KIND_FIX_FINDINGS, family, result, reason
-                )
-                self._fail_worker_task_if_open(
-                    unit, output, result=result, reason=reason
-                )
-                st.fail_run(
-                    self.state, reason, unit=unit, type_="worker_protocol"
-                )
-                self._save()
-                raise StopStep(reason)
-        else:
-            try:
-                contracts.validate_fix_coverage(
-                    output, unit.get("fix_queue") or []
-                )
-                brainstorming_no_implementation_finding_id = (
-                    self._validate_brainstorming_application_claim(
-                        unit,
-                        output,
-                        result,
-                        bool(fix_workspace_changed),
-                    )
-                )
-            except contracts.ContractError as exc:
-                self._record_worker_unaccepted(
-                    unit, contracts.KIND_FIX_FINDINGS, family, result, exc
-                )
-                self._fail_worker_task_if_open(
-                    unit, output, result=result, reason=str(exc)
-                )
-                st.fail_run(self.state, str(exc), unit=unit)
-                self._save()
-                raise StopStep(str(exc))
-            try:
-                self._validate_adjudication_refs(unit, output)
-                self._validate_contested_dispositions(unit, output)
-            except StopStep as exc:
-                self._record_worker_unaccepted(
-                    unit, contracts.KIND_FIX_FINDINGS, family, result, exc
-                )
-                self._fail_worker_task_if_open(
-                    unit, output, result=result, reason=str(exc)
-                )
-                self._save()
-                raise
+            )
+        except contracts.ContractError as exc:
+            self._record_worker_unaccepted(
+                unit, contracts.KIND_FIX_FINDINGS, family, result, exc
+            )
+            self._fail_worker_task_if_open(
+                unit, output, result=result, reason=str(exc)
+            )
+            st.fail_run(self.state, str(exc), unit=unit)
+            self._save()
+            raise StopStep(str(exc))
+        try:
+            self._validate_adjudication_refs(unit, output)
+            self._validate_contested_dispositions(unit, output)
+        except StopStep as exc:
+            self._record_worker_unaccepted(
+                unit, contracts.KIND_FIX_FINDINGS, family, result, exc
+            )
+            self._fail_worker_task_if_open(
+                unit, output, result=result, reason=str(exc)
+            )
+            self._save()
+            raise
         if active_correction.get("phase") == "proposed":
             correction_error = self._design_correction_integrity_error(
                 active_correction
             )
-            if restored:
-                correction_error = (
-                    "the provisional correction touched other sealed "
-                    "artifacts: %s" % ", ".join(restored)
-                )
             if correction_error:
                 self._record_worker_unaccepted(
                     unit, contracts.KIND_FIX_FINDINGS, family, result,
@@ -12125,11 +10940,6 @@ class Driver(object):
                     result, "brainstorming_handoff", None
                 ),
             )
-            if restored:
-                correction_error = (
-                    "the correction touched other sealed artifacts: %s"
-                    % ", ".join(restored)
-                )
             if correction_error:
                 unit["design_correction_attempted"] = True
                 self._record_worker_unaccepted(
@@ -12142,38 +10952,6 @@ class Driver(object):
                 return self._rollback_design_correction(
                     unit, correction_error, candidate
                 )
-        suite_corrected = False
-        if (
-            isinstance(output.get("suite_command"), str)
-            and output["suite_command"].strip()
-        ):
-            # A queued finding may expose a missing OR narrowed suite from a
-            # verification failure or review round. Correcting that run
-            # state is a real fix even with zero file edits. The command is
-            # part of review evidence, so changed commands invalidate prior
-            # approvals and execute at the next scheduled checkpoint.
-            command = output["suite_command"].strip()
-            effective_before = self._verification_commands(unit)
-            suite_state_changed = st.set_discovered_suite(
-                self.state, output["suite_command"], replace=True
-            )
-            suite_corrected = bool(
-                unit.get("suite_verification_pending")
-                or (
-                    bool(self.config.get("verification") or [])
-                    and effective_before != [command]
-                )
-                # With no explicit verification, changing stored state is
-                # the correction.  A documentation unit intentionally has
-                # no effective gate, so merely repeating the already stored
-                # command must not earn state-fix credit.
-                or (
-                    not bool(self.config.get("verification") or [])
-                    and suite_state_changed
-                )
-            )
-            if suite_corrected:
-                unit["suite_verification_pending"] = True
         design_amendment_finding_id = self._design_amendment_finding_id(
             result
         )
@@ -12183,31 +10961,6 @@ class Driver(object):
             result,
             brainstorming_no_implementation_finding_id,
         )
-        slices_changed = self._maybe_update_slices(unit, output)
-        fixed_slice_candidates = [
-            finding.get("id")
-            for finding in output.get("findings") or []
-            if finding.get("disposition") == "fixed"
-            and finding.get("id")
-        ] if slices_changed else []
-        slices_changed_finding_ids = []
-        if fixed_slice_candidates:
-            agreement_for_round = self._fixer_brainstorming_agreement(
-                unit, result
-            )
-            source_id = (
-                (agreement_for_round.get("source_finding") or {}).get("id")
-                if agreement_for_round else None
-            )
-            if brainstorming_no_implementation_finding_id == source_id:
-                siblings = [
-                    finding_id for finding_id in fixed_slice_candidates
-                    if finding_id != source_id
-                ]
-                if len(siblings) == 1:
-                    slices_changed_finding_ids = siblings
-            elif source_id in fixed_slice_candidates:
-                slices_changed_finding_ids = [source_id]
         st.record_round(
             self.state,
             unit,
@@ -12244,7 +10997,6 @@ class Driver(object):
                     if (fix_model or fix_effort)
                     else {}
                 ),
-                **({"suite_corrected": True} if suite_corrected else {}),
                 **(
                     {
                         "brainstorming_no_implementation_finding_id":
@@ -12259,52 +11011,16 @@ class Driver(object):
                     }
                     if design_amendment_finding_id else {}
                 ),
-                **(
-                    {
-                        "slices_changed_finding_ids":
-                        slices_changed_finding_ids,
-                    }
-                    if slices_changed_finding_ids else {}
-                ),
             },
         )
         self._terminalize_worker_task(unit, output, result=result)
-        if verification_repair:
-            # The fixer owns the complete suite in this episode. Its `ok`
-            # certifies the final workspace bytes; bind that assertion to the
-            # exact candidate and commands so any later edit invalidates it.
-            certified_fingerprint = self._verification_candidate_fingerprint()
-            st.append_event(
-                self.state,
-                "verification",
-                unit=st.unit_key(unit),
-                stage="fixer",
-                boundary="final",
-                cadence=self._full_verification_cadence(unit),
-                ok=True,
-                commands=list(verification_commands or []),
-                candidate_before=certified_fingerprint,
-                candidate_after=certified_fingerprint,
-                stable=True,
-                vacuous=not bool(verification_commands),
-                fixer_certified=True,
-                raw_path=raw_path,
-                output_tail="(fixer reported the configured full suite green)",
-            )
-            unit.pop("last_verification_output", None)
-            unit.pop("suite_verification_pending", None)
-            unit.pop("suite_armed_by_fix", None)
-            unit["verify_fix_attempts"]["pre_seal"] = 0
         self._mark_brainstorming_application_applied(
             unit,
             output,
             result=result,
             workspace_changed=fix_workspace_changed,
             state_changed=bool(
-                suite_corrected
-                or verification_repair
-                or design_amendment_finding_id
-                or slices_changed
+                design_amendment_finding_id
             ),
         )
         unit["fix_loop_rounds"] = unit.get("fix_loop_rounds", 0) + 1
@@ -12352,72 +11068,6 @@ class Driver(object):
                 candidate_changed=bool(fix_workspace_changed),
             )
             return "Brainstorming result applied; deferred fixer restored"
-        # A suite repair that did not touch the tests is taken at its word.
-        # The old condition only skipped ahead when the fixer changed
-        # NOTHING — the case where the shortcut is least needed — so every
-        # real repair fell into a delta review whose findings forced more
-        # edits, and those edits invalidated the certification the episode
-        # had just earned, sending the unit back to re-verify. That is the
-        # loop: certify green, get edited, re-verify, repeat.
-        #
-        # What actually decides whether the certification can be trusted is
-        # whether the tests themselves were altered to obtain it, and only
-        # the fixer knows that: a test can live in its own file, beside the
-        # code, or inside it, differently in every language. So it declares,
-        # and the declaration routes — reviewed when it says yes, accepted
-        # when it says no.
-        certified_without_touching_tests = (
-            verification_repair
-            and not bool(output.get("tests_modified"))
-        )
-        if certified_without_touching_tests:
-            if fix_workspace_changed:
-                # Skip the REVIEW, never the commit discipline. Folding the
-                # repair into the wip commit needs git; invalidating stale
-                # approvals does not — the candidate changed either way, and
-                # a git-disabled run inheriting a whole-artifact approval of
-                # bytes that no longer exist is exactly the seal this guard
-                # is here to prevent.
-                if gitops.enabled(self.config):
-                    try:
-                        sha = gitops.amend(self.workspace)
-                    except gitops.GitError as exc:
-                        st.fail_run(
-                            self.state,
-                            "suite repair amend failed: %s" % exc,
-                            unit=unit,
-                        )
-                        self._save()
-                        raise StopStep(str(exc))
-                    st.append_event(
-                        self.state, "amended", unit=st.unit_key(unit), sha=sha
-                    )
-                st.restart_reviews_after_candidate_change(
-                    self.state, unit, "suite repair changed bytes"
-                )
-            target = source.get("return_to") or st.U_PRE_SEAL_VERIFY
-            if (
-                target == st.U_PRE_SEAL_VERIFY
-                and self._seal_reviews(
-                    unit,
-                    current_fingerprint=self._review_evidence_fingerprint(unit),
-                ) is None
-            ):
-                target = st.U_PRE_REVIEW_VERIFY
-            unit["fix_queue"] = []
-            unit["fix_source"] = None
-            unit.pop("phantom_retried", None)
-            st.transition_unit(
-                self.state,
-                unit,
-                target,
-                reason=(
-                    "full suite certified by fixer; tests untouched"
-                    if fix_workspace_changed
-                    else "full suite certified by fixer; no candidate delta"
-                ),
-            )
-            return "full suite green; continuing without re-verification"
         if gitops.enabled(self.config):
             st.transition_unit(
                 self.state, unit, st.U_DELTA_REVIEW, reason="fix applied"
@@ -12431,8 +11081,6 @@ class Driver(object):
             st.restart_reviews_after_candidate_change(
                 self.state, unit, "git-disabled fixer changed bytes"
             )
-            target = st.U_PRE_REVIEW_VERIFY
-        elif suite_corrected and target == st.U_ROUNDS:
             target = st.U_PRE_REVIEW_VERIFY
         elif (target == st.U_PRE_SEAL_VERIFY
               and self._seal_reviews(
@@ -12464,25 +11112,6 @@ class Driver(object):
         brainstorming_no_implementation_finding_id = last_fix.get(
             "brainstorming_no_implementation_finding_id"
         )
-        slices_changed_finding_ids = set(
-            last_fix.get("slices_changed_finding_ids") or []
-        )
-        suite_corrected = bool(
-            last_fix.get("suite_corrected")
-            # Resume compatibility for a state saved by the earlier
-            # suite-arming implementation between fix and delta review.
-            or unit.pop("suite_armed_by_fix", None)
-        )
-        suite_finding_id = result.get("suite_command_finding_id")
-        if suite_corrected and not suite_finding_id:
-            # Old states predate the explicit binding.  Their arming fix was
-            # safe only in the historical single-fixed-finding shape.
-            fixed_ids = [
-                finding.get("id") for finding in result.get("findings", [])
-                if finding.get("disposition") == "fixed"
-            ]
-            if len(fixed_ids) == 1:
-                suite_finding_id = fixed_ids[0]
         claims = []
         changed = []
         for p in result.get("files_changed") or []:
@@ -12497,13 +11126,11 @@ class Driver(object):
         for f in result.get("findings", []):
             if f.get("disposition") == "fixed":
                 if not (
-                    suite_corrected and f.get("id") == suite_finding_id
-                    or design_amendment_finding_id
+                    design_amendment_finding_id
                     and f.get("id") == design_amendment_finding_id
                     or brainstorming_no_implementation_finding_id
                     and f.get("id")
                     == brainstorming_no_implementation_finding_id
-                    or f.get("id") in slices_changed_finding_ids
                 ):
                     # Only the explicitly bound finding earns state-fix
                     # credit; unrelated fixed claims still require real edits.
@@ -12551,17 +11178,10 @@ class Driver(object):
         source = unit.get("fix_source") or {}
         # The delta convergence checkpoint (delta_full_review_after_fixes)
         # escalates a review finding's fix loop to a full re-review after N
-        # fixes. It is keyed off the episode's origin, not return_to, because
-        # a pending suite re-verification may rewrite the latter.
+        # fixes. It is keyed off the episode's origin, not return_to.
         origin_type = st.active_fix_origin_type(self.state, unit)
         checkpoint_source = origin_type == "round"
         return_to = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
-        suite_verification_pending = bool(
-            unit.get("suite_verification_pending")
-            or unit.get("suite_armed_by_fix")
-        )
-        if suite_verification_pending and return_to == st.U_ROUNDS:
-            return_to = st.U_PRE_REVIEW_VERIFY
         fixer_family = None
         delta_base_revision = None
         for round_info in reversed(unit["rounds"]):
@@ -13094,8 +11714,6 @@ class Driver(object):
             or self._full_verification_cadence(unit)
         )
         if cadence is None:
-            unit.pop("suite_verification_pending", None)
-            unit.pop("suite_armed_by_fix", None)
             st.append_event(
                 self.state,
                 "verification_deferred",
@@ -13292,8 +11910,6 @@ class Driver(object):
             self._save()
             return "suite checkpoint failed; ordinary fixer queued"
 
-        unit.pop("suite_verification_pending", None)
-        unit.pop("suite_armed_by_fix", None)
         unit["verify_fix_attempts"]["pre_seal"] = 0
         closed = self._complete_seal_from_reviews(
             unit, verification_event=verification_event
@@ -13606,9 +12222,6 @@ class Driver(object):
             roots,
             amendments,
         ) = review_inputs[:5]
-        operator_complete = (
-            bool(review_inputs[5]) if len(review_inputs) > 5 else False
-        )
         active_review = self._active_worker_task(
             unit, contracts.KIND_REVIEW_ROUND
         )
@@ -13662,7 +12275,6 @@ class Driver(object):
             return "review evidence changed; cycle restarted"
         authority = {
             "amendments": amendments,
-            "operator_complete": operator_complete,
             "project_context": project_context,
             "extensions": extensions,
             "roots": roots,
@@ -13748,7 +12360,6 @@ class Driver(object):
             editable_design_paths=self._design_review_paths(unit),
             implementation_scope=self._implementation_scope(unit),
             producer_review_context=producer_review_context,
-            verification_commands=self._review_verification_commands(unit),
         )
         if active_review is not None:
             prompt = self._worker_episode_prompt(
@@ -14145,55 +12756,6 @@ class StopStep(RuntimeError):
 
 class PlanReconciliationOpened(RuntimeError):
     """A valid accepted range froze scheduling before source consumption."""
-
-
-def run_verification(commands, workspace, timeout):
-    """Run every verification command; returns (all_ok, combined_output).
-
-    Commands may be worker-discovered strings (suite_command), so they run
-    with the same stop semantics as workers: own session, tracked so the
-    driver's SIGTERM handler SIGKILLs the whole group (a TERM-trapping or
-    hung suite must not survive the Stop button), stdin closed and CI=1
-    set so watch-mode/interactive runners run once and exit. Execution
-    assumes the operator already trusts workers with full permissions;
-    sandboxed-worker configs must set explicit config verification
-    instead of relying on discovery."""
-    if not commands:
-        return True, "(no verification configured)"
-    env = dict(os.environ)
-    env.setdefault("CI", "1")
-    chunks = []
-    for cmd in commands:
-        proc = subprocess.Popen(
-            cmd,
-            shell=True,
-            cwd=workspace,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            start_new_session=True,
-        )
-        runners._track_worker(proc)
-        try:
-            try:
-                out, err = proc.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                runners._kill_group(proc)
-                proc.communicate()
-                chunks.append("$ %s\nTIMEOUT after %ss" % (cmd, timeout))
-                return False, "\n".join(chunks)
-        finally:
-            runners._untrack_worker(proc)
-        chunks.append(
-            "$ %s\nexit=%d\n%s%s" % (cmd, proc.returncode, out, err)
-        )
-        if proc.returncode != 0:
-            return False, "\n".join(chunks)
-    return True, "\n".join(chunks)
 
 
 # ---------------------------------------------------------------------------

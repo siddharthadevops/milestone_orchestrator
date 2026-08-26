@@ -4,16 +4,13 @@ review/fix-separation redesign.
 Covers, per finding:
 - milestone_closed is recorded exactly once, and re-running a finished
   state appends nothing;
-- worker protocol failures persist the raw outputs of both attempts;
+- a worker protocol failure persists its raw output before failing closed;
 - tool-cache writes by read-only reviewers do not invalidate the round
   (defaults + snapshot_exclude_dirs config);
-- a successful implementation-suite fixer replaces a duplicate driver
-  verification and resets the due-boundary counter;
-- skeleton fix rounds can update the structural slice plan;
 - a second driver invocation is refused before any worker call runs
   (staleness check + advisory lock);
-- a contract-valid skeleton with duplicate slice ids fails the run
-  instead of silently collapsing the unit plan.
+- an invalid canonical slice plan fails closed instead of silently
+  collapsing the unit plan.
 
 Deliberately self-contained (no imports from other test modules): local
 helpers script the NEW protocol — reviewers report findings without
@@ -24,6 +21,7 @@ All workspaces are tempfile.TemporaryDirectory(); nothing touches the repo.
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 
@@ -37,9 +35,7 @@ GOAL = "Build a small CLI calculator (add/sub/mul/div) with unit tests"
 
 
 def make_config(**overrides):
-    """Minimal frozen config; commands are never spawned (mock runners).
-    Git stays disabled: fix episodes return directly without delta reviews,
-    which keeps these regressions independent of gitops."""
+    """Minimal frozen config; commands are never spawned (mock runners)."""
     cfg = {
         "families_order": ["codex", "claude"],
         "fix_family": None,
@@ -48,6 +44,7 @@ def make_config(**overrides):
         "verification": [],
         "verification_timeout": 60,
         "max_rounds_per_family": 6,
+        "git": {"enabled": True},
         "max_verify_fix_attempts": 2,
         "acts": {"skeletoner": "codex", "fixer": "codex", "delta_review": "codex",
                  "consultation": "opposite"},
@@ -59,26 +56,27 @@ def make_config(**overrides):
 
 def init_state(workspace, config, goal=GOAL):
     """Create the on-disk state file the way `driver init` does."""
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=workspace,
+        check=True,
+    )
     state = st.new_state(goal, workspace, config)
     st.append_event(state, "initialized", goal=goal)
     path = drv.default_state_path(workspace)
     st.save(path, state)
-    return path
-
-
-def init_final_impl_state(workspace, config, goal=GOAL):
-    """Create a run positioned at its final implementation boundary."""
-    path = init_state(workspace, config, goal=goal)
-    state = st.load(path)
-    state["milestone"]["slices"] = [{"id": 1, "title": "core"}]
-    skeleton = state["units"][0]
-    skeleton["artifact"] = "docs/skeleton.md"
-    skeleton["status"] = st.U_SEALED
-    note = st.ensure_next_unit(state)
-    note["artifact"] = "docs/slice-01.md"
-    note["status"] = st.U_SEALED
-    st.ensure_next_unit(state)
-    st.save(path, state)
+    with open(
+        os.path.join(os.path.dirname(path), "amendments.json"),
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump({"amendments": []}, handle)
     return path
 
 
@@ -152,6 +150,27 @@ def fix_fixed(*ids, **extra):
 
 
 def step(kind, response, family=None, side_effect=None):
+    question_ids = {
+        "draft_skeleton": (
+            "due_diligence_count", "machinery_trust",
+            "environment_fit", "human_scale",
+        ),
+        "draft_slice_note": (
+            "due_diligence_count", "machinery_trust",
+            "environment_fit", "human_scale",
+        ),
+        "implement": ("machinery_trust", "environment_fit", "human_scale"),
+        "review_round": ("environment_fit", "human_scale"),
+        "delta_review": ("environment_fit", "human_scale"),
+        "fix_findings": ("environment_fit", "human_scale"),
+        "reclassify": ("environment_fit", "human_scale"),
+    }
+    if isinstance(response, dict) and kind in question_ids:
+        response = dict(response)
+        response.setdefault("questions", [
+            {"id": question_id, "answer": "Checked."}
+            for question_id in question_ids[kind]
+        ])
     s = {"expect_kind": kind, "response": response}
     if family is not None:
         s["expect_family"] = family
@@ -161,14 +180,35 @@ def step(kind, response, family=None, side_effect=None):
 
 
 def draft_skeleton_step(slices=None):
+    plan = []
+    for item in slices or [{"id": 1, "title": "core"}]:
+        plan.append({
+            "id": item["id"],
+            "title": item["title"],
+            "intent": item.get("intent") or "Deliver the bounded slice.",
+            "producer_task_executor": {
+                "draft_slice_note": "agent_call",
+                "implement": "agent_call",
+            },
+        })
+
+    def write_skeleton(workspace):
+        path = os.path.join(workspace, "docs", "skeleton.md")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(
+                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps({"slices": plan})
+            )
+
     return step(
         "draft_skeleton",
         ok(
             "draft_skeleton",
             artifact="docs/skeleton.md",
-            slices=slices or [{"id": 1, "title": "core"}],
         ),
         family="codex",
+        side_effect=write_skeleton,
     )
 
 
@@ -184,23 +224,61 @@ def skeleton_script():
 
 
 def doc_script():
+    def write_note(workspace):
+        with open(
+            os.path.join(workspace, "docs", "slice-01.md"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write("# Slice 1\n")
+
     return [
         step(
             "draft_slice_note",
             ok("draft_slice_note", artifact="docs/slice-01.md"),
             family="codex",
+            side_effect=write_note,
         ),
     ] + clean_reviews()
 
 
 def impl_script():
+    def write_implementation(workspace):
+        with open(
+            os.path.join(workspace, "calculator.py"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write("def add(a, b): return a + b\n")
+
     return [
         step(
             "implement",
             ok("implement", files_changed=["calculator.py"]),
             family="codex",
+            side_effect=write_implementation,
         ),
-    ] + clean_reviews()
+    ] + clean_reviews() + [suite_checkpoint_step()]
+
+
+def suite_checkpoint_step():
+    return step(
+        "suite_checkpoint",
+        {
+            "status": "no_suite",
+            "kind": "suite_checkpoint",
+            "commands": [],
+            "results": [],
+            "authority": {
+                "source": "repository",
+                "evidence": [{
+                    "path": "docs/skeleton.md",
+                    "basis": "No complete suite is configured or declared.",
+                }],
+            },
+        },
+        family="codex",
+    )
 
 
 class DriverTestCase(unittest.TestCase):
@@ -232,254 +310,6 @@ class DriverTestCase(unittest.TestCase):
             driver.step()
             self.assertIsInstance(drv.decide(driver.state), drv.Action)
         self.fail("predicate never satisfied within %d steps" % max_steps)
-
-
-class _FailingRunner(object):
-    """Raises scripted exceptions, then succeeds with scripted responses."""
-
-    def __init__(self, failures, then=None, token_usage=None):
-        self.failures = list(failures)
-        self.then = list(then or [])
-        self.token_usage = token_usage
-        self.calls = 0
-
-    def call(self, family, prompt, workspace, model=None, effort=None,
-             timeout_override=None):
-        self.calls += 1
-        self.profiles = getattr(self, "profiles", [])
-        self.profiles.append((family, model, effort))
-        if self.failures:
-            raise self.failures.pop(0)
-        import json as _json
-        return runners.RunnerResult(
-            _json.dumps(self.then.pop(0)), 0, 1.0,
-            token_usage=self.token_usage,
-        )
-
-
-class TestTypedInfraFailures(DriverTestCase):
-    def test_classifier_call_carries_its_family_profile(self):
-        # The classifier runs on the OPPOSITE family, whose command
-        # template may carry {model}/{effort}. Calling it without them
-        # raised "command template uses {model} but no value was resolved"
-        # before the CLI was ever reached, so the whole LLM fallback stage
-        # was dead and EVERY unmatched failure degraded to `unknown`
-        # (found live 2026-07-19). This pins the driver call site, not
-        # just errclass.
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            cfg = make_config(
-                infra_retry_backoff_s=[],
-                error_classifier=True,
-                model_defaults={
-                    "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"},
-                    "claude": {"model": "claude-fable-5", "effort": "high"},
-                },
-            )
-            path = init_state(ws, cfg)
-            runner = _FailingRunner(
-                [runners.RunnerError(
-                    "family codex exited 1 with no output; stderr tail: "
-                    "an unrecognizable banner")],
-                then=[{"error_type": "busy", "resume_at": None,
-                       "evidence": "transient"}],
-            )
-            observed_marker = {}
-            original_call = runner.call
-
-            def observe_classifier(family, prompt, workspace, **kwargs):
-                if family == "claude":
-                    with open(os.path.join(
-                        ws, ".orchestrator", "current.json"
-                    ), encoding="utf-8") as handle:
-                        observed_marker.update(json.load(handle))
-                return original_call(family, prompt, workspace, **kwargs)
-
-            runner.call = observe_classifier
-            driver = drv.Driver(path, runner=runner)
-            driver.step()
-            state = st.load(path)
-            # It reached the CLI at all, and as the opposite family.
-            self.assertEqual(state["failure"]["type"], "busy")
-            classify_calls = [p for p in runner.profiles if p[0] == "claude"]
-            self.assertEqual(
-                classify_calls, [("claude", "claude-fable-5", "high")]
-            )
-            self.assertEqual(observed_marker["kind"], "error_classifier")
-            self.assertEqual(observed_marker["family"], "claude")
-            self.assertFalse(os.path.exists(os.path.join(
-                ws, ".orchestrator", "current.json"
-            )))
-
-    def test_classifier_call_usage_is_owned_by_the_milestone(self):
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            usage = {
-                "input_tokens": 70, "cached_input_tokens": 20,
-                "output_tokens": 10, "reasoning_output_tokens": 3,
-                "total_tokens": 80,
-            }
-            path = init_state(
-                ws, make_config(
-                    infra_retry_backoff_s=[], error_classifier=True
-                )
-            )
-            runner = _FailingRunner(
-                [runners.RunnerError("a novel provider failure")],
-                then=[{"error_type": "busy", "resume_at": None,
-                       "evidence": "transient"}],
-                token_usage=usage,
-            )
-            driver = drv.Driver(path, runner=runner)
-            driver.step()
-
-            state = st.load(path)
-            summary = st.summary(state)
-            events = [
-                event for event in state["events"]
-                if event["type"] == "error_classifier_call"
-            ]
-            self.assertEqual(len(events), 1)
-            self.assertEqual(events[0]["token_usage"], usage)
-            self.assertEqual(summary["work_token_usage"], usage)
-
-    def test_interrupted_classifier_is_recovered_as_unknown_usage(self):
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            parent_usage = {
-                "input_tokens": 70,
-                "cached_input_tokens": 20,
-                "output_tokens": 10,
-                "reasoning_output_tokens": 3,
-                "total_tokens": 80,
-            }
-            path = init_state(
-                ws, make_config(
-                    infra_retry_backoff_s=[], error_classifier=True
-                )
-            )
-            parent_failure = runners.RunnerError(
-                "a novel provider failure"
-            )
-            parent_failure.token_usage = parent_usage
-            parent_failure.token_usage_partial = False
-            runner = _FailingRunner([
-                parent_failure,
-                KeyboardInterrupt(),
-            ])
-            driver = drv.Driver(path, runner=runner)
-            with self.assertRaises(KeyboardInterrupt):
-                driver.step()
-
-            marker_path = os.path.join(
-                ws, ".orchestrator", "current.json"
-            )
-            with open(marker_path, encoding="utf-8") as handle:
-                marker = json.load(handle)
-            self.assertEqual(marker["kind"], "error_classifier")
-
-            drv.Driver(path, runner=_FailingRunner([]))
-            state = st.load(path)
-            interrupted = [
-                event for event in state["events"]
-                if event["type"] == "worker_interrupted"
-            ]
-            self.assertEqual(len(interrupted), 2)
-            by_kind = {event["kind"]: event for event in interrupted}
-            self.assertEqual(
-                by_kind[contracts.KIND_DRAFT_SKELETON]["token_usage"],
-                parent_usage,
-            )
-            self.assertFalse(
-                by_kind[contracts.KIND_DRAFT_SKELETON][
-                    "token_usage_partial"
-                ]
-            )
-            self.assertIsNone(
-                by_kind["error_classifier"]["token_usage"]
-            )
-            self.assertTrue(
-                by_kind["error_classifier"]["token_usage_partial"]
-            )
-            self.assertEqual(
-                st.summary(state)["work_token_usage"], parent_usage
-            )
-            self.assertTrue(st.summary(state)["work_token_usage_partial"])
-
-    def test_classifier_io_is_persisted_and_evidence_recorded(self):
-        # An LLM-classified failure must leave an auditable trail: the
-        # classifier's prompt+response saved as a raw, plus its verdict in
-        # the failure record. Regression: the canon at-capacity strand was
-        # unauditable because the classifier's I/O was discarded.
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            cfg = make_config(infra_retry_backoff_s=[],  # no retry sleeps
-                              error_classifier=True)     # exercise the LLM
-            path = init_state(ws, cfg)
-            runner = _FailingRunner(
-                [runners.RunnerError(
-                    "family codex exited 1 with no output; stderr tail: "
-                    "a novel banner patterns do not recognize")],
-                then=[{"error_type": "busy", "resume_at": None,
-                       "evidence": "opposite family judged it transient"}],
-            )
-            driver = drv.Driver(path, runner=runner)
-            driver.step()
-            state = st.load(path)
-            self.assertEqual(state["failure"]["type"], "busy")
-            self.assertEqual(state["failure"]["classify_evidence"],
-                             "opposite family judged it transient")
-            raw_dir = os.path.join(ws, ".orchestrator", "raw")
-            classify_raws = [f for f in os.listdir(raw_dir) if "classify" in f]
-            self.assertTrue(classify_raws, os.listdir(raw_dir))
-            with open(os.path.join(raw_dir, classify_raws[0]),
-                      encoding="utf-8") as _fh:
-                body = _fh.read()
-            self.assertIn("CLASSIFIER PROMPT", body)
-            self.assertIn("busy", body)  # the classifier's actual reply
-
-    def test_network_blip_retried_in_place_then_succeeds(self):
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            cfg = make_config(infra_retry_backoff_s=[0, 0])
-            path = init_state(ws, cfg)
-            skeleton = {
-                "status": "ok", "kind": "draft_skeleton",
-                "artifact": "docs/skeleton.md",
-                "slices": [{"id": 1, "title": "core"}],
-            }
-            runner = _FailingRunner(
-                [
-                    runners.RunnerError("fetch failed: ECONNRESET"),
-                    runners.RunnerError("fetch failed: ECONNRESET"),
-                ],
-                then=[skeleton],
-            )
-            # The draft must write its artifact for the wip commit.
-            import os as _os
-            _os.makedirs(_os.path.join(ws, "docs"), exist_ok=True)
-            with open(_os.path.join(ws, "docs", "skeleton.md"), "w",
-                      encoding="utf-8") as fh:
-                fh.write("# skeleton\n")
-            driver = drv.Driver(path, runner=runner)
-            driver.step()
-            state = st.load(path)
-            self.assertIsNone(state["failure"])
-            retries = [e for e in state["events"]
-                       if e["type"] == "infra_retry"]
-            self.assertEqual(
-                [e["failure_type"] for e in retries],
-                ["network", "network"],
-            )
-            self.assertEqual(runner.calls, 3)
-
-    def test_network_failure_beyond_retries_is_typed(self):
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            cfg = make_config(infra_retry_backoff_s=[])
-            path = init_state(ws, cfg)
-            runner = _FailingRunner([
-                runners.RunnerError("could not connect: ENOTFOUND api"),
-            ])
-            driver = drv.Driver(path, runner=runner)
-            driver.step()
-            state = st.load(path)
-            self.assertEqual(state["failure"]["type"], "network")
-            self.assertIsNotNone(state["failure"]["resume_at"])
 
 
 class TestPauseAfterSeal(DriverTestCase):
@@ -637,14 +467,11 @@ class TestRunStepLimitTerminalObservation(unittest.TestCase):
 
 class TestProtocolFailureRawOutputs(DriverTestCase):
     def test_raw_texts_saved_on_protocol_violation(self):
-        """P3: on WorkerProtocolError the worker's raw output was never
-        written to .orchestrator/raw — exactly the case where the operator
-        needs to see what the model actually said."""
+        """The rejected reply is preserved before the run fails closed."""
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
             path = init_state(ws, make_config())
             mock = runners.MockRunner([
                 step("draft_skeleton", "utter junk, not JSON at all"),
-                step("draft_skeleton", "still prose with no object in sight"),
             ])
             driver = drv.Driver(path, runner=mock)
             _actions, final = self.drive(driver)
@@ -654,11 +481,6 @@ class TestProtocolFailureRawOutputs(DriverTestCase):
             with open(os.path.join(raw_dir, "skeleton-draft-protoerr1.txt"),
                       encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), "utter junk, not JSON at all")
-            with open(os.path.join(raw_dir, "skeleton-draft-protoerr2.txt"),
-                      encoding="utf-8") as fh:
-                self.assertEqual(
-                    fh.read(), "still prose with no object in sight"
-                )
 
 
 class TestSnapshotCacheExclusions(DriverTestCase):
@@ -710,124 +532,6 @@ class TestSnapshotCacheExclusions(DriverTestCase):
             unit = state["units"][0]
             self.assertEqual(unit["status"], st.U_SEALED)
             self.assertNotIn("invalidated", unit["rounds"][0])
-
-
-class TestFinalVerifyFixOwnership(DriverTestCase):
-    # The driver executes the boundary once. The fixer then owns full-suite
-    # convergence, so its success must not trigger another driver execution.
-    VER_CMD = (
-        "python3 -c \"import os,sys; p='.orchestrator/vcount'; "
-        "n=int(open(p).read()) if os.path.exists(p) else 0; n+=1; "
-        "open(p,'w').write(str(n)); sys.exit(1)\""
-    )
-
-    def test_fixer_success_replaces_driver_retry_and_resets_counter(self):
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            path = init_final_impl_state(
-                ws,
-                make_config(
-                    verification=[self.VER_CMD],
-                    max_verify_fix_attempts=2,
-                ),
-            )
-            mock = runners.MockRunner([
-                impl_script()[0],
-                step("review_round", clean(), family="codex"),
-                step("review_round", clean(), family="claude"),
-                step(
-                    "fix_findings",
-                    ok("fix_findings", findings=[], files_changed=[],
-                       tests_modified=False),
-                    family="codex",
-                ),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver, lambda s: s["units"][-1]["status"] == st.U_SEALED
-            )
-            self.assertEqual(mock.script, [])
-
-            state = st.load(path)
-            self.assertIsNone(state["failure"])
-            unit = state["units"][-1]
-            self.assertEqual(unit["status"], st.U_SEALED)
-            # The final-stage counter resets when that boundary passes.
-            self.assertEqual(
-                unit["verify_fix_attempts"],
-                {"pre_review": 0, "pre_seal": 0},
-            )
-            fixes = [r for r in unit["rounds"] if r["kind"] == "fix_findings"]
-            self.assertEqual(
-                [r["source_round_id"] for r in fixes],
-                ["slice_impl-01-verify-pre_seal-1"],
-            )
-            failed = [
-                e for e in state["events"]
-                if e["type"] == "verification" and not e["ok"]
-            ]
-            self.assertEqual(
-                [e["stage"] for e in failed],
-                [st.U_PRE_SEAL_VERIFY],
-            )
-            self.assertTrue(all(e.get("boundary") == "final" for e in failed))
-            with open(os.path.join(ws, ".orchestrator", "vcount"),
-                      encoding="utf-8") as fh:
-                self.assertEqual(fh.read(), "1")
-            raw_dir = os.path.join(ws, ".orchestrator", "raw")
-            self.assertIn("slice_impl-01-fix1.txt", os.listdir(raw_dir))
-
-
-class TestSkeletonSlicePlanUpdate(DriverTestCase):
-    def test_skeleton_fix_round_updates_structural_plan(self):
-        """P3: the slice plan was frozen from the pre-review draft JSON.
-        Under the redesign the reviewer only REPORTS the gap; the fixer
-        (which has edit permissions on the skeleton document) reports the
-        updated plan and the structural unit plan follows it."""
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            path = init_state(ws, make_config())
-            new_plan = [
-                {"id": 1, "title": "core"},
-                {"id": 2, "title": "follow-up"},
-            ]
-            mock = runners.MockRunner([
-                draft_skeleton_step(slices=[{"id": 1, "title": "core"}]),
-                step(
-                    "review_round",
-                    reported("review_round",
-                             "slice plan missed the follow-up work"),
-                    family="codex",
-                ),
-                step(
-                    "fix_findings",
-                    fix_fixed("F1", slices=new_plan),
-                    family="codex",
-                ),
-                step("review_round", clean(), family="codex"),
-                step("review_round", clean(), family="claude"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver, lambda s: s["units"][0]["status"] == st.U_SEALED
-            )
-            self.assertEqual(mock.script, [])
-            state = st.load(path)
-            self.assertEqual(state["milestone"]["slices"], new_plan)
-            updates = [
-                e for e in state["events"] if e["type"] == "slices_updated"
-            ]
-            self.assertEqual(len(updates), 1)
-            self.assertEqual(updates[0]["slices"], new_plan)
-            # The structural plan drives unit creation for BOTH slices.
-            self.assertEqual(
-                st.planned_units(state),
-                [
-                    (st.UNIT_SKELETON, None),
-                    (st.UNIT_SLICE_DOC, 1),
-                    (st.UNIT_SLICE_IMPL, 1),
-                    (st.UNIT_SLICE_DOC, 2),
-                    (st.UNIT_SLICE_IMPL, 2),
-                ],
-            )
 
 
 class TestConcurrentInvocationRefused(DriverTestCase):
@@ -883,25 +587,54 @@ class TestDuplicateSliceIdsEndToEnd(DriverTestCase):
         collapse the unit plan and close the milestone with a slice
         silently dropped. The contract now rejects it; a worker that
         insists twice fails the run with the explanation recorded."""
-        dup = ok(
-            "draft_skeleton",
-            artifact="docs/skeleton.md",
-            slices=[
-                {"id": 1, "title": "core"},
-                {"id": 1, "title": "totally different second slice"},
-            ],
-        )
+        plan = {
+            "slices": [
+                {
+                    "id": 1,
+                    "title": "core",
+                    "intent": "Deliver core.",
+                    "producer_task_executor": {
+                        "draft_slice_note": "agent_call",
+                        "implement": "agent_call",
+                    },
+                },
+                {
+                    "id": 1,
+                    "title": "totally different second slice",
+                    "intent": "Deliver a different slice.",
+                    "producer_task_executor": {
+                        "draft_slice_note": "agent_call",
+                        "implement": "agent_call",
+                    },
+                },
+            ]
+        }
+
+        def write_duplicate_plan(workspace):
+            path = os.path.join(workspace, "docs", "skeleton.md")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                    % json.dumps(plan)
+                )
+
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
             path = init_state(ws, make_config())
             mock = runners.MockRunner([
-                step("draft_skeleton", dup),
-                step("draft_skeleton", dup),  # repair retry, same junk
+                step(
+                    "draft_skeleton",
+                    ok("draft_skeleton", artifact="docs/skeleton.md"),
+                    side_effect=write_duplicate_plan,
+                ),
             ])
             driver = drv.Driver(path, runner=mock)
             _actions, final = self.drive(driver)
             self.assertEqual(final.type, drv.A_FAILED)
             state = st.load(path)
-            self.assertIn("duplicate slice id", state["failure"]["reason"])
+            self.assertIn(
+                "duplicate canonical slice id", state["failure"]["reason"]
+            )
             self.assertEqual(state["milestone"]["slices"], [])
             self.assertNotEqual(state["milestone"]["status"], st.M_CLOSED)
 

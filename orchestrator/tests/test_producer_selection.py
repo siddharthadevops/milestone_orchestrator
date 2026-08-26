@@ -10,13 +10,10 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
-from unittest import mock
-
-from orchestrator import brainstorming_milestone
+from orchestrator import canonical_plan
 from orchestrator import contracts
 from orchestrator import driver as drv
 from orchestrator import model_profiles
-from orchestrator import prompts
 from orchestrator import registry
 from orchestrator import runners
 from orchestrator import service
@@ -26,14 +23,10 @@ from orchestrator import tasks
 
 from orchestrator.tests.test_driver_mock import (
     DriverTestCase,
-    finding,
-    fix_ok,
     init_state,
     make_config,
     ok,
-    report,
     step,
-    triaged,
     write_file,
 )
 
@@ -48,19 +41,6 @@ def _request(workspace, kind, unit):
         "request": "Produce the selected slice work.",
         "context": {"task_kind": kind, "unit": unit},
         "reference_documents": [],
-    }
-
-
-def _failure(reason="the selected producer could not finish"):
-    return {
-        "status": "failure",
-        "reason": reason,
-        "duration_s": 1.0,
-        "token_usage": None,
-        "token_usage_partial": True,
-        "cost": None,
-        "cost_partial": True,
-        "native_result": {"request": "preserved"},
     }
 
 
@@ -169,254 +149,50 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
             "research",
         )
 
-    def test_unreadable_guidance_does_not_block_the_routed_skeleton(self):
-        for repointed in ("no-such-document", None):
-            with self.subTest(repointed=repointed):
-                path = self.bound_to(
-                    material_document("vocab", self.VOCABULARY),
-                    name="unreadable-%s" % (repointed or "unbound"),
-                )
-                state = st.load(path)
-                session = st.staffing_session(state)
-                if repointed is None:
-                    # A run that holds no session at all: there is no
-                    # referenced document, so there is no vocabulary either.
-                    state.pop(st.STAFFING_SESSION_KEY)
-                    st.save(path, state)
-                else:
-                    stf.edit_session(
-                        self.home, session, {"document": repointed}
-                    )
-                subject = self.driver_for(
-                    path,
-                    [canonical_skeleton_step()],
-                )
-                self.assertEqual(subject._planning_materials(), {})
-                subject.step()
-                drafted = subject.runner.calls[-1]
-                self.assertIsNone(self.catalogue_in(drafted[2]))
-                # Staffing guidance is not an author-route dependency.
-                self.assertIsNone(subject.state["failure"])
-                self.assertEqual(drafted[1], "draft_skeleton")
-
-    def test_unencodable_guidance_does_not_enter_the_routed_prompt(self):
-        # The staffing store can represent a surrogate that a UTF-8 provider
-        # prompt cannot. The routed skeleton charge does not consume that
-        # legacy vocabulary, so the ordinary author call remains valid.
-        unwritable = material_document(
-            "unwritable",
-            {"research": {"examples": ["reading \ud800 code"]},
-             "plumbing": {"examples": ["wiring one existing seam"]}},
-        )
-        # Prove the value really remains present in the independent store.
-        stf.save(self.home, unwritable)
-        self.assertEqual(
-            stf.load(self.home, "unwritable")["materials"]["research"],
-            {"examples": ["reading \ud800 code"]},
-        )
-        path = self.bound_to(unwritable, name="unwritable")
-        subject = self.driver_for(
-            path,
-            [canonical_skeleton_step()],
-        )
-        self.assertEqual(
-            subject._planning_materials(), unwritable["materials"]
-        )
-        subject.step()
-        drafted = subject.runner.calls[-1]
-        self.assertEqual(drafted[1], "draft_skeleton")
-        self.assertIsNone(self.catalogue_in(drafted[2]))
-        self.assertNotIn("wiring one existing seam", drafted[2])
-        self.assertNotIn("reading \\ud800 code", drafted[2])
-        self.assertIsNone(subject.state["failure"])
-        # The prompt that actually went out is a request an order accepts.
-        drafted[2].encode("utf-8")
-
-    def test_a_proposal_continuation_that_may_plan_reads_the_live_vocabulary(
-        self,
-    ):
-        # A skeleton fixer's queued finding may open a focused discussion
-        # that returns a PROPOSAL rather than a design amendment. It then
-        # finishes the same task, and its frozen request still tells it to
-        # return the FULL updated `slices` array, which this driver installs.
-        # So the continuation is a plan-authoring prompt: it needs the pair
-        # read at ITS boundary, not only the one quoted inside the request
-        # its first call was dispatched with.
-        path = self.bound_to(
-            material_document("vocab", self.VOCABULARY), name="continuation"
-        )
-        subject = self.driver_for(path)
-        unit = st.current_unit(subject.state)
-        self.assertEqual(unit["kind"], st.UNIT_SKELETON)
-        frozen = prompts.build_fix_findings(
-            "codex", subject.workspace, subject.state["goal"],
-            "milestone skeleton",
-            [{"id": "F1", "severity": "P2", "summary": "the table is wrong"}],
-            subject._registry(), "claude", "consult",
-            unit_kind="skeleton",
-            materials={"retired": {"examples": ["work nobody asks for now"]}},
-        )
-        self.assertIn("FULL updated `slices`", frozen)
-        self.assertIn("work nobody asks for now", frozen)
-        subject.state["tasks"] = [{
-            "id": "task-1",
-            "order": {
-                "request": {
-                    "request": frozen,
-                    "context": {"worker_validation": {}},
-                },
-            },
-        }]
-        unit["brainstorming_wait"] = {
-            "session_id": "b1",
-            "references": [],
-            "signal": {
-                "status": "need_rethink",
-                "kind": contracts.KIND_FIX_FINDINGS,
-                "request": "Which reading of the boundary governs?",
-                "finding": {"id": "F1", "summary": "the table is wrong"},
-                "target_path": "docs/skeleton.md",
-                "max_rounds": 20,
-                "result_mode": contracts.RETHINK_RESULT_PROPOSAL,
-            },
-            "origin": {
-                "unit": st.unit_key(unit),
-                "kind": contracts.KIND_FIX_FINDINGS,
-                "family": "codex",
-                "model": "gpt-5.6-sol",
-                "effort": "high",
-                "raw_name": "skeleton-fix1",
-                "provider_session_ref": "codex-thread-1",
-                "task_id": "task-1",
-                "duration_s": 1.0,
-                "pre_snapshot": {},
-            },
-        }
-        handoff = {
-            "session_id": "b1",
-            "accepted_target_revision": 2,
-            "result": {"outcome": "success"},
-            "retained_target": {
-                "exists": True,
-                "encoding": "utf-8",
-                "content": "Read the boundary the narrower way.",
-            },
-        }
-        subject._call = mock.Mock(return_value=(
-            {"status": "ok", "kind": contracts.KIND_FIX_FINDINGS,
-             "findings": [triaged("F1", "fixed", "the table is wrong")],
-             "files_changed": ["docs/skeleton.md"]},
-            runners.RunnerResult("{}", 0, 0.2),
-            "raw/continued.txt",
-        ))
-
-        with mock.patch.object(
-            brainstorming_milestone, "terminal_handoff", return_value=handoff
-        ), mock.patch.object(
-            brainstorming_milestone, "prompt_handoff", return_value=handoff
-        ):
-            subject._do_brainstorming_wait()
-
-        prompt = subject._call.call_args.args[1]
-        # A proposal grants no design edit: this is the plain continuation
-        # the earlier reviewed gate left without a live catalogue.
-        self.assertIsNone(unit.get("design_update"))
-        # The quotation is still byte-for-byte the request that was
-        # dispatched, retired vocabulary and all.
-        self.assertTrue(prompt.startswith(frozen.rstrip()))
-        self.assertIn("work nobody asks for now", prompt)
-        # ... and beside it, read at THIS boundary, the document's current
-        # pair, named as the one that governs.
-        self.assertEqual(
-            self.catalogue_in(
-                prompt[prompt.rindex("PLANNING VOCABULARY PRECEDENCE"):]
-            ),
-            {"research": ["reading unfamiliar code",
-                          "tracing an unclear failure"],
-             "plumbing": ["wiring one existing seam"]},
-        )
-        self.assertEqual(prompt.count("PLANNING VOCABULARY PRECEDENCE"), 1)
-        self.assertEqual(prompt.count("TASKEXECUTOR CATALOGUE"), 2)
-
-        # The decision is what this driver can INSTALL, not the result mode:
-        # the skeleton's own fixer always, a unit holding the skeleton among
-        # its editable design paths always, and nothing else.
-        self.assertTrue(subject._continuation_may_plan_slices(unit))
-        other = {"kind": st.UNIT_SLICE_IMPL, "slice_id": 1}
-        self.assertFalse(subject._continuation_may_plan_slices(other))
-        other["design_update"] = {
-            "editable_paths": [subject._skeleton_artifact()]
-        }
-        self.assertTrue(subject._continuation_may_plan_slices(other))
-
-    def test_slice_contract_takes_a_string_or_nothing_and_never_migrates(self):
+    def test_canonical_plan_material_is_optional_nonempty_utf8_text(self):
         base = {
-            "status": "ok",
-            "kind": contracts.KIND_DRAFT_SKELETON,
-            "artifact": "docs/skeleton.md",
-            "slices": [{"id": 1, "title": "one"}],
+            "id": 1,
+            "title": "one",
+            "intent": "Exercise material projection.",
+            "producer_task_executor": {
+                "draft_slice_note": "agent_call",
+                "implement": "agent_call",
+            },
         }
-        # The last one arrives as JSON writes it — two escapes, a surrogate
-        # PAIR — and decodes to the single scalar U+10000. The rule is on the
-        # decoded value, so a spelling that looks like the refusal below is
-        # admitted, and the pinned fact is the character, not the escape.
+
         for value in (
             "research",
             "no-such-material",
-            "",
             json.loads('"re\\ud800\\udc00search"'),
         ):
-            response = copy.deepcopy(base)
-            response["slices"][0]["material"] = value
-            with self.subTest(material=value):
-                contracts.validate_worker_output(
-                    response, contracts.KIND_DRAFT_SKELETON
-                )
-                # Verbatim, including a name no document carries: the
-                # router owns what a material MEANS.
-                self.assertEqual(response["slices"][0]["material"], value)
-        for value in (None, True, ["research"], {"name": "research"}, 3):
-            response = copy.deepcopy(base)
-            response["slices"][0]["material"] = value
-            with self.subTest(material=value), self.assertRaises(
-                contracts.ContractError
-            ):
-                contracts.validate_worker_output(
-                    response, contracts.KIND_DRAFT_SKELETON
-                )
-
-        # JSON hands back an escaped unpaired surrogate as an ordinary str,
-        # but no UTF-8 encoder can emit it, so "preserved verbatim in state"
-        # is unkeepable for it. Refused at admission — the repairable answer
-        # the malformed shapes get — rather than installed and then crashing
-        # the save that would have made the planner's result durable.
-        response = copy.deepcopy(base)
-        response["slices"][0] = json.loads(
-            '{"id": 1, "title": "one", "material": "re\\ud800search"}'
-        )
-        with self.assertRaises(contracts.ContractError):
-            contracts.validate_worker_output(
-                response, contracts.KIND_DRAFT_SKELETON
+            planned = copy.deepcopy(base)
+            planned["material"] = value
+            document = (
+                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps({"slices": [planned]}, ensure_ascii=True)
             )
-        state = st.new_state("goal", "/workspace", {"families_order": ["codex"]})
-        state["milestone"]["slices"] = [copy.deepcopy(response["slices"][0])]
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(UnicodeEncodeError):
-                st.save_new(os.path.join(tmp, "state.json"), state)
+            with self.subTest(material=value):
+                validated = canonical_plan.validate_canonical_plan(document)
+                self.assertEqual(validated["projection"][0]["material"], value)
 
-        source = [
-            {"id": 1, "title": "absent"},
-            {"id": 2, "title": "proposed", "material": "research"},
-        ]
-        before = copy.deepcopy(source)
-        effective = tasks.effective_slice_plan(source)
-        self.assertEqual(source, before)
-        self.assertNotIn("material", effective[0])
-        self.assertEqual(effective[1]["material"], "research")
-        state = st.new_state("goal", "/workspace", {"families_order": ["codex"]})
-        state["milestone"]["slices"] = source
-        self.assertEqual(st.summary(state)["slices"], effective)
-        self.assertEqual(state["milestone"]["slices"], before)
+        absent_document = (
+            "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+            % json.dumps({"slices": [base]})
+        )
+        absent = canonical_plan.validate_canonical_plan(absent_document)
+        self.assertNotIn("material", absent["projection"][0])
+
+        for value in (None, True, "", ["research"], {"name": "research"}, 3):
+            planned = copy.deepcopy(base)
+            planned["material"] = value
+            document = (
+                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps({"slices": [planned]})
+            )
+            with self.subTest(material=value), self.assertRaises(
+                canonical_plan.CanonicalPlanError
+            ):
+                canonical_plan.validate_canonical_plan(document)
 
 
 class ProducerSelectionTest(unittest.TestCase):
@@ -482,7 +258,15 @@ class ProducerSelectionTest(unittest.TestCase):
         entry = registry.get(registry.load(self.home), run_id)
         state = st.load(entry["state_path"])
         state["milestone"]["slices"] = copy.deepcopy(
-            slices or [{"id": 1, "title": "Independent producers"}]
+            slices or [{
+                "id": 1,
+                "title": "Independent producers",
+                "intent": "Exercise current producer selection.",
+                "producer_task_executor": {
+                    "draft_slice_note": {"task_executor": "agent_call"},
+                    "implement": {"task_executor": "agent_call"},
+                },
+            }]
         )
         skeleton = state["units"][0]
         skeleton.update({"status": st.U_SEALED, "artifact": "docs/skeleton.md"})
@@ -502,6 +286,7 @@ class ProducerSelectionTest(unittest.TestCase):
         planned = [{
             "id": 1,
             "title": "Canonical projection",
+            "intent": "Exercise canonical projection and order selection.",
             "material": "code",
             "producer_task_executor": {
                 "draft_slice_note": {"task_executor": "agent_call"},
@@ -547,177 +332,63 @@ class ProducerSelectionTest(unittest.TestCase):
         ):
             self.assertFalse(hasattr(owner, name), name)
 
-    def test_planner_uses_shared_catalogue_and_validates_supplied_maps(self):
-        catalogue = tasks.task_executor_catalogue()
-        prompt = prompts.build_draft_skeleton("codex", "/workspace", "goal")
-        self.assertIn("`draft_slice_note` and `implement`", prompt)
-        self.assertIn(
-            "In the skeleton document's slice table, visibly show both choices",
-            prompt,
-        )
-        self.assertIn(
-            json.dumps(
-                catalogue, ensure_ascii=False, sort_keys=True, indent=2
-            ),
-            prompt,
-        )
-
-        response = {
-            "status": "ok",
-            "kind": contracts.KIND_DRAFT_SKELETON,
-            "artifact": "docs/skeleton.md",
-            "slices": [
-                {
-                    "id": 1,
-                    "title": "one",
-                    "producer_task_executor": {
-                        "draft_slice_note": {"task_executor": "agent_call"},
-                        "implement": {
-                            "task_executor": "brainstorming",
-                            "configuration": {"max_rounds": 24},
-                        },
-                    },
-                }
-            ],
+    def test_canonical_plan_validates_complete_producer_map_from_catalogue(self):
+        catalogue = {
+            entry["id"] for entry in tasks.task_executor_catalogue()
         }
-        contracts.validate_worker_output(
-            copy.deepcopy(response), contracts.KIND_DRAFT_SKELETON
-        )
+        self.assertIn("agent_call", catalogue)
+        self.assertIn("brainstorming", catalogue)
+
+        planned = {
+            "id": 1,
+            "title": "one",
+            "intent": "Choose both current producers.",
+            "producer_task_executor": {
+                "draft_slice_note": "agent_call",
+                "implement": "brainstorming",
+            },
+        }
+
+        def document(slice_plan):
+            return (
+                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps({"slices": [slice_plan]})
+            )
+
+        validated = canonical_plan.validate_canonical_plan(document(planned))
         self.assertEqual(
-            response["slices"][0]["producer_task_executor"]["implement"]
-            ["configuration"],
-            {"max_rounds": 24},
+            validated["projection"][0]["producer_task_executor"],
+            {
+                "draft_slice_note": {"task_executor": "agent_call"},
+                "implement": {"task_executor": "brainstorming"},
+            },
         )
 
         invalid_maps = (
-            {"review_round": {"task_executor": "agent_call"}},
-            {"implement": {"task_executor": "agent_call", "extra": True}},
+            {"draft_slice_note": "agent_call"},
             {
-                "implement": {
-                    "task_executor": "brainstorming",
-                    # not an integer: a low integer is raised to the floor,
-                    # not refused
-                    "configuration": {"max_rounds": "six"},
-                }
+                "draft_slice_note": "agent_call",
+                "implement": "brainstorming",
+                "review_round": "agent_call",
+            },
+            {
+                "draft_slice_note": "agent_call",
+                "implement": "no-such-executor",
+            },
+            {
+                "draft_slice_note": {"task_executor": "agent_call"},
+                "implement": "brainstorming",
             },
         )
         for producer_map in invalid_maps:
-            malformed = copy.deepcopy(response)
-            malformed["slices"][0]["producer_task_executor"] = producer_map
+            malformed = copy.deepcopy(planned)
+            malformed["producer_task_executor"] = producer_map
             with self.subTest(producer_map=producer_map), self.assertRaises(
-                contracts.ContractError
+                canonical_plan.CanonicalPlanError
             ):
-                contracts.validate_worker_output(
-                    malformed, contracts.KIND_DRAFT_SKELETON
-                )
+                canonical_plan.validate_canonical_plan(document(malformed))
 
-    def test_plan_repair_receives_shared_catalogue(self):
-        cases = (
-            (st.UNIT_SKELETON, False),
-            (st.UNIT_SLICE_IMPL, True),
-        )
-        for unit_kind, producer_planning in cases:
-            with self.subTest(unit_kind=unit_kind):
-                prompt = prompts.build_fix_findings(
-                    "codex",
-                    "/workspace",
-                    "goal",
-                    "the current unit",
-                    [],
-                    [],
-                    "claude",
-                    "consult",
-                    unit_kind=unit_kind,
-                    editable_design_paths=["docs/skeleton.md"],
-                    producer_planning=producer_planning,
-                )
-                self.assertIn(
-                    json.dumps(
-                        tasks.task_executor_catalogue(),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        indent=2,
-                    ),
-                    prompt,
-                )
-                self.assertIn(
-                    "In the skeleton document's slice table, visibly show both choices",
-                    prompt,
-                )
-
-    def test_initial_design_update_producers_receive_shared_catalogue(self):
-        catalogue = json.dumps(
-            tasks.task_executor_catalogue(),
-            ensure_ascii=False,
-            sort_keys=True,
-            indent=2,
-        )
-        prompts_by_kind = {
-            contracts.KIND_DRAFT_SLICE_NOTE: prompts.build_draft_slice_note(
-                "codex",
-                "/workspace",
-                "goal",
-                {"id": 5, "title": "producer planning"},
-                "docs/skeleton.md",
-                editable_design_paths=["docs/skeleton.md"],
-            ),
-            contracts.KIND_IMPLEMENT: prompts.build_implement(
-                "codex",
-                "/workspace",
-                "goal",
-                {"id": 5, "title": "producer planning"},
-                "docs/slice-05.md",
-                ["python3 -m unittest focused"],
-                editable_design_paths=["docs/skeleton.md"],
-            ),
-        }
-        for kind, prompt in prompts_by_kind.items():
-            with self.subTest(kind=kind):
-                self.assertIn("SLICE PRODUCER PLANNING", prompt)
-                self.assertIn(catalogue, prompt)
-                self.assertIn(
-                    'also return the complete\n  updated plan in "slices"',
-                    prompt,
-                )
-
-        ordinary = prompts.build_implement(
-            "codex",
-            "/workspace",
-            "goal",
-            {"id": 5, "title": "producer planning"},
-            "docs/slice-05.md",
-            [],
-        )
-        self.assertNotIn("\nSLICE PRODUCER PLANNING\n", ordinary)
-        self.assertNotIn(catalogue, ordinary)
-
-    def test_accepted_plan_rethink_receives_shared_catalogue(self):
-        prompt = prompts.build_rethink_continuation(
-            contracts.KIND_IMPLEMENT,
-            "codex",
-            "/workspace",
-            {
-                "session_id": "session-1",
-                "accepted_target_revision": 1,
-                "result": {"outcome": "success"},
-                "retained_target": {"content": "Add one future slice."},
-            },
-            accepted_design_amendment=True,
-            editable_design_paths=["docs/skeleton.md"],
-            original_request="KIND: implement\nOUTPUT CONTRACT",
-            producer_planning=True,
-        )
-        self.assertIn(
-            json.dumps(
-                tasks.task_executor_catalogue(),
-                ensure_ascii=False,
-                sort_keys=True,
-                indent=2,
-            ),
-            prompt,
-        )
-
-    def test_absent_and_partial_maps_project_defaults_without_migration(self):
+    def test_standalone_partial_maps_use_generic_order_defaults(self):
         source = [
             {"id": 1, "title": "absent"},
             {
@@ -785,16 +456,14 @@ class ProducerSelectionTest(unittest.TestCase):
             holder.join(timeout=2)
             timer.cancel()
 
-    def test_every_review_covering_skeleton_receives_operative_plan(self):
+    def test_skeleton_review_context_uses_current_producer_projection(self):
         _run_id, entry, _workspace = self._planned_run("review-plan", [{
             "id": 1,
             "title": "Independent producers",
+            "intent": "Use the selected implementation producer.",
             "producer_task_executor": {
                 "draft_slice_note": {"task_executor": "agent_call"},
-                "implement": {
-                    "task_executor": "brainstorming",
-                    "configuration": {"max_rounds": 22},
-                },
+                "implement": {"task_executor": "brainstorming"},
             },
         }])
         driver = drv.Driver(entry["state_path"], runner=runners.MockRunner([]))
@@ -809,40 +478,15 @@ class ProducerSelectionTest(unittest.TestCase):
             "brainstorming",
         )
         self.assertEqual(set(context), {"producer_task_executor_by_slice"})
-        expected = json.dumps(
-            context, ensure_ascii=False, sort_keys=True, indent=2
-        )
-        full = prompts.build_review_round(
-            "codex", "/workspace", "goal", "skeleton", "docs/skeleton.md",
-            [], producer_review_context=context,
-        )
-        delta = prompts.build_delta_review(
-            "codex", "/workspace", "goal", "skeleton", [],
-            producer_review_context=context,
-        )
-        for prompt in (full, delta):
-            self.assertIn("OPERATIVE SLICE PRODUCER PLAN", prompt)
-            self.assertIn(expected, prompt)
-            self.assertIn("A missing or malformed choice", prompt)
-            self.assertIn("is always a finding", prompt)
-            self.assertIn("directly with this canonical projection", prompt)
-
-        doc = next(
-            unit for unit in driver.state["units"]
-            if unit["kind"] == st.UNIT_SLICE_DOC
-        )
-        self.assertIsNone(driver._producer_review_context(doc))
-        doc["design_update"] = {
-            "changed_paths": [skeleton["artifact"]],
-        }
-        self.assertEqual(driver._producer_review_context(doc), context)
 
     def test_worker_adapter_does_not_claim_a_brainstorming_choice(self):
         initial = [{
             "id": 1,
             "title": "Independent producers",
+            "intent": "Delegate the slice note to Brainstorming.",
             "producer_task_executor": {
                 "draft_slice_note": {"task_executor": "brainstorming"},
+                "implement": {"task_executor": "agent_call"},
             },
         }]
         _run_id, entry, _workspace = self._planned_run(
@@ -866,213 +510,11 @@ class ProducerSelectionTest(unittest.TestCase):
         self.assertIsNone(durable["failure"])
         self.assertEqual(tasks.task_records(durable), [])
 
-    def test_in_flight_design_update_is_reviewed_without_skeleton_edit(self):
-        _run_id, entry, _workspace = self._planned_run("design-update-review")
-        driver = drv.Driver(entry["state_path"], runner=runners.MockRunner([]))
-        skeleton = next(
-            unit for unit in driver.state["units"]
-            if unit["kind"] == st.UNIT_SKELETON
-        )
-        doc = next(
-            unit for unit in driver.state["units"]
-            if unit["kind"] == st.UNIT_SLICE_DOC
-        )
-        doc["design_update"] = {
-            "editable_paths": [skeleton["artifact"]],
-        }
-
-        driver._maybe_update_slices(
-            doc,
-            {
-                "slices": [{
-                    "id": 1,
-                    "title": "Independent producers",
-                    "producer_task_executor": {
-                        "draft_slice_note": {"task_executor": "agent_call"},
-                        "implement": {"task_executor": "brainstorming"},
-                    },
-                }],
-            },
-        )
-
-        self.assertEqual(driver._design_review_paths(doc), [])
-        self.assertNotIn("producer_plan_review_required", doc["design_update"])
-        driver._save()
-        driver = drv.Driver(
-            entry["state_path"], runner=runners.MockRunner([])
-        )
-        doc = next(
-            unit for unit in driver.state["units"]
-            if unit["kind"] == st.UNIT_SLICE_DOC
-        )
-        self.assertNotIn("producer_plan_review_required", doc["design_update"])
-        context = driver._producer_review_context(doc)
-        self.assertEqual(
-            context["producer_task_executor_by_slice"][0]
-            ["producer_task_executor"]["implement"],
-            {"task_executor": "brainstorming"},
-        )
-        self.assertEqual(set(context), {"producer_task_executor_by_slice"})
-        prompt = prompts.build_review_round(
-            "codex", "/workspace", "goal", "slice note", "docs/slice.md",
-            [], producer_review_context=context,
-        )
-        self.assertIn("OPERATIVE SLICE PRODUCER PLAN", prompt)
-
-    def test_pre_fix_admitted_reviews_recover_only_with_live_authority(self):
-        cases = (
-            (contracts.KIND_REVIEW_ROUND, st.U_ROUNDS),
-            (contracts.KIND_DELTA_REVIEW, st.U_DELTA_REVIEW),
-        )
-        for kind, status in cases:
-            with self.subTest(kind=kind):
-                _run_id, entry, workspace = self._planned_run(
-                    "admitted-%s" % kind
-                )
-                driver = drv.Driver(
-                    entry["state_path"], runner=runners.MockRunner([])
-                )
-                skeleton = next(
-                    unit for unit in driver.state["units"]
-                    if unit["kind"] == st.UNIT_SKELETON
-                )
-                doc = next(
-                    unit for unit in driver.state["units"]
-                    if unit["kind"] == st.UNIT_SLICE_DOC
-                )
-                doc.update({"status": status, "artifact": "docs/slice.md"})
-                doc["design_update"] = {
-                    "editable_paths": [skeleton["artifact"]],
-                }
-                if kind == contracts.KIND_DELTA_REVIEW:
-                    doc["fix_source"] = {
-                        "type": "round",
-                        "origin_type": "round",
-                        "family": "codex",
-                        "return_to": st.U_ROUNDS,
-                    }
-                driver._maybe_update_slices(
-                    doc,
-                    {
-                        "slices": [{
-                            "id": 1,
-                            "title": "Independent producers",
-                            "producer_task_executor": {
-                                "draft_slice_note": {
-                                    "task_executor": "agent_call"
-                                },
-                                "implement": {
-                                    "task_executor": "brainstorming"
-                                },
-                            },
-                        }],
-                    },
-                )
-                frozen_prompt = "legacy frozen %s prompt" % kind
-                family = st.current_family(driver.state, doc) or "codex"
-                task = driver._admit_worker_task(
-                    doc, kind, frozen_prompt, family
-                )
-
-                recovered = drv.Driver(
-                    entry["state_path"], runner=runners.MockRunner([])
-                )
-                authority = {
-                    "amendments": [],
-                    "operator_complete": False,
-                    "project_context": None,
-                    "extensions": [],
-                    "roots": [workspace],
-                }
-                seen = []
-
-                def reached(_unit, _family, prompt, *_args, **_kwargs):
-                    seen.append(prompt)
-                    raise RuntimeError("review dispatch reached")
-
-                report_patch = mock.patch.object(
-                    recovered, "_report_call", side_effect=reached
-                )
-                if kind == contracts.KIND_REVIEW_ROUND:
-                    evidence_patch = mock.patch.object(
-                        recovered,
-                        "_review_evidence_inputs",
-                        return_value=(
-                            "review-evidence", None, [], [workspace], [], False
-                        ),
-                    )
-                    with report_patch, evidence_patch, self.assertRaisesRegex(
-                        RuntimeError, "review dispatch reached"
-                    ):
-                        recovered._do_review_round()
-                else:
-                    authority_patch = mock.patch.object(
-                        recovered,
-                        "_worker_episode_authority",
-                        return_value=authority,
-                    )
-                    with (
-                        report_patch,
-                        authority_patch,
-                        mock.patch.object(
-                            drv.gitops,
-                            "worktree_diff",
-                            return_value="pending delta",
-                        ),
-                        self.assertRaisesRegex(
-                            RuntimeError, "review dispatch reached"
-                        ),
-                    ):
-                        recovered._do_delta_review()
-
-                self.assertEqual(len(seen), 1)
-                self.assertTrue(seen[0].startswith(frozen_prompt + "\n\n"))
-                self.assertEqual(
-                    seen[0].count("WORKER EPISODE AUTHORITY REFRESH"), 1
-                )
-                self.assertNotIn("OPERATIVE SLICE PRODUCER PLAN", seen[0])
-                self.assertEqual(
-                    tasks.task_record(recovered.state, task["id"])["order"]
-                    ["request"]["request"],
-                    frozen_prompt,
-                )
-
-    def test_retired_producer_id_projects_without_rewriting_its_plan(self):
-        """A plan written before the rename projects without mutation."""
-        stored = [{
-            "id": 1,
-            "title": "Planned before the rename",
-            "producer_task_executor": {
-                "draft_slice_note": {"task_executor": "worker"},
-                "implement": {"task_executor": "worker"},
-            },
-        }]
-        run_id, entry, _workspace = self._planned_run("retired-plan", stored)
-        agent_call = {"task_executor": "agent_call"}
-
-        status, detail = self._json("GET", "/api/runs/%s" % run_id)
-        self.assertEqual(status, 200, detail)
-        self.assertEqual(
-            detail["summary"]["slices"][0]["producer_task_executor"],
-            {"draft_slice_note": agent_call, "implement": agent_call},
-        )
-        self.assertEqual(
-            st.load(entry["state_path"])["milestone"]["slices"], stored
-        )
-        durable = st.load(entry["state_path"])["milestone"]["slices"][0]
-        self.assertEqual(
-            durable["producer_task_executor"]["draft_slice_note"],
-            {"task_executor": "worker"},
-        )
-        self.assertEqual(
-            tasks.effective_slice_producers(durable)["draft_slice_note"],
-            agent_call,
-        )
-
-    def test_review_and_fixer_orders_remain_worker_only(self):
+    def test_non_producer_jobs_do_not_adopt_slice_producer_choices(self):
         selected = {
             "id": 1,
             "title": "one",
+            "intent": "Keep judgment on its dedicated agent route.",
             "producer_task_executor": {
                 kind: {"task_executor": "brainstorming"}
                 for kind in tasks.PRODUCER_TASK_KINDS

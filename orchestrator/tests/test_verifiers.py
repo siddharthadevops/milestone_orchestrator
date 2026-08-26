@@ -241,10 +241,6 @@ class TestFieldCollisions(unittest.TestCase):
                 make_policy(field="artifact", kinds=["draft_skeleton"],
                             unit_kinds=["skeleton"])
             )
-        with self.assertRaises(verifiers.PolicyConfigError):
-            verifiers.compile_policy(
-                make_policy(field="suite_command", kinds=["fix_findings"])
-            )
 
     def test_common_keys_collide_for_every_kind(self):
         for key in ("status", "kind", "blocked_reason", "notes"):
@@ -290,11 +286,7 @@ class TestFieldCollisions(unittest.TestCase):
             {"status", "kind", "blocked_reason", "notes", "gaps",
              "request", "finding", "target_path", "max_rounds",
              "result_mode", "failure_gap", "files_changed",
-             "suite_command", "slices", "implementation_cut"},
-        )
-        self.assertIn(
-            "suite_command_finding_id",
-            contracts.reserved_output_keys("fix_findings"),
+             "slices", "implementation_cut"},
         )
         self.assertIn(
             "retry_reason", contracts.reserved_output_keys("fix_findings")
@@ -830,22 +822,6 @@ class TestMergedOutputValidation(FilesystemCase):
             fix,
         )
 
-        suite_fix = dict(fix)
-        suite_fix["findings"] = []
-        suite_fix["tests_modified"] = False
-        suite_fix["slices"] = [{"id": 1, "title": "continued repair"}]
-        self.assertIs(
-            verifiers.validate_merged_output(
-                suite_fix,
-                "fix_findings",
-                [ext],
-                self.roots,
-                allow_design_correction=True,
-                verification_repair=True,
-            ),
-            suite_fix,
-        )
-
         delta = {
             "status": "ok",
             "kind": "delta_review",
@@ -1043,66 +1019,6 @@ class TestCallWorkerIntegration(FilesystemCase):
         self.assertIn("REPAIR", second_prompt)
         self.assertIn("non_empty", second_prompt)
         self.assertTrue(second_prompt.startswith(self.prompt))
-
-    def test_suite_repair_contract_violation_gets_one_repair_retry(self):
-        validity = {
-            "affected_party": "the user relying on the verified behavior",
-            "observable_damage": "the verified behavior is unavailable",
-            "violated_guarantee": "the configured suite must pass",
-            "permitted_baseline": "the configured behavior remains green",
-            "incremental_harm": "the suite detects a regression",
-            "exceeds_baseline": True,
-        }
-        ordinary_fix = {
-            "status": "ok",
-            "kind": contracts.KIND_FIX_FINDINGS,
-            "findings": [{
-                "id": "V1",
-                "severity": "P1",
-                "summary": "Treat the suite signal as a queued finding.",
-                "validity": validity,
-                "disposition": "fixed",
-                "consultation": None,
-                "prevention": None,
-                "adjudication_ref": None,
-            }],
-            "files_changed": [],
-            "reuse_audit": [{"package": "life_product_chat"}],
-        }
-        suite_fix = {
-            "status": "ok",
-            "kind": contracts.KIND_FIX_FINDINGS,
-            "findings": [],
-            "tests_modified": False,
-            "files_changed": [],
-            "reuse_audit": [{"package": "life_product_chat"}],
-        }
-        runner = MockRunner([
-            {
-                "expect_kind": contracts.KIND_FIX_FINDINGS,
-                "response": ordinary_fix,
-            },
-            {
-                "expect_kind": contracts.KIND_FIX_FINDINGS,
-                "response": suite_fix,
-            },
-        ])
-
-        obj, _result = call_worker(
-            runner,
-            "codex",
-            make_prompt(contracts.KIND_FIX_FINDINGS),
-            contracts.KIND_FIX_FINDINGS,
-            self.root_a,
-            extensions=[self.ext],
-            roots=self.roots,
-            validate_opts={"verification_repair": True},
-        )
-
-        self.assertEqual(obj, suite_fix)
-        self.assertEqual(len(runner.calls), 2)
-        self.assertIn("REPAIR", runner.calls[1][2])
-        self.assertIn("empty findings list", runner.calls[1][2])
 
     def test_second_failure_raises_worker_protocol_error(self):
         failing = implement_output(reuse_audit=[])

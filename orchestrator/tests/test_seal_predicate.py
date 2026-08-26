@@ -4,15 +4,14 @@ import os
 import tempfile
 import unittest
 
-from orchestrator import contracts
 from orchestrator import driver as drv
 from orchestrator import profiles
 from orchestrator import runners
 from orchestrator import state as st
 
 from orchestrator.tests.test_driver_mock import (
-    make_config, init_state, step, ok, report, finding, battery_entries,
-    write_file, fix_ok, triaged,
+    canonical_skeleton_document, make_config, init_state, step, ok, report,
+    finding, write_file, fix_ok, triaged,
 )
 
 
@@ -110,7 +109,6 @@ class SealPredicateDriverTest(unittest.TestCase):
 
     def _config(self, profile_name):
         cfg = make_config()
-        cfg["git"] = {"enabled": False}
         if profile_name:
             cfg["profile"] = profiles.SEEDS[profile_name]["profile"]
         return cfg
@@ -126,17 +124,20 @@ class SealPredicateDriverTest(unittest.TestCase):
                 break
         return st.load(path), driver
 
-    def _skeleton_clean_no_seal_halves(self, battery=None):
-        # draft + a clean review per family; NO seal_half steps (a reform
-        # unit seals by predicate). A reform draft carries the answered
-        # question battery; a legacy draft (battery=None) carries none —
-        # faithful to pre-reform workers.
-        draft = ok("draft_skeleton", artifact="docs/skeleton.md",
-                   slices=[{"id": 1, "title": "Core"}])
-        if battery:
-            draft["battery"] = battery
+    def _skeleton_clean_no_seal_halves(self):
+        # Draft + a clean review per family; NO seal_half steps. The
+        # canonical repository document, not reply-carried plan fields,
+        # supplies the slice plan.
+        draft = ok("draft_skeleton", artifact="docs/skeleton.md")
         return [
-            step("draft_skeleton", draft, family="codex"),
+            step(
+                "draft_skeleton",
+                draft,
+                family="codex",
+                side_effect=write_file(
+                    "docs/skeleton.md", canonical_skeleton_document()
+                ),
+            ),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
         ]
@@ -144,9 +145,8 @@ class SealPredicateDriverTest(unittest.TestCase):
     def test_reform_skeleton_seals_by_predicate(self):
         state, _ = self._drive(
             self._config("strict"),
-            self._skeleton_clean_no_seal_halves(
-                battery=battery_entries(
-                    contracts.BATTERY_QUESTIONS_SKELETON)))
+            self._skeleton_clean_no_seal_halves(),
+        )
         sk = state["units"][0]
         self.assertEqual(sk["status"], st.U_SEALED)
         # Sealed with NO seal-half findings recorded, and a seal_satisfied
@@ -161,11 +161,11 @@ class SealPredicateDriverTest(unittest.TestCase):
         from orchestrator.tests.test_driver_mock import fix_ok, triaged
         script = [
             step("draft_skeleton",
-                 ok("draft_skeleton", artifact="docs/skeleton.md",
-                    slices=[{"id": 1, "title": "Core"}],
-                    battery=battery_entries(
-                        contracts.BATTERY_QUESTIONS_SKELETON)),
-                 family="codex"),
+                 ok("draft_skeleton", artifact="docs/skeleton.md"),
+                 family="codex",
+                 side_effect=write_file(
+                     "docs/skeleton.md", canonical_skeleton_document()
+                 )),
             step("review_round", report("review_round"), family="codex"),
             step("review_round",
                  report("review_round", [finding("F1", "real gap",
@@ -176,7 +176,11 @@ class SealPredicateDriverTest(unittest.TestCase):
                                  severity="P1")],
                         files_changed=["docs/skeleton.md"]),
                  family="codex",
-                 side_effect=write_file("docs/skeleton.md", "fixed\n")),
+                 side_effect=write_file(
+                     "docs/skeleton.md",
+                     canonical_skeleton_document() + "\nFixed real gap.\n",
+                 )),
+            step("delta_review", report("delta_review"), family="codex"),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
         ]
@@ -206,11 +210,7 @@ class SealPredicateDriverTest(unittest.TestCase):
             "n=$((n+1)); echo $n > .orchestrator/verify-count; "
             "if [ \"$n\" = 1 ]; then echo changed > verified-change.txt; fi"
         ]
-        script = self._skeleton_clean_no_seal_halves(
-            battery=battery_entries(
-                contracts.BATTERY_QUESTIONS_SKELETON
-            )
-        )
+        script = self._skeleton_clean_no_seal_halves()
         state, driver = self._drive(cfg, script)
         sk = state["units"][0]
         self.assertEqual(sk["status"], st.U_SEALED)
@@ -242,12 +242,11 @@ class SealPredicateDriverTest(unittest.TestCase):
                 ok(
                     "draft_skeleton",
                     artifact="docs/skeleton.md",
-                    slices=[{"id": 1, "title": "Core"}],
-                    battery=battery_entries(
-                        contracts.BATTERY_QUESTIONS_SKELETON
-                    ),
                 ),
                 family="codex",
+                side_effect=write_file(
+                    "docs/skeleton.md", canonical_skeleton_document()
+                ),
             ),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="codex"),
@@ -283,7 +282,7 @@ class SealPredicateDriverTest(unittest.TestCase):
                          [reviews[-2]["id"], reviews[-1]["id"]])
         self.assertEqual(runner.script, [])
 
-    def test_documentation_ignores_even_a_failing_full_suite_command(self):
+    def test_documentation_does_not_dispatch_configured_checkpoint(self):
         cfg = self._config("strict")
         cfg["verification"] = [
             "n=$(cat .orchestrator/verify-count 2>/dev/null || echo 0); "
@@ -291,11 +290,7 @@ class SealPredicateDriverTest(unittest.TestCase):
             "if [ \"$n\" = 1 ]; then "
             "echo changed > failed-verification-change.txt; exit 1; fi"
         ]
-        script = self._skeleton_clean_no_seal_halves(
-            battery=battery_entries(
-                contracts.BATTERY_QUESTIONS_SKELETON
-            )
-        )
+        script = self._skeleton_clean_no_seal_halves()
         state, driver = self._drive(cfg, script)
         unit = state["units"][0]
         reviews = [
@@ -317,110 +312,9 @@ class SealPredicateDriverTest(unittest.TestCase):
             os.path.join(self.ws, "failed-verification-change.txt")
         ))
 
-    def test_old_preseal_state_without_byte_binding_reenters_reviews(self):
-        cfg = self._config("strict")
-        state = st.new_state("old persisted run", self.ws, cfg)
-        st.append_event(state, "initialized", goal=state["goal"])
-        unit = state["units"][0]
-        unit["status"] = st.U_PRE_SEAL_VERIFY
-        unit.pop("review_evidence_fingerprint", None)
-        unit.pop("review_cycle_start", None)
-        unit["rounds"] = [
-            _rev("codex", rid="old-codex"),
-            _rev("claude", rid="old-claude"),
-        ]
-        path = drv.default_state_path(self.ws)
-        st.save(path, state)
-
-        resumed = drv.Driver(path, runner=runners.MockRunner([]))
-        resumed.step()
-        current = st.load(path)["units"][0]
-        self.assertEqual(current["status"], st.U_PRE_REVIEW_VERIFY)
-        self.assertIsNone(current.get("review_evidence_fingerprint"))
-        self.assertIsNone(st.load(path)["failure"])
-
-    def test_seal_recovery_without_current_evidence_restarts_reviews(self):
-        cfg = self._config("strict")
-        state = st.new_state("persisted sealing run", self.ws, cfg)
-        st.append_event(state, "initialized", goal=state["goal"])
-        unit = state["units"][0]
-        unit["status"] = st.U_SEALING
-        unit.pop("review_evidence_fingerprint", None)
-        unit.pop("review_cycle_start", None)
-        unit["rounds"] = [
-            _rev("codex", rid="old-codex"),
-            _rev("claude", rid="old-claude"),
-        ]
-        path = drv.default_state_path(self.ws)
-        st.save(path, state)
-
-        resumed = drv.Driver(path, runner=runners.MockRunner([]))
-        resumed.step()
-
-        current = st.load(path)["units"][0]
-        self.assertEqual(current["status"], st.U_PRE_REVIEW_VERIFY)
-        self.assertIsNone(current.get("review_evidence_fingerprint"))
-        self.assertEqual(len(current["rounds"]), 2)
-        self.assertIsNone(st.load(path)["failure"])
-
-    def test_advanced_unbound_review_progress_restarts_and_seals_fresh(self):
-        cfg = self._config("strict")
-        state = st.new_state("schema-2 resumable run", self.ws, cfg)
-        st.append_event(state, "initialized", goal=state["goal"])
-        unit = state["units"][0]
-        unit["status"] = st.U_ROUNDS
-        unit["family_index"] = 1
-        unit.pop("review_evidence_fingerprint", None)
-        unit.pop("review_cycle_start", None)
-        unit["rounds"] = [_rev("codex", rid="unbound-codex")]
-        path = drv.default_state_path(self.ws)
-        st.save(path, state)
-        # A real schema-2 review has already materialized the generated goal
-        # snapshot; do so before binding candidate evidence.
-        seeded = drv.Driver(path, runner=runners.MockRunner([]))
-        seeded._goal_for(st.current_unit(seeded.state))
-        runner = runners.MockRunner([
-            step("review_round", report("review_round"), family="codex"),
-            step("review_round", report("review_round"), family="claude"),
-        ])
-        resumed = drv.Driver(path, runner=runner)
-
-        resumed.step()
-        restarted = st.load(path)["units"][0]
-        self.assertEqual(restarted["status"], st.U_PRE_REVIEW_VERIFY)
-        self.assertEqual(restarted["family_index"], 0)
-        self.assertEqual(restarted["review_cycle_start"], 1)
-        self.assertIsNone(restarted.get("review_evidence_fingerprint"))
-        self.assertEqual(len(runner.calls), 0)
-
-        for _ in range(10):
-            if resumed.state["units"][0]["status"] == st.U_SEALED:
-                break
-            resumed.step()
-
-        current = st.load(path)["units"][0]
-        reviews = [
-            round_ for round_ in current["rounds"]
-            if round_["kind"] == "review_round"
-        ]
-        self.assertEqual(current["status"], st.U_SEALED)
-        self.assertEqual(
-            [round_["family"] for round_ in reviews],
-            ["codex", "codex", "claude"],
-        )
-        self.assertEqual(
-            current["seals"][0]["reviews"],
-            [reviews[-2]["id"], reviews[-1]["id"]],
-        )
-        self.assertEqual(runner.script, [])
-
     def test_new_amendment_after_reviews_does_not_revalidate_recorded_results(self):
         cfg = self._config("strict")
-        script = self._skeleton_clean_no_seal_halves(
-            battery=battery_entries(
-                contracts.BATTERY_QUESTIONS_SKELETON
-            )
-        ) + [
+        script = self._skeleton_clean_no_seal_halves() + [
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
         ]

@@ -48,8 +48,9 @@ GOAL = "Build a small CLI calculator (add/sub/mul/div) with unit tests"
 
 ADJ_ID = "skeleton-claude-r1/F1"
 
-# The five canonical gate messages, newest first (git log order). Wip
-# commits are amended away: nothing else may appear in the history.
+# The five canonical gate messages, newest first (git log order). Routed
+# canonical-plan calls may leave their own repository-boundary commits between
+# gates; those commits are implementation evidence rather than extra gates.
 GATE_MESSAGES = [
     "Close milestone",
     "Complete review of slice 01 implementation",
@@ -57,6 +58,12 @@ GATE_MESSAGES = [
     "Complete review of milestone skeleton",
     "Initialize milestone workspace",
 ]
+
+INTERNAL_COMMIT_PREFIXES = (
+    "Checkpoint before canonical-plan call",
+    "canonical plan after ",
+    "wip: ",
+)
 
 
 def _git(repo, *args):
@@ -92,8 +99,14 @@ class TestCalculatorE2E(unittest.TestCase):
         # Same shape as examples/calculator/run_demo.sh's generated config.
         config = {
             "commands": {
-                "codex": ["python3", FAKE_LLM, "--workspace", "{workspace}"],
-                "claude": ["python3", FAKE_LLM, "--workspace", "{workspace}"],
+                "codex": [
+                    "python3", FAKE_LLM, "--workspace", "{workspace}",
+                    "--family", "codex",
+                ],
+                "claude": [
+                    "python3", FAKE_LLM, "--workspace", "{workspace}",
+                    "--family", "claude",
+                ],
             },
             "timeouts": {"codex": 60, "claude": 60},
             "verification": ["python3 run_checks.py"],
@@ -242,7 +255,6 @@ class TestCalculatorE2E(unittest.TestCase):
                 "current_model",
                 "created_epoch",
                 "last_event_epoch",
-                "suite_command",
                 "name",
                 "docs_dir",
                 "failure",
@@ -558,10 +570,19 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertEqual(
             os.path.realpath(toplevel), os.path.realpath(self.work)
         )
-        # Exactly the five canonical gate messages, in gate order: wip
-        # commits were amended away, no patch stacking.
+        # The five gates remain exact and ordered. Routed calls may retain
+        # only their declared canonical-plan/wip boundary commits between
+        # those gates.
         subjects = self.git_work("log", "--format=%s").strip().splitlines()
-        self.assertEqual(subjects, GATE_MESSAGES)
+        self.assertEqual(
+            [subject for subject in subjects if subject in GATE_MESSAGES],
+            GATE_MESSAGES,
+        )
+        self.assertFalse([
+            subject for subject in subjects
+            if subject not in GATE_MESSAGES
+            and not subject.startswith(INTERNAL_COMMIT_PREFIXES)
+        ])
         # Each sealed unit recorded the short sha of ITS gate commit.
         sha_by_subject = {}
         for line in self.git_work("log", "--format=%h %s").strip().splitlines():

@@ -6,6 +6,7 @@ enable route, ordinary-law behavior after enablement, and live planning /
 review enforcement through the driver path.
 """
 
+import json
 import os
 import urllib.request
 import unittest
@@ -17,7 +18,7 @@ from orchestrator import reuse_audit
 from orchestrator import state as st
 from orchestrator import verifiers
 from orchestrator.tests.test_driver_mock import ok, report, step, write_file
-from orchestrator.tests.test_project_context import ProjectRunTestCase
+from orchestrator.tests.test_project_context import PLAN, ProjectRunTestCase
 from orchestrator.tests.test_prompts import normalized
 from orchestrator.tests.test_service_projects import (
     PROJECT,
@@ -351,7 +352,6 @@ class ReuseAuditRunTestCase(ProjectRunTestCase):
         return ok(
             "draft_skeleton",
             artifact="docs/skeleton.md",
-            slices=[{"id": 1, "title": "One"}],
             **extra
         )
 
@@ -359,7 +359,11 @@ class ReuseAuditRunTestCase(ProjectRunTestCase):
         return step(
             "draft_skeleton",
             self.skeleton_output(audit),
-            side_effect=write_file("docs/skeleton.md", "# Skeleton\n"),
+            side_effect=write_file(
+                "docs/skeleton.md",
+                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps(PLAN),
+            ),
         )
 
     def note_output(self, audit=None):
@@ -402,7 +406,7 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
             "dir_listing_matches(match_field=package, root=reuse_pkgs)",
             first_prompt,
         )
-        self.assertIn("REPAIR", driver.runner.calls[1][2])
+        self.assertIn("CONTRACT CORRECTION", driver.runner.calls[1][2])
         self.assertIn("timeline", driver.runner.calls[1][2])
         self.assertEqual(
             driver.state["units"][0]["status"], st.U_PRE_REVIEW_VERIFY
@@ -519,7 +523,7 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
         self.assertIn("KIND: draft_slice_note", note_prompt)
         self.assertIn("SAFEGUARD reuse-audit v2", note_prompt)
         repair_prompt = normalized(driver.runner.calls[4][2])
-        self.assertIn("REPAIR", repair_prompt)
+        self.assertIn("CONTRACT CORRECTION", repair_prompt)
         self.assertIn("timeline", repair_prompt)
         review_prompt = normalized(driver.runner.calls[5][2])
         self.assertIn("SAFEGUARD reuse-audit-review v2", review_prompt)
@@ -559,7 +563,7 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
         )
         self.assertIn(marker, driver.state["failure"]["reason"])
         self.assertEqual(len(driver.runner.calls), 1)
-        self.assertNotIn("REPAIR", driver.runner.calls[0][2])
+        self.assertNotIn("CONTRACT CORRECTION", driver.runner.calls[0][2])
         summary = st.summary(driver.state)
         self.assertEqual(summary["work_token_usage"], usage)
         self.assertFalse(summary["work_token_usage_partial"])

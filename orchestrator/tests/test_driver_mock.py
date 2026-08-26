@@ -15,11 +15,10 @@ Covers here:
       derived seal records, gate_commit fields, ledgers, milestone closed);
   (i) fixer coverage violation / rejected-without-consultation protocol
       failure / unknown adjudication_ref / unknown contests reference;
-  (l) git-disabled legacy path (fix returns directly, no delta/amend);
-  (m) resume mid-flow with a fresh Driver; decide() totality at every step.
+  (l) resume mid-flow with a fresh Driver; decide() totality at every step.
 
 The fix-loop mechanics themselves — delta-dirty loops, caps, verification
-episodes, review/delta tampering, the adjudication circuit, acts
+checkpoints, review/delta tampering, the adjudication circuit, acts
 resolution — live in test_fix_loop.py, which imports this module's helpers.
 """
 
@@ -32,6 +31,7 @@ import unittest
 from unittest import mock
 
 from orchestrator import contracts, driver as drv
+from orchestrator import prompt_router
 from orchestrator import runners
 from orchestrator import state as st
 
@@ -63,7 +63,6 @@ def make_config(**overrides):
         "verification": [],
         "verification_timeout": 60,
         "max_rounds_per_family": 6,
-        "max_verify_fix_attempts": 2,
         "git": {"enabled": True},
         "acts": {"skeletoner": "codex", "fixer": "codex", "delta_review": "codex",
                  "consultation": "opposite"},
@@ -101,12 +100,47 @@ def init_state(workspace, config, goal=GOAL):
     state = st.new_state(goal, workspace, config)
     st.append_event(state, "initialized", goal=goal)
     path = drv.default_state_path(workspace)
+    drv._write_initial_amendments(path)
     st.save(path, state)
     return path
 
 
+_QUESTION_IDS = {
+    contracts.KIND_DRAFT_SKELETON: (
+        "due_diligence_count",
+        "machinery_trust",
+        "environment_fit",
+        "human_scale",
+    ),
+    contracts.KIND_DRAFT_SLICE_NOTE: (
+        "due_diligence_count",
+        "machinery_trust",
+        "environment_fit",
+        "human_scale",
+    ),
+    contracts.KIND_IMPLEMENT: (
+        "machinery_trust",
+        "environment_fit",
+        "human_scale",
+    ),
+    contracts.KIND_REVIEW_ROUND: ("environment_fit", "human_scale"),
+    contracts.KIND_FIX_FINDINGS: ("environment_fit", "human_scale"),
+    contracts.KIND_DELTA_REVIEW: ("environment_fit", "human_scale"),
+    contracts.KIND_RECLASSIFY: ("environment_fit", "human_scale"),
+}
+
+
+def questions(kind):
+    return [
+        {"id": question_id, "answer": "Checked the bounded fixture."}
+        for question_id in _QUESTION_IDS.get(kind, ())
+    ]
+
+
 def ok(kind, **extra):
     payload = {"status": "ok", "kind": kind}
+    if kind in _QUESTION_IDS:
+        payload["questions"] = questions(kind)
     payload.update(extra)
     return payload
 
@@ -162,9 +196,15 @@ def finding(fid, summary, severity="P3", contests=None, plain=None,
 
 
 def battery_entries(ids):
-    """A valid battery payload for reform-profile doc drafts."""
-    return [{"question": q, "answer": "answered: %s" % q,
-             "evidence": ["docs/x.md:1"]} for q in ids]
+    """Legacy helper retained for test modules that own battery retirement."""
+    return [
+        {
+            "question": question_id,
+            "answer": "answered: %s" % question_id,
+            "evidence": ["docs/x.md:1"],
+        }
+        for question_id in ids
+    ]
 
 
 def triaged(fid, disposition, summary="triaged finding", severity="P3",
@@ -203,6 +243,35 @@ def suite_fix_ok(files_changed=(), tests_modified=False, tests_changed=(),
     if tests_modified:
         payload["tests_changed"] = list(tests_changed) or ["test/some_test.exs"]
     return fix_ok([], files_changed=files_changed, **payload)
+
+
+def suite_checkpoint_step(command, status="passed"):
+    response = {
+        "status": status,
+        "kind": contracts.KIND_SUITE_CHECKPOINT,
+        "commands": [command],
+        "results": [{
+            "command": command,
+            "exit_code": 0 if status == "passed" else 1,
+            "evidence": (
+                "complete suite passed"
+                if status == "passed" else "complete suite failed"
+            ),
+        }],
+        "authority": {"source": "operator_config", "evidence": []},
+    }
+    if status == "failed":
+        response["failure_account"] = {
+            "command": command,
+            "exit_code": 1,
+            "diagnostics": "The complete suite reported one failure.",
+            "affected_tests": ["test_calculator"],
+        }
+    return step(
+        contracts.KIND_SUITE_CHECKPOINT,
+        response,
+        family="codex",
+    )
 
 
 def step(kind, response, family=None, side_effect=None):
@@ -318,6 +387,27 @@ class DriverTestCase(unittest.TestCase):
 # Calculator-shaped scripts
 
 
+def canonical_skeleton_document():
+    plan = {
+        "slices": [{
+            "id": 1,
+            "title": "Calculator core",
+            "intent": "Build the bounded calculator CLI and its tests.",
+            "material": "code",
+            "producer_task_executor": {
+                "draft_slice_note": "agent_call",
+                "implement": "agent_call",
+            },
+        }],
+    }
+    return (
+        "# Calculator milestone\n\n"
+        "Goal: CLI calculator with tests.\n\n"
+        "## Canonical slice plan\n```json\n%s\n```\n"
+        % json.dumps(plan, separators=(",", ":"))
+    )
+
+
 def skeleton_script():
     """codex finding -> fix -> delta clean -> codex clean; claude finding ->
     reject (consultation + prevention edit) -> delta clean; claude stubborn
@@ -326,12 +416,10 @@ def skeleton_script():
     return [
         step(
             "draft_skeleton",
-            ok("draft_skeleton", artifact="docs/skeleton.md",
-               slices=[{"id": 1, "title": "Calculator core"}]),
+            ok("draft_skeleton", artifact="docs/skeleton.md"),
             family="codex",
             side_effect=write_file(
-                "docs/skeleton.md",
-                "# Calculator milestone\n\nGoal: CLI calculator with tests.\n",
+                "docs/skeleton.md", canonical_skeleton_document(),
             ),
         ),
         step("review_round",
@@ -402,8 +490,9 @@ def doc_script():
 
 
 def impl_script():
-    """Review/fix the implementation with focused checks, then let the one
-    final suite expose the div bug; repair V1, re-review, and seal green."""
+    """Review/fix the implementation, then report the due checkpoint
+    failure. The lifecycle test appends the ordinary fixer reply using the
+    driver's generated finding id."""
     return [
         step(
             "implement",
@@ -446,24 +535,7 @@ def impl_script():
         step("delta_review", report("delta_review"), family="codex"),
         step("review_round", report("review_round"), family="codex"),
         step("review_round", report("review_round"), family="claude"),
-        # The first full suite since implementation now runs at the final
-        # boundary and exposes calculator.py without div_fixed.
-        step("fix_findings",
-             suite_fix_ok(files_changed=["calculator.py", "div_fixed"]),
-             family="codex",
-             side_effect=multi(
-                 write_file(
-                     "calculator.py",
-                     '\"\"\"Tiny CLI calculator.\"\"\"\n\ndef div(a, b):\n'
-                     "    return a / b\n",
-                 ),
-                 write_file("div_fixed", "verification repaired\n"),
-             )),
-        # No delta review: the suite repair declared the tests untouched.
-        # The fix changed bytes, so both whole-artifact reviews must approve
-        # the repaired candidate before its one final suite can pass.
-        step("review_round", report("review_round"), family="codex"),
-        step("review_round", report("review_round"), family="claude"),
+        suite_checkpoint_step(VERIFY_CMD, status="failed"),
     ]
 
 
@@ -479,49 +551,64 @@ class TestHappyLifecycle(DriverTestCase):
                 skeleton_script() + doc_script() + impl_script()
             )
             driver = drv.Driver(path, runner=mock)
-            actions, final = self.drive(driver)
+            self.step_until(
+                driver,
+                lambda state: st.current_unit(state)["status"] == st.U_FIXING
+                and st.current_unit(state).get("fix_source", {}).get("type")
+                == "suite_checkpoint",
+            )
+            queued = st.current_unit(driver.state)["fix_queue"][0]
+            mock.script.extend([
+                step(
+                    "fix_findings",
+                    fix_ok([
+                        triaged(
+                            queued["id"],
+                            "fixed",
+                            queued["summary"],
+                            severity=queued["severity"],
+                        )
+                    ], files_changed=["calculator.py", "div_fixed"]),
+                    family="codex",
+                    side_effect=multi(
+                        write_file(
+                            "calculator.py",
+                            '\"\"\"Tiny CLI calculator.\"\"\"\n\n'
+                            "def div(a, b):\n    return a / b\n",
+                        ),
+                        write_file("div_fixed", "checkpoint repaired\n"),
+                    ),
+                ),
+                step("delta_review", report("delta_review"), family="codex"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                suite_checkpoint_step(VERIFY_CMD),
+            ])
+            _actions, final = self.drive(driver)
 
             self.assertEqual(final.type, drv.A_DONE)
             self.assertEqual(mock.script, [], "mock script fully consumed")
 
-            expected_actions = (
-                # skeleton
-                [drv.A_DRAFT, drv.A_VERIFY,
-                 drv.A_REVIEW_ROUND, drv.A_FIX, drv.A_DELTA_REVIEW,
-                 drv.A_VERIFY,
-                 drv.A_REVIEW_ROUND,
-                 drv.A_REVIEW_ROUND, drv.A_FIX, drv.A_DELTA_REVIEW,
-                 drv.A_VERIFY,
-                 drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
-                 drv.A_FIX, drv.A_DELTA_REVIEW,
-                 drv.A_REVIEW_ROUND,
-                 drv.A_VERIFY]
-                # slice doc
-                + [drv.A_DRAFT, drv.A_VERIFY,
-                   drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
-                   drv.A_VERIFY]
-                # slice impl
-                + [drv.A_DRAFT, drv.A_VERIFY,
-                   drv.A_REVIEW_ROUND, drv.A_FIX, drv.A_DELTA_REVIEW,
-                   drv.A_VERIFY,
-                   drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
-                   drv.A_FIX, drv.A_DELTA_REVIEW,
-                   drv.A_VERIFY, drv.A_REVIEW_ROUND,
-                   drv.A_REVIEW_ROUND, drv.A_VERIFY,
-                   # The suite repair declared the tests untouched, so its
-                   # certification is honoured: no delta review, and the
-                   # changed bytes go straight to fresh whole-artifact rounds.
-                   drv.A_FIX, drv.A_VERIFY,
-                   drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
-                   drv.A_VERIFY]
-            )
-            self.assertEqual([a.type for a, _ in actions], expected_actions)
-
             state = st.load(path)  # persisted, not just in-memory
             self.assertEqual(state["milestone"]["status"], st.M_CLOSED)
             self.assertIsNone(state["failure"])
-            self.assertEqual(state["milestone"]["slices"],
-                             [{"id": 1, "title": "Calculator core"}])
+            self.assertEqual(
+                state["milestone"]["slices"],
+                [{
+                    "id": 1,
+                    "title": "Calculator core",
+                    "intent": "Build the bounded calculator CLI and its tests.",
+                    "material": "code",
+                    "producer_task_executor": {
+                        "draft_slice_note": {
+                            "task_executor": "agent_call",
+                        },
+                        "implement": {
+                            "task_executor": "agent_call",
+                        },
+                    },
+                }],
+            )
 
             # Unit sequence and terminal statuses.
             self.assertEqual(
@@ -571,11 +658,11 @@ class TestHappyLifecycle(DriverTestCase):
                     ("slice_impl-01-codex-r6", "delta_review", "codex"),
                     ("slice_impl-01-codex-r7", "review_round", "codex"),
                     ("slice_impl-01-claude-r2", "review_round", "claude"),
-                    # The suite repair, then straight to fresh rounds: it
-                    # declared the tests untouched, so no delta review sits
-                    # between its certification and the reviews.
+                    # The failed checkpoint enters the ordinary fixer path,
+                    # including delta review before fresh whole-artifact looks.
                     ("slice_impl-01-codex-r8", "fix_findings", "codex"),
-                    ("slice_impl-01-codex-r9", "review_round", "codex"),
+                    ("slice_impl-01-codex-r9", "delta_review", "codex"),
+                    ("slice_impl-01-codex-r10", "review_round", "codex"),
                     ("slice_impl-01-claude-r3", "review_round", "claude"),
                 ],
             )
@@ -593,11 +680,14 @@ class TestHappyLifecycle(DriverTestCase):
                              "slice_impl-01-codex-r1")
             self.assertEqual(fixes["slice_impl-01-codex-r5"]["source_round_id"],
                              "slice_impl-01-claude-r1")
-            self.assertEqual(fixes["slice_impl-01-codex-r8"]["source_round_id"],
-                             "slice_impl-01-verify-pre_seal-1")
+            self.assertTrue(
+                fixes["slice_impl-01-codex-r8"]["source_round_id"].startswith(
+                    "suite-checkpoint:"
+                )
+            )
 
             # Reviewer findings carry no disposition; ordinary fixer rounds
-            # carry queued ids. The suite fixer reports no synthetic finding.
+            # carry queued ids, including the checkpoint finding.
             for r in skeleton["rounds"] + impl["rounds"]:
                 for f in r["result"].get("findings", []):
                     if r["kind"] == "fix_findings":
@@ -605,9 +695,9 @@ class TestHappyLifecycle(DriverTestCase):
                     else:
                         self.assertNotIn("disposition", f)
             self.assertEqual(
-                 [f["id"] for f in
+                [f["id"] for f in
                  fixes["slice_impl-01-codex-r8"]["result"]["findings"]],
-                [],
+                [queued["id"]],
             )
 
             # Seal records complete on every unit.
@@ -624,11 +714,19 @@ class TestHappyLifecycle(DriverTestCase):
 
             # Gate commits: canonical history, one clean commit per unit.
             subjects = git_subjects(ws)
+            subject_names = [subject for _sha, subject in subjects]
+            required_gates = [
+                GATE_MSG_INIT,
+                GATE_MSG_SKELETON,
+                GATE_MSG_NOTE,
+                GATE_MSG_IMPL,
+                GATE_MSG_CLOSE,
+            ]
             self.assertEqual(
-                [s for _, s in subjects],
-                [GATE_MSG_INIT, GATE_MSG_SKELETON, GATE_MSG_NOTE,
-                 GATE_MSG_IMPL, GATE_MSG_CLOSE],
+                [name for name in subject_names if name in required_gates],
+                required_gates,
             )
+            self.assertIn("canonical plan after draft_skeleton", subject_names)
             by_subject = {s: sha for sha, s in subjects}
             self.assertEqual(skeleton["gate_commit"], by_subject[GATE_MSG_SKELETON])
             self.assertEqual(doc["gate_commit"], by_subject[GATE_MSG_NOTE])
@@ -662,7 +760,7 @@ class TestHappyLifecycle(DriverTestCase):
 
             # Documentation never runs the suite. The final logical slice
             # reaches the milestone-end checkpoint, whose first attempt
-            # exposes the div bug exactly once.
+            # exposes the div bug and whose fresh post-fix attempt passes.
             verifs = [e for e in state["events"] if e["type"] == "verification"]
             self.assertEqual([e["ok"] for e in verifs if e["unit"] == "skeleton"],
                              [])
@@ -672,22 +770,18 @@ class TestHappyLifecycle(DriverTestCase):
             )
             self.assertEqual(
                 [e["ok"] for e in verifs if e["unit"] == "slice_impl-01"],
-                [False, True, True],
+                [False, True],
             )
             impl_verifs = [
                 e for e in verifs if e["unit"] == "slice_impl-01"
             ]
             self.assertEqual(
                 [e["boundary"] for e in impl_verifs],
-                ["final", "final", "final"],
+                ["final", "final"],
             )
             self.assertTrue(all(
                 e["cadence"] == "milestone_final" for e in impl_verifs
             ))
-            self.assertTrue(impl_verifs[-1]["reused"])
-            self.assertTrue(impl_verifs[-2]["fixer_certified"])
-            self.assertEqual(impl["verify_fix_attempts"],
-                             {"pre_review": 0, "pre_seal": 0})
 
             # Event ordering sanity.
             events = state["events"]
@@ -739,12 +833,7 @@ class TestFailedCallAccounting(DriverTestCase):
             with mock.patch.object(
                 driver, "_save_raw", side_effect=OSError("raw unavailable")
             ), self.assertRaisesRegex(OSError, "raw unavailable"):
-                driver._call(
-                    "codex",
-                    "KIND: draft_skeleton\n",
-                    contracts.KIND_DRAFT_SKELETON,
-                    "skeleton-draft",
-                )
+                driver.step()
 
             marker = os.path.join(ws, ".orchestrator", "current.json")
             self.assertTrue(os.path.exists(marker))
@@ -944,7 +1033,7 @@ class TestOperatorAmendmentsFlow(DriverTestCase):
             self.assertEqual(
                 [e["amendment_id"] for e in seen], ["A1"])
 
-    def test_missing_or_corrupt_file_means_no_amendments(self):
+    def test_corrupt_amendments_block_dispatch(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
             os.makedirs(os.path.join(ws, ".orchestrator"), exist_ok=True)
@@ -953,115 +1042,12 @@ class TestOperatorAmendmentsFlow(DriverTestCase):
                 fh.write("{not json")
             mock = runners.MockRunner([skeleton_script()[0]])
             driver = drv.Driver(path, runner=mock)
-            driver.step()
-            _fam, _kind, prompt = mock.calls[0]
-            self.assertNotIn("OPERATOR AMENDMENTS", prompt)
-
-
-class TestSuiteDiscoveryProtocol(DriverTestCase):
-    """Zero-config verification: implementation may discover suite_command,
-    which arms subsequent scheduled checkpoints but never documentation."""
-
-    def test_discovered_suite_arms_milestone_final_checkpoint(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config(verification=[]))
-            impl = impl_script()
-            # The discovered command IS the demo's verification predicate,
-            # so discovery must drive the exact verify-fail -> fix -> green
-            # machinery the configured path drives.
-            impl[0]["response"]["suite_command"] = VERIFY_CMD
-            mock = runners.MockRunner(
-                skeleton_script() + doc_script() + impl
-            )
-            driver = drv.Driver(path, runner=mock)
-            _actions, final = self.drive(driver)
-            self.assertEqual(final.type, drv.A_DONE)
-            self.assertEqual(mock.script, [])
-
-            state = st.load(path)
-            self.assertEqual(state["suite_command"], VERIFY_CMD)
-            discoveries = [e for e in state["events"]
-                           if e["type"] == "suite_discovered"]
-            self.assertEqual([e["command"] for e in discoveries],
-                             [VERIFY_CMD])
-
-            # Documentation creates no verification events. Every attempt at
-            # the milestone-final checkpoint uses the discovered command; no
-            # review/fix cycle runs it in between.
-            ver = [e for e in state["events"] if e["type"] == "verification"]
-            self.assertTrue(ver)
-            docs = [e for e in ver if not e["unit"].startswith("slice_impl")]
-            self.assertEqual(docs, [])
-            impl_ver = [e for e in ver if e["unit"] == "slice_impl-01"]
-            self.assertEqual(
-                [e["commands"] for e in impl_ver],
-                [[VERIFY_CMD], [VERIFY_CMD], [VERIFY_CMD]],
-            )
-            self.assertEqual(
-                [e["boundary"] for e in impl_ver],
-                ["final", "final", "final"],
-            )
-            self.assertTrue(all(
-                e["cadence"] == "milestone_final" for e in impl_ver
-            ))
-
-            # Reviews receive one generic verification boundary. The exact
-            # suite remains driver state and never anchors their judgment.
-            for fam, kind, prompt in mock.calls:
-                if kind == "review_round":
-                    self.assertIn("VERIFICATION BOUNDARY", prompt)
-                    self.assertIn(
-                        "Do NOT run the repository's full suite", prompt
-                    )
-                    self.assertNotIn(VERIFY_CMD, prompt)
-
-    def test_later_discovery_does_not_replace_established_suite(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config(verification=[]))
-            state = st.load(path)
-
-            self.assertTrue(st.set_discovered_suite(state, "mix precommit"))
-            self.assertFalse(st.set_discovered_suite(state, "mix test"))
-            self.assertEqual(state["suite_command"], "mix precommit")
-
-            ignored = [
-                event for event in state["events"]
-                if event["type"] == "suite_discovery_ignored"
-            ]
-            self.assertEqual(len(ignored), 1)
-            self.assertEqual(ignored[0]["command"], "mix test")
-            self.assertEqual(ignored[0]["established"], "mix precommit")
-
-    def test_suite_fix_overrides_stale_config_verification(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            stale = "python3 -m unittest discover -s orchestrator/tests"
-            corrected = stale + " -t ."
-            path = init_state(ws, make_config(verification=[stale]))
-            state = st.load(path)
-            st.set_discovered_suite(state, corrected)
-            state["units"][0]["rounds"].append({
-                "id": "skeleton-codex-r2",
-                "family": "codex",
-                "kind": contracts.KIND_FIX_FINDINGS,
-                "result": {
-                    "status": "ok",
-                    "kind": contracts.KIND_FIX_FINDINGS,
-                    "suite_command": corrected,
-                    "suite_command_finding_id": "F1",
-                    "findings": [
-                        {"id": "F1", "severity": "P1",
-                         "summary": "wrong suite",
-                         "disposition": "fixed"},
-                    ],
-                    "files_changed": [],
-                },
-            })
-            st.save(path, state)
-            driver = drv.Driver(path, runner=runners.MockRunner([]))
-            self.assertEqual(
-                driver._verification_commands(driver.state["units"][0]),
-                [corrected],
-            )
+            with self.assertRaisesRegex(
+                prompt_router.PromptRouterError,
+                "current mutable operator amendments are unavailable",
+            ):
+                driver.step()
+            self.assertEqual(mock.calls, [])
 
 
 class TestUncleanStopRepair(DriverTestCase):
@@ -1445,28 +1431,27 @@ class TestFixerProtocolFailures(DriverTestCase):
     def test_fixer_coverage_violation_fails_run(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
-            mock = runners.MockRunner(self._dirty_round_prefix() + [
-                step("fix_findings",
-                     fix_ok([triaged("X9", "fixed", "some invented finding")]),
-                     family="codex"),
-            ])
+            invalid = step(
+                "fix_findings",
+                fix_ok([triaged("X9", "fixed", "some invented finding")]),
+                family="codex",
+            )
+            mock = runners.MockRunner(
+                self._dirty_round_prefix() + [invalid, copy.deepcopy(invalid)]
+            )
             driver = drv.Driver(path, runner=mock)
             _actions, final = self.drive(driver)
             self.assertEqual(final.type, drv.A_FAILED)
             self.assertEqual(mock.script, [])
             self.assert_failed(
                 path, driver,
-                ["triage must cover exactly the queued findings",
-                 "queued=['F1']", "got=['X9']"],
+                ["contract-violating output twice",
+                 "triage must cover exactly the queued findings"],
                 unit_key="skeleton",
             )
-            state = st.load(path)
-            rejected = [
-                event for event in state["events"]
-                if event["type"] == "worker_unaccepted"
-            ]
-            self.assertEqual(len(rejected), 1)
-            self.assertIn("triage must cover", rejected[0]["reason"])
+            fix_calls = [call for call in mock.calls if call[1] == "fix_findings"]
+            self.assertEqual(len(fix_calls), 2)
+            self.assertIn("CONTRACT CORRECTION", fix_calls[-1][2])
 
     def test_unavailable_consultation_retries_the_same_fix_episode(self):
         retry = {
@@ -1474,6 +1459,7 @@ class TestFixerProtocolFailures(DriverTestCase):
             "kind": contracts.KIND_FIX_FINDINGS,
             "retry_reason": contracts.RETRY_CONSULTATION_UNAVAILABLE,
             "notes": "opposite family did not return a clear result",
+            "questions": questions(contracts.KIND_FIX_FINDINGS),
         }
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
@@ -1521,7 +1507,7 @@ class TestFixerProtocolFailures(DriverTestCase):
             # Exactly one repair retry happened.
             fix_calls = [c for c in mock.calls if c[1] == "fix_findings"]
             self.assertEqual(len(fix_calls), 2)
-            self.assertIn("REPAIR:", fix_calls[1][2])
+            self.assertIn("CONTRACT CORRECTION", fix_calls[1][2])
             self.assert_failed(
                 path, driver,
                 ["fix_findings call failed",
@@ -1613,67 +1599,7 @@ class TestFixerProtocolFailures(DriverTestCase):
 
 
 # ---------------------------------------------------------------------------
-# (l) git disabled: the legacy direct-return path
-
-
-class TestGitDisabledLegacyPath(DriverTestCase):
-    def test_fix_episode_restarts_reviews_without_delta_or_amend(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config(git={"enabled": False}))
-            mock = runners.MockRunner([
-                skeleton_script()[0],  # draft (writes docs/skeleton.md)
-                step("review_round",
-                     report("review_round",
-                            [finding("F1", "skeleton lacks non-goals")]),
-                     family="codex"),
-                step("fix_findings",
-                     fix_ok([triaged("F1", "fixed",
-                                     "skeleton lacks non-goals")],
-                            files_changed=["docs/skeleton.md"]),
-                     family="codex",
-                     side_effect=append_file("docs/skeleton.md",
-                                             "\n## Non-goals\n")),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(driver,
-                            lambda s: s["units"][0]["status"] == st.U_SEALED)
-            self.assertEqual(mock.script, [])
-
-            # No repo was ever created, no delta review ever ran.
-            self.assertFalse(os.path.exists(os.path.join(ws, ".git")))
-            self.assertEqual(
-                [c for c in mock.calls if c[1] == "delta_review"], [])
-
-            state = st.load(path)
-            unit = state["units"][0]
-            self.assertEqual(
-                [r["kind"] for r in unit["rounds"]],
-                ["review_round", "fix_findings", "review_round",
-                 "review_round"],
-            )
-            transitions = [
-                (e["from_status"], e["to_status"])
-                for e in state["events"]
-                if e["type"] == "unit_transition" and e["unit"] == "skeleton"
-            ]
-            # Without Git there is no delta artefact, but changed bytes still
-            # invalidate prior approvals and restart mechanical verification.
-            self.assertIn((st.U_FIXING, st.U_PRE_REVIEW_VERIFY), transitions)
-            self.assertNotIn(
-                st.U_DELTA_REVIEW,
-                [t for pair in transitions for t in pair],
-            )
-            types = [e["type"] for e in state["events"]]
-            self.assertNotIn("wip_commit", types)
-            self.assertNotIn("amended", types)
-            self.assertNotIn("gate_commit", types)
-            self.assertIsNone(unit["gate_commit"])
-
-
-# ---------------------------------------------------------------------------
-# git enabled without a deliberately created ledger repo: run refused
+# missing deliberately created ledger repo: run refused
 
 
 class TestGitEnabledNonRepoWorkspace(DriverTestCase):
@@ -1706,7 +1632,7 @@ class TestGitEnabledNonRepoWorkspace(DriverTestCase):
 class TestResume(DriverTestCase):
     def test_new_driver_mid_fix_episode_continues_to_close(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config())
+            path = init_state(ws, make_config(verification=["true"]))
 
             # Phase 1: stop mid-flow, INSIDE an open fix episode.
             mock1 = runners.MockRunner([
@@ -1749,6 +1675,7 @@ class TestResume(DriverTestCase):
                                             "    return a / b\n")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
+                suite_checkpoint_step("true"),
             ])
             driver2 = drv.Driver(path, runner=mock2)
             _actions, final = self.drive(driver2)
@@ -1768,11 +1695,19 @@ class TestResume(DriverTestCase):
                 state["units"][0]["rounds"][: len(rounds_before)],
                 rounds_before,
             )
+            subject_names = [subject for _sha, subject in git_subjects(ws)]
+            required_gates = [
+                GATE_MSG_INIT,
+                GATE_MSG_SKELETON,
+                GATE_MSG_NOTE,
+                GATE_MSG_IMPL,
+                GATE_MSG_CLOSE,
+            ]
             self.assertEqual(
-                [s for _, s in git_subjects(ws)],
-                [GATE_MSG_INIT, GATE_MSG_SKELETON, GATE_MSG_NOTE,
-                 GATE_MSG_IMPL, GATE_MSG_CLOSE],
+                [name for name in subject_names if name in required_gates],
+                required_gates,
             )
+            self.assertIn("canonical plan after draft_skeleton", subject_names)
 
 
 class TestSnapshotUniverseWiring(DriverTestCase):

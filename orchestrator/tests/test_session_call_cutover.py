@@ -100,7 +100,10 @@ class SessionCallCutoverTest(unittest.TestCase):
         options = {
             "job": job,
             "material": (
-                "code" if job == "implement@slice_impl" else "document"
+                "code"
+                if job == "implement@slice_impl"
+                or artifact_type == "implementation"
+                else "document"
             ),
             "role": role,
             "lead": lead,
@@ -119,13 +122,23 @@ class SessionCallCutoverTest(unittest.TestCase):
             path.write_text(json.dumps(document), encoding="utf-8")
 
     def test_session_charge_matrix_mounts_exact_seat_law(self):
-        cases = (
-            ("draft_slice_note@slice_doc", "initial_position", True, None),
-            ("draft_slice_note@slice_doc", "contrary_position", False, None),
-            ("implement@slice_impl", "initial_position", True, None),
-            ("rethink", "initial_position", True, "document"),
-            ("rethink", "common_sense", False, "implementation"),
+        seats = (
+            ("initial_position", True),
+            ("contrary_position", False),
+            ("common_sense", False),
         )
+        charges = (
+            ("draft_slice_note@slice_doc", None),
+            ("implement@slice_impl", None),
+            ("rethink", "document"),
+            ("rethink", "implementation"),
+        )
+        cases = tuple(
+            (job, role, lead, artifact_type)
+            for job, artifact_type in charges
+            for role, lead in seats
+        )
+        self.assertEqual(len(cases), 12)
         for job, role, lead, artifact_type in cases:
             with self.subTest(job=job, role=role):
                 prepared = self.prepare(

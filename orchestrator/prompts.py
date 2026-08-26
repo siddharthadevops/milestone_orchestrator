@@ -791,15 +791,12 @@ def _amendments_block(amendments):
     return "\n".join(lines) + "\n\n"
 
 
-def worker_episode_authority_block(
-    amendments, project_context, operator_complete
-):
+def worker_episode_authority_block(amendments, project_context):
     """Render one milestone-owned live-authority episode boundary.
 
-    The admitted request remains immutable.  This block states whether the
-    mutable operator file is complete enough to revoke omissions, repeats the
-    append-only accepted design decisions, and makes the current safeguard set
-    replace (rather than union with) prior episode validation.
+    The admitted request remains immutable. The mutable operator source has
+    already passed the strict reader, so this block is unconditionally the
+    complete replacing set. Accepted design decisions remain append-only.
     """
     amendments = list(amendments or [])
     operator = [
@@ -817,21 +814,13 @@ def worker_episode_authority_block(
         "change frozen strategy or access, or create a successor task.",
         "",
     ]
-    if operator_complete:
-        lines += [
-            "MUTABLE OPERATOR AMENDMENTS: COMPLETE",
-            "The successfully parsed file is the complete current set. Any",
-            "previously shown mutable operator amendment omitted here is revoked.",
-        ]
-        if not operator:
-            lines.append("CURRENT MUTABLE OPERATOR AMENDMENTS: none.")
-    else:
-        lines += [
-            "MUTABLE OPERATOR AMENDMENTS: INCOMPLETE",
-            "The file was absent, unreadable, or malformed. This block revokes",
-            "nothing. Retain mutable operator authority already present in the",
-            "admitted prompt or provider history; there is no prior-set cache.",
-        ]
+    lines += [
+        "MUTABLE OPERATOR AMENDMENTS: COMPLETE",
+        "The successfully parsed file is the complete current set. Any",
+        "previously shown mutable operator amendment omitted here is revoked.",
+    ]
+    if not operator:
+        lines.append("CURRENT MUTABLE OPERATOR AMENDMENTS: none.")
     lines += [
         "",
         "ACCEPTED DESIGN AMENDMENTS: APPEND-ONLY",
@@ -857,44 +846,21 @@ def worker_episode_authority_block(
     )
 
 
-def attach_worker_episode_authority(
-    prompt, amendments, project_context, operator_complete
-):
+def attach_worker_episode_authority(prompt, amendments, project_context):
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt must be a non-empty string")
     return (
         prompt.rstrip()
         + "\n\n"
-        + worker_episode_authority_block(
-            amendments, project_context, operator_complete
-        )
+        + worker_episode_authority_block(amendments, project_context)
     )
 
 
-def _review_verification_block(verification_commands=None):
-    """Keep review independent from another worker's suite choice."""
-    block = (
-        "VERIFICATION BOUNDARY\n"
-        "- Do NOT run the repository's full suite during review.\n"
-        "- Use focused checks only when necessary to verify a concrete claim.\n"
-    )
-    if verification_commands is None:
-        return block
-    commands = list(verification_commands)
-    if commands:
-        return block
-    return (
-        block
-        + "- Scheduled full-suite commands currently armed, in order:\n"
-        + "  (none)"
-        + "\n"
-        + "- This empty list is unknown, not proof that the repository has "
-        "no suite. Inspect the repository's official test entry points. "
-        "If an official non-interactive full-suite command exists, report "
-        "the missing command as a finding so the existing fixer correction "
-        "can arm it. An empty list is acceptable only when the repository "
-        "has no full suite.\n"
-    )
+REVIEW_VERIFICATION_BLOCK = (
+    "VERIFICATION BOUNDARY\n"
+    "- Do NOT run the repository's full suite during review.\n"
+    "- Use focused checks only when necessary to verify a concrete claim.\n"
+)
 
 
 def _delta_governing_line(governing):
@@ -980,31 +946,6 @@ def _delta_quality_block(unit_kind, reform=False):
 def _fix_quality_block(unit_kind):
     parts = [EVIDENCE_BLOCK, FIX_VERDICT_ACCOUNT_BLOCK, FIX_EVIDENCE_BLOCK,
              FIX_SELF_CHECK_BLOCK, FIX_MACHINERY_RESULT_LINE]
-    if unit_kind in DOC_UNIT_KINDS:
-        parts.append(ALTITUDE_BLOCK)
-        parts.append(ALTITUDE_FIX_BLOCK)
-    return "".join(parts) + "\n"
-
-
-def _suite_fix_quality_block(unit_kind):
-    parts = [
-        EVIDENCE_BLOCK,
-        (
-            "SUITE FAILURE JUDGMENT\n"
-            "- Treat every failing check as evidence, not as authority. Before\n"
-            "  editing, establish the violated guarantee and its actual posture\n"
-            "  (strict, optimistic, eventual, or best-effort), the permitted\n"
-            "  baseline, incremental harm, affected party, observable damage,\n"
-            "  exposure, reversibility, scope, and altitude.\n"
-            "- Decide from the current workspace whether code, test, fixture,\n"
-            "  configuration, or environment is wrong. Do not weaken behavior\n"
-            "  or tests merely to obtain green output.\n"
-            "- Use the cheapest sufficient repair. Reuse existing capability;\n"
-            "  do not invent a stronger guarantee or machinery without an\n"
-            "  independent authority and a real consumer.\n"
-        ),
-        FIX_MACHINERY_RESULT_LINE,
-    ]
     if unit_kind in DOC_UNIT_KINDS:
         parts.append(ALTITUDE_BLOCK)
         parts.append(ALTITUDE_FIX_BLOCK)
@@ -1677,14 +1618,11 @@ def _updated_design_assignment_block(
     return ""
 
 
-def build_implement(family, workspace, goal, slice_info, note_path, verification,
+def build_implement(family, workspace, goal, slice_info, note_path,
                     amendments=None, project_context=None, gap_enabled=False,
                     skeleton_path=None, remodeled=False,
                     editable_design_paths=None, implementation_scope=None,
                     materials=None):
-    ver = "\n".join("  %s" % c for c in verification) or (
-        "  (none yet — your suite_command will arm scheduled checkpoints)"
-    )
     remodel_block = _updated_design_assignment_block(
         skeleton_path, remodeled
     )
@@ -1703,12 +1641,6 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         "test suite at the end. After reviews are clean, the driver runs it\n"
         "after every fourth completed logical slice and at milestone end.\n"
         + IMPLEMENTATION_SIZE_GUIDANCE
-        + "Report the repo's official full-suite command (as run from the\n"
-        "workspace root) in `suite_command` — it must be non-interactive\n"
-        "and run the suite exactly once and exit (never a watch mode).\n"
-        "Scheduled full-suite commands currently armed:\n"
-        + ver
-        + "\n\n"
         + REUSE_GATE_BLOCK
         + (REUSE_GATE_REFORM_ADDENDUM if gap_enabled else "")
         + MACHINERY_RESULT_LINE
@@ -1915,19 +1847,13 @@ def build_rethink_continuation(
     battery=None,
     accepted_design_amendment=False,
     editable_design_paths=None,
-    verification_repair=False,
-    verification_commands=None,
-    verification_signal=None,
-    unit_kind=None,
     gap_enabled=False,
     original_request=None,
     episode_authority=None,
     producer_planning=False,
     materials=None,
 ):
-    finding_application = bool(
-        kind == contracts.KIND_FIX_FINDINGS and not verification_repair
-    )
+    finding_application = kind == contracts.KIND_FIX_FINDINGS
     authority = {
         "session_id": handoff["session_id"],
         "accepted_target_revision": handoff[
@@ -1946,28 +1872,6 @@ def build_rethink_continuation(
             raise ValueError("original_request must be a non-empty string")
         continuation_task = ""
         output_contract = ""
-    elif verification_repair:
-        continuation_task = (
-            "FULL-SUITE REPAIR CONTINUES\n"
-            "Brainstorming resolved one design request; it did not complete\n"
-            "the repair. Keep every judgment and safety rule from the original\n"
-            "prompt. Run the configured full-suite command(s), investigate all\n"
-            "failures, and make only justified repairs. Return `ok` only after\n"
-            "the complete suite passes on the final workspace bytes; otherwise\n"
-            "return `blocked`.\n"
-            "CONFIGURED FULL-SUITE COMMANDS:\n%s\n\n"
-            % (
-                json.dumps(
-                    list(verification_commands or []),
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-            )
-            + _suite_fix_quality_block(unit_kind)
-        )
-        output_contract = contracts.suite_fix_contract(
-            gap_enabled=gap_enabled
-        )
     else:
         continuation_task = ""
         output_contract = _modern_contract(kind)
@@ -2129,8 +2033,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        project_context=None, battery=None, debt=None,
                        gap_enabled=False, wave_docs=None,
                        editable_design_paths=None, implementation_scope=None,
-                       producer_review_context=None,
-                       verification_commands=None):
+                       producer_review_context=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
@@ -2147,7 +2050,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
         + "You fix nothing and triage nothing — a separate fixer call\n"
         "will verify your findings against the real files and concede or\n"
         "dissent.\n\n"
-        + _review_verification_block(verification_commands)
+        + REVIEW_VERIFICATION_BLOCK
         + _review_quality_block(unit_kind, reform=gap_enabled)
         + (_battery_review_block(battery) if battery else "")
         + _debt_block(debt)
@@ -2470,8 +2373,6 @@ def build_fix_findings(
     legacy_design_process=None,
     design_correction=None,
     editable_design_paths=None,
-    verification_repair=False,
-    verification_commands=None,
     implementation_scope=None,
     producer_planning=False,
     materials=None,
@@ -2493,11 +2394,6 @@ def build_fix_findings(
         if findings
         else "[]"
     )
-    source_signal = findings[0] if findings else {
-        "id": "V1",
-        "severity": "P1",
-        "summary": "the configured full verification suite is not green",
-    }
     killed_block = killed_call_notice() if killed_notice else ""
     phantom_block = ""
     if phantom_retry:
@@ -2508,17 +2404,8 @@ def build_fix_findings(
             "delta was EMPTY — nothing was actually written, and those\n"
             "claims were discarded. This is your one retry: either apply\n"
             "the edits to disk for real, or dispose honestly ('rejected'\n"
-            "with its consultation, or 'blocked'). EXCEPTION: when a\n"
-            "queued finding identifies a missing, narrowed, or wrong\n"
-            "scheduled full-suite command, return the corrected\n"
-            "`suite_command` and\n"
-            "its `suite_command_finding_id`; that is a real DRIVER-STATE\n"
-            "fix and may correctly have `files_changed: []`. Do not edit a\n"
-            "generated ledger or manufacture a repository change for it.\n"
-            "This exception credits only that one bound finding; every\n"
-            "other fixed/prevention/file claim still requires a real\n"
-            "worktree edit. A second uncredited empty-delta claim fails the\n"
-            "run.\n\n"
+            "with its consultation, or 'blocked'). A second empty-delta\n"
+            "claim fails the run.\n\n"
         )
     correction_block = ""
     if (legacy_design_process and design_correction
@@ -2684,17 +2571,13 @@ def build_fix_findings(
     if legacy_design_process:
         design_baseline_block = sealed_block
     else:
-        repair_scope = (
-            "verified suite failures"
-            if verification_repair else "queued findings"
-        )
         design_baseline_block = (
             "CURRENT REVIEWED DESIGN BASELINE\n"
             "- The current unit's artifact named by TASK is editable for its\n"
             "  %s. Other milestone skeleton and slice-note files\n"
             "  are read-only unless an accepted amendment lists them below.\n"
             "  A `prevention` edit follows the same boundary.\n"
-            % repair_scope
+            % "queued findings"
             + _editable_design_block(editable_design_paths)
             + "- If a confirmed finding requires an in-goal change to another\n"
             "  design document, return `need_rethink`; do not code around it,\n"
@@ -2719,94 +2602,37 @@ def build_fix_findings(
         (_fix_gap_block() if gap_enabled else "")
         if legacy_design_process else _design_rethink_block(fixer=True)
     )
-    if verification_repair:
-        task_line = (
-            "\nTASK: make the configured full verification suite green on %s.\n"
-            % unit_desc
+    task_line = "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
+    work_block = (
+        _fixer_adversarial_block()
+        + "QUEUED FINDINGS (claims, not facts — verify each against the\n"
+        "real code/doc before deciding). These are the exact stored objects;\n"
+        "if you request `need_rethink`, copy exactly one complete object into\n"
+        "`finding` without shortening, normalizing, or dropping fields:\n"
+        + findings_text
+        + "\n\n"
+    )
+    decision_block = (
+        "FIX DECISION TABLE (exactly once per queued finding)\n"
+        "- valid -> `fixed`; apply the fix now.\n"
+        "- invalid -> `rejected` after consultation. If ambiguity caused the\n"
+        "  false finding, add the smallest clarifying `prevention` edit.\n"
+        "- settled duplicate without new evidence -> `rejected_adjudicated`\n"
+        "  with adjudication_ref; no consultation. CONTESTS means reassess\n"
+        "  the new evidence and consult again if rejecting.\n"
+        "- confirmed and impossible -> per-finding `blocked`.\n\n"
+    )
+    quality_block = _fix_quality_block(unit_kind)
+    consultation_block = (
+        _consultation_block(consultation_family, consultation_cmd) + "\n"
+    )
+    output_contract = (
+        contracts.prompt_contract(
+            contracts.KIND_FIX_FINDINGS, gap_enabled=gap_enabled
         )
-        work_block = (
-            "FULL-SUITE REPAIR\n"
-            "- The suite is not green. Run the configured full command(s)\n"
-            "  yourself in the current workspace; no stored failure excerpt\n"
-            "  is authoritative or supplied. Investigate every failure, apply\n"
-            "  only justified repairs, and rerun the full suite.\n"
-            "- Return `status: \"ok\"` only after the complete suite passes on\n"
-            "  the final workspace bytes. Return `blocked` if you cannot leave\n"
-            "  it green.\n"
-            "- Fix the CAUSE. Never make a test pass by weakening it: no\n"
-            "  raised timeouts or retries to outlast a race, no skipped or\n"
-            "  deleted cases, no loosened assertions, no widened tolerances,\n"
-            "  no test rewritten to assert what the code happens to do. If a\n"
-            "  test is genuinely wrong, that is a real repair — but say so.\n"
-            "- Change nothing you were not sent for. A repair that also\n"
-            "  touches unrelated surfaces cannot be reviewed as a repair.\n"
-            "- DECLARE `tests_modified`: true if you altered ANY test code,\n"
-            "  false otherwise, naming what you altered in `tests_changed`.\n"
-            "  Test code is what asserts behaviour, WHEREVER it lives: its\n"
-            "  own file, a file beside the code, or inside a source file —\n"
-            "  a Rust `#[cfg(test)]` module, an Elixir doctest, an inline\n"
-            "  describe block. Fixtures, factories, helpers and harness\n"
-            "  config count too. If you are unsure, declare true.\n"
-            "- Nothing verifies that declaration for you: the machine takes\n"
-            "  your word and, when you say no, seals the repair without a\n"
-            "  second look. That is precisely why a false `no` destroys the\n"
-            "  only evidence anyone has that the suite means anything. An\n"
-            "  honest `yes` costs you one review.\n"
-            "CONFIGURED FULL-SUITE COMMANDS:\n%s\n\n"
-            "SOURCE SIGNAL (copy this complete object only if returning\n"
-            " `need_rethink`):\n%s\n\n"
-            % (
-                json.dumps(
-                    list(verification_commands or []),
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                json.dumps(
-                    source_signal,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    indent=2,
-                ),
-            )
-        )
-        decision_block = ""
-        quality_block = _suite_fix_quality_block(unit_kind)
-        consultation_block = ""
-        output_contract = contracts.suite_fix_contract(
-            gap_enabled=gap_enabled
-        )
-    else:
-        task_line = "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
-        work_block = (
-            _fixer_adversarial_block()
-            + "QUEUED FINDINGS (claims, not facts — verify each against the\n"
-            "real code/doc before deciding). These are the exact stored objects;\n"
-            "if you request `need_rethink`, copy exactly one complete object into\n"
-            "`finding` without shortening, normalizing, or dropping fields:\n"
-            + findings_text
-            + "\n\n"
-        )
-        decision_block = (
-            "FIX DECISION TABLE (exactly once per queued finding)\n"
-            "- valid -> `fixed`; apply the fix now.\n"
-            "- invalid -> `rejected` after consultation. If ambiguity caused the\n"
-            "  false finding, add the smallest clarifying `prevention` edit.\n"
-            "- settled duplicate without new evidence -> `rejected_adjudicated`\n"
-            "  with adjudication_ref; no consultation. CONTESTS means reassess\n"
-            "  the new evidence and consult again if rejecting.\n"
-            "- confirmed and impossible -> per-finding `blocked`.\n\n"
-        )
-        quality_block = _fix_quality_block(unit_kind)
-        consultation_block = (
-            _consultation_block(consultation_family, consultation_cmd) + "\n"
-        )
-        output_contract = (
-            contracts.prompt_contract(
-                contracts.KIND_FIX_FINDINGS, gap_enabled=gap_enabled
-            )
-            if legacy_design_process else
-            _modern_contract(contracts.KIND_FIX_FINDINGS)
-        )
+        if legacy_design_process else
+        _modern_contract(contracts.KIND_FIX_FINDINGS)
+    )
     return (
         _header(contracts.KIND_FIX_FINDINGS, family, workspace)
         + task_line
@@ -2817,7 +2643,7 @@ def build_fix_findings(
         + rethink_block
         + slice_table_block
         + killed_block
-        + ("" if verification_repair else phantom_block)
+        + phantom_block
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + work_block

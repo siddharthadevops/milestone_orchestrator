@@ -58,6 +58,26 @@ def fix_ok(*args, **kwargs):
     return payload
 
 
+def no_suite_checkpoint():
+    return step(
+        contracts.KIND_SUITE_CHECKPOINT,
+        {
+            "status": "no_suite",
+            "kind": contracts.KIND_SUITE_CHECKPOINT,
+            "commands": [],
+            "results": [],
+            "authority": {
+                "source": "repository",
+                "evidence": [{
+                    "path": "docs/skeleton.md",
+                    "basis": "No complete suite is configured or declared.",
+                }],
+            },
+        },
+        family="codex",
+    )
+
+
 def draft_step():
     current = skeleton_script()[0]
     response = dict(current["response"])
@@ -1235,6 +1255,7 @@ class TestP3Debt(DriverTestCase):
                             [finding("F1", "test names could be clearer")]),
                      family="claude"),
                 reclassify(True, family="codex", reason="test-naming nit"),
+                no_suite_checkpoint(),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(
