@@ -11,7 +11,7 @@ import tempfile
 
 from orchestrator import brainstorming, brainstorming_coordination
 from orchestrator import brainstorming_lifecycle
-from orchestrator import contracts, registry, session_calls
+from orchestrator import contracts, registry, session_calls, session_repository
 
 
 class AdapterError(RuntimeError):
@@ -626,12 +626,12 @@ def terminal_handoff(state, session_id, active_home=None):
             work_cost=projected.get("work_cost"),
             work_cost_partial=projected.get("work_cost_partial", False),
         )
+    repository_backed = session_repository.context_from_state(
+        session_state
+    ) is not None
     handoff = {
         "session_id": session_id,
         "result": copy.deepcopy(session_state["result"]),
-        "accepted_target_revision": session_state[
-            "accepted_target_revision"
-        ],
         "work_duration_s": projected.get("work_duration_s"),
         "work_token_usage": projected.get("work_token_usage"),
         "work_token_usage_partial": projected.get(
@@ -640,6 +640,13 @@ def terminal_handoff(state, session_id, active_home=None):
         "work_cost": projected.get("work_cost"),
         "work_cost_partial": projected.get("work_cost_partial", False),
     }
+    if repository_backed:
+        if session_state["status"] == "success":
+            handoff.update(session_repository.sealed_range(session_state))
+        return handoff
+    handoff["accepted_target_revision"] = session_state[
+        "accepted_target_revision"
+    ]
     if session_state["status"] == "success":
         revision = handoff["accepted_target_revision"]
         if revision is None:

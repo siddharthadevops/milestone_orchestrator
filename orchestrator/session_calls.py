@@ -150,7 +150,20 @@ def prepare_turn(
         raise prompt_router.PromptRouterError(
             "milestone session round must be positive"
         )
-    if not isinstance(target_revision, dict):
+    repository_backed = "repository" in charge
+    if repository_backed:
+        if (
+            not isinstance(target_revision, str)
+            or len(target_revision) != 40
+            or any(
+                character not in "0123456789abcdef"
+                for character in target_revision
+            )
+        ):
+            raise prompt_router.PromptRouterError(
+                "milestone session Git authority is unavailable"
+            )
+    elif not isinstance(target_revision, dict):
         raise prompt_router.PromptRouterError(
             "milestone session target authority is unavailable"
         )

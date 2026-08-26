@@ -2006,6 +2006,9 @@ def _create_session_with_context(
     target_path = _resolved_target_path(
         checked["request"], context, owned_target_path=owned_target_path
     )
+    repository = session_repository.context_from_state(
+        {"request": checked["request"]}
+    )
     _reject_authority_overlap(home, store, target_path)
     if not checked["create_target_parents"]:
         # Historical fail-fast: without the opt-in, a target whose parent
@@ -2057,7 +2060,6 @@ def _create_session_with_context(
             ):
                 raise PublicLifecycleError(503, UNAVAILABLE)
             session_creation_attempted = True
-            recovery_baseline = coordination.capture_target(target_path)
             created = store.create(
                 session_id,
                 checked["request"],
@@ -2067,11 +2069,19 @@ def _create_session_with_context(
             running = store.transition(
                 session_id, created.revision, "running"
             )
-            store.initialize_coordination(
-                session_id,
-                running.revision,
-                recovery_baseline,
-            )
+            if repository is None:
+                recovery_baseline = coordination.capture_target(target_path)
+                store.initialize_coordination(
+                    session_id,
+                    running.revision,
+                    recovery_baseline,
+                )
+            else:
+                store.initialize_repository_coordination(
+                    session_id,
+                    running.revision,
+                    repository["pre_session_commit"],
+                )
             record = {
                 "id": session_id,
                 "caller": caller,
@@ -2546,26 +2556,35 @@ def view_session(
             progress is not None
             and progress["accepted_target_revision"] is not None
         ):
-            accepted = store.read_target_revision(
-                record["id"], progress["accepted_target_revision"]
-            )
-            exists, content = brainstorming.target_revision_content(accepted)
-            target.update(
-                {
-                    "revision": accepted["revision"],
-                    "changed": accepted["revision"]
-                    != state.get("recovery_baseline_revision"),
-                    "exists": exists,
-                }
-            )
-            if exists:
-                try:
-                    text = content.decode("utf-8")
-                except UnicodeDecodeError:
-                    pass
-                else:
-                    target["content"] = text[:preview_limit]
-                    target["truncated"] = len(text) > preview_limit
+            if brainstorming.repository_session(state):
+                target.update(
+                    {
+                        "revision": progress["accepted_target_revision"],
+                        "changed": progress["accepted_target_revision"]
+                        != state.get("recovery_baseline_revision"),
+                    }
+                )
+            else:
+                accepted = store.read_target_revision(
+                    record["id"], progress["accepted_target_revision"]
+                )
+                exists, content = brainstorming.target_revision_content(accepted)
+                target.update(
+                    {
+                        "revision": accepted["revision"],
+                        "changed": accepted["revision"]
+                        != state.get("recovery_baseline_revision"),
+                        "exists": exists,
+                    }
+                )
+                if exists:
+                    try:
+                        text = content.decode("utf-8")
+                    except UnicodeDecodeError:
+                        pass
+                    else:
+                        target["content"] = text[:preview_limit]
+                        target["truncated"] = len(text) > preview_limit
         turns = [] if progress is None else progress["completed_turns"]
         activity = _activity_projection(store, record, state)
         supplied = None
@@ -3304,8 +3323,10 @@ def _wait_for_external_response(
                 snapshot.state["accepted_target_revision"]
                 or snapshot.state["recovery_baseline_revision"]
             )
-            target_revision = store.read_target_revision(
-                record["id"], revision
+            target_revision = (
+                revision
+                if brainstorming.repository_session(snapshot.state)
+                else store.read_target_revision(record["id"], revision)
             )
             prepare_call = lambda correction: turn_preparer(
                 snapshot.state,
@@ -3333,19 +3354,39 @@ def _wait_for_external_response(
                     (record["id"], claimed["participant_id"], prompt,
                      execution_context)
                 )
-                envelope, _result = exchange(
+                repository_backed = brainstorming.repository_session(
+                    snapshot.state
+                )
+                envelope, result = exchange(
                     *args,
                     before_repair=lambda: store.retry_external_provider(
                         record["id"], token
                     ),
-                    after_validate=lambda accepted: (
-                        store.complete_external_provider(
+                    after_validate=(
+                        None
+                        if repository_backed else
+                        lambda accepted: store.complete_external_provider(
                             record["id"],
                             token,
                             {"markdown": accepted["markdown"]},
                         )
                     ),
                 )
+                if repository_backed:
+                    outcome = getattr(result, "repository_turn", None) or {}
+                    completed_revision = outcome.get("revision")
+                    if completed_revision is None:
+                        raise brainstorming.HistoryRewriteError(
+                            "repository narrator exposed no Git revision"
+                        )
+                    store.complete_external_provider(
+                        record["id"],
+                        token,
+                        {
+                            "markdown": envelope["markdown"],
+                            "target_revision": completed_revision,
+                        },
+                    )
             else:
                 envelope, _result = (
                     participant_execution.exchange_control_quiescent(
@@ -3366,10 +3407,33 @@ def _wait_for_external_response(
                         ),
                     )
                 )
-        except session_repository.ReadOnlyTurnInvalidated:
+        except session_repository.ReadOnlyTurnInvalidated as exc:
             store.mark_external_provider_quiescent(
                 record["id"], token
             )
+            outcome = getattr(exc, "repository_turn", None) or {}
+            completed_revision = outcome.get("revision")
+            current = store.read(record["id"])
+            if (
+                completed_revision is not None
+                and current is not None
+                and brainstorming.repository_session(current.state)
+                and completed_revision
+                != (
+                    current.state["accepted_target_revision"]
+                    or current.state["recovery_baseline_revision"]
+                )
+            ):
+                store.advance_repository_revision(
+                    record["id"],
+                    current.revision,
+                    completed_revision,
+                    publish=False,
+                )
+                store.discard_unanswered_external_intervention(
+                    record["id"], token
+                )
+                return
             continue
         except BaseException as exc:
             latest = store.read_external_intervention(record["id"])
@@ -3461,6 +3525,32 @@ def run_lifecycle(
         if prepared.state["status"] in brainstorming.TERMINAL_STATUSES:
             return 0
         execution_context = record["execution_context"]
+
+        if brainstorming.repository_session(prepared.state):
+            while True:
+                snapshot = store.read(session_id)
+                if snapshot is None:
+                    return 2
+                if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                    return 0
+                try:
+                    snapshot = coordinator.run_next_turn(
+                        session_id, execution_context
+                    )
+                except coordination.ExternalInterventionPending as pending:
+                    _wait_for_external_response(
+                        store,
+                        participant_execution,
+                        record,
+                        pending,
+                        execution_context,
+                        turn_preparer,
+                    )
+                    continue
+                except brainstorming.RevisionConflict:
+                    continue
+                if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                    return 0
 
         discussion_due_after_closure = False
         while True:

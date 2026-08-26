@@ -5579,18 +5579,19 @@ class Driver(object):
                     {"findings": [copy.deepcopy(checked["finding"])]},
                     kind,
                 )
-                self._terminalize_worker_task(
-                    unit,
-                    signal,
-                    result=result,
-                    status="failure",
-                    reason=(
-                        "%s requested design help instead of returning its "
-                        "contracted review" % kind
-                    ),
-                )
-                # A review origin is terminal before the independent discussion
-                # is attached. Later review work must admit a fresh task.
+            self._terminalize_worker_task(
+                unit,
+                signal,
+                result=result,
+                status="failure",
+                reason=(
+                    "%s requested rethink; its repository session will "
+                    "resolve the focused contradiction" % kind
+                ),
+            )
+            # Every originating call is spent before the independent session
+            # starts. A successful repository seal later re-enters this same
+            # ordinary stage with a newly admitted task.
         except StopStep:
             self._fail_worker_task_if_open(
                 unit,
@@ -5625,16 +5626,6 @@ class Driver(object):
         self._save()
         try:
             provider_ref = getattr(result, "session_ref", None)
-            if (
-                kind in contracts.RETHINK_CONTINUATION_KINDS
-                and (
-                    not isinstance(provider_ref, str)
-                    or not provider_ref.strip()
-                )
-            ):
-                raise brainstorming_milestone.AdapterError(
-                    "the origin provider exposed no explicit session reference"
-                )
             references = self._brainstorming_references(unit, checked)
             authority = self._worker_episode_authority(unit, kind)
             authority_context = {
@@ -6745,9 +6736,6 @@ class Driver(object):
             cost_partial=result.get("cost_partial", False),
             task_id=record.get("id"),
         )
-        self._enforce_sealed_artifacts(
-            "%s-brainstorming-production" % st.unit_key(unit)
-        )
         unit.pop("brainstorming_wait", None)
         reference = unit.get("active_task") or {}
         if reference.get("id") == record.get("id"):
@@ -6842,14 +6830,6 @@ class Driver(object):
         home = brainstorming_milestone.service_home(
             self.state, active_home=self.model_profiles_home
         )
-        dispatch_authority = (active.get("resolved_staffing") or {}).get(
-            "dispatch_authority"
-        )
-        staffing_selection = (
-            self._brainstorming_staffing(active["order"])
-            if dispatch_authority == "current_profile"
-            else None
-        )
         try:
             terminal = self._with_inspection_retry(
                 lambda: brainstorming_tasks.finish_task(
@@ -6857,23 +6837,11 @@ class Driver(object):
                     task_id,
                     home,
                     wait["session_id"],
-                    lambda effect_request:
-                        brainstorming_tasks.apply_agreed_effects(
-                            home,
-                            wait["session_id"],
-                            task_id,
-                            effect_request,
-                            dispatch_authority=dispatch_authority,
-                            staffing_selection=staffing_selection,
-                        ),
                 )
             )
         except Exception as exc:
             # Inspection and recoverable service faults leave the task and its
             # wait intact. Explicit Resume re-enters this same identity.
-            self._enforce_sealed_artifacts(
-                "%s-brainstorming-production" % st.unit_key(unit)
-            )
             st.fail_run(
                 self.state,
                 "Brainstorming producer could not be inspected: %s" % exc,
@@ -6887,9 +6855,6 @@ class Driver(object):
         if terminal["result"]["status"] != "success":
             return self._fail_brainstorming_production(unit, terminal)
 
-        self._enforce_sealed_artifacts(
-            "%s-brainstorming-production" % st.unit_key(unit)
-        )
         result = terminal["result"]
         native = copy.deepcopy(result.get("native_result"))
         if not isinstance(native, dict):
@@ -7299,6 +7264,28 @@ class Driver(object):
                 )
             self._route_rethink_report_failure(unit, wait)
             return "Brainstorming failed; source finding queued for fixing"
+
+        if (
+            "source_base_revision" in handoff
+            and "accepted_revision" in handoff
+        ):
+            unit.pop("brainstorming_wait", None)
+            unit.pop("brainstorming_resume", None)
+            if kind == contracts.KIND_IMPLEMENT:
+                unit.pop("implementation_attempt_snapshot", None)
+            st.append_event(
+                self.state,
+                "brainstorming_rethink_sealed",
+                unit=st.unit_key(unit),
+                kind=kind,
+                session_id=session_id,
+                source_base_revision=handoff["source_base_revision"],
+                accepted_revision=handoff["accepted_revision"],
+            )
+            return (
+                "Brainstorming sealed repository changes; %s will run fresh"
+                % kind
+            )
 
         if kind in contracts.RETHINK_CONTINUATION_KINDS:
             amendment_mode = self._rethink_requests_design_amendment(

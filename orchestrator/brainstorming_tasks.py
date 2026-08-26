@@ -16,8 +16,10 @@ import time
 from orchestrator import brainstorming
 from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import brainstorming_milestone as milestone
+from orchestrator import gitops
 from orchestrator import kvstore
 from orchestrator import session_calls
+from orchestrator import session_repository
 from orchestrator import state as st
 from orchestrator import tasks
 
@@ -30,7 +32,6 @@ _STATIC_AUTHORITY = "static"
 # the question is hard, not to save tokens.
 DIRECT_BRAINSTORMING_EFFORT = "max"
 _TASK_CALLER_PREFIX = "task:"
-_NOTE_EFFECT = "Required effect: create the slice note at %s."
 _RECOVERED_EFFECT_ERROR = (
     "production effect ended without durable completion evidence"
 )
@@ -1236,9 +1237,19 @@ def _finish_task_exclusive(
     caller = _task_caller(record, task_id)
     request = record["order"]["request"]
     workspace = _workspace(request)
-    _work_area, _target_parent, target = _private_target_paths(
-        workspace, home, task_id
+    repository_backed = "repository" in (
+        request.get("context", {}).get("session_charge") or {}
     )
+    if repository_backed:
+        target = _repository_target(request)
+        if target is None:
+            raise AdapterError(
+                "repository-backed task has no primary repository target"
+            )
+    else:
+        _work_area, _target_parent, target = _private_target_paths(
+            workspace, home, task_id
+        )
     try:
         projection = lifecycle.inspect_session(
             home, session_id, _authorize_caller(caller)
@@ -1246,7 +1257,10 @@ def _finish_task_exclusive(
     except lifecycle.PublicLifecycleError as exc:
         if exc.code != lifecycle.UNKNOWN_SESSION:
             raise
-        retained = _retained_projection(home, session_id, caller, target)
+        retained = (
+            None if repository_backed else
+            _retained_projection(home, session_id, caller, target)
+        )
         return _fail_lost_session(state, task_id, retained)
     session_state = projection["state"]
     if session_state["status"] not in brainstorming.TERMINAL_STATUSES:
@@ -1258,6 +1272,13 @@ def _finish_task_exclusive(
         return tasks.record_task_result(state, task_id, {
             "status": "failure",
             "reason": reason,
+            **accounting,
+            "native_result": native_result,
+        })
+    if repository_backed:
+        native_result.update(session_repository.sealed_range(session_state))
+        return tasks.record_task_result(state, task_id, {
+            "status": "success",
             **accounting,
             "native_result": native_result,
         })
@@ -1326,10 +1347,10 @@ def finish_task(
     task_id,
     home,
     session_id,
-    apply_effects,
+    apply_effects=None,
     effect_store=None,
 ):
-    """Terminalize only after native closure and the lead's effect handoff."""
+    """Terminalize repository work directly; standalone retains its effect."""
     record = _task_record(state, task_id)
     workspace = _workspace(record["order"]["request"])
     durable_store = brainstorming.SessionStore(lifecycle.state_directory(home))
@@ -1372,23 +1393,46 @@ def prepare_slice_note_request(request, planned_path):
             else os.path.join(workspace, output_root)
         )
         tasks.resolve_derived_path(output_root, absolute)
-    checked["request"] = (
-        checked["request"].rstrip() + "\n\n" + (_NOTE_EFFECT % planned_path)
+    repository_backed = "repository" in (
+        (checked.get("context") or {}).get("session_charge") or {}
     )
+    if not repository_backed:
+        checked["request"] = (
+            checked["request"].rstrip()
+            + "\n\nRequired effect: create the slice note at %s." % planned_path
+        )
     return tasks.validate_request(checked)
 
 
 def record_slice_note_handoff(unit, record, planned_path):
-    """Record the current task's planned path, replacing predecessor handoff."""
+    """Record a planned note that exists in the sealed repository revision."""
     result = record.get("result") if isinstance(record, dict) else None
     request = ((record.get("order") or {}).get("request") or {})
+    native = result.get("native_result") if isinstance(result, dict) else None
+    accepted = (
+        native.get("accepted_revision") if isinstance(native, dict) else None
+    )
+    repository_backed = "repository" in (
+        (request.get("context") or {}).get("session_charge") or {}
+    )
+    if repository_backed:
+        valid_delivery = (
+            (request.get("context") or {}).get("planned_slice_note_path")
+            == planned_path
+            and isinstance(accepted, str)
+            and gitops.show_file_mode(
+                _workspace(request), accepted, planned_path
+            ) in ("100644", "100755")
+        )
+    else:
+        valid_delivery = request.get("request", "").rstrip().endswith(
+            "Required effect: create the slice note at %s." % planned_path
+        )
     if (
         (record.get("order") or {}).get("task_executor") != "brainstorming"
         or not isinstance(result, dict)
         or result.get("status") != "success"
-        or not request.get("request", "").rstrip().endswith(
-            _NOTE_EFFECT % planned_path
-        )
+        or not valid_delivery
     ):
         raise AdapterError("slice-note handoff requires its successful current task")
     unit["artifact"] = planned_path

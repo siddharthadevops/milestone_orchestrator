@@ -63,6 +63,7 @@ _TARGET_REVISION_ID_PREFIX = "brainstorming-sha256:"
 _TARGET_REVISION_ID_RE = re.compile(
     r"^brainstorming-sha256:[0-9a-f]{64}$"
 )
+_GIT_REVISION_ID_RE = re.compile(r"^[0-9a-f]{40}$")
 _COORDINATION_FIELDS = (
     "completed_turns",
     "rounds_used",
@@ -452,6 +453,24 @@ def validate_target_revision_id(revision):
     return revision
 
 
+def validate_coordination_revision_id(revision):
+    """Accept either standalone retained-target identity or project Git SHA."""
+    if isinstance(revision, str) and _GIT_REVISION_ID_RE.fullmatch(revision):
+        return revision
+    return validate_target_revision_id(revision)
+
+
+def repository_session(state):
+    """Whether this immutable request carries the milestone Git boundary."""
+    try:
+        repository = state["request"]["context"]["source_payload"][
+            "session_charge"
+        ]["repository"]
+    except (KeyError, TypeError):
+        return False
+    return isinstance(repository, dict)
+
+
 def make_target_revision(exists, content, mode):
     """Retain exact target bytes and functional mode under a derived id."""
     if type(exists) is not bool:
@@ -558,7 +577,7 @@ def validate_external_intervention(intervention):
         "target_revision": (
             None
             if intervention["target_revision"] is None
-            else validate_target_revision_id(
+            else validate_coordination_revision_id(
                 intervention["target_revision"]
             )
         ),
@@ -711,14 +730,22 @@ def validate_external_intervention(intervention):
             _exact_keys(
                 payload,
                 ("markdown",),
-                (),
+                ("target_revision",),
                 "external_intervention.response.payload",
             )
             payload = {
                 "markdown": _text(
                     payload["markdown"],
                     "external_intervention.response.payload.markdown",
-                )
+                ),
+                **(
+                    {
+                        "target_revision": validate_coordination_revision_id(
+                            payload["target_revision"]
+                        )
+                    }
+                    if "target_revision" in payload else {}
+                ),
             }
         else:
             _exact_keys(
@@ -775,7 +802,9 @@ def validate_turn_attempt(turn_attempt):
         "target_revision": (
             None
             if turn_attempt["target_revision"] is None
-            else validate_target_revision_id(turn_attempt["target_revision"])
+            else validate_coordination_revision_id(
+                turn_attempt["target_revision"]
+            )
         ),
         "quiescent": turn_attempt["quiescent"],
     }
@@ -1494,12 +1523,29 @@ def _validate_coordination(state, request, run_config, status):
         raise ContractError(
             "state.rounds_used must be a non-negative integer"
         )
-    recovery_baseline = validate_target_revision_id(
+    repository_backed = repository_session(state)
+    revision_validator = (
+        validate_coordination_revision_id
+        if repository_backed else validate_target_revision_id
+    )
+    recovery_baseline = revision_validator(
         projection["recovery_baseline_revision"]
     )
+    if repository_backed and not _GIT_REVISION_ID_RE.fullmatch(
+        recovery_baseline
+    ):
+        raise ContractError(
+            "repository recovery_baseline_revision must be a full Git SHA"
+        )
     accepted_revision = projection["accepted_target_revision"]
     if accepted_revision is not None:
-        accepted_revision = validate_target_revision_id(accepted_revision)
+        accepted_revision = revision_validator(accepted_revision)
+    if repository_backed and accepted_revision is not None and not (
+        _GIT_REVISION_ID_RE.fullmatch(accepted_revision)
+    ):
+        raise ContractError(
+            "repository accepted_target_revision must be a full Git SHA"
+        )
     participants = run_config["participants"]
     turn_limit = request["max_rounds"] * len(participants)
     if len(turns) > turn_limit:
@@ -1511,7 +1557,10 @@ def _validate_coordination(state, request, run_config, status):
         ctx = "state.completed_turns[%d]" % index
         _exact_keys(
             turn,
-            ("round", "participant_id", "markdown", "target_revision"),
+            (
+                "round", "participant_id", "markdown", "target_revision",
+                *(('ready',) if repository_backed else ()),
+            ),
             (),
             ctx,
         )
@@ -1526,8 +1575,21 @@ def _validate_coordination(state, request, run_config, status):
         _text(turn["markdown"], "%s.markdown" % ctx)
         revision = turn["target_revision"]
         if revision is not None:
-            revision = validate_target_revision_id(revision)
-        if participant["role"] == "initial_position":
+            revision = revision_validator(revision)
+        if repository_backed:
+            if (
+                revision is None
+                or not _GIT_REVISION_ID_RE.fullmatch(revision)
+            ):
+                raise ContractError(
+                    "%s repository turn requires a full Git SHA" % ctx
+                )
+            ready = turn["ready"]
+            if type(ready) is not bool:
+                raise ContractError("%s.ready must be a boolean" % ctx)
+            if participant["role"] == "common_sense" and ready:
+                raise ContractError("%s questioner cannot become ready" % ctx)
+        elif participant["role"] == "initial_position":
             if revision is None:
                 raise ContractError(
                     "%s completed initial-position turn must accept a target "
@@ -1549,21 +1611,56 @@ def _validate_coordination(state, request, run_config, status):
         )
     if rounds_used > request["max_rounds"]:
         raise ContractError("state.rounds_used exceeds request.max_rounds")
-    if accepted_revision != previous_revision:
-        raise ContractError(
-            "accepted_target_revision must match the latest completed turn"
-        )
-    if completed_initial_turn is not (accepted_revision is not None):
-        raise ContractError(
-            "accepted_target_revision must exist exactly after completed "
-            "initial-position work"
-        )
+    if not repository_backed:
+        if accepted_revision != previous_revision:
+            raise ContractError(
+                "accepted_target_revision must match the latest completed turn"
+            )
+        if completed_initial_turn is not (accepted_revision is not None):
+            raise ContractError(
+                "accepted_target_revision must exist exactly after completed "
+                "initial-position work"
+            )
     return {
         "completed_turns": _json_copy(turns, "state.completed_turns"),
         "rounds_used": rounds_used,
         "recovery_baseline_revision": recovery_baseline,
         "accepted_target_revision": accepted_revision,
     }
+
+
+def repository_positions_ready(state, coordination=None):
+    """Whether every discussion seat last readied at the current Git SHA."""
+    if not repository_session(state):
+        raise ContractError("repository readiness requires a repository session")
+    coordination = coordination or coordination_projection(state)
+    if coordination is None:
+        return False
+    revision = (
+        coordination["accepted_target_revision"]
+        or coordination["recovery_baseline_revision"]
+    )
+    latest = {}
+    roles = {
+        item["id"]: item["role"]
+        for item in state["run_config"]["participants"]
+    }
+    for turn in coordination["completed_turns"]:
+        participant_id = turn["participant_id"]
+        if (
+            roles.get(participant_id) in POSITION_ROLES
+            and turn["target_revision"] == revision
+        ):
+            latest[participant_id] = turn["ready"]
+    discussion_ids = [
+        item["id"]
+        for item in state["run_config"]["participants"]
+        if item["role"] in POSITION_ROLES
+    ]
+    return bool(discussion_ids) and all(
+        latest.get(participant_id) is True
+        for participant_id in discussion_ids
+    )
 
 
 def _validate_eligible_participants(eligible_participants):
@@ -2009,7 +2106,51 @@ def validate_result(result, terminal_status, target_path, transcript_ref):
     return _json_copy(result, "result")
 
 
-def _validate_closure_lifecycle(status, request, coordination, events):
+def _validate_closure_lifecycle(
+    state, status, request, run_config, coordination, events
+):
+    if repository_session(state):
+        if any(event["kind"] == "closure_ballot" for event in events):
+            raise ContractError(
+                "repository sessions cannot carry closure ballots"
+            )
+        if coordination is None:
+            if status == "success":
+                raise ContractError(
+                    "repository success requires accepted coordination"
+                )
+            return
+        participant_count = len(run_config["participants"])
+        full_pass = (
+            coordination["rounds_used"] > 0
+            and len(coordination["completed_turns"])
+            == coordination["rounds_used"] * participant_count
+        )
+        if status == "success" and (
+            not full_pass
+            or coordination["accepted_target_revision"] is None
+            or not repository_positions_ready(state, coordination)
+        ):
+            raise ContractError(
+                "repository success requires common readiness after Dante"
+            )
+        if (
+            status == "running"
+            and full_pass
+            and repository_positions_ready(state, coordination)
+        ):
+            raise ContractError(
+                "common repository readiness must become success atomically"
+            )
+        if (
+            status == "running"
+            and full_pass
+            and coordination["rounds_used"] == request["max_rounds"]
+        ):
+            raise ContractError(
+                "an exhausted repository discussion must become terminal"
+            )
+        return
     ballots = [
         event["fact"]
         for event in events
@@ -2165,7 +2306,7 @@ def validate_session_state(state):
         state["transcript_events"], run_config, coordination
     )
     _validate_closure_lifecycle(
-        status, request, coordination, transcript_events
+        state, status, request, run_config, coordination, transcript_events
     )
     if state["transcript_format_version"] not in _TRANSCRIPT_RENDERERS:
         raise ContractError("state.transcript_format_version is unsupported")
@@ -2409,6 +2550,30 @@ def initialize_coordination_state(state, target_revision):
     return validate_session_state(successor)
 
 
+def initialize_repository_coordination_state(state, revision):
+    """Initialize a milestone session from its committed pre-session HEAD."""
+    current = validate_session_state(state)
+    if current["status"] != "running" or not repository_session(current):
+        raise IllegalTransition(
+            "repository coordination requires a running repository session"
+        )
+    if coordination_projection(current) is not None:
+        raise HistoryRewriteError("accepted coordination is already initialized")
+    revision = validate_coordination_revision_id(revision)
+    if not _GIT_REVISION_ID_RE.fullmatch(revision):
+        raise ContractError("repository coordination requires a full Git SHA")
+    successor = copy.deepcopy(current)
+    successor.update(
+        {
+            "completed_turns": [],
+            "rounds_used": 0,
+            "recovery_baseline_revision": revision,
+            "accepted_target_revision": None,
+        }
+    )
+    return validate_session_state(successor)
+
+
 def assert_coordination_initialization_successor(old_state, new_state):
     """Accept exactly the first empty coordination projection."""
     old = validate_session_state(old_state)
@@ -2429,6 +2594,16 @@ def assert_coordination_initialization_successor(old_state, new_state):
     if not _same_json_value(validate_session_state(expected), new):
         raise HistoryRewriteError(
             "coordination initialization changed unrelated session state"
+        )
+
+
+def assert_repository_coordination_initialization_successor(
+    old_state, new_state, revision
+):
+    expected = initialize_repository_coordination_state(old_state, revision)
+    if not _same_json_value(expected, validate_session_state(new_state)):
+        raise HistoryRewriteError(
+            "repository coordination initialization changed unrelated state"
         )
 
 
@@ -2498,6 +2673,141 @@ def assert_completed_turn_successor(
     if not _same_json_value(expected, new):
         raise HistoryRewriteError(
             "completed turn is not the exact next coordination revision"
+        )
+
+
+def repository_revision_successor(state, revision):
+    """Advance repository authority without accepting the invalidated turn."""
+    current = validate_session_state(state)
+    if current["status"] != "running" or not repository_session(current):
+        raise IllegalTransition(
+            "repository revision advance requires a running repository session"
+        )
+    if coordination_projection(current) is None:
+        raise HistoryRewriteError("repository coordination is not initialized")
+    revision = validate_coordination_revision_id(revision)
+    if not _GIT_REVISION_ID_RE.fullmatch(revision):
+        raise ContractError("repository revision must be a full Git SHA")
+    successor = copy.deepcopy(current)
+    successor["accepted_target_revision"] = revision
+    return validate_session_state(successor)
+
+
+def assert_repository_revision_successor(old_state, new_state, revision):
+    expected = repository_revision_successor(old_state, revision)
+    if not _same_json_value(expected, validate_session_state(new_state)):
+        raise HistoryRewriteError(
+            "repository revision advance changed unrelated session state"
+        )
+
+
+def _repository_closing_summary(outcome, reason):
+    return {
+        "reason": reason,
+        "unresolved_objections": [],
+        "affected_parties": "The milestone operator and downstream workers.",
+        "damage_altitude": "The repository-backed discussion boundary.",
+        "proportionality": (
+            "Closure follows only the registered readiness and Git revision."
+        ),
+        "escalation_evidence": None,
+    }
+
+
+def repository_completed_turn_successor(
+    state, participant_id, markdown, revision, ready
+):
+    """Append one Git-backed turn and atomically seal at the roster boundary."""
+    current = validate_session_state(state)
+    if current["status"] != "running" or not repository_session(current):
+        raise IllegalTransition(
+            "repository turns require a running repository session"
+        )
+    if coordination_projection(current) is None:
+        raise HistoryRewriteError("repository coordination is not initialized")
+    participant_id = _text(participant_id, "participant_id")
+    markdown = _text(markdown, "discussion_turn.markdown")
+    revision = validate_coordination_revision_id(revision)
+    if not _GIT_REVISION_ID_RE.fullmatch(revision):
+        raise ContractError("repository turn revision must be a full Git SHA")
+    if type(ready) is not bool:
+        raise ContractError("repository turn ready must be a boolean")
+
+    participants = current["run_config"]["participants"]
+    turn_index = len(current["completed_turns"])
+    turn_limit = current["request"]["max_rounds"] * len(participants)
+    if turn_index >= turn_limit:
+        raise IllegalTransition("the configured round limit is exhausted")
+    participant = participants[turn_index % len(participants)]
+    if participant_id != participant["id"]:
+        raise HistoryRewriteError(
+            "repository turn does not match the next persisted participant"
+        )
+    if participant["role"] == "common_sense" and ready:
+        raise HistoryRewriteError("the questioner cannot become ready")
+
+    successor = copy.deepcopy(current)
+    round_number = turn_index // len(participants) + 1
+    successor["completed_turns"].append(
+        {
+            "round": round_number,
+            "participant_id": participant_id,
+            "markdown": markdown,
+            "target_revision": revision,
+            "ready": ready,
+        }
+    )
+    successor["accepted_target_revision"] = revision
+    full_pass = (turn_index + 1) % len(participants) == 0
+    if full_pass:
+        successor["rounds_used"] += 1
+
+    outcome = None
+    if full_pass and repository_positions_ready(
+        successor, coordination_projection(successor)
+    ):
+        outcome = "success"
+        reason = "All discussion seats are ready on the current Git revision."
+    elif (
+        full_pass
+        and successor["rounds_used"] == successor["request"]["max_rounds"]
+    ):
+        outcome = "failure"
+        reason = "Discussion seats did not reach common repository readiness."
+
+    if outcome is None:
+        return validate_session_state(successor)
+
+    result = {
+        "outcome": outcome,
+        "target_ref": successor["request"]["target_path"],
+        "transcript_ref": successor["transcript_ref"],
+        "rounds_used": successor["rounds_used"],
+        **({"reason": reason} if outcome == "failure" else {}),
+    }
+    summary = _repository_closing_summary(outcome, reason)
+    successor["status"] = outcome
+    successor["result"] = result
+    successor["closing_summary"] = summary
+    successor["history"].append(
+        {
+            "status": outcome,
+            "result": copy.deepcopy(result),
+            "closing_summary": copy.deepcopy(summary),
+        }
+    )
+    return validate_session_state(successor)
+
+
+def assert_repository_completed_turn_successor(
+    old_state, new_state, participant_id, markdown, revision, ready
+):
+    expected = repository_completed_turn_successor(
+        old_state, participant_id, markdown, revision, ready
+    )
+    if not _same_json_value(expected, validate_session_state(new_state)):
+        raise HistoryRewriteError(
+            "repository turn is not the exact next coordination revision"
         )
 
 
@@ -3792,6 +4102,31 @@ class SessionStore:
                 "external intervention changed before completion"
             )
 
+    def discard_unanswered_external_intervention(self, session_id, token):
+        """Retire a quiescent prompt whose repository revision was invalidated."""
+        token = _text(token, "external_intervention.token")
+        key = _external_intervention_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            return
+        intervention = validate_external_intervention(current["value"])
+        if intervention["token"] != token:
+            raise HistoryRewriteError("external intervention token changed")
+        if intervention["response"] is not None:
+            raise HistoryRewriteError(
+                "an answered external intervention cannot be discarded"
+            )
+        if not intervention["provider_quiescent"]:
+            raise HistoryRewriteError(
+                "an active external provider cannot be discarded"
+            )
+        self._preserve_external_call_accounting(session_id, intervention)
+        result = self._store.delete(key, expected_revision=current["revision"])
+        if not result.ok:
+            raise HistoryRewriteError(
+                "external intervention changed before discard"
+            )
+
     def read_turn_attempt(self, session_id):
         """Read the exclusive in-flight control record, if one remains."""
         record = self._store.read(_turn_attempt_key(session_id))
@@ -4527,7 +4862,7 @@ class SessionStore:
                 supplied_baseline_key
                 or (
                     None
-                    if progress is None
+                    if progress is None or repository_session(state)
                     else _target_revision_key(
                         session_id, progress["recovery_baseline_revision"]
                     )
@@ -4711,6 +5046,28 @@ class SessionStore:
             assert_coordination_initialization_successor,
         )
 
+    def initialize_repository_coordination(
+        self, session_id, expected_revision, revision
+    ):
+        """Initialize Git-backed progress without retaining target bytes."""
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = initialize_repository_coordination_state(
+            current.state, revision
+        )
+
+        def assertion(old, new):
+            assert_repository_coordination_initialization_successor(
+                old, new, revision
+            )
+
+        return self._cas_coordination(
+            session_id, expected_revision, candidate, assertion
+        )
+
     def record_completed_turn(
         self,
         session_id,
@@ -4745,6 +5102,67 @@ class SessionStore:
                 participant_id,
                 markdown,
                 None if checked_target is None else checked_target["revision"],
+            )
+
+        return self._cas_coordination(
+            session_id,
+            expected_revision,
+            candidate,
+            assertion,
+            publish=publish,
+        )
+
+    def advance_repository_revision(
+        self, session_id, expected_revision, revision, publish=True
+    ):
+        """Invalidate old readiness after a plan-only read-only commit."""
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = repository_revision_successor(current.state, revision)
+        if _same_json_value(candidate, current.state):
+            return current
+
+        def assertion(old, new):
+            assert_repository_revision_successor(old, new, revision)
+
+        return self._cas_coordination(
+            session_id,
+            expected_revision,
+            candidate,
+            assertion,
+            publish=publish,
+        )
+
+    def record_repository_turn(
+        self,
+        session_id,
+        expected_revision,
+        participant_id,
+        markdown,
+        revision,
+        ready,
+        publish=True,
+    ):
+        """Append the actual post-attempt SHA and seal when the pass is ready."""
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = repository_completed_turn_successor(
+            current.state,
+            participant_id,
+            markdown,
+            revision,
+            ready,
+        )
+
+        def assertion(old, new):
+            assert_repository_completed_turn_successor(
+                old, new, participant_id, markdown, revision, ready
             )
 
         return self._cas_coordination(

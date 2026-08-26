@@ -103,6 +103,37 @@ def context_from_state(state):
     return context_from_charge(charge)
 
 
+def sealed_range(session_state):
+    """Return the committed A..B delivery of one successful repository seal."""
+    context = context_from_state(session_state)
+    if context is None:
+        raise SessionRepositoryError(
+            "session has no repository delivery boundary"
+        )
+    if session_state.get("status") != "success":
+        raise SessionRepositoryError(
+            "repository delivery requires a successful session"
+        )
+    accepted = session_state.get("accepted_target_revision")
+    if (
+        not isinstance(accepted, str)
+        or len(accepted) != 40
+        or any(character not in "0123456789abcdef" for character in accepted)
+    ):
+        raise SessionRepositoryError(
+            "repository seal has no accepted full revision"
+        )
+    workspace = session_state["request"]["workspace_path"]
+    if gitops.head_full_sha(workspace) != accepted:
+        raise SessionRepositoryError(
+            "repository HEAD no longer equals the sealed revision"
+        )
+    return {
+        "source_base_revision": context["pre_session_commit"],
+        "accepted_revision": accepted,
+    }
+
+
 def begin_attempt(session_state, charge, role):
     """Capture one proportional boundary immediately before seat dispatch."""
     context = context_from_charge(charge)

@@ -678,13 +678,17 @@ class SessionCallCutoverTest(unittest.TestCase):
                 },
             },
             "transcript_ref": "%s/chat.md" % self.workspace,
-            "accepted_target_revision": "accepted",
-            "recovery_baseline_revision": "baseline",
+            "accepted_target_revision": (
+                repository_context(self.workspace)["pre_session_commit"]
+            ),
+            "recovery_baseline_revision": (
+                repository_context(self.workspace)["pre_session_commit"]
+            ),
         }
         participant = {
             "id": "initial-position", "role": "initial_position"
         }
-        target = {"exists": True}
+        target = state["accepted_target_revision"]
         boundary = {
             "accept_reply": True,
             "committed": False,

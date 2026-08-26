@@ -1019,10 +1019,16 @@ class BrainstormingCoordinator:
                 raise CoordinationRejected(
                     "repository session has an attempt before initialization"
                 )
-            baseline = brainstorming.make_target_revision(False, b"", None)
+            repository = session_repository.context_from_state(snapshot.state)
+            if repository is None:
+                raise CoordinationRejected(
+                    "repository session has no committed repository context"
+                )
             try:
-                return self.store.initialize_coordination(
-                    session_id, snapshot.revision, baseline
+                return self.store.initialize_repository_coordination(
+                    session_id,
+                    snapshot.revision,
+                    repository["pre_session_commit"],
                 )
             except brainstorming.RevisionConflict:
                 continue
@@ -1183,6 +1189,11 @@ class BrainstormingCoordinator:
             or accepted["participant_id"] != pending["participant_id"]
             or accepted["round"] != pending["round"]
             or accepted["markdown"] != payload["markdown"]
+            or (
+                payload.get("target_revision") is not None
+                and accepted["target_revision"]
+                != payload["target_revision"]
+            )
         ):
             raise CoordinationRejected(
                 "external intervention conflicts with accepted discussion"
@@ -1853,7 +1864,6 @@ class BrainstormingCoordinator:
         round_number = turn_index // len(participants) + 1
 
         if participant["delivery"] == "external":
-            placeholder = self._authority_record(session_id, starting)
             pending = self.store.read_external_intervention(session_id)
             if pending is None:
                 pending = self._publish_external(
@@ -1878,12 +1888,19 @@ class BrainstormingCoordinator:
                 brainstorming.coordination_projection(current.state),
             ):
                 raise brainstorming.RevisionConflict(current)
-            accepted = self.store.record_completed_turn(
+            payload = pending["response"]["payload"]
+            revision = payload.get("target_revision")
+            if revision is None:
+                raise CoordinationRejected(
+                    "repository external turn has no completed Git revision"
+                )
+            self.store.record_repository_turn(
                 session_id,
                 current.revision,
                 participant["id"],
-                pending["response"]["payload"]["markdown"],
-                placeholder,
+                payload["markdown"],
+                revision,
+                False,
                 publish=False,
             )
             self.store.finish_external_intervention(
@@ -1910,9 +1927,12 @@ class BrainstormingCoordinator:
             },
         }
         attempt = self.store.begin_turn_attempt(session_id, attempt)
-        placeholder = self._authority_record(session_id, starting)
+        authority_revision = (
+            state["accepted_target_revision"]
+            or state["recovery_baseline_revision"]
+        )
         prepare_call = lambda correction: self.turn_preparer(
-            state, participant, round_number, placeholder, correction
+            state, participant, round_number, authority_revision, correction
         )
 
         def before_repair():
@@ -1924,7 +1944,7 @@ class BrainstormingCoordinator:
                 )
 
         try:
-            envelope, _runner_result = (
+            envelope, runner_result = (
                 self.participant_execution.exchange_prepared_quiescent(
                     session_id,
                     participant["id"],
@@ -1933,13 +1953,20 @@ class BrainstormingCoordinator:
                     before_repair=before_repair,
                 )
             )
-        except session_repository.ReadOnlyTurnInvalidated:
+        except session_repository.ReadOnlyTurnInvalidated as exc:
             self.store.mark_turn_attempt_quiescent(
                 session_id, attempt["token"]
             )
             self.store.preserve_turn_attempt_accounting(
                 session_id, attempt["token"]
             )
+            outcome = getattr(exc, "repository_turn", None) or {}
+            revision = outcome.get("revision")
+            if revision is not None:
+                current = self._require_running(self.store.read(session_id))
+                self.store.advance_repository_revision(
+                    session_id, current.revision, revision, publish=False
+                )
             self.store.finish_turn_attempt(session_id, attempt["token"])
             return self.store.reconcile_transcript(session_id)
         except BaseException as exc:
@@ -1962,12 +1989,19 @@ class BrainstormingCoordinator:
             brainstorming.coordination_projection(current.state),
         ):
             raise brainstorming.RevisionConflict(current)
-        self.store.record_completed_turn(
+        outcome = getattr(runner_result, "repository_turn", None) or {}
+        revision = outcome.get("revision")
+        if revision is None:
+            raise CoordinationRejected(
+                "repository turn completion exposed no Git revision"
+            )
+        self.store.record_repository_turn(
             session_id,
             current.revision,
             participant["id"],
             envelope["markdown"],
-            placeholder,
+            revision,
+            envelope.get("ready") is True,
             publish=False,
         )
         self.store.finish_turn_attempt(session_id, attempt["token"])
@@ -2209,6 +2243,10 @@ class BrainstormingCoordinator:
     def run_closure(self, session_id, execution_context):
         """Collect one revision-bound ballot or continue/fail at the boundary."""
         claimed = self._require_running(self.store.read(session_id))
+        if self._repository_session(claimed.state):
+            raise CoordinationRejected(
+                "repository sessions seal through accepted turns, not closure"
+            )
         path = resolve_target_path(claimed.state["request"])
         try:
             with _exclusive_target_turn(

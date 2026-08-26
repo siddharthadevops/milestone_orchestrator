@@ -10,7 +10,8 @@ from unittest import mock
 
 from orchestrator import brainstorming, brainstorming_coordination
 from orchestrator import brainstorming_execution, brainstorming_tasks
-from orchestrator import brainstorming_milestone, canonical_plan, driver
+from orchestrator import brainstorming_lifecycle, brainstorming_milestone
+from orchestrator import canonical_plan, driver
 from orchestrator import gitops, ledgers, runners, session_calls
 from orchestrator import session_repository, state, tasks
 
@@ -447,7 +448,7 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                 session_snapshot.state,
                 participant,
                 1,
-                {"exists": True},
+                self.repository["pre_session_commit"],
                 correction,
             )
 
@@ -550,6 +551,112 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         self.assertEqual(len(accepted.state["completed_turns"]), 2)
         self.assertEqual(len(contrary_executor.calls), 2)
 
+    def test_plan_only_invalidation_advances_revision_without_a_turn(self):
+        lead = {
+            "id": "lead", "role": "initial_position", "delivery": "llm",
+            "executor_ref": "lead-executor", "model_family": "codex",
+        }
+        contrary = {
+            "id": "contrary", "role": "contrary_position",
+            "delivery": "llm", "executor_ref": "contrary-executor",
+            "model_family": "codex",
+        }
+        store = self._store([lead, contrary])
+
+        def reply(role, lead_seat, markdown, ready):
+            package = session_calls.prepare(
+                self.home,
+                job="rethink",
+                material="document",
+                role=role,
+                lead=lead_seat,
+                artifact_type="document",
+                values={
+                    "workspace": self.workspace,
+                    "chat_path": os.path.join(self.temp.name, "chat.md"),
+                    "reference_documents": "  - %s" % self.skeleton_path,
+                    "participant_id": role,
+                    "role": role,
+                    "round": "1",
+                    "target_path": self.target_path,
+                    "target_authority": "repository HEAD current",
+                    "target_state": "present",
+                    "rethink_finding": self.charge()["values"][
+                        "rethink_finding"
+                    ],
+                },
+                operator_amendments=[],
+            )
+            return json.dumps({
+                "kind": "discussion_turn",
+                "markdown": markdown,
+                "ready": ready,
+                "questions": question_answers(package),
+            })
+
+        updated = {
+            "slices": PLAN["slices"] + [{
+                "id": 2,
+                "title": "Two",
+                "intent": "Build the next bounded slice.",
+                "producer_task_executor": {
+                    "draft_slice_note": "agent_call",
+                    "implement": "agent_call",
+                },
+            }]
+        }
+
+        def change_plan():
+            Path(self.workspace, self.skeleton_path).write_text(
+                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps(updated, separators=(",", ":")),
+                encoding="utf-8",
+            )
+
+        execution = brainstorming_execution.ParticipantExecution(
+            store,
+            {
+                "lead-executor": CallbackExecutor([
+                    reply("initial_position", True, "Author ready.", True)
+                ]),
+                "contrary-executor": CallbackExecutor(
+                    [
+                        reply("contrary_position", False, "Plan changed.", True),
+                        reply("contrary_position", False, "Clean retry.", False),
+                    ],
+                    callbacks=[change_plan, lambda: None],
+                ),
+            },
+        )
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            store,
+            execution,
+            turn_preparer=lambda current, participant, round_number,
+                                 target_revision, correction:
+                session_calls.prepare_turn(
+                    self.home,
+                    current,
+                    participant,
+                    round_number,
+                    target_revision,
+                    correction,
+                ),
+        )
+        first = coordinator.run_next_turn("repository-session", {})
+        first_revision = first.state["accepted_target_revision"]
+        invalidated = coordinator.run_next_turn("repository-session", {})
+
+        self.assertEqual(len(invalidated.state["completed_turns"]), 1)
+        self.assertNotEqual(
+            invalidated.state["accepted_target_revision"], first_revision
+        )
+        self.assertFalse(
+            brainstorming.repository_positions_ready(invalidated.state)
+        )
+        accepted = coordinator.run_next_turn("repository-session", {})
+        self.assertEqual(len(accepted.state["completed_turns"]), 2)
+        self.assertEqual(accepted.state["status"], "running")
+
     def test_coordinator_records_an_external_dante_turn(self):
         lead = {
             "id": "lead", "role": "initial_position", "delivery": "llm",
@@ -632,7 +739,10 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         store.submit_external_intervention(
             "repository-session",
             pending["token"],
-            {"markdown": "Dante asks the bounded question."},
+            {
+                "markdown": "Dante asks the bounded question.",
+                "target_revision": gitops.head_full_sha(self.workspace),
+            },
         )
 
         accepted = coordinator.run_next_turn("repository-session", {})
@@ -644,6 +754,155 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         )
         self.assertIsNone(
             store.read_external_intervention("repository-session")
+        )
+
+    def test_external_plan_only_invalidation_republishes_dante(self):
+        lead = {
+            "id": "lead", "role": "initial_position", "delivery": "llm",
+            "executor_ref": "lead-executor", "model_family": "codex",
+        }
+        contrary = {
+            "id": "contrary", "role": "contrary_position",
+            "delivery": "llm", "executor_ref": "contrary-executor",
+            "model_family": "codex",
+        }
+        dante = {
+            "id": "dante", "role": "common_sense",
+            "delivery": "external", "external_ref": "operator-dante",
+        }
+        store = self._store([lead, contrary, dante])
+
+        def reply(role, lead_seat, markdown, questioner=False):
+            package = session_calls.prepare(
+                self.home,
+                job="rethink",
+                material="document",
+                role=role,
+                lead=lead_seat,
+                artifact_type="document",
+                values={
+                    "workspace": self.workspace,
+                    "chat_path": os.path.join(self.temp.name, "chat.md"),
+                    "reference_documents": "  - %s" % self.skeleton_path,
+                    "participant_id": role,
+                    "role": role,
+                    "round": "1",
+                    "target_path": self.target_path,
+                    "target_authority": "repository HEAD current",
+                    "target_state": "present",
+                    "rethink_finding": self.charge()["values"][
+                        "rethink_finding"
+                    ],
+                },
+                operator_amendments=[],
+            )
+            payload = {
+                "kind": "questioner_turn" if questioner else "discussion_turn",
+                "markdown": markdown,
+                "questions": question_answers(package),
+            }
+            if not questioner:
+                payload["ready"] = False
+            return json.dumps(payload)
+
+        updated = {
+            "slices": PLAN["slices"] + [{
+                "id": 2,
+                "title": "Two",
+                "intent": "Build the next bounded slice.",
+                "producer_task_executor": {
+                    "draft_slice_note": "agent_call",
+                    "implement": "agent_call",
+                },
+            }]
+        }
+
+        def change_plan():
+            Path(self.workspace, self.skeleton_path).write_text(
+                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps(updated, separators=(",", ":")),
+                encoding="utf-8",
+            )
+
+        execution = brainstorming_execution.ParticipantExecution(
+            store,
+            {
+                "lead-executor": CallbackExecutor([
+                    reply("initial_position", True, "Author turn.")
+                ]),
+                "contrary-executor": CallbackExecutor([
+                    reply("contrary_position", False, "Contrary turn.")
+                ]),
+                "operator-dante": CallbackExecutor(
+                    [
+                        reply("common_sense", False, "Changed plan.", True),
+                        reply("common_sense", False, "Clean question.", True),
+                    ],
+                    callbacks=[change_plan, lambda: None],
+                ),
+            },
+        )
+        turn_preparer = lambda current, participant, round_number, \
+                target_revision, correction: session_calls.prepare_turn(
+                    self.home,
+                    current,
+                    participant,
+                    round_number,
+                    target_revision,
+                    correction,
+                )
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            store, execution, turn_preparer=turn_preparer
+        )
+        coordinator.run_next_turn("repository-session", {})
+        coordinator.run_next_turn("repository-session", {})
+        with self.assertRaises(
+            brainstorming_coordination.ExternalInterventionPending
+        ) as first_pending:
+            coordinator.run_next_turn("repository-session", {})
+        record = {
+            "id": "repository-session",
+            "runtime": {
+                "external_providers": {
+                    "operator-dante": {"kind": "narrator"}
+                }
+            },
+        }
+        brainstorming_lifecycle._wait_for_external_response(
+            store,
+            execution,
+            record,
+            first_pending.exception,
+            {},
+            turn_preparer,
+        )
+        advanced = store.read("repository-session")
+        self.assertEqual(len(advanced.state["completed_turns"]), 2)
+        self.assertIsNone(
+            store.read_external_intervention("repository-session")
+        )
+
+        with self.assertRaises(
+            brainstorming_coordination.ExternalInterventionPending
+        ) as second_pending:
+            coordinator.run_next_turn("repository-session", {})
+        self.assertEqual(
+            second_pending.exception.intervention["target_revision"],
+            advanced.state["accepted_target_revision"],
+        )
+        brainstorming_lifecycle._wait_for_external_response(
+            store,
+            execution,
+            record,
+            second_pending.exception,
+            {},
+            turn_preparer,
+        )
+        accepted = coordinator.run_next_turn("repository-session", {})
+        self.assertEqual(len(accepted.state["completed_turns"]), 3)
+        self.assertEqual(
+            accepted.state["completed_turns"][-1]["target_revision"],
+            advanced.state["accepted_target_revision"],
         )
 
     def test_questioner_uses_the_same_read_only_boundary(self):
@@ -707,7 +966,7 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                     snapshot.state,
                     dante,
                     1,
-                    {"exists": True},
+                    self.repository["pre_session_commit"],
                     correction,
                 ),
                 {},
