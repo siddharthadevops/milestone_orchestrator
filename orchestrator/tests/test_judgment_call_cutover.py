@@ -26,6 +26,7 @@ JOBS = (
     "fix_findings@slice_impl",
     "reclassify@doc",
     "merge_repair@workspace",
+    "suite_checkpoint@workspace",
 )
 
 
@@ -76,6 +77,12 @@ def values_for(workspace, job):
             "accepted_revision": "3" * 40,
             "opening_reconciliation_account": "{}",
             "required_outcome": "Leave one clean linear repaired commit.",
+        }
+    elif kind == "suite_checkpoint":
+        values = {
+            "kind": "suite_checkpoint",
+            "workspace": workspace,
+            "checkpoint_reason": "four_slice_checkpoint",
         }
     else:
         values = {
@@ -170,7 +177,10 @@ class JudgmentCallPreparationTest(unittest.TestCase):
         options = {
             "job": job,
             "material": (
-                "code" if job.endswith("@slice_impl") else "document"
+                "code"
+                if job.endswith("@slice_impl")
+                or job == "suite_checkpoint@workspace"
+                else "document"
             ),
             "values": values_for(self.temp.name, job),
             "amendments": [],
@@ -255,6 +265,26 @@ class JudgmentCallPreparationTest(unittest.TestCase):
             repair.validate(copy.deepcopy(repair_reply)), repair_reply
         )
         self.assertEqual(repair.bound.question_ids, ())
+
+        checkpoint = self.prepare(
+            "suite_checkpoint@workspace",
+            configured_suite_commands=["true"],
+        )
+        checkpoint_reply = {
+            "status": "passed",
+            "kind": "suite_checkpoint",
+            "commands": ["true"],
+            "authority": {"source": "operator_config", "evidence": []},
+            "results": [
+                {"command": "true", "exit_code": 0, "evidence": "done"}
+            ],
+        }
+        self.assertEqual(
+            checkpoint.validate(copy.deepcopy(checkpoint_reply)),
+            checkpoint_reply,
+        )
+        self.assertIn('["true"]', checkpoint.prompt)
+        self.assertEqual(checkpoint.bound.question_ids, ())
 
         for field in (
             "slices",
@@ -858,6 +888,33 @@ class JudgmentCallPreparationTest(unittest.TestCase):
         }]
         self.assertEqual(prepared.validate(copy.deepcopy(reply)), reply)
 
+    def test_suite_checkpoint_accepts_its_scoped_extension(self):
+        suite_policy = policy(field="suite_evidence")
+        suite_policy["scope"] = {
+            "kinds": [contracts.KIND_SUITE_CHECKPOINT],
+            "unit_kinds": ["slice_impl"],
+        }
+        prepared = self.prepare(
+            "suite_checkpoint@workspace",
+            configured_suite_commands=["python3 -m unittest"],
+            project_context=project_context(self.temp.name, [suite_policy]),
+        )
+        reply = {
+            "status": "passed",
+            "kind": "suite_checkpoint",
+            "commands": ["python3 -m unittest"],
+            "authority": {"source": "operator_config", "evidence": []},
+            "results": [{
+                "command": "python3 -m unittest",
+                "exit_code": 0,
+                "evidence": "green",
+            }],
+        }
+        with self.assertRaises(contracts.ContractError):
+            prepared.validate(copy.deepcopy(reply))
+        reply["suite_evidence"] = [{"finding": "Complete suite passed."}]
+        self.assertEqual(prepared.validate(copy.deepcopy(reply)), reply)
+
     def test_incomplete_project_authority_stops_during_preparation(self):
         complete = project_context(self.temp.name, [])
         for missing in ("project", "work_area", "safeguards"):
@@ -978,7 +1035,7 @@ class JudgmentCallPreparationTest(unittest.TestCase):
                 )
                 self.assertIsNone(prepared.prompt_set_fallback)
 
-    def test_only_the_ten_direct_judgment_jobs_are_admitted(self):
+    def test_only_the_twelve_direct_technical_jobs_are_admitted(self):
         with self.assertRaises(ValueError):
             self.prepare("implement@slice_impl")
 

@@ -8,6 +8,9 @@
         "ref": "header"
       },
       {
+        "ref": "contract_correction"
+      },
+      {
         "text": [
           "TASK: certify the CURRENT WORK TREE at the scheduled full-suite checkpoint.",
           "This is one fresh, report-only call. Determine the repository's official",
@@ -26,6 +29,9 @@
       },
       {
         "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_author"
       },
       {
         "text": [

@@ -15,8 +15,14 @@ PROJECT CONTEXT (standing project law; binding)
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/tutor — a READ-ONLY grant: you may read it for evidence; never edit it.
 
+OPERATOR AMENDMENTS (binding; they refine the MANDATE)
+These bind like the TASK itself.
+[A1] Ladders are ordered by capability. A family's models ladder runs from the least to the most capable model, as the operator judges it; price is not the criterion, even where it happens to coincide. step_up exists to add intelligence when work is stuck - first more effort, then a more capable model - never to change cost. The initial conversion writes today's order (luna < terra < sol; sonnet < opus < fable) as operator data in the document, and only the operator reorders it.
+[A2] Old runs: default and move on. A run that resumes without a staffing session gets one that points at the document with its selected profile name (the converted profiles keep their names) at its selected rigor, or at the default document when that name does not exist. Nothing else is derived: live act overrides (acts.json literals) are NOT carried into the session; the document's own numbers apply from the next call, the marker shows what ran, and the operator edits the session if he wants something else. Resume is never failed or blocked for compatibility. This is the whole compatibility rule - one level, no strict/best-effort split about carried overrides, no census of old runs, no exception clauses, no machinery to represent old literals. Stop discussing it.
+[A3] Session overrides are explicit configuration written by any authorized session owner - the operator, or a calling product - through the store, the API, or the panel. Nothing in the router restricts the author beyond the caller identity and project access the service already enforces. A2 forbids only deriving overrides at resume; it says nothing about who may write one. Do not write 'operator only' anywhere.
+
 OPERATOR-CONFIGURED COMMANDS
-python3 -m unittest discover -s orchestrator/tests -t .
+["python3 -m unittest discover -s orchestrator/tests -t ."]
 
 CHECKPOINT LAW
 - You are not an author: do not fix code, tests, configuration, or docs,

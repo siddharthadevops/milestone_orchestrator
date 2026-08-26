@@ -32,7 +32,10 @@ INVALID_POLICY = "invalid_policy"
 INVALID_DEFAULTS = "invalid_defaults"
 RETIRED_SCOPE_KINDS = frozenset({"seal_half"})
 POLICY_SCOPE_KINDS = frozenset(
-    contracts.KINDS + (contracts.KIND_MERGE_REPAIR,)
+    contracts.KINDS + (
+        contracts.KIND_MERGE_REPAIR,
+        contracts.KIND_SUITE_CHECKPOINT,
+    )
 )
 
 

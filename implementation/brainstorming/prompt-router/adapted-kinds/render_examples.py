@@ -110,8 +110,9 @@ RUNS = {
                   'material': 'code'},
         'values': {'kind': 'suite_checkpoint', 'workspace': WS,
                    'ecosystem_map': ECOSYSTEM,
+                   'operator_amendments': AMENDMENTS_A,
                    'checkpoint_reason': 'four_slice_checkpoint',
-                   'verification_commands': 'python3 -m unittest discover -s orchestrator/tests -t .'},
+                   'verification_commands': '["python3 -m unittest discover -s orchestrator/tests -t ."]'},
     },
     'draft_skeleton': {
         'route': {'job': 'draft_skeleton@skeleton', 'executor': 'agent_call',

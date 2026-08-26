@@ -4201,6 +4201,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                     'scheduled checkpoint. No craft '
                                                     'law, no battery.',
                                      'instructions': {'parts': [{'ref': 'header'},
+                                                                {'ref': 'contract_correction'},
                                                                 {'text': ['TASK: '
                                                                           'certify the '
                                                                           'CURRENT '
@@ -4245,6 +4246,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                'or '
                                                                                                'milestone_final'}]},
                                                                 {'ref': 'project_context'},
+                                                                {'ref': 'operator_amendments_author'},
                                                                 {'text': ['OPERATOR-CONFIGURED '
                                                                           'COMMANDS',
                                                                           '{{verification_commands}}'],

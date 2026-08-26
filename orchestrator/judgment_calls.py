@@ -36,6 +36,7 @@ JUDGMENT_JOBS = frozenset((
     "fix_findings@slice_impl",
     "reclassify@doc",
     "merge_repair@workspace",
+    "suite_checkpoint@workspace",
 ))
 
 _REQUIRED_JOB_PAYLOADS = {
@@ -88,6 +89,9 @@ _REQUIRED_JOB_PAYLOADS = {
         "source_base_role", "source_base_revision", "accepted_revision",
         "opening_reconciliation_account", "required_outcome",
     )),
+    "suite_checkpoint@workspace": frozenset((
+        "workspace", "checkpoint_reason",
+    )),
 }
 
 _REQUIRED_CONTRACT_SECTIONS = {
@@ -102,6 +106,7 @@ _REQUIRED_CONTRACT_SECTIONS = {
     )),
     "reclassify": frozenset(("reclassify_result",)),
     "merge_repair": frozenset(("merge_repair_result",)),
+    "suite_checkpoint": frozenset(("suite_checkpoint_result",)),
 }
 
 _SHARED_CONTRACT_SECTIONS = frozenset((
@@ -216,6 +221,7 @@ def prepare(
     correction=None,
     fixer_recovery_state=None,
     design_correction=None,
+    configured_suite_commands=None,
 ):
     """Freshly resolve, render, bind, and pair one direct technical charge."""
     if job not in JUDGMENT_JOBS:
@@ -227,11 +233,33 @@ def prepare(
     if set(values).intersection((
         "operator_amendments", "ecosystem_map", "queued_findings",
         "contract_correction", "fixer_recovery_state",
+        "verification_commands",
     )):
         raise prompt_router.PromptRouterError(
             "judgment-owned values are adapter-owned"
         )
     kind = prompt_router.DIRECT_ROUTES[job][0]
+    frozen_suite_commands = None
+    if kind == "suite_checkpoint":
+        if configured_suite_commands is not None:
+            if (
+                not isinstance(configured_suite_commands, list)
+                or not configured_suite_commands
+                or any(
+                    not isinstance(command, str) or not command.strip()
+                    for command in configured_suite_commands
+                )
+            ):
+                raise prompt_router.PromptRouterError(
+                    "configured suite commands must be a non-empty string list"
+                )
+            frozen_suite_commands = copy.deepcopy(
+                configured_suite_commands
+            )
+    elif configured_suite_commands is not None:
+        raise prompt_router.PromptRouterError(
+            "only suite_checkpoint accepts configured suite commands"
+        )
     if kind == "fix_findings":
         if not isinstance(queued_findings, list):
             raise prompt_router.PromptRouterError(
@@ -312,6 +340,12 @@ def prepare(
         amendments, operator_complete
     )
     charge_values["operator_amendments"] = amendments_block
+    if frozen_suite_commands is not None:
+        charge_values["verification_commands"] = json.dumps(
+            frozen_suite_commands,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     frozen_extensions = ()
     frozen_roots = ()
@@ -364,6 +398,7 @@ def prepare(
             "implementation_scope": implementation_scope is not None,
             "contract_correction": correction is not None,
             "fixer_recovery_state": fixer_recovery_state is not None,
+            "verification_commands": frozen_suite_commands is not None,
         }
         for variable, supplied in dynamic_payloads.items():
             declarations = mounted_variable_declarations[variable]
@@ -373,7 +408,11 @@ def prepare(
                     "routed %s prompt must bind exactly one adapter-owned "
                     "dynamic payload %r" % (kind, variable)
                 )
-            if not supplied and variable in defaulted_variables:
+            if (
+                not supplied
+                and variable in defaulted_variables
+                and variable != "verification_commands"
+            ):
                 raise prompt_sets.PromptSetError(
                     "routed %s prompt invents adapter-owned dynamic payload %r"
                     % (kind, variable)
@@ -456,6 +495,7 @@ def prepare(
                 bound,
                 candidate,
                 queued_findings=frozen_queued_findings,
+                configured_suite_commands=frozen_suite_commands,
                 workspace=validation_workspace,
                 extension_fields=extension_fields,
             ),

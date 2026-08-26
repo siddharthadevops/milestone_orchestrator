@@ -397,7 +397,7 @@ class PromptContractsTest(unittest.TestCase):
         ]
         prompt_contracts.validate(bound, reply)
 
-    def test_suite_checkpoint_rejects_noops_and_contradictory_traces(self):
+    def test_suite_checkpoint_trusts_command_meaning_but_rejects_bad_traces(self):
         bound = prompt_contracts.bind(
             prompt("suite_checkpoint", ("suite_checkpoint_result",))
         )
@@ -410,20 +410,8 @@ class PromptContractsTest(unittest.TestCase):
             ],
             "authority": {"source": "operator_config", "evidence": []},
         }
-        with self.assertRaises(contracts.ContractError):
-            prompt_contracts.validate(
-                bound, passed_noop, configured_suite_commands=["true"]
-            )
         prompt_contracts.validate(
-            bound,
-            {
-                "status": "blocked",
-                "kind": "suite_checkpoint",
-                "commands": ["true"],
-                "results": [],
-                "blocked_reason": "The configured command is a no-op",
-            },
-            configured_suite_commands=["true"],
+            bound, passed_noop, configured_suite_commands=["true"]
         )
 
         commands = ["suite-a", "suite-b"]

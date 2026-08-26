@@ -66,6 +66,10 @@ KIND_RECLASSIFY = "reclassify"
 # than the legacy builder table, so it is a valid project-policy target but
 # deliberately is not added to ``KINDS`` below.
 KIND_MERGE_REPAIR = "merge_repair"
+# The routed full-suite checkpoint is another direct technical kind.  It has
+# its own served contract and deliberately stays outside the legacy worker
+# kind table until Slice 14 removes that table's remaining call lanes.
+KIND_SUITE_CHECKPOINT = "suite_checkpoint"
 
 # Ordered drift-risk scale for reclassify ratings (least to most risk).
 DRIFT_RISK_LEVELS = ("low", "medium", "high", "xhigh")
@@ -1247,6 +1251,9 @@ KIND_OUTPUT_KEYS = {
     # Routed directly through prompt_contracts rather than the legacy worker
     # validator, but project safeguards still need the same collision source.
     KIND_MERGE_REPAIR: frozenset({"files_changed"}),
+    KIND_SUITE_CHECKPOINT: frozenset(
+        {"commands", "authority", "results", "failure_account"}
+    ),
 }
 
 

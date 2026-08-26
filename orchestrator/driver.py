@@ -1463,6 +1463,40 @@ class Driver(object):
             return "four_slice_checkpoint"
         return None
 
+    def _invalidated_suite_checkpoint_cadence(self, unit):
+        """Keep a declared fresh rerun due across plan and unit changes."""
+        if (
+            unit.get("kind") != st.UNIT_SLICE_IMPL
+            or unit.get("implementation_cut")
+        ):
+            return None
+        key = st.unit_key(unit)
+        for event in reversed(self.state.get("events") or []):
+            if event.get("type") == "verification":
+                if (
+                    event.get("ok") is True
+                    and event.get("stable") is True
+                    and event.get("status") in ("passed", "no_suite")
+                ):
+                    return None
+                if (
+                    event.get("unit") == key
+                    and event.get("status") == "invalidated"
+                    and event.get("stable") is False
+                    and event.get("cadence") in (
+                        "four_slice_checkpoint", "milestone_final"
+                    )
+                ):
+                    return event["cadence"]
+            if (
+                event.get("type") == "suite_checkpoint_rerun_required"
+                and event.get("cadence") in (
+                    "four_slice_checkpoint", "milestone_final"
+                )
+            ):
+                return event["cadence"]
+        return None
+
     def _review_evidence_inputs(self, unit):
         """Return immutable review evidence plus this episode's hot rules.
 
@@ -2846,6 +2880,124 @@ class Driver(object):
         if discovered:
             return [discovered]
         return []
+
+    def _suite_checkpoint_configured_commands(self, unit):
+        """Return only the operator's current explicit suite command list.
+
+        Empty means the checkpoint agent discovers the complete suite.  The
+        historical discovered/corrected command fields belong to the retiring
+        shell gate and intentionally do not participate.
+        """
+        configured = self.config.get("verification")
+        if configured in (None, []):
+            return None
+        if (
+            not isinstance(configured, list)
+            or any(
+                not isinstance(command, str) or not command.strip()
+                for command in configured
+            )
+        ):
+            reason = (
+                "suite checkpoint configuration must be an ordered list of "
+                "non-empty command strings"
+            )
+            st.fail_run(
+                self.state,
+                reason,
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            raise StopStep(reason)
+        return list(configured)
+
+    def _suite_checkpoint_prepare_call(
+        self, unit, cadence, configured_commands
+    ):
+        """Build one fresh routed checkpoint and its read-only Git boundary."""
+        skeleton_path = self._skeleton_artifact()
+
+        def prepare(repair_error):
+            authority = self._worker_episode_authority(
+                unit, contracts.KIND_SUITE_CHECKPOINT
+            )
+            self._activate_worker_episode_authority(authority)
+            prepared = judgment_calls.prepare(
+                self._author_prompt_home(),
+                job="suite_checkpoint@workspace",
+                material="code",
+                values={
+                    "kind": contracts.KIND_SUITE_CHECKPOINT,
+                    "workspace": self.workspace,
+                    "checkpoint_reason": cadence,
+                },
+                amendments=authority["amendments"],
+                operator_complete=(
+                    authority["operator_complete"]
+                    or self.state.get("schema_version", 0)
+                    < st.PROMPT_ROUTER_ACTIVATION_SCHEMA_VERSION
+                ),
+                prompt_set=self.state.get(
+                    st.PROMPT_SET_KEY, prompt_sets.DEFAULT_SET_NAME
+                ),
+                project_context=authority["project_context"],
+                workspace=self.workspace,
+                correction=repair_error,
+                configured_suite_commands=configured_commands,
+            )
+            snapshot = canonical_plan.begin_author_call(
+                self.state, skeleton_path
+            )
+            physical_attempt = 2 if repair_error is not None else 1
+
+            def complete():
+                outcome = canonical_plan.complete_repository_read_only_call(
+                    self.state,
+                    snapshot,
+                    message="Canonical plan from suite checkpoint",
+                )
+                source_base = snapshot["repository"]["head"]
+                accepted = outcome["revision"]
+                boundary = {
+                    "accept_reply": bool(outcome["accept_reply"]),
+                    "plan_changed": bool(outcome["plan_changed"]),
+                    "source_base_revision": source_base,
+                    "accepted_revision": accepted,
+                    "physical_attempt": physical_attempt,
+                    "scheduling_frozen": False,
+                }
+                if outcome["plan_changed"]:
+                    boundary["scheduling_frozen"] = (
+                        self._observe_accepted_plan_range(
+                            source_base,
+                            accepted,
+                            {
+                                "executor": "agent_call",
+                                "job": "suite_checkpoint@workspace",
+                                "material": "code",
+                                "unit": st.unit_key(unit),
+                                "physical_attempt": physical_attempt,
+                            },
+                        )
+                    )
+                if not outcome["accept_reply"]:
+                    st.append_event(
+                        self.state,
+                        "suite_checkpoint_rerun_required",
+                        unit=st.unit_key(unit),
+                        cadence=cadence,
+                        physical_attempt=physical_attempt,
+                        plan_changed=bool(outcome["plan_changed"]),
+                        source_base_revision=source_base,
+                        accepted_revision=accepted,
+                    )
+                    self._save()
+                return boundary
+
+            return prepared._replace(complete=complete)
+
+        return prepare
 
     def _review_verification_commands(self, unit):
         """Expose an empty-suite handoff only for Brainstorming production.
@@ -12928,7 +13080,10 @@ class Driver(object):
                 )
                 return "pre-seal evidence stale; review cycle restarted"
 
-        cadence = self._full_verification_cadence(unit)
+        cadence = (
+            self._invalidated_suite_checkpoint_cadence(unit)
+            or self._full_verification_cadence(unit)
+        )
         if cadence is None:
             unit.pop("suite_verification_pending", None)
             unit.pop("suite_armed_by_fix", None)
@@ -12948,156 +13103,151 @@ class Driver(object):
             closed = self._complete_seal_from_reviews(unit)
             return "full verification not due; %s" % closed
 
-        commands = self._verification_commands(unit)
-        verification_before = self._snapshot()
-        candidate_before = self._verification_candidate_fingerprint(
-            verification_before
+        configured_commands = self._suite_checkpoint_configured_commands(
+            unit
         )
-        reusable = self._matching_fixer_verification(
-            commands, candidate_before
+        if self.model_profiles_home is not None:
+            family, model, effort = self._staff(
+                "implement", material="code", episode_unit=unit
+            )
+            dispatch = self._dispatch_for_role(
+                "implement", material="code", episode_unit=unit
+            )
+        else:
+            family, model, effort = self._act_profile("implementer")
+            dispatch = self._dispatch_for_act("implementer")
+        raw_name = "%s-suite-checkpoint" % st.unit_key(unit)
+        output, result, raw_path = self._call(
+            family,
+            "suite checkpoint",
+            contracts.KIND_SUITE_CHECKPOINT,
+            raw_name,
+            model=model,
+            effort=effort,
+            dispatch_resolver=dispatch,
+            prepare_call=self._suite_checkpoint_prepare_call(
+                unit, cadence, configured_commands
+            ),
+            episode_unit=unit,
         )
-        if reusable is not None:
-            event = st.append_event(
+        if not isinstance(output, dict):
+            st.fail_run(
                 self.state,
-                "verification",
-                unit=st.unit_key(unit),
-                stage=stage,
-                boundary="final",
-                cadence=cadence,
-                ok=True,
-                commands=list(commands),
-                candidate_before=candidate_before,
-                candidate_after=candidate_before,
-                stable=True,
-                reused=True,
-                reused_from_seq=reusable["seq"],
-                fixer_certified=True,
-                output_tail=(
-                    "(reused: fixer certified these exact bytes and "
-                    "commands at event %d)" % reusable["seq"]
-                ),
+                "suite checkpoint ended without a validated result",
+                unit=unit,
+                type_="suite_checkpoint",
             )
-            unit.pop("suite_verification_pending", None)
-            unit.pop("suite_armed_by_fix", None)
-            unit["verify_fix_attempts"]["pre_seal"] = 0
-            closed = self._complete_seal_from_reviews(
-                unit, verification_event=event
-            )
-            return "fixer suite result reused; %s" % closed
-
-        verification_changed = []
-        boundary = "final"
-        self._mark_busy(
-            "verification (%s)" % boundary, "verification", None
+            self._save()
+            raise StopStep("suite checkpoint produced no result")
+        boundaries = list(
+            getattr(result, "call_boundary_results", None) or []
         )
-        verification_started = time.monotonic()
-        try:
-            ok, output = run_verification(
-                commands,
-                self.workspace,
-                self.config.get("verification_timeout"),
+        if not boundaries or not isinstance(boundaries[-1], dict):
+            st.fail_run(
+                self.state,
+                "suite checkpoint lost its repository boundary result",
+                unit=unit,
+                type_="canonical_plan_boundary",
             )
-        finally:
-            verification_duration_s = max(
-                0.0, time.monotonic() - verification_started
+            self._save()
+            raise StopStep("suite checkpoint boundary unavailable")
+        call_boundary = boundaries[-1]
+        accepted = call_boundary.get("accept_reply") is True
+        returned_status = output.get("status")
+        status = returned_status if accepted else "invalidated"
+        duration_s, token_usage, token_usage_partial = (
+            self._call_accounting(result)
+        )
+        actual_family, actual_model, actual_effort = self._result_identity(
+            result, family, model, effort
+        )
+        event_fields = {
+            "unit": st.unit_key(unit),
+            "stage": stage,
+            "boundary": "final",
+            "cadence": cadence,
+            "status": status,
+            "ok": bool(
+                accepted and returned_status in ("passed", "no_suite")
+            ),
+            "stable": accepted,
+            "commands": (
+                copy.deepcopy(output.get("commands") or [])
+                if accepted else []
+            ),
+            "results": (
+                copy.deepcopy(output.get("results") or [])
+                if accepted else []
+            ),
+            "candidate_before": call_boundary.get(
+                "source_base_revision"
+            ),
+            "candidate_after": call_boundary.get("accepted_revision"),
+            "vacuous": (
+                True if accepted and returned_status == "no_suite" else None
+            ),
+            "raw_path": raw_path,
+            "family": actual_family,
+            "model": actual_model,
+            "effort": actual_effort,
+            "duration_s": duration_s,
+            "token_usage": copy.deepcopy(token_usage),
+            "token_usage_partial": bool(
+                token_usage_partial or token_usage is None
+            ),
+            "cost": copy.deepcopy(getattr(result, "cost", None)),
+            "cost_partial": bool(
+                getattr(result, "cost_partial", False)
+                or getattr(result, "cost", None) is None
+            ),
+            **self._prompt_set_fallback_fields(result),
+        }
+        if accepted and "authority" in output:
+            event_fields["authority"] = copy.deepcopy(output["authority"])
+        if accepted and returned_status == "failed":
+            event_fields["failure_account"] = copy.deepcopy(
+                output["failure_account"]
             )
-            self._clear_busy()
-        verification_after = self._snapshot()
-        verification_changed = self._snapshot_diff(
-            verification_before, verification_after
-        )
-        candidate_after = self._verification_candidate_fingerprint(
-            verification_after
-        )
+        if accepted and returned_status == "blocked":
+            event_fields["blocked_reason"] = output["blocked_reason"]
+        if not accepted:
+            event_fields["returned_status"] = returned_status
+            event_fields["plan_changed"] = bool(
+                call_boundary.get("plan_changed")
+            )
         verification_event = st.append_event(
-            self.state,
-            "verification",
-            unit=st.unit_key(unit),
-            stage=stage,
-            boundary=boundary,
-            cadence=cadence,
-            ok=ok,
-            commands=list(commands),
-            candidate_before=candidate_before,
-            candidate_after=candidate_after,
-            stable=not bool(verification_changed),
-            vacuous=(not commands) or None,
-            duration_s=verification_duration_s,
-            output_tail=(output or "")[-2000:],
+            self.state, "verification", **event_fields
         )
 
-        if verification_changed:
-            st.restart_reviews_after_candidate_change(
+        if not accepted:
+            self._save()
+            return (
+                "suite checkpoint result invalidated by its repository "
+                "boundary; fresh checkpoint remains due"
+            )
+        if returned_status == "blocked":
+            st.fail_run(
                 self.state,
-                unit,
-                "verification changed candidate bytes: %s"
-                % runners.format_changes(verification_changed),
+                "suite checkpoint blocked: %s"
+                % output.get("blocked_reason", "unspecified"),
+                unit=unit,
+                type_="suite_checkpoint",
             )
-        if ok:
-            # A mechanical pass closes any pending suite-repair episode.
-            unit.pop("suite_verification_pending", None)
-            unit.pop("suite_armed_by_fix", None)
-            unit["verify_fix_attempts"]["pre_seal"] = 0
-            if verification_changed and stage == st.U_PRE_SEAL_VERIFY:
-                st.transition_unit(
-                    self.state,
-                    unit,
-                    st.U_PRE_REVIEW_VERIFY,
-                    reason=("verification changed candidate bytes; "
-                            "review approvals invalidated"),
-                )
-                return (
-                    "verification ok but changed candidate bytes; "
-                    "review cycle restarted"
-                )
-            sealed = self._complete_seal_from_reviews(
-                unit, verification_event=verification_event
-            )
-            return "verification ok (%d command(s)); %s" % (
-                len(commands), sealed
-            )
-        unit["verify_fix_attempts"]["pre_seal"] += 1
-        unit.pop("last_verification_output", None)
-        # Keep a unique source signal solely for durable episode identity and
-        # the optional rethink handoff. The fixer receives no parsed failure
-        # or output tail; it diagnoses the live suite itself.
-        seq = unit.setdefault(
-            "verify_episode_seq", {"pre_review": 0, "pre_seal": 0}
+            self._save()
+            raise StopStep("suite checkpoint blocked")
+        if returned_status == "failed":
+            # Slice 13 consumes this exact event into the non-deferrable
+            # synthetic finding and fresh checkpoint lifecycle.
+            self._save()
+            return "suite checkpoint failed; failure account recorded"
+
+        unit.pop("suite_verification_pending", None)
+        unit.pop("suite_armed_by_fix", None)
+        unit["verify_fix_attempts"]["pre_seal"] = 0
+        closed = self._complete_seal_from_reviews(
+            unit, verification_event=verification_event
         )
-        seq.setdefault("pre_seal", 0)
-        seq["pre_seal"] += 1
-        n_episode = seq["pre_seal"]
-        st.enter_fix_episode(
-            self.state,
-            unit,
-            [
-                {
-                    "id": "V1",
-                    "severity": "P1",
-                    "summary": "the configured full verification suite is "
-                    "not green",
-                    "validity": {
-                        "permitted_baseline": (
-                            "the configured verification suite passes"
-                        ),
-                        "actual_outcome": (
-                            "the configured verification suite failed"
-                        ),
-                        "incremental_harm": (
-                            "the candidate cannot demonstrate its required "
-                            "verification gate"
-                        ),
-                        "exceeds_baseline": True,
-                    },
-                }
-            ],
-            "verification",
-            None,
-            "%s-verify-pre_seal-%d" % (st.unit_key(unit), n_episode),
-            (st.U_PRE_REVIEW_VERIFY
-             if verification_changed else stage),
-        )
-        return "verification failed; full-suite repair queued"
+        return "suite checkpoint %s; %s" % (returned_status, closed)
 
     def _preserve_reclassify_parent(self, unit, parent_call, reason):
         """Keep a completed review visible when child admission stops."""

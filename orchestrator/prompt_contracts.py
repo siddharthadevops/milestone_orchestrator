@@ -515,22 +515,6 @@ def _suite_checkpoint(obj, bound, options, ctx):
     codes = _results(
         _require(obj, "results", list, ctx), commands, "%s.results" % ctx
     )
-    unsafe_commands = []
-    for index, command in enumerate(commands):
-        try:
-            contracts.validate_suite_command(
-                command, "%s.commands[%d]" % (ctx, index)
-            )
-        except contracts.ContractError:
-            unsafe_commands.append(command)
-    if unsafe_commands:
-        if status != "blocked" or codes:
-            raise contracts.ContractError(
-                "%s: a no-op suite command requires blocked without execution"
-                % ctx
-            )
-        _text(obj, "blocked_reason", ctx)
-        return
     if status == "blocked":
         _text(obj, "blocked_reason", ctx)
         if any(codes) or (commands and len(codes) == len(commands)):
