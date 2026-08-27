@@ -163,11 +163,8 @@ class SuiteCheckpointCallTest(unittest.TestCase):
             response["questions"] = questions
         return response
 
-    def test_default_config_declares_checkpoint_suite(self):
-        self.assertEqual(
-            driver.load_config()["verification"],
-            [driver.CHECKPOINT_SUITE_COMMAND],
-        )
+    def test_default_config_discovers_repository_suite(self):
+        self.assertNotIn("verification", driver.load_config())
 
     def _subject(self, response, side_effect=None):
         return driver.Driver(

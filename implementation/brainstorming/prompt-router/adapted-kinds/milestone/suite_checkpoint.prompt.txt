@@ -43,9 +43,10 @@ CHECKPOINT LAW
   `blocked` without running it; configured authority does not waive these
   execution-safety requirements.
 - Stop after the first failure and report it. Do not repair it. A later
-  ordinary fix/review cycle will lead to a fresh checkpoint call. Put the
-  complete actionable diagnostics in `failure_account`; the driver preserves
-  that account verbatim in the synthetic finding given to the fixer.
+  dedicated full-suite fixer receives this command plan and the complete
+  actionable diagnostics in `failure_account`. Its `status: ok` certifies
+  that the plan passed on its final bytes; unchanged bytes reuse that proof
+  instead of executing another checkpoint.
 - `no_suite` is valid only after inspecting the repository authorities and
   finding that no complete suite exists, and only when no operator commands
   were supplied; cite that evidence explicitly.

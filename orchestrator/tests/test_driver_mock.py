@@ -614,7 +614,6 @@ class TestHappyLifecycle(DriverTestCase):
                 step("delta_review", report("delta_review"), family="codex"),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                suite_checkpoint_step(VERIFY_CMD),
             ])
             _actions, final = self.drive(driver)
 
@@ -690,7 +689,7 @@ class TestHappyLifecycle(DriverTestCase):
                     ("slice_impl-01-codex-r6", "delta_review", "codex"),
                     ("slice_impl-01-codex-r7", "review_round", "codex"),
                     ("slice_impl-01-claude-r2", "review_round", "claude"),
-                    # The failed checkpoint enters the ordinary fixer path,
+                    # The failed checkpoint enters the full-suite fixer path,
                     # including delta review before fresh whole-artifact looks.
                     ("slice_impl-01-codex-r8", "fix_findings", "codex"),
                     ("slice_impl-01-codex-r9", "delta_review", "codex"),
@@ -793,7 +792,8 @@ class TestHappyLifecycle(DriverTestCase):
 
             # Documentation never runs the suite. The final logical slice
             # reaches the milestone-end checkpoint, whose first attempt
-            # exposes the div bug and whose fresh post-fix attempt passes.
+            # exposes the div bug. The fixer certifies the repaired bytes and
+            # the clean post-fix reviews reuse that proof.
             verifs = [e for e in state["events"] if e["type"] == "verification"]
             self.assertEqual([e["ok"] for e in verifs if e["unit"] == "skeleton"],
                              [])
@@ -803,14 +803,19 @@ class TestHappyLifecycle(DriverTestCase):
             )
             self.assertEqual(
                 [e["ok"] for e in verifs if e["unit"] == "slice_impl-01"],
-                [False, True],
+                [False, True, True],
             )
             impl_verifs = [
                 e for e in verifs if e["unit"] == "slice_impl-01"
             ]
             self.assertEqual(
                 [e["boundary"] for e in impl_verifs],
-                ["final", "final"],
+                ["final", "final", "final"],
+            )
+            self.assertTrue(impl_verifs[1].get("fixer_certified"))
+            self.assertTrue(impl_verifs[2].get("reused"))
+            self.assertEqual(
+                impl_verifs[2]["reused_from_seq"], impl_verifs[1]["seq"]
             )
             self.assertTrue(all(
                 e["cadence"] == "milestone_final" for e in impl_verifs

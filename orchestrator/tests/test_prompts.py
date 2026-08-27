@@ -1346,12 +1346,23 @@ class TestVerificationProtocol(unittest.TestCase):
         self.assertNotIn("suite_command", prompt)
         self.assertNotIn("Scheduled full-suite commands", prompt)
 
-    def test_fixer_never_runs_the_full_suite(self):
-        prompt = normalized(prompts.build_fix_findings(
+    def test_only_a_failed_checkpoint_assigns_the_full_suite_to_a_fixer(self):
+        ordinary = normalized(prompts.build_fix_findings(
             FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
             unit_kind="slice_impl"))
-        self.assertIn("never the repo's full suite", prompt)
-        self.assertIn("the driver runs it at scheduled checkpoints", prompt)
+        self.assertIn("In an ordinary fix pass", ordinary)
+        self.assertNotIn("This fix episode owns the failed", ordinary)
+
+        repair = normalized(prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [],
+            unit_kind="slice_impl",
+            suite_repair_commands=["python3 -m unittest"],
+            suite_repair_cadence="milestone_final",
+        ))
+        self.assertIn("FULL-SUITE REPAIR", repair)
+        self.assertIn("This fix episode owns the failed milestone_final", repair)
+        self.assertIn("python3 -m unittest", repair)
+        self.assertIn("will not execute the suite again", repair)
 
 
 class TestSequentialImplementationScope(unittest.TestCase):

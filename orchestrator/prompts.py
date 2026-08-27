@@ -585,11 +585,31 @@ FIX_VERDICT_ACCOUNT_BLOCK = (
 )
 
 FIX_SELF_CHECK_BLOCK = (
-    "- Run cheap focused checks when relevant, never the repo's full suite;\n"
-    "  the driver runs it at scheduled checkpoints. Before returning, verify\n"
+    "- In an ordinary fix pass, run cheap focused checks when relevant and\n"
+    "  leave the repo's full suite to its scheduled checkpoint. A supplied\n"
+    "  FULL-SUITE REPAIR block is the sole exception. Before returning, verify\n"
     "  the pending changes cover every `fixed` finding and keep directly\n"
     "  touched statuses and acceptance criteria coherent.\n"
 )
+
+
+def suite_repair_block(commands, cadence):
+    """Render the driver-owned exception for a failed scheduled suite."""
+    return (
+        "FULL-SUITE REPAIR\n"
+        "- This fix episode owns the failed %s checkpoint. Run every command\n"
+        "  below, in order, from the workspace root after making any justified\n"
+        "  repair. A clean rerun with no workspace edit is also a valid result.\n"
+        "- In this call, `status: \"ok\"` certifies that the complete command\n"
+        "  list passed on the final workspace bytes. The driver trusts that\n"
+        "  certification and will not execute the suite again on those bytes.\n"
+        "  Return top-level `blocked` if you cannot leave the suite green.\n"
+        "- Complete-suite commands:\n%s\n\n"
+        % (
+            cadence,
+            json.dumps(list(commands), ensure_ascii=False, indent=2),
+        )
+    )
 
 DELTA_COVERAGE_LINE = (
     "DELTA CHECK\n"
@@ -2356,6 +2376,8 @@ def build_fix_findings(
     implementation_scope=None,
     producer_planning=False,
     materials=None,
+    suite_repair_commands=None,
+    suite_repair_cadence=None,
 ):
     # `gap_enabled` answers only whether THIS fixer may emit a new gap.  A
     # legacy repair fixer deliberately cannot open a nested gap, but it still
@@ -2582,6 +2604,13 @@ def build_fix_findings(
         (_fix_gap_block() if gap_enabled else "")
         if legacy_design_process else _design_rethink_block(fixer=True)
     )
+    suite_repair = ""
+    if suite_repair_commands is not None:
+        if not suite_repair_cadence:
+            raise ValueError("suite repair cadence is required")
+        suite_repair = suite_repair_block(
+            suite_repair_commands, suite_repair_cadence
+        )
     task_line = "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
     work_block = (
         _fixer_adversarial_block()
@@ -2626,6 +2655,7 @@ def build_fix_findings(
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + work_block
+        + suite_repair
         + decision_block
         + quality_block
         + _debt_block(debt)

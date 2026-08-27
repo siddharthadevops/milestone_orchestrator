@@ -63,6 +63,19 @@
       },
       {
         "text": [
+          "{{suite_repair}}"
+        ],
+        "variables": [
+          {
+            "name": "suite_repair",
+            "required": false,
+            "drop_unit_if_absent": true,
+            "description": "Driver-owned full-suite repair assignment, supplied only when this fixer follows a failed scheduled checkpoint."
+          }
+        ]
+      },
+      {
+        "text": [
           "FIX DECISION TABLE (exactly once per queued finding)",
           "- valid -> `fixed`; apply the fix now.",
           "- invalid -> `rejected` directly. If ambiguity caused the",
@@ -112,8 +125,9 @@
           "- Do not triage from memory, chat, or prior review authority. Use",
           "  the finding only to locate evidence; decide from the current",
           "  artifact.",
-          "- Run cheap focused checks when relevant; the full test suite is",
-          "  run by someone else — do not run it.",
+          "- In an ordinary fix pass, run cheap focused checks when relevant",
+          "  and leave the full suite to its scheduled checkpoint. A supplied",
+          "  FULL-SUITE REPAIR block is the sole exception.",
           "- Before returning, verify the pending changes cover every `fixed`",
           "  finding and keep directly touched statuses and acceptance",
           "  criteria coherent."
@@ -188,7 +202,9 @@
           "field explicitly required by an active project-safeguard or",
           "active project block above. Plan edits live only in the canonical skeleton",
           "block; never duplicate them in the reply. A fixer never invokes, spawns,",
-          "or consults another LLM or agent; rejection is its own evidence-backed judgment."
+          "or consults another LLM or agent; rejection is its own evidence-backed judgment.",
+          "When the prompt supplies a FULL-SUITE REPAIR block, `status: \"ok\"` also",
+          "certifies that its complete command list passed on the final workspace bytes."
         ],
         "variables": []
       },

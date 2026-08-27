@@ -2,7 +2,7 @@
 
 ## Commands
 
-Normal milestone checkpoint (also the default `suite_checkpoint` command):
+Repository-specific normal milestone checkpoint command:
 
     python3 -m unittest orchestrator.tests.suite_checkpoint
 

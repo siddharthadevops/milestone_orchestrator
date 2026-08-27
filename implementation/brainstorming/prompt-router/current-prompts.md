@@ -1510,7 +1510,7 @@ PROCESS AUTHORITY
 OUTPUT CONTRACT (mandatory)
 Return exactly one JSON object; no prose or markdown fences.
 
-Clean or findings:
+Completed review:
 {"status":"ok","kind":"<echo KIND>","findings":[<finding>, ...],
  "notes":"<optional short note>"}
 Each finding is exactly:
@@ -1827,7 +1827,7 @@ PROCESS AUTHORITY
 OUTPUT CONTRACT (mandatory)
 Return exactly one JSON object; no prose or markdown fences.
 
-Clean or findings:
+Completed review:
 {"status":"ok","kind":"<echo KIND>","findings":[<finding>, ...],
  "notes":"<optional short note>"}
 Each finding is exactly:
@@ -2373,8 +2373,9 @@ is invalid: use `rejected` after consultation, or
 `rejected_adjudicated` for a settled duplicate.
 - Do not triage from memory, chat, or prior review authority. Use the
   finding only to locate evidence; decide from the current artifact.
-- Run cheap focused checks when relevant, never the repo's full suite;
-  the driver runs it at scheduled checkpoints. Before returning, verify
+- In an ordinary fix pass, run cheap focused checks when relevant and
+  leave the repo's full suite to its scheduled checkpoint. A supplied
+  FULL-SUITE REPAIR block is the sole exception. Before returning, verify
   the pending changes cover every `fixed` finding and keep directly
   touched statuses and acceptance criteria coherent.
 - Apply the machinery check once to this coherent fix pass. For editable

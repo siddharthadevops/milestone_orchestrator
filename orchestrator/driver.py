@@ -56,11 +56,6 @@ FULL_VERIFICATION_SLICE_INTERVAL = 4
 class _NoIndependentReclassifier(runners.RunnerError):
     """Current structural policy leaves no separate rating call."""
 
-CHECKPOINT_SUITE_COMMAND = (
-    "python3 -m unittest orchestrator.tests.suite_checkpoint"
-)
-
-
 DEFAULT_CONFIG = {
     "families_order": ["codex", "claude"],
     "fix_family": None,  # default: first family in families_order
@@ -148,9 +143,6 @@ DEFAULT_CONFIG = {
         "unconfirmed_grace_s": 180,
         "confirmed_grace_s": 600,
     },
-    # The normal milestone gate is intentionally proportional. Releases and
-    # deliberate deep checks run orchestrator.tests.suite_extended manually.
-    "verification": [CHECKPOINT_SUITE_COMMAND],
     # Unlimited by default, same philosophy as worker timeouts: a real
     # suite may take 15+ minutes and a gate that kills it converts honest
     # work into failures. Set a number (seconds) to cap it per run.
@@ -1362,6 +1354,36 @@ class Driver(object):
             operator_bytes
         ).hexdigest()
 
+    def _matching_fixer_verification(
+        self, unit, cadence, fingerprint, configured_commands
+    ):
+        """Return a fixer-owned suite success for these exact inputs."""
+        barriers = st.reconciliation_invalidation_barriers(self.state)
+        for event in reversed(self.state.get("events") or []):
+            if not st.event_survives_reconciliation_barrier(
+                self.state, event, barriers
+            ):
+                continue
+            if (
+                event.get("type") == "verification"
+                and event.get("unit") == st.unit_key(unit)
+                and event.get("cadence") == cadence
+                and event.get("status") == "passed"
+                and event.get("ok") is True
+                and event.get("stable") is True
+                and event.get("fixer_certified") is True
+                and not event.get("reused")
+                and event.get("candidate_after") == fingerprint
+                and isinstance(event.get("commands"), list)
+                and bool(event.get("commands"))
+                and (
+                    configured_commands is None
+                    or event.get("commands") == configured_commands
+                )
+            ):
+                return event
+        return None
+
     def _latest_full_verification_checkpoint(self):
         """Latest full-suite proof whose logical slice actually closed.
 
@@ -2065,6 +2087,7 @@ class Driver(object):
                 correction=repair_error,
                 fixer_recovery_state=context.get("fixer_recovery_state"),
                 design_correction=context.get("design_correction"),
+                suite_repair=context.get("suite_repair"),
             )
             editing = kind == contracts.KIND_FIX_FINDINGS
             snapshot = canonical_plan.begin_author_call(
@@ -10283,6 +10306,12 @@ class Driver(object):
     def _do_fix(self):
         unit = st.current_unit(self.state)
         source = unit.get("fix_source") or {}
+        suite_repair = (
+            source.get("suite_repair")
+            if source.get("origin_type") == "suite_checkpoint"
+            and isinstance(source.get("suite_repair"), dict)
+            else None
+        )
         max_loops = self.config.get("max_fix_loops", 6)
         cap_agreement = (source.get("brainstorming_agreement") or {})
         mandatory_application_retry = bool(
@@ -10443,6 +10472,12 @@ class Driver(object):
             design_correction=design_context,
             editable_design_paths=editable_design_paths,
             implementation_scope=self._implementation_scope(unit),
+            suite_repair_commands=(
+                suite_repair.get("commands") if suite_repair else None
+            ),
+            suite_repair_cadence=(
+                suite_repair.get("cadence") if suite_repair else None
+            ),
             )
             application_handoff = self._brainstorming_application_handoff(
                 unit
@@ -10557,6 +10592,10 @@ class Driver(object):
                                     )
                                 }
                                 if killed_notice else {}
+                            ),
+                            **(
+                                {"suite_repair": suite_repair}
+                                if suite_repair else {}
                             ),
                         },
                         queued_findings=copy.deepcopy(
@@ -10902,6 +10941,7 @@ class Driver(object):
                     if (fix_model or fix_effort)
                     else {}
                 ),
+                **({"suite_repair": True} if suite_repair else {}),
                 **(
                     {
                         "brainstorming_no_implementation_finding_id":
@@ -10973,6 +11013,64 @@ class Driver(object):
                 candidate_changed=bool(fix_workspace_changed),
             )
             return "Brainstorming result applied; deferred fixer restored"
+        if suite_repair:
+            certified_fingerprint = self._verification_candidate_fingerprint(
+                post_guard_snapshot
+            )
+            st.append_event(
+                self.state,
+                "verification",
+                unit=st.unit_key(unit),
+                stage="fixer",
+                boundary="final",
+                cadence=suite_repair["cadence"],
+                status="passed",
+                ok=True,
+                stable=True,
+                commands=copy.deepcopy(suite_repair["commands"]),
+                results=[],
+                candidate_before=certified_fingerprint,
+                candidate_after=certified_fingerprint,
+                fixer_certified=True,
+                raw_path=raw_path,
+                family=family,
+                model=fix_model,
+                effort=fix_effort,
+                duration_s=getattr(result, "duration_s", None),
+                output_tail=(
+                    "(fixer reported the complete suite green on final bytes)"
+                ),
+                token_usage=copy.deepcopy(
+                    getattr(result, "token_usage", None)
+                ),
+                token_usage_partial=bool(
+                    getattr(result, "token_usage_partial", False)
+                    or getattr(result, "token_usage", None) is None
+                ),
+                cost=copy.deepcopy(getattr(result, "cost", None)),
+                cost_partial=bool(
+                    getattr(result, "cost_partial", False)
+                    or getattr(result, "cost", None) is None
+                ),
+                **self._prompt_set_fallback_evidence(result),
+            )
+            unit["verify_fix_attempts"]["pre_seal"] = 0
+            if not fix_workspace_changed and source.get("type") == (
+                "suite_checkpoint"
+            ):
+                target = source.get("return_to") or st.U_PRE_SEAL_VERIFY
+                unit["fix_queue"] = []
+                unit["fix_source"] = None
+                unit.pop("phantom_retried", None)
+                st.transition_unit(
+                    self.state,
+                    unit,
+                    target,
+                    reason=(
+                        "full suite certified by fixer; no candidate delta"
+                    ),
+                )
+                return "full suite green; continuing without re-verification"
         if gitops.enabled(self.config):
             st.transition_unit(
                 self.state, unit, st.U_DELTA_REVIEW, reason="fix applied"
@@ -11696,6 +11794,41 @@ class Driver(object):
         configured_commands = self._suite_checkpoint_configured_commands(
             unit
         )
+        candidate_fingerprint = self._verification_candidate_fingerprint()
+        fixer_verification = self._matching_fixer_verification(
+            unit,
+            cadence,
+            candidate_fingerprint,
+            configured_commands,
+        )
+        if fixer_verification is not None:
+            verification_event = st.append_event(
+                self.state,
+                "verification",
+                unit=st.unit_key(unit),
+                stage=stage,
+                boundary="final",
+                cadence=cadence,
+                status="passed",
+                ok=True,
+                stable=True,
+                commands=copy.deepcopy(fixer_verification["commands"]),
+                results=copy.deepcopy(fixer_verification.get("results") or []),
+                candidate_before=candidate_fingerprint,
+                candidate_after=candidate_fingerprint,
+                reused=True,
+                reused_from_seq=fixer_verification["seq"],
+                fixer_certified=True,
+                output_tail=(
+                    "(reused: fixer certified these exact bytes and commands "
+                    "at event %d)" % fixer_verification["seq"]
+                ),
+            )
+            unit["verify_fix_attempts"]["pre_seal"] = 0
+            closed = self._complete_seal_from_reviews(
+                unit, verification_event=verification_event
+            )
+            return "fixer suite result reused; %s" % closed
         if self.model_profiles_home is not None:
             family, model, effort = self._staff(
                 "implement", material="code", episode_unit=unit
@@ -11841,7 +11974,7 @@ class Driver(object):
                     ),
                     "incremental_harm": (
                         "The current candidate cannot seal until the failure "
-                        "is triaged and a fresh checkpoint passes."
+                        "is triaged and the complete suite passes."
                     ),
                     "exceeds_baseline": True,
                 },
@@ -11850,8 +11983,9 @@ class Driver(object):
                     "not ready to seal."
                 ),
                 "example": (
-                    "The fixer may repair or reject this diagnosis, but the "
-                    "driver must run a fresh checkpoint either way."
+                    "The fixer may repair the cause or confirm a transient "
+                    "failure, then certifies the complete suite on its final "
+                    "workspace bytes."
                 ),
                 "contests": None,
                 # Queue-owned evidence, intentionally opaque to the driver.
@@ -11870,8 +12004,13 @@ class Driver(object):
                 ),
                 return_to=st.U_PRE_SEAL_VERIFY,
             )
+            unit["fix_source"]["suite_repair"] = {
+                "verification_event_seq": verification_event["seq"],
+                "cadence": cadence,
+                "commands": copy.deepcopy(output["commands"]),
+            }
             self._save()
-            return "suite checkpoint failed; ordinary fixer queued"
+            return "suite checkpoint failed; full-suite fixer queued"
 
         unit["verify_fix_attempts"]["pre_seal"] = 0
         closed = self._complete_seal_from_reviews(

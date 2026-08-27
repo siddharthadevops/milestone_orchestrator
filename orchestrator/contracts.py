@@ -1360,7 +1360,7 @@ Kind fix_findings adds:
 REPORT_CONTRACT_TEXT = """OUTPUT CONTRACT (mandatory)
 Return exactly one JSON object; no prose or markdown fences.
 
-Clean or findings:
+Completed review:
 {"status":"ok","kind":"<echo KIND>","findings":[<finding>, ...],
  "notes":"<optional short note>"}
 Each finding is exactly:
@@ -1413,6 +1413,8 @@ cannot be demonstrated, the finding is invalid: use `rejected`
 both rejection dispositions require exceeds_baseline=false. Include extra
 fields required by an active block. A fixer never invokes, spawns, or consults
 another LLM or agent; rejection is its own evidence-backed judgment.
+When the prompt supplies a FULL-SUITE REPAIR block, `status: "ok"` also
+certifies that its complete command list passed on the final workspace bytes.
 
 Impossible worker task (not a finding disposition):
 {"status":"blocked","kind":"fix_findings","blocked_reason":"..."}

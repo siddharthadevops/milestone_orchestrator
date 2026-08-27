@@ -214,6 +214,7 @@ def prepare(
     fixer_recovery_state=None,
     design_correction=None,
     configured_suite_commands=None,
+    suite_repair=None,
 ):
     """Freshly resolve, render, bind, and pair one direct technical charge."""
     if job not in JUDGMENT_JOBS:
@@ -225,7 +226,7 @@ def prepare(
     if set(values).intersection((
         "operator_amendments", "ecosystem_map", "queued_findings",
         "contract_correction", "fixer_recovery_state",
-        "verification_commands",
+        "verification_commands", "suite_repair",
     )):
         raise prompt_router.PromptRouterError(
             "judgment-owned values are adapter-owned"
@@ -264,6 +265,29 @@ def prepare(
         )
     else:
         frozen_queued_findings = None
+
+    frozen_suite_repair = None
+    if suite_repair is not None:
+        if kind != "fix_findings" or not isinstance(suite_repair, dict):
+            raise prompt_router.PromptRouterError(
+                "suite repair is valid only for fix_findings"
+            )
+        commands = suite_repair.get("commands")
+        cadence = suite_repair.get("cadence")
+        if (
+            not isinstance(commands, list)
+            or not commands
+            or any(
+                not isinstance(command, str) or not command.strip()
+                for command in commands
+            )
+            or not isinstance(cadence, str)
+            or not cadence.strip()
+        ):
+            raise prompt_router.PromptRouterError(
+                "suite repair requires commands and cadence"
+            )
+        frozen_suite_repair = copy.deepcopy(suite_repair)
 
     if design_correction is None:
         consumer_sections = ()
@@ -336,6 +360,11 @@ def prepare(
             ensure_ascii=False,
             separators=(",", ":"),
         )
+    if frozen_suite_repair is not None:
+        charge_values["suite_repair"] = prompts.suite_repair_block(
+            frozen_suite_repair["commands"],
+            frozen_suite_repair["cadence"],
+        ).rstrip("\n")
 
     frozen_extensions = ()
     frozen_roots = ()
@@ -389,6 +418,7 @@ def prepare(
             "contract_correction": correction is not None,
             "fixer_recovery_state": fixer_recovery_state is not None,
             "verification_commands": frozen_suite_commands is not None,
+            "suite_repair": frozen_suite_repair is not None,
         }
         for variable, supplied in dynamic_payloads.items():
             declarations = mounted_variable_declarations[variable]

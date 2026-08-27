@@ -417,6 +417,96 @@ class JudgmentCallPreparationTest(unittest.TestCase):
                 queued_findings=[],
             )
 
+    def test_failed_checkpoint_mounts_one_driver_owned_suite_repair(self):
+        queued = [{
+            "id": "suite-checkpoint-7",
+            "severity": "P1",
+            "summary": "The complete suite checkpoint failed",
+        }]
+        repair = {
+            "commands": ["python3 -m unittest"],
+            "cadence": "milestone_final",
+        }
+        prepared = self.prepare(
+            "fix_findings@slice_impl",
+            queued_findings=queued,
+            suite_repair=repair,
+        )
+
+        self.assertEqual(
+            prepared.prompt.count("This fix episode owns the failed"), 1
+        )
+        self.assertIn("python3 -m unittest", prepared.prompt)
+        self.assertIn("will not execute the suite again", prepared.prompt)
+        ordinary = self.prepare(
+            "fix_findings@slice_impl", queued_findings=queued
+        )
+        self.assertNotIn("This fix episode owns the failed", ordinary.prompt)
+
+        values = values_for(self.temp.name, "fix_findings@slice_impl")
+        values["suite_repair"] = "caller injection"
+        with self.assertRaises(ValueError):
+            judgment_calls.prepare(
+                self.temp.name,
+                job="fix_findings@slice_impl",
+                material="code",
+                values=values,
+                amendments=[],
+                queued_findings=queued,
+                suite_repair=repair,
+            )
+
+    def test_suite_repair_falls_back_from_an_older_prompt_rung(self):
+        self.assertTrue(prompt_sets.ensure_default(self.temp.name))
+        documents = copy.deepcopy(prompt_sets.default_seed().documents)
+        parts = documents["milestone/fix_findings.json"]["instructions"][
+            "parts"
+        ]
+        documents["milestone/fix_findings.json"]["instructions"]["parts"] = [
+            part
+            for part in parts
+            if not any(
+                variable.get("name") == "suite_repair"
+                for variable in part.get("variables", [])
+            )
+        ]
+        self.write_set("older-fixer", documents)
+        queued = [{
+            "id": "suite-checkpoint-7",
+            "severity": "P1",
+            "summary": "The complete suite checkpoint failed",
+        }]
+        prepared = self.prepare(
+            "fix_findings@slice_impl",
+            prompt_set="older-fixer",
+            queued_findings=queued,
+            suite_repair={
+                "commands": ["python3 -m unittest"],
+                "cadence": "milestone_final",
+            },
+        )
+
+        self.assertEqual(
+            prepared.prompt_set_fallback,
+            prompt_sets.PROMPT_SET_FALLBACK_DEFAULT,
+        )
+        self.assertIn("This fix episode owns the failed", prepared.prompt)
+
+        self.write_set("default", documents)
+        prepared = self.prepare(
+            "fix_findings@slice_impl",
+            queued_findings=queued,
+            suite_repair={
+                "commands": ["python3 -m unittest"],
+                "cadence": "milestone_final",
+            },
+        )
+        self.assertEqual(
+            prepared.prompt_set_fallback,
+            prompt_sets.PROMPT_SET_FALLBACK_SEED,
+        )
+        self.assertIn("This fix episode owns the failed", prepared.prompt)
+
     def test_named_rungs_omitting_owned_payloads_fall_as_a_whole(self):
         self.assertTrue(prompt_sets.ensure_default(self.temp.name))
         cases = (

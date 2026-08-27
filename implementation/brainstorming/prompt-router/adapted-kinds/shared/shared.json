@@ -617,7 +617,7 @@
     },
     "review_contract": {
       "text": [
-        "Clean or findings:",
+        "Completed review:",
         "{\"status\":\"ok\",\"kind\":\"<echo KIND>\",\"findings\":[<finding>, ...],",
         " \"notes\":\"<optional short note>\"}",
         "Each finding is exactly:",

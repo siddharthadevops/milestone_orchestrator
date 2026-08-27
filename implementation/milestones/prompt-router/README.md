@@ -161,13 +161,15 @@ recorded in its README. The load-bearing ones this milestone implements in code:
   attempted results. With configured commands, the plan must echo that exact
   ordered list and `no_suite` is invalid: that list defines the run's complete
   verification gate and the agent neither narrows nor replaces it. Without a
-  configured list, repository evidence establishes completeness. Implementers and fixers neither return nor correct
-  `suite_command`. A failed checkpoint returns a complete `failure_account`,
-  which the driver preserves verbatim in a synthetic P1 finding. That finding
-  is non-deferable and non-reclassifiable; its fixer may dispute the diagnosis,
-  but the checkpoint still reruns and no seal can pass until a fresh unchanged
-  attempt returns `passed` or `no_suite`. It is the
-  only route that owns complete-suite execution. It uses the existing
+  configured list, repository evidence establishes completeness. Implementers
+  and ordinary fixers neither return nor correct `suite_command`. A failed
+  checkpoint returns a complete `failure_account`, which the driver preserves
+  verbatim in a synthetic P1 finding together with the complete command plan.
+  That finding is non-deferable and non-reclassifiable. Its dedicated fixer
+  owns the full-suite repair and `status: ok` certifies that the plan passed on
+  the final workspace bytes. The driver reuses that exact-byte proof instead
+  of executing another checkpoint; later byte or configured-command changes
+  invalidate it. The checkpoint uses the existing
   `implement` seat 1 for staffing (`suite_checkpoint@workspace` × `agent_call`
   × `code`); the checkpoint prompt makes that call
   report-only, so no new staffing role or hand-picked model exists. The driver

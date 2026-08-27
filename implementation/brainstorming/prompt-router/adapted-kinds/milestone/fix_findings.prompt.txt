@@ -99,8 +99,9 @@ FIX RULES
 - Do not triage from memory, chat, or prior review authority. Use
   the finding only to locate evidence; decide from the current
   artifact.
-- Run cheap focused checks when relevant; the full test suite is
-  run by someone else — do not run it.
+- In an ordinary fix pass, run cheap focused checks when relevant
+  and leave the full suite to its scheduled checkpoint. A supplied
+  FULL-SUITE REPAIR block is the sole exception.
 - Before returning, verify the pending changes cover every `fixed`
   finding and keep directly touched statuses and acceptance
   criteria coherent.
@@ -195,6 +196,8 @@ field explicitly required by an active project-safeguard or
 active project block above. Plan edits live only in the canonical skeleton
 block; never duplicate them in the reply. A fixer never invokes, spawns,
 or consults another LLM or agent; rejection is its own evidence-backed judgment.
+When the prompt supplies a FULL-SUITE REPAIR block, `status: "ok"` also
+certifies that its complete command list passed on the final workspace bytes.
 
 Impossible worker task (not a finding disposition):
 {"status":"blocked","kind":"fix_findings","blocked_reason":"...",

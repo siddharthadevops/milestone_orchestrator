@@ -83,8 +83,8 @@ The final gate must prove:
   apply;
 - all surviving valid plan changes enter the shared anchor/projection/range
   transition, while unchanged plans follow the job's ordinary lifecycle;
-- suite fourth/final cadence, failure-to-ordinary-fixer, and fresh checkpoint
-  completion work without shell execution or fixer certification;
+- suite fourth/final cadence, failure-to-dedicated-fixer, and exact-byte fixer
+  certification reuse work without driver shell execution;
 - schema-2 load/attach/resume is refused and schema-3 creation starts with a
   valid explicit amendments source;
 - service, CLI, fake-provider, Brainstorming, panel projection, ledger, and

@@ -1328,8 +1328,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                      'design_correction_verdict={decision, '
                                                                                      'reason}.'],
                                                                             'variables': []},
-                                              'review_contract': {'text': ['Clean or '
-                                                                           'findings:',
+                                              'review_contract': {'text': ['Completed '
+                                                                           'review:',
                                                                            '{"status":"ok","kind":"<echo '
                                                                            'KIND>","findings":[<finding>, '
                                                                            '...],',
@@ -3554,6 +3554,24 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                            'the '
                                                                                            'review '
                                                                                            'ledger.'}]},
+                                                            {'text': ['{{suite_repair}}'],
+                                                             'variables': [{'name': 'suite_repair',
+                                                                            'required': False,
+                                                                            'drop_unit_if_absent': True,
+                                                                            'description': 'Driver-owned '
+                                                                                           'full-suite '
+                                                                                           'repair '
+                                                                                           'assignment, '
+                                                                                           'supplied '
+                                                                                           'only '
+                                                                                           'when '
+                                                                                           'this '
+                                                                                           'fixer '
+                                                                                           'follows '
+                                                                                           'a '
+                                                                                           'failed '
+                                                                                           'scheduled '
+                                                                                           'checkpoint.'}]},
                                                             {'text': ['FIX DECISION '
                                                                       'TABLE (exactly '
                                                                       'once per queued '
@@ -3716,14 +3734,20 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'decide from the '
                                                                       'current',
                                                                       '  artifact.',
-                                                                      '- Run cheap '
+                                                                      '- In an '
+                                                                      'ordinary fix '
+                                                                      'pass, run cheap '
                                                                       'focused checks '
-                                                                      'when relevant; '
-                                                                      'the full test '
-                                                                      'suite is',
-                                                                      '  run by '
-                                                                      'someone else — '
-                                                                      'do not run it.',
+                                                                      'when relevant',
+                                                                      '  and leave the '
+                                                                      'full suite to '
+                                                                      'its scheduled '
+                                                                      'checkpoint. A '
+                                                                      'supplied',
+                                                                      '  FULL-SUITE '
+                                                                      'REPAIR block is '
+                                                                      'the sole '
+                                                                      'exception.',
                                                                       '- Before '
                                                                       'returning, '
                                                                       'verify the '
@@ -3891,7 +3915,26 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'is its '
                                                                             'own '
                                                                             'evidence-backed '
-                                                                            'judgment.'],
+                                                                            'judgment.',
+                                                                            'When the '
+                                                                            'prompt '
+                                                                            'supplies '
+                                                                            'a '
+                                                                            'FULL-SUITE '
+                                                                            'REPAIR '
+                                                                            'block, '
+                                                                            '`status: '
+                                                                            '"ok"` '
+                                                                            'also',
+                                                                            'certifies '
+                                                                            'that its '
+                                                                            'complete '
+                                                                            'command '
+                                                                            'list '
+                                                                            'passed on '
+                                                                            'the final '
+                                                                            'workspace '
+                                                                            'bytes.'],
                                                                    'variables': []},
                                                                   {'id': 'fix_blocked',
                                                                    'text': ['Impossible '
@@ -4326,29 +4369,37 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           'Do not '
                                                                           'repair it. '
                                                                           'A later',
-                                                                          '  ordinary '
-                                                                          'fix/review '
-                                                                          'cycle will '
-                                                                          'lead to a '
-                                                                          'fresh '
-                                                                          'checkpoint '
-                                                                          'call. Put '
-                                                                          'the',
-                                                                          '  complete '
+                                                                          '  dedicated '
+                                                                          'full-suite '
+                                                                          'fixer '
+                                                                          'receives '
+                                                                          'this '
+                                                                          'command '
+                                                                          'plan and '
+                                                                          'the '
+                                                                          'complete',
+                                                                          '  '
                                                                           'actionable '
                                                                           'diagnostics '
                                                                           'in '
-                                                                          '`failure_account`; '
-                                                                          'the driver '
-                                                                          'preserves',
-                                                                          '  that '
-                                                                          'account '
-                                                                          'verbatim in '
-                                                                          'the '
-                                                                          'synthetic '
-                                                                          'finding '
-                                                                          'given to '
-                                                                          'the fixer.',
+                                                                          '`failure_account`. '
+                                                                          'Its '
+                                                                          '`status: '
+                                                                          'ok` '
+                                                                          'certifies',
+                                                                          '  that the '
+                                                                          'plan passed '
+                                                                          'on its '
+                                                                          'final '
+                                                                          'bytes; '
+                                                                          'unchanged '
+                                                                          'bytes reuse '
+                                                                          'that proof',
+                                                                          '  instead '
+                                                                          'of '
+                                                                          'executing '
+                                                                          'another '
+                                                                          'checkpoint.',
                                                                           '- '
                                                                           '`no_suite` '
                                                                           'is valid '

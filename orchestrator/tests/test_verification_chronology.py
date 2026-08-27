@@ -234,6 +234,47 @@ class TestVerificationChronology(DriverTestCase):
     def _unit(state, key):
         return next(unit for unit in state["units"] if st.unit_key(unit) == key)
 
+    def test_fixer_suite_proof_is_exact_byte_and_command_scoped(self):
+        command = "python3 -m unittest"
+        with tempfile.TemporaryDirectory(prefix="orch-verify-proof-") as ws:
+            path = init_state(ws, make_config(verification=[command]))
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            unit = st.current_unit(driver.state)
+            fingerprint = driver._verification_candidate_fingerprint()
+            proof = st.append_event(
+                driver.state,
+                "verification",
+                unit=st.unit_key(unit),
+                cadence="milestone_final",
+                status="passed",
+                ok=True,
+                stable=True,
+                fixer_certified=True,
+                commands=[command],
+                candidate_after=fingerprint,
+            )
+
+            self.assertEqual(
+                driver._matching_fixer_verification(
+                    unit, "milestone_final", fingerprint, [command]
+                ),
+                proof,
+            )
+            self.assertIsNone(
+                driver._matching_fixer_verification(
+                    unit, "milestone_final", fingerprint, ["other-suite"]
+                )
+            )
+            write_file("later-edit.txt", "changed\n")(ws)
+            self.assertIsNone(
+                driver._matching_fixer_verification(
+                    unit,
+                    "milestone_final",
+                    driver._verification_candidate_fingerprint(),
+                    [command],
+                )
+            )
+
     def test_documentation_runs_no_full_suite_and_impl_starts_directly(self):
         counter = "docs-suite-count"
         command = _counter_command(counter)
@@ -616,24 +657,34 @@ class TestVerificationChronology(DriverTestCase):
                     family="codex",
                 ),
                 *_clean_reviews(),
-                _suite_step(command),
             ])
             _actions, final = self.drive(driver, max_steps=40)
 
             self.assertEqual(final.type, drv.A_DONE)
             self.assertEqual(mock.script, [])
+            suite_fix_prompt = next(
+                call[2]
+                for call in mock.calls
+                if call[1] == contracts.KIND_FIX_FINDINGS
+            )
+            self.assertIn("This fix episode owns the failed", suite_fix_prompt)
+            self.assertIn(command, suite_fix_prompt)
             state = st.load(path)
             events = self._verification_events(state)
-            self.assertEqual([event["ok"] for event in events], [False, True])
             self.assertEqual(
-                [event["status"] for event in events], ["failed", "passed"]
+                [event["ok"] for event in events], [False, True, True]
+            )
+            self.assertEqual(
+                [event["status"] for event in events],
+                ["failed", "passed", "passed"],
             )
             self.assertEqual(events[0].get("cadence"), "milestone_final")
-            self.assertFalse(any(
-                event.get("fixer_certified") or event.get("reused")
-                for event in events
-            ))
-            self.assertEqual(events[1].get("cadence"), "milestone_final")
+            self.assertTrue(events[1].get("fixer_certified"))
+            self.assertFalse(events[1].get("reused"))
+            self.assertTrue(events[2].get("fixer_certified"))
+            self.assertTrue(events[2].get("reused"))
+            self.assertEqual(events[2]["reused_from_seq"], events[1]["seq"])
+            self.assertEqual(events[2].get("cadence"), "milestone_final")
             self.assertFalse(any(
                 event.get("boundary") == "baseline" for event in events
             ))
@@ -667,7 +718,7 @@ class TestVerificationChronology(DriverTestCase):
             ]
             self.assertGreater(events[-1]["seq"], review_events[-1]["seq"])
 
-    def test_rejected_suite_diagnosis_still_requires_fresh_checkpoint(self):
+    def test_clean_flaky_rerun_is_trusted_without_fresh_checkpoint(self):
         command = "python3 -m unittest"
         with tempfile.TemporaryDirectory(prefix="orch-verify-reject-fix-") as ws:
             path = init_state(ws, make_config(verification=[command]))
@@ -696,18 +747,26 @@ class TestVerificationChronology(DriverTestCase):
                     ),
                     family="codex",
                 ),
-                _suite_step(command),
             ])
 
             _actions, final = self.drive(driver, max_steps=20)
 
             self.assertEqual(final.type, drv.A_DONE)
             self.assertEqual(mock.script, [])
+            suite_fix_prompt = next(
+                call[2]
+                for call in mock.calls
+                if call[1] == contracts.KIND_FIX_FINDINGS
+            )
+            self.assertIn("This fix episode owns the failed", suite_fix_prompt)
             events = self._verification_events(st.load(path))
             self.assertEqual(
-                [event["status"] for event in events], ["failed", "passed"]
+                [event["status"] for event in events],
+                ["failed", "passed", "passed"],
             )
-            self.assertFalse(any(event.get("fixer_certified") for event in events))
+            self.assertTrue(events[1].get("fixer_certified"))
+            self.assertTrue(events[2].get("reused"))
+            self.assertEqual(events[2]["reused_from_seq"], events[1]["seq"])
 
     def test_due_suite_fixer_commit_remains_in_reviewed_history(self):
         marker = "suite-green.marker"
@@ -769,7 +828,6 @@ class TestVerificationChronology(DriverTestCase):
                     family="codex",
                 ),
                 *_clean_reviews(),
-                _suite_step(command),
             ])
             _actions, final = self.drive(driver, max_steps=40)
 

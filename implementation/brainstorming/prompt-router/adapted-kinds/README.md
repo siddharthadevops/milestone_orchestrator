@@ -771,6 +771,16 @@ captured evidence it was pruned from.
     none. This supersedes decision 75 without changing the dynamic mounted-id
     reply contract or decision 76's absence of a length ceiling.
 
+78. **A suite fixer may certify the scheduled gate** (operator ruling,
+    2026-08-27): after a failed `suite_checkpoint`, the resulting fixer owns
+    the checkpoint's complete command plan. Its `status: ok` certifies that
+    every command passed on the final workspace bytes. Delta and whole-artifact
+    reviews still inspect changed work, but unchanged bytes reuse that exact
+    fixer certification instead of executing another checkpoint. Any later
+    byte or configured-command change invalidates the proof. This supersedes
+    the fresh-checkpoint portions of decisions 71 and 72; no output parser,
+    `tests_modified` declaration, or generic skip flag is introduced.
+
 ## Content observations left untouched (not adaptation's call)
 
 - The Dante questioner keeps its fiction wrapper and all-caps MANDATORY line.

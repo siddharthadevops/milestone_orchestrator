@@ -228,11 +228,11 @@ skeleton frames downstream kinds as **BASELINE** (adapted-kinds decision 20).
   first failure. Report the full plan, the authority proving it complete, the
   attempted exit results, and concise output evidence. A failure carries one
   complete actionable `failure_account`, preserved verbatim in the synthetic
-  P1 finding. It cannot be deferred or reclassified; after its ordinary
-  fix/delta/review cycle this same job reruns on the
-  corrected work tree; no fixer or implementer executes the complete suite.
-  A fixer's rejection cannot satisfy the gate: only a fresh unchanged
-  `passed`/`no_suite` attempt permits seal.
+  P1 finding. It cannot be deferred or reclassified. The resulting dedicated
+  fixer receives the complete command plan, runs it after any justified repair,
+  and its `status: ok` certifies the final workspace bytes. Delta and full
+  reviews still inspect changed work; when those bytes remain unchanged, the
+  driver reuses the fixer proof rather than executing this job again.
   Staffing reuses the existing `implement` seat 1 — the prompt, not a new role,
   makes this call report-only. The driver snapshots governed bytes, index, and
   HEAD for every status; any mutation invalidates the reply and is restored
@@ -241,16 +241,18 @@ skeleton frames downstream kinds as **BASELINE** (adapted-kinds decision 20).
   configured `no_suite`, and checks that results are the full passing plan or
   the exact failing prefix. Configured calls identify `operator_config`;
   discovery/no-suite calls supply non-empty `{path,basis}` evidence whose
-  workspace-relative paths must exist. A later checkpoint resolves afresh.
+  workspace-relative paths must exist. A later byte or configured-command
+  change invalidates a fixer certification and resolves afresh.
 - Output: `passed`, `failed`, `no_suite`, or `blocked`, with the fields required
   by that state. This is a bare technical kind with no QUESTIONS battery.
 - Not here: implementation craft law, reviews, fixes, `suite_command` discovery
   state, or command correction/adoption.
 
-Legacy discovered/corrected commands and suite-repair flags remain display-only.
-On resume, interrupted or accepted fixer work completes recovery plus its delta
-and full reviews; only a clean pre-seal boundary converts to one fresh checkpoint.
-Explicit operator-configured commands remain authoritative.
+Legacy discovered/corrected command fields remain display-only. On resume,
+interrupted or accepted fixer work completes recovery plus its delta and full
+reviews. A clean pre-seal boundary reuses an exact matching fixer certification;
+otherwise it dispatches a fresh checkpoint. Explicit operator-configured
+commands remain authoritative.
 
 ## 3. The genuinely universal core — two items, nothing more
 

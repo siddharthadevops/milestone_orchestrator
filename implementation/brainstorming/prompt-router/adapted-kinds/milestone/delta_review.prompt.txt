@@ -134,7 +134,7 @@ QUESTIONS (answer each in output, backed by an explanation)
 OUTPUT CONTRACT (mandatory)
 Return exactly one JSON object; no prose or markdown fences.
 
-Clean or findings:
+Completed review:
 {"status":"ok","kind":"<echo KIND>","findings":[<finding>, ...],
  "notes":"<optional short note>"}
 Each finding is exactly:

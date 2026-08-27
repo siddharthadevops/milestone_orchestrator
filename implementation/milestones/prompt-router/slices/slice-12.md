@@ -10,7 +10,7 @@ the complete suite itself.
 
 This slice owns the physical call, its contextual reply contract, and the
 read-only repository boundary. Slice 13 owns cadence and the failed-checkpoint
-fix/rerun lifecycle. Slice 14 removes the now-unreachable legacy command and
+fix/certification lifecycle. Slice 14 removes the now-unreachable legacy command and
 shell-verification lanes and activates the new schema after the driver drain.
 
 ## Authority and scope
@@ -67,7 +67,7 @@ for the operator.
 | Execution | one LLM call; the driver never runs the suite command | legacy deletion: Slice 14 |
 | Mutation | restore ordinary mutation; preserve valid block only; invalidate status | — |
 | Success | stable `passed` or `no_suite` may seal | cadence completion: Slice 13 |
-| Failure | preserve complete `failure_account` without sealing | synthetic P1/fixer/rerun: Slice 13 |
+| Failure | preserve complete `failure_account` without sealing | synthetic P1/fixer/certification: Slice 13 |
 | History | no discovered/corrected command is reused | state-field retirement: Slice 14 |
 
 ## Verification
@@ -85,8 +85,8 @@ Focused tests must prove:
 - ordinary mutation is restored and its result is discarded;
 - a valid block-only edit is preserved and its result is discarded, with the
   accepted A..B range routed through the shared reconciliation observer;
-- neither historical `suite_command` state nor fixer certification supplies
-  the command plan.
+- neither historical `suite_command` state nor an unrelated legacy fixer
+  certification supplies the command plan; only this failed attempt does.
 
 ## Explicit non-goals
 

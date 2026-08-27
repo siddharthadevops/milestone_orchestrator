@@ -146,8 +146,10 @@ slice and at milestone completion, the driver dispatches one routed
 `suite_checkpoint` LLM call. Explicit config `verification` supplies the exact
 ordered commands; otherwise the checkpoint agent inspects repository authority
 for the complete suite and may report `no_suite`. The driver executes no shell
-suite and implementers/fixers report no suite command. A failed checkpoint
-enters the ordinary fixer cycle and a fresh unchanged checkpoint remains due.
+suite and implementers report no suite command. A failed checkpoint assigns
+its complete command plan to a dedicated fixer. That fixer's `status: ok`
+certifies the final workspace bytes; the driver reuses the certification on
+those exact bytes instead of executing another checkpoint.
 Documentation does not run the full suite, and split implementation parts
 (`a`...`z`) still count as one logical slice. Focused checks remain the
 implementer's and fixer's ordinary feedback while bytes change; there are no
@@ -464,10 +466,11 @@ debt versus fixing. Deferred findings remain in the run's append-only debt
 history and unresolved debt stays available for operator review after closure;
 it does not block milestone completion.
 
-A failing scheduled suite opens a dedicated full-suite fixer call, not a synthetic
-review-finding dispute. The fixer receives the goal, reviewed design, project
-context, amendments, proportionality rules, and configured suite commands; it
-receives no parsed or truncated failure excerpt. It runs the complete suite,
+A failing scheduled suite opens the fixer's dedicated full-suite mode through
+the preserved synthetic P1. The fixer receives the goal, reviewed design, project
+context, amendments, proportionality rules, and the checkpoint command plan; it
+receives the checkpoint's exact preserved failure account, never a parsed or
+truncated substitute. It runs the complete suite,
 repairs only justified failures, and returns `ok` only after the final workspace
 bytes are green (`blocked` stops the run). That success is bound to the exact
 bytes and commands. Changed bytes still take the normal delta and full-review
@@ -555,7 +558,8 @@ The milestone closes from clean same-byte reviews without a seal worker call.
 
 ## Tests
 
-The normal milestone checkpoint runs the proportional suite:
+When a checkpoint agent discovers this repository's official normal suite,
+the proportional command is:
 
     python3 -m unittest orchestrator.tests.suite_checkpoint
 
