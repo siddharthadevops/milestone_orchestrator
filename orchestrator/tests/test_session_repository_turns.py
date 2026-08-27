@@ -129,9 +129,7 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         artifact_type = None
         material = "code" if job == "implement@slice_impl" else "document"
         if job == "rethink":
-            values["rethink_finding"] = json.dumps({
-                "id": "F1", "summary": "Resolve the contradiction."
-            })
+            values["rethink_problem"] = "Resolve the contradiction."
             artifact_type = "document"
         charge = {
             "job": job,
@@ -147,20 +145,23 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         return charge
 
     def session_state(self, charge=None):
-        return {
-            "request": {
-                "workspace_path": self.workspace,
-                "target_path": self.target_path,
-                "request": "Resolve one focused contradiction.",
-                "context": {
-                    "brief": "Resolve one focused contradiction.",
-                    "references": [self.skeleton_path],
-                    "source_payload": {
-                        "session_charge": charge or self.charge()
-                    },
+        charge = charge or self.charge()
+        request = {
+            "workspace_path": self.workspace,
+            "request": "Resolve one focused contradiction.",
+            "context": {
+                "brief": "Resolve one focused contradiction.",
+                "references": [self.skeleton_path],
+                "source_payload": {
+                    "session_charge": charge
                 },
-                "max_rounds": 2,
             },
+            "max_rounds": 2,
+        }
+        if charge["job"] != "rethink":
+            request["target_path"] = self.target_path
+        return {
+            "request": request,
             "transcript_ref": os.path.join(self.temp.name, "chat.md"),
             "accepted_target_revision": None,
             "recovery_baseline_revision": "baseline",
@@ -251,11 +252,8 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
             "shared project repository", body["request"]["context"]["brief"]
         )
 
-    def test_rethink_session_uses_its_project_target_without_materializing(self):
-        signal = {
-            "finding": {"id": "F1", "summary": "Resolve one issue."},
-            "target_path": self.target_path,
-        }
+    def test_rethink_session_uses_the_repository_without_a_target(self):
+        signal = {"problem": "Resolve the contradiction."}
         milestone_state = state.load(self.state_path)
         with mock.patch.object(
             brainstorming_milestone,
@@ -273,7 +271,13 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         self.assertEqual(created, {"id": "session-1"})
         body = launch.call_args.args[3]
         self.assertEqual(body["request"]["workspace_path"], self.workspace)
-        self.assertEqual(body["request"]["target_path"], self.target_path)
+        self.assertNotIn("target_path", body["request"])
+        payload = body["request"]["context"]["source_payload"]
+        self.assertEqual(set(payload), {"session_charge"})
+        self.assertEqual(
+            payload["session_charge"]["values"]["rethink_problem"],
+            signal["problem"],
+        )
 
     def test_read_only_turn_restores_and_reruns(self):
         before = gitops.head_full_sha(self.workspace)
@@ -408,10 +412,8 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                 "participant_id": "lead",
                 "role": "initial_position",
                 "round": "1",
-                "target_path": self.target_path,
-                "target_authority": "repository HEAD current",
-                "target_state": "present",
-                "rethink_finding": self.charge()["values"]["rethink_finding"],
+                "repository_authority": "Git commit current",
+                "rethink_problem": self.charge()["values"]["rethink_problem"],
             },
             operator_amendments=[],
         )
@@ -423,11 +425,17 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         }
 
         target = Path(self.workspace, self.target_path)
+        second_file = Path(self.workspace, "docs", "second-resolution.md")
+
+        def resolved_cross_file_edit():
+            target.write_text("second\n", encoding="utf-8")
+            second_file.write_text("also resolved\n", encoding="utf-8")
+
         executor = CallbackExecutor(
             ["malformed", json.dumps(reply)],
             callbacks=[
                 lambda: target.write_text("first\n", encoding="utf-8"),
-                lambda: target.write_text("second\n", encoding="utf-8"),
+                resolved_cross_file_edit,
             ],
         )
         execution = brainstorming_execution.ParticipantExecution(
@@ -451,6 +459,9 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         )
         self.assertEqual(accepted["markdown"], reply["markdown"])
         self.assertEqual(target.read_text(encoding="utf-8"), "second\n")
+        self.assertEqual(
+            second_file.read_text(encoding="utf-8"), "also resolved\n"
+        )
         self.assertEqual(
             int(git(self.workspace, "rev-list", "--count", "%s..HEAD" % before)),
             2,
@@ -484,11 +495,9 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                     "participant_id": role,
                     "role": role,
                     "round": "1",
-                    "target_path": self.target_path,
-                    "target_authority": "repository HEAD current",
-                    "target_state": "present",
-                    "rethink_finding": self.charge()["values"][
-                        "rethink_finding"
+                    "repository_authority": "Git commit current",
+                    "rethink_problem": self.charge()["values"][
+                        "rethink_problem"
                     ],
                 },
                 operator_amendments=[],
@@ -571,11 +580,9 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                     "participant_id": role,
                     "role": role,
                     "round": "1",
-                    "target_path": self.target_path,
-                    "target_authority": "repository HEAD current",
-                    "target_state": "present",
-                    "rethink_finding": self.charge()["values"][
-                        "rethink_finding"
+                    "repository_authority": "Git commit current",
+                    "rethink_problem": self.charge()["values"][
+                        "rethink_problem"
                     ],
                 },
                 operator_amendments=[],
@@ -681,11 +688,9 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                     "participant_id": role,
                     "role": role,
                     "round": "1",
-                    "target_path": self.target_path,
-                    "target_authority": "repository HEAD current",
-                    "target_state": "present",
-                    "rethink_finding": self.charge()["values"][
-                        "rethink_finding"
+                    "repository_authority": "Git commit current",
+                    "rethink_problem": self.charge()["values"][
+                        "rethink_problem"
                     ],
                 },
                 operator_amendments=[],
@@ -780,11 +785,9 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                     "participant_id": role,
                     "role": role,
                     "round": "1",
-                    "target_path": self.target_path,
-                    "target_authority": "repository HEAD current",
-                    "target_state": "present",
-                    "rethink_finding": self.charge()["values"][
-                        "rethink_finding"
+                    "repository_authority": "Git commit current",
+                    "rethink_problem": self.charge()["values"][
+                        "rethink_problem"
                     ],
                 },
                 operator_amendments=[],
@@ -937,10 +940,8 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                 "participant_id": "dante",
                 "role": "common_sense",
                 "round": "1",
-                "target_path": self.target_path,
-                "target_authority": "repository HEAD current",
-                "target_state": "present",
-                "rethink_finding": self.charge()["values"]["rethink_finding"],
+                "repository_authority": "Git commit current",
+                "rethink_problem": self.charge()["values"]["rethink_problem"],
             },
             operator_amendments=[],
         )

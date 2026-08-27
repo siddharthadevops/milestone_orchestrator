@@ -92,12 +92,6 @@ RETHINK_CONTINUATION_KINDS = (
     KIND_FIX_FINDINGS,
 )
 RETHINK_KINDS = RETHINK_CONTINUATION_KINDS + REPORT_KINDS
-RETHINK_RESULT_PROPOSAL = "proposal"
-RETHINK_RESULT_DESIGN_AMENDMENT = "design_amendment"
-RETHINK_RESULT_MODES = (
-    RETHINK_RESULT_PROPOSAL,
-    RETHINK_RESULT_DESIGN_AMENDMENT,
-)
 # Round limit of every milestone-attached Brainstorming (need_rethink,
 # guarantee calibration) and the catalogue default for Brainstorming tasks.
 # Raised from 10 to 20 (operator, 2026-08-18): sessions were reaching the
@@ -787,100 +781,6 @@ def validate_battery(battery, required_questions, ctx):
     return battery
 
 
-def validate_need_rethink(
-    obj, kind, ctx, require_plain=False, require_failure_gap=False
-):
-    """Validate the closed, non-completing milestone adapter signal."""
-    if kind not in RETHINK_KINDS:
-        raise ContractError(
-            "%s: need_rethink is not allowed for kind %r" % (ctx, kind)
-        )
-    required = {
-        "status",
-        "kind",
-        "request",
-        "finding",
-        "target_path",
-        "max_rounds",
-    }
-    _require_keys(obj, required, "%s: need_rethink" % ctx)
-    # Surplus is ignored here as everywhere else (an envelope carrying
-    # `notes` used to be rejected on this path alone) — with ONE exception
-    # that is not noise: the kind's own work product. need_rethink is
-    # help-seeking, not completion, so a rethink that also claims
-    # files_changed / artifact / findings is a contradiction, not a
-    # surplus field.
-    claimed = sorted(set(obj) & KIND_OUTPUT_KEYS.get(kind, frozenset()))
-    if claimed:
-        raise ContractError(
-            "%s: need_rethink is help-seeking, not completion; it must not "
-            "also claim %s" % (ctx, claimed)
-        )
-    result_mode = obj.get("result_mode", RETHINK_RESULT_PROPOSAL)
-    if result_mode not in RETHINK_RESULT_MODES:
-        raise ContractError(
-            "%s: need_rethink.result_mode %r not in %r"
-            % (ctx, result_mode, RETHINK_RESULT_MODES)
-        )
-    request = obj["request"]
-    if not isinstance(request, str) or not request.strip():
-        raise ContractError(
-            "%s: need_rethink.request must be non-empty" % ctx
-        )
-    finding = obj["finding"]
-    if not isinstance(finding, dict) or not finding:
-        raise ContractError(
-            "%s: need_rethink.finding must be one non-empty object" % ctx
-        )
-    if kind in REPORT_KINDS:
-        validate_report_finding(
-            finding, "%s.finding" % ctx, require_plain=require_plain
-        )
-    target = obj["target_path"]
-    if not isinstance(target, str) or not target.strip():
-        raise ContractError(
-            "%s: need_rethink.target_path must be non-empty" % ctx
-        )
-    if (
-        os.path.isabs(target)
-        or "\x00" in target
-        or os.path.normpath(target) != target
-        or target in (".", "..")
-        or target.startswith(".." + os.sep)
-    ):
-        raise ContractError(
-            "%s: need_rethink.target_path must be normalized and "
-            "workspace-relative" % ctx
-        )
-    if (
-        type(obj["max_rounds"]) is not int
-        or obj["max_rounds"] != MILESTONE_BRAINSTORMING_ROUNDS
-    ):
-        raise ContractError(
-            "%s: need_rethink.max_rounds must be exactly %d"
-            % (ctx, MILESTONE_BRAINSTORMING_ROUNDS)
-        )
-    if require_failure_gap and "failure_gap" not in obj:
-        raise ContractError(
-            "%s: legacy continuation need_rethink requires failure_gap"
-            % ctx
-        )
-    if "failure_gap" in obj:
-        if kind not in RETHINK_CONTINUATION_KINDS:
-            raise ContractError(
-                "%s: failure_gap is allowed only for a continuable legacy "
-                "builder/fixer" % ctx
-            )
-        validate_gap(obj["failure_gap"], "%s.failure_gap" % ctx)
-    if result_mode == RETHINK_RESULT_DESIGN_AMENDMENT:
-        if kind not in RETHINK_CONTINUATION_KINDS:
-            raise ContractError(
-                "%s: design_amendment is allowed only for a continuable "
-                "builder/fixer" % ctx
-            )
-    return obj
-
-
 def validate_worker_output(obj, kind, require_plain=False,
                            battery_questions=None,
                            require_drift_damage=False,
@@ -904,10 +804,10 @@ def validate_worker_output(obj, kind, require_plain=False,
         raise ContractError("%s: output must be a JSON object" % ctx)
 
     status = _require(obj, "status", str, ctx)
-    if status not in ("ok", "blocked", "gap", "need_rethink"):
+    if status not in ("ok", "blocked", "gap"):
         raise ContractError(
             "%s: status %r not in "
-            "('ok','blocked','gap','need_rethink')"
+            "('ok','blocked','gap')"
             % (ctx, status)
         )
     echoed = _require(obj, "kind", str, ctx)
@@ -915,14 +815,6 @@ def validate_worker_output(obj, kind, require_plain=False,
         raise ContractError(
             "%s: echoed kind %r does not match requested kind %r"
             % (ctx, echoed, kind)
-        )
-    if status == "need_rethink":
-        return validate_need_rethink(
-            obj,
-            kind,
-            ctx,
-            require_plain=require_plain,
-            require_failure_gap=require_failure_gap,
         )
     # gaps ride ONLY with a gap status — an `ok` carrying a non-empty gaps
     # array is a contract violation (nothing was finished, or nothing was
@@ -1085,7 +977,10 @@ COMMON_OUTPUT_KEYS = frozenset(
         "kind",
         "blocked_reason",
         "notes",
+        "problem",
         "gaps",
+        # Retired rethink fields remain reserved so project extensions cannot
+        # quietly repurpose old protocol vocabulary.
         "request",
         "finding",
         "target_path",
@@ -1188,43 +1083,12 @@ Respond with EXACTLY ONE JSON object and nothing else: no prose before or
 after it, no markdown fences. The object must satisfy:
 
 Common fields (all kinds):
-  "status": "ok" | "blocked" | "need_rethink"
+  "status": "ok" | "blocked"
   "kind": "<echo the KIND header of this prompt>"
   "blocked_reason": string    (required when status is "blocked": explain
                                precisely what stops you; the run will end
                                with this explanation in the log)
   "notes": string             (optional, short)
-
-`status: "need_rethink"` is allowed ONLY for draft_slice_note, implement,
-fix_findings, review_round and delta_review when one focused design request
-should be resolved by the independent Brainstorming process before this worker
-can finish its current judgment. It is help-seeking, not completion. Return
-EXACTLY:
-  "status": "need_rethink"
-  "kind": "<echo the current eligible kind>"
-  "request": "<one non-empty focused request or desired outcome>"
-  "finding": {<the one current finding, preserved as source evidence>}
-  "target_path": "<normalized workspace-relative source artifact to isolate>"
-  "max_rounds": __ROUNDS__
-  "result_mode": "proposal" | "design_amendment"
-Use `design_amendment` only when one conservative, bounded clarification of
-the current reviewed design can resolve an in-goal contradiction without
-changing the operator goal or an operator-reserved decision. It may amend the
-skeleton and affected slice notes and may assign bounded repair work to the
-current slice or a new future slice. In that mode
-`target_path` names the smallest source artifact for context; Brainstorming
-constructs a separate concise amendment target. Use `proposal` for an ordinary
-focused request. Set max_rounds to __ROUNDS__; the session may close earlier on
-agreement. Review
-kinds may use only `proposal`. The validator accepts
-an omitted result_mode as `proposal` solely for in-flight run compatibility.
-Do not mix need_rethink with notes, ordinary findings/results, work/file claims,
-retry, disposition, verdict, gap arrays, or slice plans. A fixer must put
-exactly one currently queued finding in `finding`; its queued siblings remain
-pending. Any materializable workspace artifact may be selected as the source,
-including one also named in context, a generated milestone record, or
-the artifact currently under judgment; the adapter supplies isolation by
-copying it into the Brainstorming-owned work area.
 
 Kind draft_skeleton adds:
   "artifact": "<workspace-relative path of the skeleton document you wrote>"
@@ -1381,14 +1245,6 @@ design-correction block above.
 
 Impossible task:
 {"status":"blocked","kind":"<echo KIND>","blocked_reason":"..."}
-
-Focused discussion before finishing this judgment:
-{"status":"need_rethink","kind":"<echo KIND>","request":"...",
- "finding":{<one complete current finding>},
- "target_path":"<normalized workspace-relative path>",
- "max_rounds":__ROUNDS__,"result_mode":"proposal"}
-The session may close earlier on agreement.
-Return no other fields with `blocked` or `need_rethink`.
 """
 
 
@@ -1418,31 +1274,6 @@ certifies that its complete command list passed on the final workspace bytes.
 
 Impossible worker task (not a finding disposition):
 {"status":"blocked","kind":"fix_findings","blocked_reason":"..."}
-
-Focused discussion before deciding one queued finding:
-{"status":"need_rethink","kind":"fix_findings","request":"...",
- "finding":{<one complete queued finding>},
- "target_path":"<normalized workspace-relative path>",
- "max_rounds":__ROUNDS__,"result_mode":"proposal|design_amendment"}
-The session may close earlier on agreement. Return no work claims or sibling
-findings with this status.
-"""
-
-
-# One source for the milestone Brainstorming round limit inside the contract
-# texts: substituted here so the number can never drift from the validator.
-CONTRACT_TEXT, REPORT_CONTRACT_TEXT, FIX_CONTRACT_TEXT = (
-    _text.replace("__ROUNDS__", str(MILESTONE_BRAINSTORMING_ROUNDS))
-    for _text in (
-        CONTRACT_TEXT, REPORT_CONTRACT_TEXT, FIX_CONTRACT_TEXT,
-    )
-)
-
-LEGACY_FAILURE_GAP_CONTRACT = """
-Legacy fallback for a focused discussion:
-When returning `need_rethink`, also include exactly one `failure_gap` object
-using the normal GAP EXIT entry schema. It is required only so the historical
-repair route can resume if Brainstorming ends without agreement.
 """
 
 
@@ -1459,13 +1290,5 @@ def prompt_contract(kind, gap_enabled=False):
             "claims.\n"
             if gap_enabled else ""
         )
-        legacy_rethink = (
-            LEGACY_FAILURE_GAP_CONTRACT if gap_enabled else ""
-        )
-        return FIX_CONTRACT_TEXT + gap + legacy_rethink
-    legacy_rethink = (
-        LEGACY_FAILURE_GAP_CONTRACT
-        if gap_enabled and kind in RETHINK_CONTINUATION_KINDS
-        else ""
-    )
-    return CONTRACT_TEXT + legacy_rethink
+        return FIX_CONTRACT_TEXT + gap
+    return CONTRACT_TEXT

@@ -2669,50 +2669,36 @@ class TestSummary(TempWorkspaceCase):
         state = make_state(self.workspace)
         seal_current_unit(state, skeleton_draft(1))
         doc = st.ensure_next_unit(state)
+        source = "a" * 40
+        accepted = "b" * 40
         st.append_event(
             state, "brainstorming_wait_started", unit="skeleton",
             kind=contracts.KIND_REVIEW_ROUND, family="codex",
-            session_id="bs-one", target_path="docs/one.md",
+            session_id="bs-one", source_base_revision=source,
         )
         st.append_event(
-            state, "brainstorming_implementation_queued", unit="skeleton",
+            state, "brainstorming_rethink_sealed", unit="skeleton",
             kind=contracts.KIND_REVIEW_ROUND, session_id="bs-one",
-            accepted_target_revision="brainstorming-sha256:" + "a" * 64,
+            source_base_revision=source, accepted_revision=accepted,
         )
         st.append_event(
             state, "brainstorming_wait_started", unit="skeleton",
             kind=contracts.KIND_IMPLEMENT, family="claude",
-            session_id="bs-two", target_path="docs/two.md",
+            session_id="bs-two", source_base_revision=accepted,
         )
-        # An outcome for a session this unit never opened invents nothing;
-        # the genuinely open detour keeps reading "waiting".
+        # An outcome for a session this unit never opened invents nothing.
         st.append_event(
             state, "brainstorming_failure_routed", unit="skeleton",
             kind=contracts.KIND_IMPLEMENT, session_id="bs-missing",
         )
         st.append_event(
-            state, "brainstorming_missing_detached", unit="skeleton",
+            state, "brainstorming_failure_routed", unit="skeleton",
             kind=contracts.KIND_IMPLEMENT, session_id="bs-two",
         )
         st.append_event(
             state, "brainstorming_wait_started", unit=st.unit_key(doc),
             kind=contracts.KIND_REVIEW_ROUND, family="codex",
-            session_id="bs-three", target_path="docs/three.md",
-        )
-        st.append_event(
-            state, "brainstorming_wait_started", unit="skeleton",
-            kind=contracts.KIND_REVIEW_ROUND, family="codex",
-            session_id="bs-legacy", target_path="docs/legacy.md",
-        )
-        st.append_event(
-            state, "brainstorming_review_restarted", unit="skeleton",
-            kind=contracts.KIND_REVIEW_ROUND, session_id="bs-legacy",
-        )
-        st.append_event(
-            state,
-            "brainstorming_review_handoff_migrated_to_implementation",
-            unit="skeleton", from_kind=contracts.KIND_REVIEW_ROUND,
-            to_kind=contracts.KIND_FIX_FINDINGS, session_id="bs-legacy",
+            session_id="bs-three", source_base_revision=accepted,
         )
 
         views = {view["unit"]: view for view in st.summary(state)["units"]}
@@ -2723,18 +2709,15 @@ class TestSummary(TempWorkspaceCase):
                 (
                     "bs-one",
                     contracts.KIND_REVIEW_ROUND,
-                    "implementation_queued",
+                    "continued",
                 ),
-                ("bs-two", contracts.KIND_IMPLEMENT, "detached"),
-                (
-                    "bs-legacy",
-                    contracts.KIND_REVIEW_ROUND,
-                    "implementation_queued",
-                ),
+                ("bs-two", contracts.KIND_IMPLEMENT, "failed"),
             ],
         )
         self.assertEqual(detours[0]["family"], "codex")
-        self.assertEqual(detours[0]["target_path"], "docs/one.md")
+        self.assertNotIn("target_path", detours[0])
+        self.assertEqual(detours[0]["source_base_revision"], source)
+        self.assertEqual(detours[0]["accepted_revision"], accepted)
         self.assertIsNotNone(detours[0]["outcome_at"])
         self.assertIsNotNone(detours[1]["outcome_at"])
         # Each detour is filed against the unit that raised it.

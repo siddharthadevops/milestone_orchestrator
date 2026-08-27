@@ -13,7 +13,7 @@ from pathlib import Path
 KINDS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(KINDS_DIR.parents[3]))
 
-from orchestrator import prompt_router, prompt_sets, prompts
+from orchestrator import prompt_contracts, prompt_router, prompt_sets, prompts
 
 BASE = KINDS_DIR.parent
 CAPTURES = (BASE / 'current-prompts.md').read_text().splitlines()
@@ -66,10 +66,9 @@ BS_ECOSYSTEM = '''- PRIMARY ROOT /Users/siddhartha/Development/source/life_prod/
 BS_COMMON = {
     'ecosystem_map': BS_ECOSYSTEM,
     'chat_path': '/Users/siddhartha/.impl_roadmap/brainstorming/state/kv.json.sessions/1be28264ef51cac17ad7e2bf4b6b29fd75de2660ea53159f5199572494426d9d/chat.md',
-    'target_path': '/Users/siddhartha/Development/source/life_prod/ai_capability_certification/implementation/milestones/m9/skeleton.md',
     'reference_documents': '  - implementation/milestones/m9/skeleton.md\n  - implementation/milestones/m9/goal.md',
     'workspace_path': '/Users/siddhartha/Development/source/life_prod/ai_capability_certification',
-    'rethink_finding': '{"id":"F1","summary":"Resolve the bounded contradiction in the current design."}',
+    'rethink_problem': 'The governing design requires two incompatible repository outcomes, so this order cannot complete until that contradiction is resolved.',
 }
 
 RUNS = {
@@ -216,8 +215,7 @@ RUNS = {
                   'lead': True, 'artifact_type': 'document'},
         'options': {'two_register': True, 'altitude_doc': True, 'reuse_gate': True},
         'values': {**BS_COMMON, 'kind': 'discussion_turn', 'workspace': BS_COMMON['workspace_path'], 'participant_id': 'initial-position', 'role': 'initial_position', 'round': '3',
-                   'target_authority': f'Git commit {BS_ACCEPTED_REVISION}',
-                   'target_state': 'present'},
+                   'repository_authority': f'Git commit {BS_ACCEPTED_REVISION}'},
         'variants': {'role_stance': 'initial_position'},
     },
     'discussion_turn.contrary': {
@@ -227,15 +225,15 @@ RUNS = {
                   'lead': False, 'artifact_type': 'document'},
         'options': {'evidence': True, 'altitude_review': True},
         'values': {**BS_COMMON, 'kind': 'discussion_turn', 'workspace': BS_COMMON['workspace_path'], 'participant_id': 'contrary-position', 'role': 'contrary_position', 'round': '3',
-                   'target_authority': f'Git commit {BS_ACCEPTED_REVISION}',
-                   'target_state': 'present'},
+                   'repository_authority': f'Git commit {BS_ACCEPTED_REVISION}'},
         'variants': {'role_stance': 'contrary_position'},
     },
     'questioner_turn': {'options': {'reuse_gate_questioner': True, 'altitude_questioner': True},
         'route': {'job': 'rethink', 'executor': 'brainstorming',
                   'material': 'document', 'role': 'common_sense',
                   'lead': False, 'artifact_type': 'document'},
-        'values': {**BS_COMMON, 'kind': 'questioner_turn', 'workspace': BS_COMMON['workspace_path']}},
+        'values': {**BS_COMMON, 'kind': 'questioner_turn', 'workspace': BS_COMMON['workspace_path'],
+                   'repository_authority': f'Git commit {BS_ACCEPTED_REVISION}'}},
 }
 
 # --- renderer ---------------------------------------------------------------
@@ -269,6 +267,15 @@ def render_kind(kind, spec):
     prompt = prompt_router.assemble(
         PROMPT_SET, values=values, **spec['route']
     )
+    if kind in {
+        'draft_slice_note', 'implement', 'review_round', 'delta_review',
+        'fix_findings',
+    }:
+        prompt = prompt_contracts.bind(
+            prompt,
+            consumer_sections=(prompts.need_rethink_output_section(),),
+            consumer_instructions=(prompts.need_rethink_instruction(kind),),
+        ).prompt
     blocks = [render_unit(unit, values) for unit in prompt['instructions']]
     questions = prompt['questions']
     if questions['items']:

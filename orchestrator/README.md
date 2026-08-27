@@ -125,14 +125,17 @@ diagnoses close through the existing operational-failure path. Classifier LLM
 calls are separate activity, never discussion or target authority, and their
 time is included in accumulated LLM work.
 
-A milestone `need_rethink` discussion works directly in the project repository.
-On agreement, its editing turns are already commits and the terminal handoff
-must name the sealed `source_base_revision..accepted_revision` range. The driver
-observes that range through the ordinary canonical-plan boundary and opens
-reconciliation only when its plan consequence requires it. Nothing is applied
-at close and no old worker continuation resumes: the originating kind runs
-fresh against the resulting repository. A missing range or a discussion that
-ends without agreement fails closed to the operator.
+A milestone worker requests `need_rethink` with one explained `problem`; it
+does not choose a target or echo its call kind. The discussion works across the
+project repository, and its durable request, result, prompts and panel carry Git
+authority rather than a target artifact. On agreement, editing turns are
+already commits and the terminal handoff names the exact
+`source_base_revision..accepted_revision` range. An unchanged `A..A` success is
+also authoritative. The driver observes that range through the ordinary
+canonical-plan boundary and opens reconciliation only when the plan actually
+changed. Nothing is applied or independently re-judged at close: the
+originating kind runs fresh against the resulting repository. A missing
+session/range, operational failure, or no agreement stops for the operator.
 
 Work starts from a project's **⋯ menu**, never from a standing button:
 "New milestone" and "New brainstorming" are the first two items (every user

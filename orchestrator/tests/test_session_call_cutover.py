@@ -21,9 +21,9 @@ from orchestrator import session_repository, state, tasks
 from orchestrator.tests.test_driver_mock import prompt_response
 
 
-RETHINK_FINDING = json.dumps(
-    {"id": "F1", "summary": "One bounded contradiction."},
-    sort_keys=True,
+RETHINK_PROBLEM = (
+    "The governing design requires two incompatible outcomes, so this order "
+    "cannot complete."
 )
 def repository_context(workspace):
     return {
@@ -105,7 +105,14 @@ class SessionCallCutoverTest(unittest.TestCase):
     def prepare(self, job, role, lead, artifact_type=None, **changes):
         values = turn_values(self.workspace, role)
         if job == "rethink":
-            values["rethink_finding"] = RETHINK_FINDING
+            for field in (
+                "target_path", "target_authority", "target_state",
+            ):
+                values.pop(field)
+            values.update({
+                "rethink_problem": RETHINK_PROBLEM,
+                "repository_authority": "Git commit %s" % ("0" * 40),
+            })
         options = {
             "job": job,
             "material": (
@@ -524,42 +531,47 @@ class SessionCallCutoverTest(unittest.TestCase):
         reply["seat_evidence"] = [{"finding": "Used the existing router."}]
         self.assertEqual(prepared.validate(copy.deepcopy(reply)), reply)
 
-    def test_rethink_origin_has_one_unframed_identity(self):
-        finding = {"id": "F1", "summary": "One bounded contradiction."}
+    def test_rethink_origin_has_one_unframed_problem(self):
         checked = brainstorming_milestone.validate_origin_signal(
             {
                 "status": "need_rethink",
-                "kind": "implement",
-                "finding": finding,
-                "target_path": "docs/skeleton.md",
+                "problem": RETHINK_PROBLEM,
                 "questions": [],
             },
             "implement",
         )
-        self.assertEqual(checked, {
-            "finding": finding,
-            "target_path": "docs/skeleton.md",
-        })
+        self.assertEqual(checked, {"problem": RETHINK_PROBLEM})
         for retired in (
-            "request", "result_mode", "max_rounds", "failure_gap"
+            "kind", "finding", "target_path", "request", "result_mode",
+            "max_rounds", "failure_gap",
         ):
-            self.assertNotIn(retired, checked)
+            with self.subTest(retired=retired), self.assertRaises(
+                brainstorming_milestone.AdapterError
+            ):
+                brainstorming_milestone.validate_origin_signal(
+                    {
+                        "status": "need_rethink",
+                        "problem": RETHINK_PROBLEM,
+                        retired: "retired",
+                    },
+                    "implement",
+                )
 
         charge = {
             "job": "rethink",
             "material": "document",
             "prompt_set": "default",
-            "values": {"rethink_finding": RETHINK_FINDING},
+            "values": {"rethink_problem": RETHINK_PROBLEM},
             "amendments_path": str(Path(self.workspace) / "amendments.json"),
             "accepted_amendments": [],
             "artifact_type": "document",
             "repository": repository_context(self.workspace),
         }
         session_calls.validate_charge(charge)
-        missing_finding = copy.deepcopy(charge)
-        missing_finding["values"] = {}
+        missing_problem = copy.deepcopy(charge)
+        missing_problem["values"] = {}
         with self.assertRaises(prompt_router.PromptRouterError):
-            session_calls.validate_charge(missing_finding)
+            session_calls.validate_charge(missing_problem)
 
         prepared = self.prepare(
             "rethink", "initial_position", True,
@@ -569,7 +581,7 @@ class SessionCallCutoverTest(unittest.TestCase):
             declaration
             for unit in prepared.bound.prompt["instructions"]
             for declaration in unit["variables"]
-            if declaration.get("name") == "rethink_finding"
+            if declaration.get("name") == "rethink_problem"
         ]
         self.assertEqual(len(mounted), 1)
 
@@ -602,34 +614,33 @@ class SessionCallCutoverTest(unittest.TestCase):
                     declarations = session_calls._mounted_variable_declarations(
                         prepared.bound.prompt
                     )
-                    self.assertEqual(declarations["rethink_finding"], 1)
+                    self.assertEqual(declarations["rethink_problem"], 1)
                     self.assertEqual(
                         session_calls._mounted_variable_substitutions(
-                            prepared.bound.prompt, "rethink_finding"
+                            prepared.bound.prompt, "rethink_problem"
                         ),
                         1,
                     )
+                    self.assertEqual(
+                        declarations["repository_authority"], 1
+                    )
                     self.assertIsNotNone(prepared.prompt_set_fallback)
 
-    def test_rethink_artifact_type_follows_the_target(self):
+    def test_rethink_artifact_type_follows_the_originating_unit(self):
         subject = object.__new__(driver.Driver)
-        subject._design_document_paths = lambda: [
-            "implementation/milestones/demo/skeleton.md"
-        ]
-        unit = {"kind": state.UNIT_SLICE_IMPL}
-        for target in (
-            "implementation/milestones/demo/skeleton.md",
-            "README.md",
-            "docs/architecture.rst",
-        ):
-            with self.subTest(target=target):
-                self.assertEqual(
-                    subject._rethink_artifact_type(unit, target), "document"
-                )
-        self.assertEqual(
-            subject._rethink_artifact_type(unit, "orchestrator/driver.py"),
-            "implementation",
+        cases = (
+            (state.UNIT_SKELETON, "document"),
+            (state.UNIT_SLICE_DOC, "document"),
+            (state.UNIT_SLICE_IMPL, "implementation"),
         )
+        for unit_kind, expected in cases:
+            with self.subTest(unit_kind=unit_kind):
+                self.assertEqual(
+                    subject._rethink_artifact_type({"kind": unit_kind}),
+                    expected,
+                )
+        with self.assertRaises(state.IllegalTransition):
+            subject._rethink_artifact_type({"kind": "unknown"})
 
     def test_session_correction_reloads_prompt_and_authority(self):
         documents = copy.deepcopy(prompt_sets.default_seed().documents)
@@ -660,8 +671,11 @@ class SessionCallCutoverTest(unittest.TestCase):
             operator_amendments=[{"id": "A1", "text": "Current law."}],
         )
         expected_values = turn_values(self.workspace, "initial_position")
+        for field in ("target_path", "target_authority", "target_state"):
+            expected_values.pop(field)
         expected_values.update({
-            "rethink_finding": RETHINK_FINDING,
+            "rethink_problem": RETHINK_PROBLEM,
+            "repository_authority": "Git commit %s" % ("0" * 40),
             "operator_amendments": prompt_authority.current_amendments(
                 [{"id": "A1", "text": "Current law."}]
             ),
@@ -683,7 +697,6 @@ class SessionCallCutoverTest(unittest.TestCase):
         state = {
             "request": {
                 "workspace_path": self.workspace,
-                "target_path": "docs/decision.md",
                 "context": {
                     "references": ["docs/skeleton.md"],
                     "source_payload": {
@@ -692,7 +705,7 @@ class SessionCallCutoverTest(unittest.TestCase):
                             "material": "document",
                             "prompt_set": "default",
                             "values": {
-                                "rethink_finding": RETHINK_FINDING,
+                                "rethink_problem": RETHINK_PROBLEM,
                             },
                             "amendments_path": str(amendments),
                             "accepted_amendments": [],
@@ -758,10 +771,8 @@ class SessionCallCutoverTest(unittest.TestCase):
             "participant_id": "initial-position",
             "role": "initial_position",
             "round": "1",
-            "target_path": "docs/decision.md",
-            "target_authority": "repository HEAD live",
-            "target_state": "present",
-            "rethink_finding": RETHINK_FINDING,
+            "rethink_problem": RETHINK_PROBLEM,
+            "repository_authority": "Git commit %s" % target,
             "operator_amendments": prompt_authority.current_amendments(
                 [{"id": "A1", "text": "New law."}]
             ),
@@ -847,7 +858,7 @@ class SessionCallCutoverTest(unittest.TestCase):
             "job": "rethink",
             "material": "document",
             "prompt_set": "default",
-            "values": {"rethink_finding": RETHINK_FINDING},
+            "values": {"rethink_problem": RETHINK_PROBLEM},
             "amendments_path": str(amendments),
             "accepted_amendments": [],
             "artifact_type": "document",
@@ -865,7 +876,6 @@ class SessionCallCutoverTest(unittest.TestCase):
         participants = [lead, contrary]
         request = {
             "workspace_path": root,
-            "target_path": "docs/decision.md",
             "request": "Resolve one issue.",
             "context": {
                 "brief": "Resolve one issue.",

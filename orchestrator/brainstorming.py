@@ -471,6 +471,28 @@ def repository_session(state):
     return isinstance(repository, dict)
 
 
+def repository_rethink_request(request):
+    """Whether one request is the target-free milestone rethink variant."""
+    try:
+        charge = request["context"]["source_payload"]["session_charge"]
+    except (KeyError, TypeError):
+        return False
+    return (
+        isinstance(charge, dict)
+        and charge.get("job") == "rethink"
+        and isinstance(charge.get("repository"), dict)
+    )
+
+
+def repository_rethink_session(state):
+    """Whether durable state carries the target-free rethink request."""
+    try:
+        request = state["request"]
+    except (KeyError, TypeError):
+        return False
+    return repository_rethink_request(request)
+
+
 def make_target_revision(exists, content, mode):
     """Retain exact target bytes and functional mode under a derived id."""
     if type(exists) is not bool:
@@ -636,14 +658,18 @@ def validate_external_intervention(intervention):
     checked["created_at"] = float(checked["created_at"])
 
     supplied = intervention["input"]
+    target_free_rethink = repository_rethink_request(supplied)
     _exact_keys(
         supplied,
         (
-            "request",
-            "context",
-            "workspace_path",
-            "target_path",
-            "transcript_ref",
+            (
+                "request", "context", "workspace_path", "transcript_ref",
+            )
+            if target_free_rethink else
+            (
+                "request", "context", "workspace_path", "target_path",
+                "transcript_ref",
+            )
         ),
         (),
         "external_intervention.input",
@@ -659,14 +685,15 @@ def validate_external_intervention(intervention):
             supplied["workspace_path"],
             "external_intervention.input.workspace_path",
         ),
-        "target_path": _text(
-            supplied["target_path"],
-            "external_intervention.input.target_path",
-        ),
         "transcript_ref": validate_transcript_ref(
             supplied["transcript_ref"]
         ),
     }
+    if not target_free_rethink:
+        checked["input"]["target_path"] = _text(
+            supplied["target_path"],
+            "external_intervention.input.target_path",
+        )
 
     closure_context = intervention.get("closure_context")
     if checked["action_kind"] == "closure_vote":
@@ -1306,18 +1333,34 @@ def _validate_participant(participant, ctx):
 
 def validate_request(request):
     """Validate and return a detached JSON-compatible request copy."""
+    target_free_rethink = repository_rethink_request(request)
     _exact_keys(
         request,
-        ("workspace_path", "target_path", "request", "context", "max_rounds"),
+        (
+            ("workspace_path", "request", "context", "max_rounds")
+            if target_free_rethink else
+            (
+                "workspace_path", "target_path", "request", "context",
+                "max_rounds",
+            )
+        ),
         ("deliver_chat",),
         "request",
     )
-    for key in ("workspace_path", "target_path", "request"):
+    for key in (
+        ("workspace_path", "request")
+        if target_free_rethink else
+        ("workspace_path", "target_path", "request")
+    ):
         _text(request[key], "request.%s" % key)
     if type(request["max_rounds"]) is not int or request["max_rounds"] <= 0:
         raise ContractError("request.max_rounds must be a positive integer")
     if "deliver_chat" in request and type(request["deliver_chat"]) is not bool:
         raise ContractError("request.deliver_chat must be a boolean")
+    if target_free_rethink and request.get("deliver_chat", False):
+        raise ContractError(
+            "repository rethink requests cannot deliver chat beside a target"
+        )
 
     context = request["context"]
     _exact_keys(
@@ -1335,6 +1378,29 @@ def validate_request(request):
             _text(reference, "request.context.references[%d]" % index)
     if "source_payload" in context:
         _json_copy(context["source_payload"], "request.context.source_payload")
+        payload = context["source_payload"]
+        if isinstance(payload, dict) and "session_charge" in payload:
+            # Admission may omit a target only after the complete milestone
+            # charge has passed its own closed validator. Import lazily to
+            # avoid a prompt-router import cycle at module load time.
+            try:
+                from orchestrator import session_calls
+
+                charge = session_calls.validate_charge(
+                    payload["session_charge"]
+                )
+            except (TypeError, ValueError, RuntimeError) as exc:
+                raise ContractError(
+                    "request carries an invalid milestone session charge"
+                ) from exc
+            validated_target_free = (
+                charge["job"] == "rethink"
+                and isinstance(charge.get("repository"), dict)
+            )
+            if validated_target_free is not target_free_rethink:
+                raise ContractError(
+                    "request target scope does not match its session charge"
+                )
     if "amendments" in context:
         amendments = context["amendments"]
         if not isinstance(amendments, list):
@@ -2076,11 +2142,15 @@ def closing_summary_with_ballot_facts(summary, ballot, run_config):
     return validate_closing_summary_shape(checked)
 
 
-def validate_result(result, terminal_status, target_path, transcript_ref):
+def validate_result(result, terminal_status, request, transcript_ref):
     """Validate the retained representation of a terminal outcome."""
+    checked_request = validate_request(request)
+    target_free_rethink = repository_rethink_request(checked_request)
     _object(result, "result")
     outcome = result.get("outcome")
-    required = {"outcome", "target_ref", "transcript_ref", "rounds_used"}
+    required = {"outcome", "transcript_ref", "rounds_used"}
+    if not target_free_rethink:
+        required.add("target_ref")
     if outcome == "failure":
         required.add("reason")
     _exact_keys(result, required, (), "result")
@@ -2088,9 +2158,12 @@ def validate_result(result, terminal_status, target_path, transcript_ref):
         raise ContractError("result.outcome must match the terminal status")
     if outcome not in TERMINAL_STATUSES:
         raise ContractError("result.outcome must be success or failure")
-    target_ref = _text(result["target_ref"], "result.target_ref")
-    if target_ref != target_path:
-        raise ContractError("result.target_ref must equal request.target_path")
+    if not target_free_rethink:
+        target_ref = _text(result["target_ref"], "result.target_ref")
+        if target_ref != checked_request["target_path"]:
+            raise ContractError(
+                "result.target_ref must equal request.target_path"
+            )
     checked_transcript_ref = _text(
         result["transcript_ref"], "result.transcript_ref"
     )
@@ -2218,7 +2291,7 @@ def _current_closure_ballot(events, run_config, coordination):
     return None
 
 
-def _validate_history(history, target_path, transcript_ref):
+def _validate_history(history, request, transcript_ref):
     if not isinstance(history, list) or not history:
         raise ContractError("state.history must be a non-empty list")
     previous = None
@@ -2246,7 +2319,7 @@ def _validate_history(history, target_path, transcript_ref):
             raise IllegalTransition("%s -> %s is not legal" % (previous, status))
         if status in TERMINAL_STATUSES:
             result = validate_result(
-                record["result"], status, target_path, transcript_ref
+                record["result"], status, request, transcript_ref
             )
             validate_closing_summary(
                 record["closing_summary"], status, result
@@ -2311,7 +2384,7 @@ def validate_session_state(state):
     if state["transcript_format_version"] not in _TRANSCRIPT_RENDERERS:
         raise ContractError("state.transcript_format_version is unsupported")
     last_status = _validate_history(
-        state["history"], request["target_path"], transcript_ref
+        state["history"], request, transcript_ref
     )
     if last_status != status:
         raise ContractError("state.status must match the last history record")
@@ -2319,7 +2392,7 @@ def validate_session_state(state):
         result = validate_result(
             state["result"],
             status,
-            request["target_path"],
+            request,
             transcript_ref,
         )
         if not _same_json_value(result, state["history"][-1]["result"]):
@@ -2403,7 +2476,7 @@ def transition_session(
         checked_result = validate_result(
             result,
             new_status,
-            current["request"]["target_path"],
+            current["request"],
             current["transcript_ref"],
         )
         terminal_ballot = _current_closure_ballot(
@@ -2780,11 +2853,12 @@ def repository_completed_turn_successor(
 
     result = {
         "outcome": outcome,
-        "target_ref": successor["request"]["target_path"],
         "transcript_ref": successor["transcript_ref"],
         "rounds_used": successor["rounds_used"],
         **({"reason": reason} if outcome == "failure" else {}),
     }
+    if not repository_rethink_session(successor):
+        result["target_ref"] = successor["request"]["target_path"]
     summary = _repository_closing_summary(outcome, reason)
     successor["status"] = outcome
     successor["result"] = result
@@ -2901,7 +2975,7 @@ def terminal_closure_successor(state, ballot, result, closing_summary):
     checked_result = validate_result(
         result,
         outcome,
-        current["request"]["target_path"],
+        current["request"],
         current["transcript_ref"],
     )
     if "closing_summary" not in checked_ballot:
@@ -3058,7 +3132,60 @@ def _field(label, value):
     return "**%s**\n\n%s" % (label, value)
 
 
+def _repository_rethink_authority(state):
+    charge = state["request"]["context"]["source_payload"][
+        "session_charge"
+    ]
+    base = charge["repository"]["pre_session_commit"]
+    accepted = state.get("accepted_target_revision") or base
+    return base, accepted
+
+
+def _render_repository_rethink_opening(state, labels):
+    roster = []
+    for participant in state["run_config"]["participants"]:
+        label = labels[participant["id"]]
+        if participant["role"] == "initial_position":
+            role = "resolves the problem by editing the project repository"
+        elif participant["role"] == "contrary_position":
+            role = (
+                "reviews the repository read-only and challenges the resolution"
+            )
+        else:
+            role = "reviews read-only and asks common-sense anti-drift questions"
+        roster.append("- **%s** — %s." % (label, role))
+    rounds = state["request"]["max_rounds"]
+    base, _accepted = _repository_rethink_authority(state)
+    problem = state["request"]["context"]["source_payload"][
+        "session_charge"
+    ]["values"]["rethink_problem"]
+    return _entry(
+        "Opening",
+        _field(
+            "Requested outcome",
+            _quoted_markdown(state["request"]["request"]),
+        ),
+        _field(
+            "Problem to resolve",
+            _quoted_markdown(problem),
+        ),
+        _field("Repository base revision", _quoted_markdown(base)),
+        _field("Participants", "\n".join(roster)),
+        _field(
+            "Agreement rule",
+            _closure_rule(state["run_config"]["closure_policy"]),
+        ),
+        _field(
+            "Round limit",
+            "The discussion may use at most %d round%s."
+            % (rounds, "" if rounds == 1 else "s"),
+        ),
+    )
+
+
 def _render_opening(state, labels):
+    if repository_rethink_session(state):
+        return _render_repository_rethink_opening(state, labels)
     roster = []
     for participant in state["run_config"]["participants"]:
         label = labels[participant["id"]]
@@ -3174,6 +3301,68 @@ def _render_transcript_event(event, state, labels):
 
 
 def _render_closing(state):
+    if repository_rethink_session(state):
+        summary = state["closing_summary"]
+        result = state["result"]
+        base, accepted = _repository_rethink_authority(state)
+        objections = summary["unresolved_objections"]
+        objections_text = (
+            "No unresolved objections were recorded."
+            if not objections else
+            "\n\n".join(
+                "%d.\n\n%s" % (index, _quoted_markdown(objection))
+                for index, objection in enumerate(objections, 1)
+            )
+        )
+        evidence = summary["escalation_evidence"]
+        evidence_text = (
+            _quoted_markdown(evidence)
+            if evidence is not None else
+            "No concrete escalation evidence was recorded."
+        )
+        questions = summary.get("open_questions", [])
+        questions_text = (
+            "No open questions were recorded."
+            if not questions else
+            "\n\n".join(_quoted_markdown(item) for item in questions)
+        )
+        return _entry(
+            "Closing",
+            _field(
+                "Agreement",
+                (
+                    "Agreement was reached."
+                    if result["outcome"] == "success" else
+                    "Agreement was not reached."
+                ),
+            ),
+            _field(
+                "Final agreement"
+                if result["outcome"] == "success" else "Reason",
+                _quoted_markdown(summary["reason"]),
+            ),
+            _field("Open questions", questions_text),
+            _field("Accepted Git revision", _quoted_markdown(accepted)),
+            _field(
+                "Committed Git range",
+                _quoted_markdown("%s..%s" % (base, accepted)),
+            ),
+            _field("Completed rounds", str(result["rounds_used"])),
+            _field("Unresolved objections", objections_text),
+            _field(
+                "Affected parties",
+                _quoted_markdown(summary["affected_parties"]),
+            ),
+            _field(
+                "Realistic damage",
+                _quoted_markdown(summary["damage_altitude"]),
+            ),
+            _field(
+                "Proportionality",
+                _quoted_markdown(summary["proportionality"]),
+            ),
+            _field("Escalation evidence", evidence_text),
+        )
     summary = state["closing_summary"]
     result = state["result"]
     agreement = (
@@ -3355,6 +3544,10 @@ class SessionStore:
         """Return the final chat artifact placed beside the target."""
         session_id = kvstore.validate_fragment(session_id, "session_id")
         checked = validate_request(request)
+        if repository_rethink_request(checked):
+            raise ContractError(
+                "repository rethink transcripts have no delivered target path"
+            )
         target = checked["target_path"]
         if not os.path.isabs(target):
             target = os.path.join(checked["workspace_path"], target)
@@ -3474,7 +3667,10 @@ class SessionStore:
         session's own transcript is unaffected — it is always kept, and
         the panel always shows it.
         """
-        if not delivers_chat(state["request"]):
+        if (
+            repository_rethink_session(state)
+            or not delivers_chat(state["request"])
+        ):
             return None
         delivered = self.delivered_transcript_ref(
             session_id, state["request"]
@@ -3593,9 +3789,10 @@ class SessionStore:
             "request": request["request"],
             "context": request["context"],
             "workspace_path": request["workspace_path"],
-            "target_path": request["target_path"],
             "transcript_ref": snapshot.state["transcript_ref"],
         }
+        if not repository_rethink_request(request):
+            expected_input["target_path"] = request["target_path"]
         if (
             not valid_action
             or checked["completed_turn_count"] != len(turns)
@@ -4604,34 +4801,38 @@ class SessionStore:
         if not _same_json_value(checked_config, resolved_config):
             raise ContractError("run_config does not match roster resolution")
         checked_request = validate_request(request)
-        target_path = checked_request["target_path"]
-        if not os.path.isabs(target_path):
-            target_path = os.path.join(
-                checked_request["workspace_path"], target_path
-            )
-        target_path = os.path.abspath(target_path)
+        target_free_rethink = repository_rethink_request(checked_request)
         state = new_session_state(
             checked_request, resolved_config, self.transcript_ref(session_id)
         )
-        if _target_overlaps_state_storage(self.path, target_path):
-            raise ContractError(
-                "request.target_path must not overlap Brainstorming's "
-                "durable state store or lock"
+        if not target_free_rethink:
+            target_path = checked_request["target_path"]
+            if not os.path.isabs(target_path):
+                target_path = os.path.join(
+                    checked_request["workspace_path"], target_path
+                )
+            target_path = os.path.abspath(target_path)
+            if _target_overlaps_state_storage(self.path, target_path):
+                raise ContractError(
+                    "request.target_path must not overlap Brainstorming's "
+                    "durable state store or lock"
+                )
+            delivered = self.delivered_transcript_ref(
+                session_id, checked_request
             )
-        delivered = self.delivered_transcript_ref(session_id, checked_request)
-        if os.path.realpath(target_path) == os.path.realpath(delivered):
-            raise ContractError(
-                "request.target_path must not equal its delivered chat path"
-            )
-        if _target_overlaps_transcript_storage(
-            self._transcript_root,
-            target_path,
-            state["transcript_ref"],
-        ):
-            raise ContractError(
-                "request.target_path must not overlap Brainstorming-owned "
-                "transcript storage"
-            )
+            if os.path.realpath(target_path) == os.path.realpath(delivered):
+                raise ContractError(
+                    "request.target_path must not equal its delivered chat path"
+                )
+            if _target_overlaps_transcript_storage(
+                self._transcript_root,
+                target_path,
+                state["transcript_ref"],
+            ):
+                raise ContractError(
+                    "request.target_path must not overlap Brainstorming-owned "
+                    "transcript storage"
+                )
         result = self._store.cas(_session_key(session_id), None, state)
         if not result.ok:
             raise SessionAlreadyExists("session already exists")

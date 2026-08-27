@@ -11,6 +11,7 @@ from orchestrator import registry, service
 from orchestrator.tests import test_brainstorming_api as api_tests
 VIEW_KEYS = {
     "id", "caller", "status", "request", "process", "revision", "target",
+    "repository",
     "participants", "same_family_fallback", "closure_policy",
     "closure_ballots", "round", "transcript_markdown", "result",
     "final_agreement",

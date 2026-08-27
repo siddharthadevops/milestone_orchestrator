@@ -105,9 +105,6 @@
         "ref": "review_blocked"
       },
       {
-        "ref": "review_need_rethink"
-      },
-      {
         "ref": "questions_output"
       }
     ]

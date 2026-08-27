@@ -101,18 +101,18 @@ def validate_charge(charge):
             raise prompt_router.PromptRouterError(
                 "rethink session charge requires its artifact type"
             )
-        finding = charge["values"].get("rethink_finding")
-        if not isinstance(finding, str) or not finding.strip():
+        problem = charge["values"].get("rethink_problem")
+        if not isinstance(problem, str) or not problem.strip():
             raise prompt_router.PromptRouterError(
-                "rethink session charge requires its complete finding"
+                "rethink session charge requires its complete problem"
             )
     elif artifact_type is not None:
         raise prompt_router.PromptRouterError(
             "producer session charge derives its artifact type from its job"
         )
-    elif "rethink_finding" in charge["values"]:
+    elif "rethink_problem" in charge["values"]:
         raise prompt_router.PromptRouterError(
-            "producer session charge cannot carry a rethink finding"
+            "producer session charge cannot carry a rethink problem"
         )
     return copy.deepcopy(charge)
 
@@ -167,9 +167,6 @@ def prepare_turn(
         raise prompt_router.PromptRouterError(
             "milestone session target authority is unavailable"
         )
-    authority, target_state, _repository = (
-        session_repository.live_target_authority(state, charge)
-    )
     references = state["request"]["context"].get("references") or []
     reference_lines = (
         "\n".join("  - %s" % item for item in references)
@@ -183,10 +180,18 @@ def prepare_turn(
         "participant_id": participant["id"],
         "role": role,
         "round": str(round_number),
-        "target_path": state["request"]["target_path"],
-        "target_authority": authority,
-        "target_state": target_state,
     })
+    if charge["job"] == "rethink":
+        values["repository_authority"] = "Git commit %s" % target_revision
+    else:
+        authority, target_state, _repository = (
+            session_repository.live_target_authority(state, charge)
+        )
+        values.update({
+            "target_path": state["request"]["target_path"],
+            "target_authority": authority,
+            "target_state": target_state,
+        })
     operator = prompt_authority.read_mutable_amendments(
         charge["amendments_path"]
     )
@@ -260,11 +265,15 @@ def prepare(
     if not isinstance(values, dict):
         raise prompt_router.PromptRouterError("values must be an object")
     if job == "rethink" and (
-        not isinstance(values.get("rethink_finding"), str)
-        or not values["rethink_finding"].strip()
+        not isinstance(values.get("rethink_problem"), str)
+        or not values["rethink_problem"].strip()
     ):
         raise prompt_router.PromptRouterError(
-            "rethink requires its complete source finding"
+            "rethink requires its complete source problem"
+        )
+    if job != "rethink" and "rethink_problem" in values:
+        raise prompt_router.PromptRouterError(
+            "producer session cannot carry a rethink problem"
         )
     owned = {
         "operator_amendments", "ecosystem_map", "contract_correction",
@@ -299,7 +308,21 @@ def prepare(
         declarations = _mounted_variable_declarations(prompt)
         required_mounts = ["operator_amendments"]
         if job == "rethink":
-            required_mounts.append("rethink_finding")
+            required_mounts.extend((
+                "rethink_problem", "repository_authority",
+            ))
+            retired = sorted(
+                name for name in (
+                    "rethink_finding", "target_path", "target_authority",
+                    "target_state",
+                )
+                if declarations[name]
+            )
+            if retired:
+                raise prompt_sets.PromptSetError(
+                    "routed rethink prompt mounts retired target payload %r"
+                    % retired[0]
+                )
         if correction is not None:
             required_mounts.append("contract_correction")
         if authority_body is not None:

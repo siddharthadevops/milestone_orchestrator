@@ -1394,7 +1394,7 @@ function sessionStatusIndicator(s) {
    exactly like a milestone, polling the session's dedicated view route
    on the shared 2s tick. The monitoring page leads with live chips, the
    discussion Markdown and the result; session metadata, participants and
-   the accepted target live on a secondary Info page (the run view's
+   the accepted repository authority live on a secondary Info page (the run view's
    Edit… precedent). ---- */
 let selectedSession = null;
 let sessionSeq = 0;
@@ -1452,8 +1452,7 @@ async function refreshSessionDetail() {
           <div class="danger-copy">The session view cannot be loaded (its
             stored state may be broken), but the session can still be
             discarded: this removes it from the panel and deletes whatever
-            stored discussion state remains. The target document and
-            repository files are untouched.</div>
+            stored discussion state remains. Project files are untouched.</div>
           <button class="btn danger" ${sessionDiscarding ? "disabled" : ""}
             onclick="discardSelectedSession()">${
             sessionDiscarding ? "Discarding…" : "Discard session…"}</button>
@@ -1481,6 +1480,12 @@ function sessionTargetState(target) {
   return target.truncated
     ? "Text preview truncated at the display limit."
     : "Complete accepted text.";
+}
+function sessionRepositoryState(repository) {
+  if (!repository || !repository.accepted_revision)
+    return "No Git revision has been accepted yet.";
+  return `Accepted revision ${repository.accepted_revision}` +
+    (repository.range ? ` · range ${repository.range}` : "");
 }
 function sessionParticipant(view, participantId) {
   return (view.participants || []).find(p => p.id === participantId) || null;
@@ -1559,9 +1564,13 @@ function sessionChips(view) {
   const pendingActivity = (view.activity || []).filter(item =>
     item.round > (view.round.completed || 0));
   chips.push(...pendingActivity.map(item => sessionActivityChip(item, view)));
-  if (view.target.revision !== null)
+  if (view.target && view.target.revision !== null)
     chips.push(`<span class="chip doc clicky"
       title="${esc(view.target.ref)} — open Info" onclick="openSessionInfo()">&#128196; accepted target</span>`);
+  else if (view.repository && view.repository.accepted_revision)
+    chips.push(`<span class="chip doc clicky"
+      title="${esc(sessionRepositoryState(view.repository))} — open Info"
+      onclick="openSessionInfo()">&#128196; accepted Git revision</span>`);
   if (running && !terminal)
     chips.push(sessionInFlightChip(view));
   else if (view.status === "success")
@@ -1735,7 +1744,9 @@ function renderSessionDetail(view) {
     html += `<div class="card"><h3>Session</h3>
       <div class="amend-hint mono">session: ${esc(view.id)} · revision ${esc(String(view.revision))}</div>
       <div class="amend-hint mono">caller: ${esc(view.caller)}</div>
-      <div class="amend-hint mono">target: ${esc(view.target.ref)}</div>
+      ${view.target
+        ? `<div class="amend-hint mono">target: ${esc(view.target.ref)}</div>`
+        : ""}
       <div class="amend-hint mono">closure: ${esc(view.closure_policy)} · ${
         view.same_family_fallback ? "same-family fallback" : "cross-family"}</div>
       <div class="amend-hint mono">rounds: ${view.round.completed} complete · ${view.round.maximum} maximum</div></div>`;
@@ -1746,16 +1757,25 @@ function renderSessionDetail(view) {
         `family ${esc(p.model_family || "—")} · model ${esc(p.model || "—")} · ` +
         `effort ${esc(p.effort || "—")}</div>`
       ).join("") + `</div>`;
-    html += `<div class="card"><h3>Accepted target</h3>
-      <div class="amend-hint mono">version: ${esc(view.target.revision || "—")}</div>
-      <div class="amend-hint">${esc(sessionTargetState(view.target))}</div>` +
-      (view.target.content !== null
-        ? `<div class="mdbody flow" style="margin-top:8px">${mdRender(view.target.content)}</div>`
-        : "") + `</div>`;
+    if (view.target) {
+      html += `<div class="card"><h3>Accepted target</h3>
+        <div class="amend-hint mono">version: ${esc(view.target.revision || "—")}</div>
+        <div class="amend-hint">${esc(sessionTargetState(view.target))}</div>` +
+        (view.target.content !== null
+          ? `<div class="mdbody flow" style="margin-top:8px">${mdRender(view.target.content)}</div>`
+          : "") + `</div>`;
+    } else if (view.repository) {
+      html += `<div class="card"><h3>Repository authority</h3>
+        <div class="amend-hint mono">base: ${esc(view.repository.source_base_revision)}</div>
+        <div class="amend-hint mono">accepted: ${esc(view.repository.accepted_revision || "—")}</div>
+        <div class="amend-hint mono">range: ${esc(view.repository.range || "—")}</div>
+        <div class="amend-hint">${esc(sessionRepositoryState(view.repository))}</div>
+        </div>`;
+    }
     html += `<div class="card danger-zone"><h3>Danger zone</h3>
       <div class="danger-copy">Discarding removes this session from the
-        panel and deletes its stored discussion state. The target document
-        and repository files are untouched.</div>
+        panel and deletes its stored discussion state. Project files are
+        untouched.</div>
       <button class="btn danger" ${running || sessionDiscarding ? "disabled" : ""}
         onclick="discardSelectedSession()">${
         sessionDiscarding ? "Discarding…" : "Discard session…"}</button>
@@ -1811,18 +1831,25 @@ function renderSessionDetail(view) {
   html += sessionClosingCard(view);
   if (view.final_agreement) {
     const agreement = view.final_agreement;
-    const targetName = String(view.target.ref || "target").split("/").pop();
-    const targetState = view.target.changed === true ? "changed"
-      : view.target.changed === false ? "unchanged" : "change unknown";
+    const targetName = view.target
+      ? String(view.target.ref || "target").split("/").pop() : "";
+    const targetState = view.target && view.target.changed === true ? "changed"
+      : view.target && view.target.changed === false ? "unchanged"
+      : "change unknown";
     const questions = Array.isArray(agreement.open_questions)
       ? agreement.open_questions : [];
     const objections = Array.isArray(agreement.unresolved_objections)
       ? agreement.unresolved_objections : [];
     html += `<div class="card final-agreement"><h3>&#10003; Final agreement</h3>
       <div class="mdbody flow">${mdRender(agreement.markdown)}</div>
-      <div class="amend-hint" style="margin-top:10px"><b>Accepted target:</b>
-        <span class="mono" title="${esc(view.target.ref)}">${esc(targetName)}</span>
-        · ${esc(targetState)}</div>
+      ${view.target
+        ? `<div class="amend-hint" style="margin-top:10px"><b>Accepted target:</b>
+          <span class="mono" title="${esc(view.target.ref)}">${esc(targetName)}</span>
+          · ${esc(targetState)}</div>`
+        : view.repository
+          ? `<div class="amend-hint mono" style="margin-top:10px"><b>Git authority:</b>
+            ${esc(sessionRepositoryState(view.repository))}</div>`
+          : ""}
       <div class="amend-hint" style="margin-top:6px"><b>Open questions:</b> ${
         questions.length
           ? questions.map(item => esc(item)).join(" · ")
@@ -1887,8 +1914,8 @@ async function discardSelectedSession() {
   const label = lastSessionView
     ? lastSessionView.request : selectedSession;
   if (!confirm(`Discard brainstorming “${label}”? This removes it from the `
-      + "panel and deletes its private discussion state; the target and any "
-      + "final chat delivered beside it are untouched.")) return;
+      + "panel and deletes its private discussion state; project files are "
+      + "untouched.")) return;
   sessionDiscarding = true;
   if (lastSessionView) renderSessionDetail(lastSessionView);
   try {

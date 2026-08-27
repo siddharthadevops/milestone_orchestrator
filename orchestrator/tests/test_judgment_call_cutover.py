@@ -326,6 +326,82 @@ class JudgmentCallPreparationTest(unittest.TestCase):
                 with self.assertRaises(contracts.ContractError):
                     review.validate(invalid)
 
+    def test_runtime_mounts_problem_only_rethink_on_every_judgment_kind(self):
+        cases = (
+            (
+                "review_round@slice_impl",
+                "If one confirmed problem meets this rule",
+            ),
+            (
+                "delta_review@slice_doc",
+                "If one confirmed in-scope problem meets this rule",
+            ),
+            (
+                "fix_findings@skeleton",
+                "If the queued work exposes this condition",
+            ),
+        )
+        for job, kind_instruction in cases:
+            with self.subTest(job=job):
+                prepared = self.prepare(job)
+                self.assertEqual(
+                    prepared.bound.registered_section_ids.count(
+                        "need_rethink"
+                    ),
+                    1,
+                )
+                self.assertIn("NEED_RETHINK", prepared.prompt)
+                self.assertIn(kind_instruction, prepared.prompt)
+                reply = {
+                    "status": "need_rethink",
+                    "problem": "Two governing requirements contradict.",
+                    "questions": answers(prepared.bound),
+                }
+                self.assertEqual(
+                    prepared.validate(copy.deepcopy(reply)), reply
+                )
+
+    def test_named_judgment_rungs_with_retired_rethink_fall_whole(self):
+        self.assertTrue(prompt_sets.ensure_default(self.temp.name))
+        cases = (
+            (
+                "old-review-rethink", "review_round@slice_impl",
+                "review_need_rethink",
+            ),
+            (
+                "old-delta-rethink", "delta_review@slice_doc",
+                "review_need_rethink",
+            ),
+            (
+                "old-fix-rethink", "fix_findings@skeleton",
+                "fix_need_rethink",
+            ),
+        )
+        for name, job, retired_id in cases:
+            with self.subTest(job=job):
+                documents = copy.deepcopy(
+                    prompt_sets.default_seed().documents
+                )
+                kind = job.split("@", 1)[0]
+                documents["milestone/%s.json" % kind][
+                    "output_contract"
+                ]["sections"].append({
+                    "id": retired_id,
+                    "text": ["Return need_rethink with a finding."],
+                    "variables": [],
+                })
+                self.write_set(name, documents)
+
+                prepared = self.prepare(job, prompt_set=name)
+
+                self.assertEqual(
+                    prepared.prompt_set_fallback,
+                    prompt_sets.PROMPT_SET_FALLBACK_DEFAULT,
+                )
+                self.assertIn("NEED_RETHINK", prepared.prompt)
+                self.assertNotIn(retired_id,
+                                 prepared.bound.registered_section_ids)
+
     def test_provisional_delta_keeps_its_routed_verdict_contract(self):
         correction = {
             "artifact": "implementation/slices/slice-06.md",

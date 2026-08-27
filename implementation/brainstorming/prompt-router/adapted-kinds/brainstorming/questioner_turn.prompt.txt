@@ -19,13 +19,22 @@ PROCESS AUTHORITY
 
 SOURCES
 - Brainstorming chat: /Users/siddhartha/.impl_roadmap/brainstorming/state/kv.json.sessions/1be28264ef51cac17ad7e2bf4b6b29fd75de2660ea53159f5199572494426d9d/chat.md
-- Target document: /Users/siddhartha/Development/source/life_prod/ai_capability_certification/implementation/milestones/m9/skeleton.md
 - Goal and reference documents:
   - implementation/milestones/m9/skeleton.md
   - implementation/milestones/m9/goal.md
 
-RETHINK CHARGE (complete source finding)
-{"id":"F1","summary":"Resolve the bounded contradiction in the current design."}
+TASK
+Resolve the problem below. Work directly in the project Git repository.
+Make whatever repository changes are necessary so the problem no longer
+prevents the work from continuing; clarifying the governing documentation
+may be the complete solution. Return `ready` only after the complete
+resolution is present in the repository.
+
+PROBLEM
+The governing design requires two incompatible repository outcomes, so this order cannot complete until that contradiction is resolved.
+
+REPOSITORY AUTHORITY
+Git commit 0ea745bdfa27c4ca11a6bbc7e726ed78cb4b38e5
 
 PERSONA
 - This scene belongs to a contemporary novel built from a real case

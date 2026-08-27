@@ -2585,6 +2585,7 @@ _BRAINSTORMING_OUTCOMES = {
         "implementation_queued"
     ),
     "brainstorming_review_restarted": "restarted",
+    "brainstorming_rethink_sealed": "continued",
     "brainstorming_failure_routed": "failed",
     "brainstorming_operational_detached": "detached",
     "brainstorming_missing_detached": "detached",
@@ -2656,7 +2657,6 @@ def summary(state, acts_overlay=None, current_review_model=None):
                 "session_id": e.get("session_id"),
                 "kind": e.get("kind"),
                 "family": e.get("family"),
-                "target_path": e.get("target_path"),
                 "at": e.get("at"),
                 "outcome": "waiting",
                 "outcome_at": None,
@@ -2665,6 +2665,16 @@ def summary(state, acts_overlay=None, current_review_model=None):
                 "token_usage_partial": False,
                 "cost": None,
                 "cost_partial": False,
+                **(
+                    {
+                        "source_base_revision": e.get(
+                            "source_base_revision"
+                        )
+                    }
+                    if isinstance(e.get("source_base_revision"), str)
+                    and e.get("source_base_revision")
+                    else {}
+                ),
                 **(
                     {"task_id": e.get("task_id")}
                     if isinstance(e.get("task_id"), str) and e.get("task_id")
@@ -2678,6 +2688,13 @@ def summary(state, acts_overlay=None, current_review_model=None):
             if entry is not None:
                 entry["outcome"] = _BRAINSTORMING_OUTCOMES[e.get("type")]
                 entry["outcome_at"] = e.get("at")
+                for field in (
+                    "source_base_revision",
+                    "accepted_revision",
+                ):
+                    value = e.get(field)
+                    if isinstance(value, str) and value:
+                        entry[field] = value
         elif e.get("type") == "brainstorming_work_recorded":
             entry = brainstorming_index.get((uk, e.get("session_id")))
             if entry is not None:

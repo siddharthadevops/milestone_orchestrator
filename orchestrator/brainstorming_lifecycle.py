@@ -152,6 +152,10 @@ def _validate_target_identity(identity):
 
 
 def _validate_record(record):
+    has_target_path = "target_path" in record
+    has_target_identity = "target_identity" in record
+    if has_target_path is not has_target_identity:
+        raise RuntimeError("invalid Brainstorming service registry")
     brainstorming._exact_keys(
         record,
         (
@@ -159,12 +163,13 @@ def _validate_record(record):
             "caller",
             "project",
             "work_area",
-            "target_path",
-            "target_identity",
             "pid",
             "created_at",
             "runtime",
             "execution_context",
+        ) + (
+            ("target_path", "target_identity")
+            if has_target_path else ()
         ),
         # The staffing router's durable binding on this registry. Presence of
         # `staffing_session` says the router staffs the automatic calls; its
@@ -178,9 +183,10 @@ def _validate_record(record):
     try:
         kvstore.validate_fragment(record["id"], "session_id")
         brainstorming._text(record["caller"], "service_record.caller")
-        brainstorming._text(
-            record["target_path"], "service_record.target_path"
-        )
+        if has_target_path:
+            brainstorming._text(
+                record["target_path"], "service_record.target_path"
+            )
         brainstorming._text(
             record["created_at"], "service_record.created_at"
         )
@@ -220,7 +226,8 @@ def _validate_record(record):
             raise RuntimeError(
                 "invalid Brainstorming service registry"
             ) from exc
-    _validate_target_identity(record["target_identity"])
+    if has_target_identity:
+        _validate_target_identity(record["target_identity"])
     try:
         brainstorming._json_copy(record["runtime"], "service_record.runtime")
         brainstorming._json_copy(
@@ -229,6 +236,18 @@ def _validate_record(record):
         )
     except brainstorming.ContractError as exc:
         raise RuntimeError("invalid Brainstorming service registry") from exc
+    if not has_target_path:
+        context = record["execution_context"]
+        workspace = (
+            context.get("workspace_path")
+            if isinstance(context, dict) else None
+        )
+        if (
+            not isinstance(workspace, str)
+            or not workspace
+            or os.path.abspath(workspace) != workspace
+        ):
+            raise RuntimeError("invalid Brainstorming service registry")
     return copy.deepcopy(record)
 
 
@@ -337,7 +356,11 @@ def validate_create_body(body):
             "brainstorming create body",
         )
         request = brainstorming.validate_request(body["request"])
-        for field in ("workspace_path", "target_path"):
+        for field in (
+            ("workspace_path",)
+            if brainstorming.repository_rethink_request(request) else
+            ("workspace_path", "target_path")
+        ):
             if "\x00" in request[field]:
                 raise brainstorming.ContractError(
                     "request.%s is not a valid filesystem path" % field
@@ -467,6 +490,13 @@ def validate_create_body(body):
         if type(create_parents) is not bool:
             raise brainstorming.ContractError(
                 "create_target_parents must be a boolean"
+            )
+        if (
+            brainstorming.repository_rethink_request(request)
+            and create_parents
+        ):
+            raise brainstorming.ContractError(
+                "repository rethink requests cannot create target parents"
             )
         staffing_session = body.get("staffing_session")
         if staffing_session is not None:
@@ -1276,6 +1306,8 @@ def _discard_created_dirs(home, target_path, created):
                 guarded.add(os.path.abspath(directory))
                 guarded.add(os.path.realpath(directory))
             for record in document["sessions"]:
+                if "target_path" not in record:
+                    continue
                 for recorded in (
                     os.path.abspath(record["target_path"]),
                     os.path.realpath(record["target_path"]),
@@ -1350,6 +1382,8 @@ def _reject_authority_overlap(home, store, target_path):
 
 
 def _same_target(record, target_path, identity):
+    if "target_path" not in record:
+        return False
     recorded_path = record["target_path"]
     if (
         recorded_path == target_path
@@ -1369,6 +1403,29 @@ def _same_target(record, target_path, identity):
     except PublicLifecycleError:
         return False
     return brainstorming._same_json_value(current_identity, identity)
+
+
+def _paths_overlap(first, second):
+    first = os.path.abspath(first)
+    second = os.path.abspath(second)
+    first_real = os.path.realpath(first)
+    second_real = os.path.realpath(second)
+    try:
+        common = os.path.commonpath((first_real, second_real))
+    except ValueError:
+        common = None
+    if common in (first_real, second_real):
+        return True
+    return brainstorming._paths_overlap_from_existing_ancestor(first, second)
+
+
+def _record_mutation_path(record):
+    if "target_path" in record:
+        return record["target_path"]
+    context = record.get("execution_context")
+    if isinstance(context, dict):
+        return context.get("workspace_path")
+    return None
 
 
 def _target_is_active(store, record):
@@ -2003,14 +2060,27 @@ def _create_session_with_context(
         staffing_binding=staffing_binding,
     )
     store = brainstorming.SessionStore(state_directory(home))
-    target_path = _resolved_target_path(
-        checked["request"], context, owned_target_path=owned_target_path
+    target_free_rethink = brainstorming.repository_rethink_request(
+        checked["request"]
+    )
+    if target_free_rethink and owned_target_path is not None:
+        raise PublicLifecycleError(400, INVALID_REQUEST)
+    target_path = (
+        None
+        if target_free_rethink else
+        _resolved_target_path(
+            checked["request"], context,
+            owned_target_path=owned_target_path,
+        )
     )
     repository = session_repository.context_from_state(
         {"request": checked["request"]}
     )
-    _reject_authority_overlap(home, store, target_path)
-    if not checked["create_target_parents"]:
+    if target_free_rethink and repository is None:
+        raise PublicLifecycleError(400, INVALID_REQUEST)
+    if not target_free_rethink:
+        _reject_authority_overlap(home, store, target_path)
+    if not target_free_rethink and not checked["create_target_parents"]:
         # Historical fail-fast: without the opt-in, a target whose parent
         # is missing (or otherwise uncapturable) refuses before anything
         # is spawned or written.
@@ -2026,16 +2096,35 @@ def _create_session_with_context(
         reap_children(home)
         with _locked_registry(home):
             document = _load_registry(home)
-            if checked["create_target_parents"]:
+            if not target_free_rethink and checked["create_target_parents"]:
                 # Under the registry lock, after every pure validation: a
                 # concurrent create of the same fresh folder serializes
                 # here, so cleanup can never remove a sibling's folder.
                 created_dirs = _ensure_target_parents(target_path)
-            identity = _target_identity(target_path)
+            identity = (
+                None if target_free_rethink else _target_identity(target_path)
+            )
             for record in document["sessions"]:
-                if (
-                    _same_target(record, target_path, identity)
-                    and _target_is_active(store, record)
+                if not _target_is_active(store, record):
+                    continue
+                recorded_scope = _record_mutation_path(record)
+                overlaps_repository_scope = (
+                    isinstance(recorded_scope, str)
+                    and (
+                        target_free_rethink
+                        or "target_path" not in record
+                    )
+                    and _paths_overlap(
+                        (
+                            context["workspace_path"]
+                            if target_free_rethink else target_path
+                        ),
+                        recorded_scope,
+                    )
+                )
+                if overlaps_repository_scope or (
+                    not target_free_rethink
+                    and _same_target(record, target_path, identity)
                 ):
                     raise PublicLifecycleError(409, TARGET_IN_USE)
             session_id = _new_session_id()
@@ -2087,13 +2176,14 @@ def _create_session_with_context(
                 "caller": caller,
                 "project": checked["project"],
                 "work_area": checked["work_area"],
-                "target_path": target_path,
-                "target_identity": identity,
                 "pid": launch.process.pid,
                 "created_at": registry.now_iso(),
                 "runtime": runtime,
                 "execution_context": context,
             }
+            if not target_free_rethink:
+                record["target_path"] = target_path
+                record["target_identity"] = identity
             if staffing_binding is not None:
                 record["staffing_session"] = staffing_binding["session"]
                 if "material" in staffing_binding:
@@ -2316,7 +2406,6 @@ def _list_projection(store, record):
         "caller": record["caller"],
         "project": record["project"],
         "work_area": record["work_area"],
-        "target_path": record["target_path"],
         "created_at": record["created_at"],
         "process": "running" if _process_alive(record) else "stopped",
         "status": None,
@@ -2335,6 +2424,12 @@ def _list_projection(store, record):
         "external_intervention": None,
         "state_error": None,
     }
+    if "target_path" in record:
+        row["target_path"] = record["target_path"]
+    else:
+        row["workspace_path"] = record["execution_context"][
+            "workspace_path"
+        ]
     try:
         snapshot = store.read(record["id"])
         if snapshot is None:
@@ -2544,16 +2639,39 @@ def view_session(
             raise RuntimeError("Brainstorming session state is unavailable")
         state = snapshot.state
         progress = brainstorming.coordination_projection(state)
-        target = {
-            "ref": state["request"]["target_path"],
-            "revision": None,
-            "changed": None,
-            "exists": None,
-            "content": None,
-            "truncated": False,
-        }
+        target_free_rethink = brainstorming.repository_rethink_session(state)
+        target = (
+            None
+            if target_free_rethink else
+            {
+                "ref": state["request"]["target_path"],
+                "revision": None,
+                "changed": None,
+                "exists": None,
+                "content": None,
+                "truncated": False,
+            }
+        )
+        repository_authority = None
+        if target_free_rethink:
+            repository = session_repository.context_from_state(state)
+            accepted = (
+                None
+                if progress is None else
+                progress["accepted_target_revision"]
+            )
+            base = repository["pre_session_commit"]
+            repository_authority = {
+                "source_base_revision": base,
+                "accepted_revision": accepted,
+                "range": (
+                    None if accepted is None else "%s..%s" % (base, accepted)
+                ),
+            }
         if (
-            progress is not None
+            not target_free_rethink
+            and target is not None
+            and progress is not None
             and progress["accepted_target_revision"] is not None
         ):
             if brainstorming.repository_session(state):
@@ -2617,6 +2735,7 @@ def view_session(
             "process": "running" if _process_alive(record) else "stopped",
             "revision": snapshot.revision,
             "target": target,
+            "repository": repository_authority,
             "participants": _view_participants(
                 record, state, staffing_binding=staffing_binding
             ),
@@ -2714,13 +2833,15 @@ def _signal_lifecycle(record):
 
 def _failure_result(state, reason):
     projection = brainstorming.coordination_projection(state)
-    return {
+    result = {
         "outcome": "failure",
-        "target_ref": state["request"]["target_path"],
         "transcript_ref": state["transcript_ref"],
         "rounds_used": 0 if projection is None else projection["rounds_used"],
         "reason": reason,
     }
+    if not brainstorming.repository_rethink_session(state):
+        result["target_ref"] = state["request"]["target_path"]
+    return result
 
 
 def _closing_summary(state, reason, proportionality):

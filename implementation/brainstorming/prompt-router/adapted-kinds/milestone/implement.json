@@ -62,9 +62,6 @@
       },
       {
         "ref": "process_authority"
-      },
-      {
-        "ref": "design_contradiction_author"
       }
     ]
   },
@@ -95,11 +92,8 @@
       {
         "ref": "common_fields",
         "defaults": {
-          "status_vocabulary": "\"ok\" | \"blocked\" | \"need_rethink\""
+          "status_vocabulary": "\"ok\" | \"blocked\""
         }
-      },
-      {
-        "ref": "need_rethink_author"
       },
       {
         "ref": "implement_result"

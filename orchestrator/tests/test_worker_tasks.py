@@ -86,22 +86,14 @@ def _usage(amount=3):
 
 
 def _rethink(kind, source=None, result_mode="proposal"):
-    value = {
+    del kind, source, result_mode
+    return prompt_response({
         "status": "need_rethink",
-        "kind": kind,
-        "finding": copy.deepcopy(source or {"id": "BUILD", "summary": "choice"}),
-        "target_path": "proposals/rethink.md",
-    }
-    if kind in _AUTHOR_KINDS:
-        return prompt_response(value)
-    value.update({
-        "request": "Resolve the one bounded design question.",
-        "max_rounds": 20,
-        "result_mode": result_mode,
+        "problem": (
+            "The governing design leaves two incompatible persistence "
+            "requirements in force."
+        ),
     })
-    if kind in contracts.RETHINK_CONTINUATION_KINDS:
-        value["failure_gap"] = failure_gap()
-    return prompt_response(value)
 
 
 def _author_ok(kind, **extra):
@@ -129,13 +121,24 @@ def _worker_skeleton():
     )
 
 
-def _created(session_id):
+def _created(session_id, state_path, workspace):
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=workspace, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
     return {
         "id": session_id,
         "state": {
+            "request": {"context": {"source_payload": {
+                "session_charge": {"repository": {
+                    "state_path": state_path,
+                    "skeleton_path": "docs/skeleton.md",
+                    "pre_session_commit": base,
+                }}
+            }}},
             "completed_turns": [],
             "rounds_used": 0,
-            "recovery_baseline_revision": "baseline-%s" % session_id,
+            "recovery_baseline_revision": base,
             "accepted_target_revision": None,
         },
     }
@@ -558,7 +561,17 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 )
                 self.assertEqual(task["order"]["request"]["context"]["task_kind"], kind)
                 self.assertEqual(task["result"]["status"], "success")
-                self.assertEqual(task["result"]["native_result"], response)
+                native = task["result"]["native_result"]
+                self.assertEqual(
+                    {key: native[key] for key in response}, dict(response)
+                )
+                expected_questions = runners.prompt_question_ids(
+                    runner.calls[0][2]
+                )
+                self.assertEqual(
+                    [entry["id"] for entry in native.get("questions", [])],
+                    list(expected_questions),
+                )
                 links = [
                     record.get("task_id")
                     for unit in state["units"]
@@ -691,17 +704,27 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         self.assertEqual(note["artifact"], declared)
         self.assertEqual(driver._artifact(note), declared)
         self.assertEqual(driver._slice_note_artifact(1), declared)
-        self.assertEqual(task["result"]["native_result"], response)
+        native = task["result"]["native_result"]
+        self.assertEqual(
+            {key: native[key] for key in response}, dict(response)
+        )
+        self.assertEqual(
+            [entry["id"] for entry in native.get("questions", [])],
+            list(runners.prompt_question_ids(runner.calls[0][2])),
+        )
 
     def test_continuable_worker_abandonments_fail_and_reentry_succeeds_new_task(self):
         def paused(label):
             path = self._path(label)
+            workspace = st.load(path)["workspace"]
             runner = runners.MockRunner([{
                 "expect_kind": contracts.KIND_IMPLEMENT,
                 "response": _rethink(contracts.KIND_IMPLEMENT),
             }])
             with mock.patch.object(adapter, "create_session",
-                                   return_value=_created(label)):
+                                   return_value=_created(
+                                       label, path, workspace
+                                   )):
                 drv.Driver(path, runner=runner).step()
             return path
 
@@ -715,7 +738,11 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             effect = error if error is not None else [handoff]
             with mock.patch.object(adapter, "terminal_handoff", side_effect=effect):
                 drv.Driver(path, runner=runners.MockRunner([])).step()
-            self.assertEqual(self._task(st.load(path))["result"]["status"], "failure")
+            failed_state = st.load(path)
+            self.assertEqual(
+                self._task(failed_state)["result"]["status"], "failure"
+            )
+            self.assertIsNotNone(failed_state["failure"])
 
         waiting = paused("recoverable")
         with mock.patch.object(adapter, "terminal_handoff", return_value=None):

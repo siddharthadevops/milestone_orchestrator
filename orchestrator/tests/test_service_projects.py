@@ -717,6 +717,25 @@ class ProjectAccessApiTest(ProjectsServiceTestCase):
         )
         never.assert_not_called()
 
+        # A target-free repository rethink owns the whole execution-context
+        # workspace rather than inventing one representative artifact.
+        repository_scoped = {
+            "status": "running",
+            "workspace_path": primary,
+        }
+        with mock.patch.object(
+            service.brainstorming_lifecycle, "list_sessions",
+            return_value=[repository_scoped],
+        ), mock.patch.object(service.gitsync, "run_sync") as never:
+            status, body = self.request_json(
+                "POST", self.project_path(PROJECT, "git-sync"),
+                {"work_area": AREA},
+            )
+        self.assertEqual(
+            (status, body["error"]), (409, service.WORK_AREA_BUSY)
+        )
+        never.assert_not_called()
+
         # A finished session does not own anything any more.
         done = dict(live, status="success")
         with mock.patch.object(

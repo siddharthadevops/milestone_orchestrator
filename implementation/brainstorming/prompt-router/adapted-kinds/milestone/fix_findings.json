@@ -26,9 +26,6 @@
         "ref": "project_context"
       },
       {
-        "ref": "design_contradiction_fixer"
-      },
-      {
         "ref": "operator_amendments_author"
       },
       {
@@ -48,9 +45,7 @@
       {
         "text": [
           "QUEUED FINDINGS (claims, not facts — verify each against the",
-          "real code/doc before deciding). These are the exact stored objects;",
-          "if you request `need_rethink`, copy exactly one complete object into",
-          "`finding` without shortening, normalizing, or dropping fields:",
+          "real code/doc before deciding). These are the exact stored objects:",
           "{{queued_findings}}"
         ],
         "variables": [
@@ -214,19 +209,6 @@
           "Impossible worker task (not a finding disposition):",
           "{\"status\":\"blocked\",\"kind\":\"fix_findings\",\"blocked_reason\":\"...\",",
           " \"questions\":[...]}   (the QUESTIONS entries are required in EVERY reply)"
-        ],
-        "variables": []
-      },
-      {
-        "id": "fix_need_rethink",
-        "text": [
-          "Focused discussion before deciding one queued finding:",
-          "{\"status\":\"need_rethink\",\"kind\":\"fix_findings\",",
-          " \"finding\":{<one complete queued finding>},",
-          " \"target_path\":\"<workspace-relative artifact it lives in>\",",
-          " \"questions\":[...]}   (required in EVERY reply)",
-          "No proposed direction and no other fields; sibling findings stay",
-          "queued — the orchestrator runs the session from the finding alone."
         ],
         "variables": []
       },

@@ -47,10 +47,37 @@
             "name": "reference_documents",
             "required": true
           }
+        ],
+        "mount": [
+          "job:producer"
         ]
       },
       {
-        "ref": "rethink_charge"
+        "ref": "bs_sources",
+        "mount": [
+          "job:rethink"
+        ]
+      },
+      {
+        "ref": "rethink_charge",
+        "mount": [
+          "job:rethink"
+        ]
+      },
+      {
+        "text": [
+          "REPOSITORY AUTHORITY",
+          "{{repository_authority}}"
+        ],
+        "variables": [
+          {
+            "name": "repository_authority",
+            "required": true
+          }
+        ],
+        "mount": [
+          "job:rethink"
+        ]
       },
       {
         "text": [

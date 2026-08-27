@@ -470,7 +470,10 @@ class PlanReconciliationTests(unittest.TestCase):
         unit["implementation_attempt_snapshot"] = {"tree": "stale"}
         unit["brainstorming_wait"] = {
             "session_id": "rethink-session",
-            "signal": {"finding": {"id": "F1"}},
+            "signal": {
+                "status": "need_rethink",
+                "problem": "The accepted plan must remove this unit.",
+            },
             "origin": {
                 "unit": st.unit_key(unit),
                 "kind": "implement",
@@ -511,6 +514,31 @@ class PlanReconciliationTests(unittest.TestCase):
             event.get("type") == "brainstorming_rethink_sealed"
             for event in subject.state["events"]
         ))
+
+        record = copy.deepcopy(
+            subject.state["milestone"][canonical_plan.RECONCILIATION_KEY]
+        )
+        subject._close_reconciliation(record, {
+            "final_head": accepted,
+            "final_plan": copy.deepcopy(record["accepted_plan"]),
+            "projection": copy.deepcopy(
+                subject.state["milestone"]["slices"]
+            ),
+            "final_account": plan_reconciliation._final_account(
+                record, record["accepted_plan"]
+            ),
+        })
+        events = [event["type"] for event in subject.state["events"]]
+        self.assertLess(
+            events.index("accepted_range_reconciliation_closed"),
+            events.index("brainstorming_rethink_sealed"),
+        )
+        sealed = next(
+            event for event in reversed(subject.state["events"])
+            if event.get("type") == "brainstorming_rethink_sealed"
+        )
+        self.assertEqual(sealed["session_id"], "rethink-session")
+        self.assertNotIn("target_path", sealed)
 
     def test_producer_session_freezes_before_recording_draft_or_wip(self):
         subject, unit, accepted = self._accepted_session_driver()

@@ -126,6 +126,85 @@ class RepositorySealTest(unittest.TestCase):
             ready,
         )
 
+    def test_problem_only_origin_preserves_exact_text(self):
+        problem = "  The governing design contradicts persistence.  "
+        checked = brainstorming_milestone.validate_origin_signal(
+            {"status": "need_rethink", "problem": problem},
+            "implement",
+        )
+        self.assertEqual(checked, {"problem": problem})
+        for retired in ("kind", "finding", "target_path"):
+            with self.subTest(retired=retired), self.assertRaises(
+                brainstorming_milestone.AdapterError
+            ):
+                brainstorming_milestone.validate_origin_signal(
+                    {
+                        "status": "need_rethink",
+                        "problem": problem,
+                        retired: "retired",
+                    },
+                    "implement",
+                )
+
+    def test_rethink_craft_follows_origin_unit_kind(self):
+        subject = object.__new__(driver.Driver)
+        self.assertEqual(
+            subject._rethink_artifact_type({"kind": state.UNIT_SKELETON}),
+            "document",
+        )
+        self.assertEqual(
+            subject._rethink_artifact_type({"kind": state.UNIT_SLICE_DOC}),
+            "document",
+        )
+        self.assertEqual(
+            subject._rethink_artifact_type({"kind": state.UNIT_SLICE_IMPL}),
+            "implementation",
+        )
+
+    def test_milestone_adapter_launches_target_free_exact_problem(self):
+        problem = "The design requires persistence without database access."
+        charge = {
+            "job": "rethink",
+            "material": "code",
+            "prompt_set": "default",
+            "values": {"rethink_problem": problem},
+            "amendments_path": self.amendments,
+            "accepted_amendments": [],
+            "artifact_type": "implementation",
+            "repository": {
+                "state_path": os.path.join(self.workspace, "state.json"),
+                "skeleton_path": "skeleton.md",
+                "pre_session_commit": self.base,
+            },
+        }
+        with mock.patch.object(
+            brainstorming_milestone,
+            "_launch_repository_session",
+            return_value={"id": "session"},
+        ) as launch:
+            created = brainstorming_milestone.create_session(
+                {"workspace": self.workspace},
+                {},
+                "slice_impl-01",
+                {"problem": problem},
+                ["skeleton.md", "target.md"],
+                charge,
+            )
+        self.assertEqual(created, {"id": "session"})
+        body = launch.call_args.args[3]
+        request = body["request"]
+        self.assertNotIn("target_path", request)
+        self.assertNotIn("deliver_chat", request)
+        self.assertEqual(
+            set(request["context"]["source_payload"]), {"session_charge"}
+        )
+        self.assertEqual(
+            request["context"]["source_payload"]["session_charge"]
+            ["values"]["rethink_problem"],
+            problem,
+        )
+        self.assertTrue(request["request"].endswith(problem))
+
     def test_repository_initialization_writes_no_target_snapshot(self):
         with mock.patch.object(
             self.store,
@@ -333,7 +412,10 @@ class RepositorySealTest(unittest.TestCase):
         unit["implementation_attempt_snapshot"] = {"tree": "stale"}
         unit["brainstorming_wait"] = {
             "session_id": "session",
-            "signal": {"finding": {"id": "F1"}},
+            "signal": {
+                "status": "need_rethink",
+                "problem": "The governing design contradicts persistence.",
+            },
             "origin": {
                 "unit": state.unit_key(unit),
                 "kind": "implement",
@@ -346,7 +428,6 @@ class RepositorySealTest(unittest.TestCase):
             "session_id": "session",
             "result": {
                 "outcome": "success",
-                "target_ref": "target.md",
                 "transcript_ref": "chat.md",
                 "rounds_used": 1,
             },
@@ -364,6 +445,13 @@ class RepositorySealTest(unittest.TestCase):
         self.assertNotIn("brainstorming_resume", current)
         self.assertNotIn("implementation_attempt_snapshot", current)
         self.assertIn("will run fresh", message)
+        event = next(
+            item for item in subject.state["events"]
+            if item.get("type") == "brainstorming_rethink_sealed"
+        )
+        self.assertEqual(event["source_base_revision"], self.base)
+        self.assertEqual(event["accepted_revision"], self.base)
+        self.assertNotIn("target_path", event)
 
 
 if __name__ == "__main__":

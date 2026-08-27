@@ -24,6 +24,19 @@ _AUTHOR_STATUSES = {
 }
 _REVIEW_KINDS = ("review_round", "delta_review")
 _FIX_STATUSES = ("ok", "blocked", "need_rethink")
+NEED_RETHINK_SECTION_ID = "need_rethink"
+RETIRED_RETHINK_SECTION_IDS = frozenset((
+    "need_rethink_author",
+    "review_need_rethink",
+    "fix_need_rethink",
+))
+_NEED_RETHINK_KINDS = frozenset((
+    "draft_slice_note",
+    "implement",
+    "review_round",
+    "delta_review",
+    "fix_findings",
+))
 
 
 def _require(obj, key, types, ctx):
@@ -55,7 +68,10 @@ def _status(obj, bound, allowed, ctx, expected_kinds=None):
         raise contracts.ContractError(
             "%s: status %r not in %r" % (ctx, status, allowed)
         )
-    if _require(obj, "kind", str, ctx) != kind:
+    if (
+        status != "need_rethink"
+        or NEED_RETHINK_SECTION_ID not in bound.registered_section_ids
+    ) and _require(obj, "kind", str, ctx) != kind:
         raise contracts.ContractError("%s: kind does not match prompt" % ctx)
     return status
 
@@ -156,20 +172,6 @@ def _implement_result(obj, bound, options, ctx):
         )
 
 
-def _target_path(obj, ctx):
-    target = _text(obj, "target_path", ctx)
-    if (
-        os.path.isabs(target)
-        or "\x00" in target
-        or os.path.normpath(target) != target
-        or target in (".", "..")
-        or target.startswith(".." + os.sep)
-    ):
-        raise contracts.ContractError(
-            "%s: target_path must be normalized and workspace-relative" % ctx
-        )
-
-
 def _report_finding(finding, ctx, require_plain=False):
     contracts.validate_report_finding(
         finding, ctx, require_plain=require_plain
@@ -195,33 +197,24 @@ def _fix_finding(finding, ctx):
     return finding
 
 
-def _need_rethink(obj, bound, ctx, kinds, finding_validator=None,
-                  statuses=("ok", "blocked", "need_rethink")):
-    status = _status(obj, bound, statuses, ctx, kinds)
+def _problem_rethink(obj, bound, options, ctx):
+    del options
+    _kind(bound, _NEED_RETHINK_KINDS)
+    status = _require(obj, "status", str, ctx)
     if status != "need_rethink":
         return
-    finding = _require(obj, "finding", dict, ctx)
-    if not finding:
-        raise contracts.ContractError("%s: finding must be non-empty" % ctx)
-    if finding_validator is not None:
-        finding_validator(finding, "%s.finding" % ctx, require_plain=True)
-    _target_path(obj, ctx)
+    _text(obj, "problem", ctx)
     forbidden = {
-        "request", "result_mode", "max_rounds", "artifact", "files_changed",
-        "findings", "implementation_cut",
+        "kind", "finding", "target_path", "request", "result_mode",
+        "max_rounds", "artifact", "files_changed", "findings",
+        "implementation_cut", "failure_gap", "design_correction",
+        "design_correction_verdict", "brainstorming_application",
     }
     claimed = sorted(forbidden & set(obj))
     if claimed:
         raise contracts.ContractError(
             "%s: need_rethink must not carry %s" % (ctx, claimed)
         )
-
-
-def _author_rethink(obj, bound, options, ctx):
-    del options
-    _need_rethink(
-        obj, bound, ctx, ("draft_slice_note", "implement")
-    )
 
 
 def _review_result(obj, bound, options, ctx):
@@ -248,13 +241,6 @@ def _review_blocked(obj, bound, options, ctx):
     )
     if status == "blocked":
         _text(obj, "blocked_reason", ctx)
-
-
-def _review_rethink(obj, bound, options, ctx):
-    del options
-    _need_rethink(
-        obj, bound, ctx, _REVIEW_KINDS, _report_finding
-    )
 
 
 def _design_correction_verdict(obj, bound, options, ctx):
@@ -313,23 +299,6 @@ def _fix_blocked(obj, bound, options, ctx):
     status = _status(obj, bound, _FIX_STATUSES, ctx, ("fix_findings",))
     if status == "blocked":
         _text(obj, "blocked_reason", ctx)
-
-
-def _fix_rethink(obj, bound, options, ctx):
-    queued_findings = options["queued_findings"]
-    if obj.get("status") == "need_rethink" and queued_findings is not None:
-        finding = obj.get("finding")
-        if not isinstance(finding, dict) or not any(
-            finding == queued for queued in queued_findings
-        ):
-            raise contracts.ContractError(
-                "%s.finding must exactly copy one complete queued finding"
-                % ctx
-            )
-    _need_rethink(
-        obj, bound, ctx, ("fix_findings",), _report_finding,
-        _FIX_STATUSES,
-    )
 
 
 def _questions(obj, bound, options, ctx):
@@ -558,15 +527,13 @@ REGISTERED_SECTIONS = {
     "envelope_compact": _envelope,
     "envelope_verbose": _envelope,
     "implement_result": _implement_result,
-    "need_rethink_author": _author_rethink,
+    NEED_RETHINK_SECTION_ID: _problem_rethink,
     "questions_output": _questions,
     "review_blocked": _review_blocked,
     "review_contract": _review_result,
     "design_correction_verdict": _design_correction_verdict,
-    "review_need_rethink": _review_rethink,
     "discussion_turn_envelope": _turn("discussion_turn", True),
     "fix_blocked": _fix_blocked,
-    "fix_need_rethink": _fix_rethink,
     "fix_results": _fix_result,
     "merge_repair_result": _merge_repair,
     "questioner_turn_envelope": _turn("questioner_turn", False),
@@ -575,7 +542,7 @@ REGISTERED_SECTIONS = {
 }
 
 _PROTOCOL_FIELDS = frozenset({
-    "status", "kind", "blocked_reason", "notes", "artifact",
+    "status", "kind", "blocked_reason", "notes", "problem", "artifact",
     "files_changed", "implementation_cut", "finding", "target_path",
     "findings", "retry_reason", "questions", "markdown", "ready",
     "tests_modified", "tests_changed",
@@ -599,6 +566,17 @@ _STRICT_FIELD_SECTIONS = frozenset({
 
 def _allowed_fields(bound, obj):
     status = obj.get("status")
+    if (
+        status == "need_rethink"
+        and NEED_RETHINK_SECTION_ID in bound.registered_section_ids
+    ):
+        allowed = {"status", "problem"}
+        if (
+            bound.question_ids
+            or "questions_output" in bound.registered_section_ids
+        ):
+            allowed.add("questions")
+        return allowed
     allowed = set()
     for section_id in bound.registered_section_ids:
         if section_id == "common_fields":
@@ -613,10 +591,6 @@ def _allowed_fields(bound, obj):
             allowed.update(("status", "kind"))
             if status == "ok":
                 allowed.update(("files_changed", "implementation_cut"))
-        elif section_id == "need_rethink_author":
-            allowed.update(("status", "kind"))
-            if status == "need_rethink":
-                allowed.update(("finding", "target_path"))
         elif section_id == "review_contract":
             allowed.update(("status", "kind"))
             if status == "ok":
@@ -625,10 +599,6 @@ def _allowed_fields(bound, obj):
             allowed.update(("status", "kind"))
             if status == "blocked":
                 allowed.add("blocked_reason")
-        elif section_id == "review_need_rethink":
-            allowed.update(("status", "kind"))
-            if status == "need_rethink":
-                allowed.update(("finding", "target_path"))
         elif section_id == "design_correction_verdict":
             allowed.update(("status", "kind"))
             if status == "ok":
@@ -641,10 +611,6 @@ def _allowed_fields(bound, obj):
             allowed.update(("status", "kind"))
             if status == "blocked":
                 allowed.add("blocked_reason")
-        elif section_id == "fix_need_rethink":
-            allowed.update(("status", "kind"))
-            if status == "need_rethink":
-                allowed.update(("finding", "target_path"))
         elif section_id == "discussion_turn_envelope":
             allowed.update(("kind", "markdown", "ready"))
         elif section_id == "questioner_turn_envelope":
@@ -665,10 +631,6 @@ def _allowed_fields(bound, obj):
             allowed.update(("status", "kind", "files_changed", "notes"))
             if status == "blocked":
                 allowed.add("blocked_reason")
-    if status == "need_rethink" and "need_rethink_author" in (
-        bound.registered_section_ids
-    ):
-        allowed.discard("notes")
     if (
         bound.question_ids
         or "questions_output" in bound.registered_section_ids
@@ -721,7 +683,7 @@ def _section(section, ctx):
     return section_id
 
 
-def bind(prompt, consumer_sections=()):
+def bind(prompt, consumer_sections=(), consumer_instructions=()):
     """Copy a served prompt and bind its registered reply obligations."""
     if not isinstance(prompt, dict):
         raise contracts.ContractError("prompt must be an object")
@@ -737,8 +699,45 @@ def bind(prompt, consumer_sections=()):
                 "prompt has duplicate output-contract id %r" % section_id
             )
         seen.add(section_id)
+    if isinstance(consumer_instructions, (str, bytes, dict)):
+        raise contracts.ContractError("consumer_instructions must be a sequence")
+    consumer_instructions = tuple(consumer_instructions)
+    instructions = bound_prompt.get("instructions")
+    if instructions is None:
+        instructions = []
+        bound_prompt["instructions"] = instructions
+    elif not isinstance(instructions, list):
+        raise contracts.ContractError("prompt.instructions must be a list")
     if isinstance(consumer_sections, (str, bytes, dict)):
         raise contracts.ContractError("consumer_sections must be a sequence")
+    consumer_sections = tuple(consumer_sections)
+    incoming_ids = []
+    for index, section in enumerate(consumer_sections):
+        incoming_ids.append(_section(
+            section, "consumer_sections[%d]" % index
+        ))
+    if NEED_RETHINK_SECTION_ID in incoming_ids:
+        retired = sorted(seen & RETIRED_RETHINK_SECTION_IDS)
+        if retired:
+            raise contracts.ContractError(
+                "served prompt mounts retired rethink section %r" % retired[0]
+            )
+        if any(
+            "need_rethink" in line
+            for unit in instructions + sections
+            for line in unit["text"]
+        ):
+            raise contracts.ContractError(
+                "served prompt owns a retired need_rethink fragment"
+            )
+    for index, instruction in enumerate(consumer_instructions):
+        instruction = copy.deepcopy(instruction)
+        instruction_ctx = "consumer_instructions[%d]" % index
+        try:
+            prompt_sets.validate_unit(instruction, instruction_ctx)
+        except prompt_sets.PromptSetError as exc:
+            raise contracts.ContractError(str(exc)) from exc
+        instructions.append(instruction)
     for index, section in enumerate(consumer_sections):
         section = copy.deepcopy(section)
         section_ctx = "consumer_sections[%d]" % index

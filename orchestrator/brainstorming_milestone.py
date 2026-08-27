@@ -8,7 +8,7 @@ import hashlib
 import os
 import tempfile
 
-from orchestrator import brainstorming, brainstorming_coordination
+from orchestrator import brainstorming
 from orchestrator import brainstorming_lifecycle
 from orchestrator import contracts, registry, session_calls, session_repository
 
@@ -88,35 +88,7 @@ def _candidate_reference(workspace, value):
     return os.path.abspath(path)
 
 
-def validate_target(state, signal, references):
-    """Resolve the requested source artifact inside the milestone checkout."""
-    workspace = os.path.abspath(state["workspace"])
-    target = os.path.abspath(os.path.join(workspace, signal["target_path"]))
-    workspace_real = os.path.realpath(workspace)
-    target_real = os.path.realpath(target)
-    try:
-        if (
-            os.path.commonpath((workspace, target)) != workspace
-            or os.path.commonpath((workspace_real, target_real))
-            != workspace_real
-        ):
-            raise AdapterError(
-                "the Brainstorming proposal target leaves the workspace"
-            )
-    except ValueError as exc:
-        raise AdapterError(
-            "the Brainstorming proposal target leaves the workspace"
-        ) from exc
-    try:
-        brainstorming_coordination.capture_materialization_source(target)
-    except brainstorming_coordination.CoordinationRejected as exc:
-        raise AdapterError(
-            "the requested Brainstorming source target is not materializable"
-        ) from exc
-    return target
-
-
-def stable_references(state, candidates, target_path):
+def stable_references(state, candidates):
     """Keep stable, unique present caller references in declared order."""
     workspace = os.path.abspath(state["workspace"])
     references = []
@@ -136,55 +108,33 @@ def stable_references(state, candidates, target_path):
     return references
 
 
-def validate_origin_signal(signal, kind, queued_findings=None):
+def validate_origin_signal(signal, kind):
     """Apply caller-state checks that the common schema cannot know."""
     if kind not in contracts.RETHINK_KINDS or not isinstance(signal, dict):
         raise AdapterError("the origin cannot open a rethink session")
-    if signal.get("status") != "need_rethink" or signal.get("kind") != kind:
+    if signal.get("status") != "need_rethink":
         raise AdapterError("the rethink signal does not match its origin")
-    finding = signal.get("finding")
-    if not isinstance(finding, dict) or not finding:
-        raise AdapterError("a rethink requires one source finding")
-    if kind in contracts.REPORT_KINDS:
-        contracts.validate_report_finding(
-            finding,
-            "milestone need_rethink.finding",
-            require_plain=True,
-        )
-    target = signal.get("target_path")
-    if (
-        not isinstance(target, str)
-        or not target.strip()
-        or os.path.isabs(target)
-        or "\x00" in target
-        or os.path.normpath(target) != target
-        or target in (".", "..")
-        or target.startswith(".." + os.sep)
-    ):
+    retired = (
+        "kind",
+        "finding",
+        "target_path",
+        "request",
+        "max_rounds",
+        "result_mode",
+        "failure_gap",
+    )
+    present = [field for field in retired if field in signal]
+    if present:
         raise AdapterError(
-            "a rethink target must be normalized and workspace-relative"
+            "the rethink signal contains retired field(s): %s"
+            % ", ".join(present)
         )
-    checked = {
-        "finding": copy.deepcopy(finding),
-        "target_path": target,
-    }
-    if kind == contracts.KIND_FIX_FINDINGS:
-        wanted = finding.get("id")
-        matches = [
-            finding
-            for finding in list(queued_findings or [])
-            if wanted is not None and finding.get("id") == wanted
-        ]
-        if len(matches) != 1:
-            raise AdapterError(
-                "a fixer rethink must name exactly one currently queued finding"
-            )
-        # The queue's copy is the authoritative text. A fixer echoing the
-        # finding may normalize a byte it never meant to contest — one
-        # transposed character in the echo killed a run (2026-08-21) —
-        # so the id selects and the queue supplies the body.
-        checked["finding"] = copy.deepcopy(matches[0])
-    return checked
+    problem = signal.get("problem")
+    if not isinstance(problem, str) or not problem.strip():
+        raise AdapterError("a rethink requires one non-empty textual problem")
+    # Preserve the exact authored explanation. It is the session charge, not
+    # a normalized label or a source finding reconstructed by the driver.
+    return {"problem": problem}
 
 
 def _owned_work_areas_root(state, active_home=None):
@@ -329,19 +279,25 @@ def create_session(
     staffing_selection=None,
     active_home=None,
 ):
-    """Translate one valid signal into the existing standalone lifecycle."""
+    """Translate one problem-only signal into a repository-backed session."""
     participants = _participants(lead_profile, counterpart_profile)
     checked_charge = session_calls.validate_charge(session_charge)
     if checked_charge["job"] != "rethink":
         raise AdapterError("an attached rethink requires the rethink charge")
-    validate_target(state, signal, references)
-    context_references = list(references)
-    if signal["target_path"] not in context_references:
-        context_references.append(signal["target_path"])
-    source_payload = {
-        "finding": copy.deepcopy(signal["finding"]),
-        "session_charge": checked_charge,
-    }
+    try:
+        session_repository.context_from_charge(checked_charge)
+    except session_repository.SessionRepositoryError as exc:
+        raise AdapterError(
+            "an attached rethink requires a repository boundary"
+        ) from exc
+    problem = signal.get("problem")
+    if not isinstance(problem, str) or not problem.strip():
+        raise AdapterError("an attached rethink requires its exact problem")
+    if checked_charge["values"].get("rethink_problem") != problem:
+        raise AdapterError(
+            "the rethink signal and session charge must carry the same problem"
+        )
+    source_payload = {"session_charge": checked_charge}
     accepted = [
         copy.deepcopy(item)
         for item in (authority_context or {}).get("amendments") or []
@@ -351,18 +307,23 @@ def create_session(
     body = {
         "request": {
             "workspace_path": state["workspace"],
-            "target_path": signal["target_path"],
             "request": (
-                "Resolve the focused contradiction in the supplied finding. "
-                "Edit the target and any other repository files the resolution "
-                "requires."
+                "**TASK**\n\n"
+                "Resolve the problem below. Work directly in the project Git "
+                "repository. Make whatever repository changes are necessary "
+                "so the problem no longer prevents the work from continuing; "
+                "clarifying the governing documentation may be the complete "
+                "solution. Return `ready` only after the complete resolution "
+                "is present in the repository.\n\n"
+                "**PROBLEM**\n\n%s" % problem
             ),
             "context": {
                 "brief": (
-                    "A milestone worker reported one focused contradiction. "
-                    "The finding below is the complete rethink charge."
+                    "A milestone worker reported a governing design "
+                    "contradiction. The problem below is the complete rethink "
+                    "charge."
                 ),
-                "references": context_references,
+                "references": list(references),
                 "amendments": accepted,
                 "source_payload": source_payload,
             },
@@ -454,6 +415,7 @@ def terminal_handoff(state, session_id, active_home=None):
         "work_cost_partial": projected.get("work_cost_partial", False),
     }
     if repository_backed:
+        handoff["result"].pop("target_ref", None)
         if session_state["status"] == "success":
             handoff.update(session_repository.sealed_range(session_state))
         return handoff

@@ -5068,6 +5068,24 @@ class Driver(object):
             unit, task_id, task, session_id = (
                 self._validate_reconciliation_source_carrier(record)
             )
+            rethink_completion = None
+            if (
+                session_id is not None
+                and (record.get("source") or {}).get("executor")
+                == "brainstorming"
+                and (record.get("source") or {}).get("job") == "rethink"
+            ):
+                wait = unit.get("brainstorming_wait") or {}
+                origin = wait.get("origin") or {}
+                rethink_completion = {
+                    "unit": st.unit_key(unit),
+                    "kind": origin.get("kind"),
+                    "session_id": session_id,
+                    "source_base_revision": record[
+                        "source_base_revision"
+                    ],
+                    "accepted_revision": record["accepted_revision"],
+                }
             account = final["final_account"]
             by_key = {
                 st.unit_key(item): item
@@ -5113,7 +5131,6 @@ class Driver(object):
                     }
                 ),
             )
-
             requeue_ids = set(account["requeue_slice_ids"])
             for target in invalidated:
                 if target.get("kind") != st.UNIT_SLICE_IMPL:
@@ -5156,6 +5173,12 @@ class Driver(object):
                 ),
                 final_account=copy.deepcopy(account),
             )
+            if rethink_completion is not None:
+                st.append_event(
+                    self.state,
+                    "brainstorming_rethink_sealed",
+                    **rethink_completion,
+                )
             st.ensure_due_unit(self.state)
         except Exception:
             self.state = baseline
@@ -5900,7 +5923,7 @@ class Driver(object):
         )
         return "design correction ratified; amended (%s)" % sha
 
-    def _brainstorming_references(self, unit, signal):
+    def _brainstorming_references(self, unit):
         return brainstorming_milestone.stable_references(
             self.state,
             [
@@ -5909,23 +5932,23 @@ class Driver(object):
                 self._governing(unit),
                 unit.get("artifact"),
             ],
-            signal["target_path"],
         )
 
     @staticmethod
     def _rethink_requests_design_amendment(signal):
         return False
 
-    def _rethink_artifact_type(self, unit, target_path):
-        del unit
-        if target_path in self._design_document_paths():
-            return "document"
-        extension = os.path.splitext(target_path)[1].lower()
-        return (
-            "document"
-            if extension in (".adoc", ".markdown", ".md", ".mdx", ".rst", ".txt")
-            else "implementation"
-        )
+    def _rethink_artifact_type(self, unit):
+        try:
+            return {
+                st.UNIT_SKELETON: "document",
+                st.UNIT_SLICE_DOC: "document",
+                st.UNIT_SLICE_IMPL: "implementation",
+            }[unit["kind"]]
+        except (KeyError, TypeError) as exc:
+            raise st.IllegalTransition(
+                "rethink origin has no supported unit type"
+            ) from exc
 
     def _adopt_brainstorming_design_amendment(
         self, unit, wait, handoff
@@ -6089,7 +6112,6 @@ class Driver(object):
         result,
         raw_path,
         raw_name,
-        pre_snapshot=None,
     ):
         """Attach one non-completing worker signal to an independent session."""
         st.append_event(
@@ -6121,14 +6143,7 @@ class Driver(object):
             checked = brainstorming_milestone.validate_origin_signal(
                 signal,
                 kind,
-                queued_findings=unit.get("fix_queue") or [],
             )
-            if kind in contracts.REPORT_KINDS:
-                self._validate_contests(
-                    unit,
-                    {"findings": [copy.deepcopy(checked["finding"])]},
-                    kind,
-                )
             self._terminalize_worker_task(
                 unit,
                 signal,
@@ -6175,8 +6190,7 @@ class Driver(object):
         # because the discussion was not attached yet.
         self._save()
         try:
-            provider_ref = getattr(result, "session_ref", None)
-            references = self._brainstorming_references(unit, checked)
+            references = self._brainstorming_references(unit)
             authority = self._worker_episode_authority(unit, kind)
             authority_context = {
                 "amendments": copy.deepcopy(
@@ -6186,21 +6200,12 @@ class Driver(object):
                     authority.get("project_context")
                 ),
             }
-            artifact_type = self._rethink_artifact_type(
-                unit, checked["target_path"]
-            )
+            artifact_type = self._rethink_artifact_type(unit)
             repository = self._session_repository_context(unit)
             session_charge = self._session_charge(
                 "rethink",
                 self._judgment_material(unit),
-                {
-                    "rethink_finding": json.dumps(
-                        checked["finding"],
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        indent=2,
-                    )
-                },
+                {"rethink_problem": checked["problem"]},
                 authority,
                 repository,
                 artifact_type=artifact_type,
@@ -6224,14 +6229,18 @@ class Driver(object):
                 staffing_selection=staffing_selection,
                 active_home=self.model_profiles_home,
             )
-            progress = brainstorming.coordination_projection(created["state"])
+            created_state = created["state"]
+            repository_context = session_repository.context_from_state(
+                created_state
+            )
+            progress = brainstorming.coordination_projection(created_state)
             if (
-                progress is None
-                or progress["accepted_target_revision"] is not None
+                repository_context is None
+                or progress is None
                 or not progress["recovery_baseline_revision"]
             ):
                 raise brainstorming_milestone.AdapterError(
-                    "Brainstorming creation did not expose an unaccepted "
+                    "Brainstorming creation did not expose its repository "
                     "recovery baseline"
                 )
         except StopStep:
@@ -6265,7 +6274,10 @@ class Driver(object):
 
         unit["brainstorming_wait"] = {
             "session_id": created["id"],
-            "signal": copy.deepcopy(checked),
+            "signal": {
+                "status": "need_rethink",
+                "problem": checked["problem"],
+            },
             "references": list(references),
             "origin": {
                 "unit": st.unit_key(unit),
@@ -6273,25 +6285,9 @@ class Driver(object):
                 "family": family,
                 "model": model,
                 "effort": effort,
-                "provider_session_ref": provider_ref,
-                "provider_session_token_usage": copy.deepcopy(
-                    getattr(result, "session_token_usage", None)
-                ),
-                # The raw CUMULATIVE snapshot, so a continuation after a
-                # restart can still subtract instead of pricing as unknown.
-                # It must be the session twin, not cost_payloads[-1]: that
-                # list is rewritten to the per-turn delta, and persisting a
-                # delta as a baseline re-charges the whole session on resume.
-                # Codex only -- nothing else consumes it, and Claude's payload
-                # is a whole worker envelope.
-                "provider_session_cost_payload": copy.deepcopy(
-                    getattr(result, "session_cost_payload", None)
-                    if family == "codex" else None
-                ),
                 "raw_path": raw_path,
                 "raw_name": raw_name,
                 "duration_s": result.duration_s,
-                "pre_snapshot": copy.deepcopy(pre_snapshot),
                 "plan_source": {
                     "executor": "brainstorming",
                     "job": session_charge["job"],
@@ -6313,7 +6309,7 @@ class Driver(object):
             kind=kind,
             family=family,
             session_id=created["id"],
-            target_path=checked["target_path"],
+            source_base_revision=progress["recovery_baseline_revision"],
         )
         # The independent process is already live. Persist its attachment
         # before returning to the outer step so a later crash cannot leave a
@@ -7424,6 +7420,23 @@ class Driver(object):
             )
         if (wait.get("origin") or {}).get("task_executor") == "brainstorming":
             return self._do_brainstorming_production_wait(unit, wait)
+        origin = wait["origin"]
+        kind = origin.get("kind")
+        try:
+            brainstorming_milestone.validate_origin_signal(
+                wait.get("signal"), kind
+            )
+        except brainstorming_milestone.AdapterError as exc:
+            unit.pop("brainstorming_wait", None)
+            st.fail_run(
+                self.state,
+                "recorded rethink signal is incompatible with the current "
+                "problem-only contract: %s" % exc,
+                unit=unit,
+                type_="worker_protocol",
+            )
+            self._save()
+            raise StopStep("recorded rethink signal is incompatible")
         try:
             handoff = self._with_inspection_retry(
                 lambda: brainstorming_milestone.terminal_handoff(
@@ -7443,14 +7456,8 @@ class Driver(object):
                 )
                 self._save()
                 raise StopStep("Brainstorming inspection failed")
-            unit.pop("brainstorming_wait", None)
             origin_kind = (wait.get("origin") or {}).get("kind")
-            if origin_kind in contracts.RETHINK_CONTINUATION_KINDS:
-                self._fail_waiting_worker_task(
-                    unit,
-                    wait,
-                    "attached Brainstorming session is missing",
-                )
+            unit.pop("brainstorming_wait", None)
             st.append_event(
                 self.state,
                 "brainstorming_missing_detached",
@@ -7458,10 +7465,14 @@ class Driver(object):
                 kind=origin_kind,
                 session_id=session_id,
             )
-            return (
-                "discarded missing Brainstorming session %s; "
-                "originating action resumed" % session_id
+            st.fail_run(
+                self.state,
+                "recorded Brainstorming session is missing",
+                unit=unit,
+                type_="brainstorming_operational",
             )
+            self._save()
+            raise StopStep("Brainstorming session is missing")
         except brainstorming_milestone.OperationalTerminalError as exc:
             # The terminal session remains retained evidence, but it must no
             # longer monopolize the unit's next action. Operator resume now
@@ -7518,65 +7529,8 @@ class Driver(object):
             cost_partial=handoff.get("work_cost_partial", False),
         )
 
-        origin = wait["origin"]
-        kind = origin["kind"]
         if handoff["result"]["outcome"] == "failure":
-            if self._modern_design_updates():
-                unit.pop("brainstorming_wait", None)
-                if kind in contracts.RETHINK_CONTINUATION_KINDS:
-                    self._fail_waiting_worker_task(
-                        unit,
-                        wait,
-                        "focused design discussion ended without agreement",
-                    )
-                st.append_event(
-                    self.state,
-                    "brainstorming_failure_routed",
-                    unit=st.unit_key(unit),
-                    kind=kind,
-                    session_id=session_id,
-                )
-                st.fail_run(
-                    self.state,
-                    "focused design discussion ended without agreement; "
-                    "the original work and candidate are preserved",
-                    unit=unit,
-                    type_="brainstorming_no_agreement",
-                )
-                self._save()
-                raise StopStep("Brainstorming ended without agreement")
-            if (
-                kind == contracts.KIND_FIX_FINDINGS
-                and not self._fixer_gap_enabled(unit)
-            ):
-                # A discussion failure cannot broaden the ordinary fixer-gap
-                # route. Preserve the fix episode and stop before any unwind.
-                unit.pop("brainstorming_wait", None)
-                self._fail_waiting_worker_task(
-                    unit,
-                    wait,
-                    "focused design discussion could not be adopted by the "
-                    "fixer route",
-                )
-                st.fail_run(
-                    self.state,
-                    "Brainstorming failed for a fixer outside the supported "
-                    "gap envelope; the existing fix episode is preserved for "
-                    "operator intervention",
-                    unit=unit,
-                    type_="worker_blocked",
-                )
-                self._save()
-                raise StopStep(
-                    "Brainstorming fixer failure outside gap envelope"
-                )
             unit.pop("brainstorming_wait", None)
-            if kind in contracts.RETHINK_CONTINUATION_KINDS:
-                self._fail_waiting_worker_task(
-                    unit,
-                    wait,
-                    "focused design discussion routed the work elsewhere",
-                )
             st.append_event(
                 self.state,
                 "brainstorming_failure_routed",
@@ -7584,52 +7538,15 @@ class Driver(object):
                 kind=kind,
                 session_id=session_id,
             )
-            if kind in contracts.RETHINK_CONTINUATION_KINDS:
-                failure_gap = wait["signal"].get("failure_gap")
-                if not isinstance(failure_gap, dict):
-                    st.fail_run(
-                        self.state,
-                        "a historical Brainstorming continuation has no "
-                        "failure_gap for its no-agreement route",
-                        unit=unit,
-                        type_="worker_protocol",
-                    )
-                    self._save()
-                    raise StopStep("missing legacy failure gap")
-                pre = origin.get("pre_snapshot") or {}
-                return self._handle_gap(
-                    unit,
-                    {"gaps": [copy.deepcopy(failure_gap)]},
-                    None,
-                    pre_tree=pre.get("tree"),
-                    pre_head=pre.get("head"),
-                    pre_sym=pre.get("sym"),
-                    pre_refs=pre.get("refs"),
-                    pre_stash=pre.get("stash"),
-                    pre_worktree_tree=pre.get("worktree_tree"),
-                    from_fixer=kind == contracts.KIND_FIX_FINDINGS,
-                )
-            if kind == RETIRED_SEAL_WORKER_KIND:
-                self._restart_from_retired_seal_rethink(
-                    unit, "retired seal Brainstorming failed"
-                )
-                st.enter_fix_episode(
-                    self.state,
-                    unit,
-                    [self._rethink_finding_for_fix(
-                        wait["signal"]["finding"]
-                    )],
-                    "round",
-                    origin.get("family"),
-                    "brainstorming:%s" % session_id,
-                    st.U_ROUNDS,
-                )
-                return (
-                    "Brainstorming failed; retired seal finding queued and "
-                    "ordinary reviews restarted"
-                )
-            self._route_rethink_report_failure(unit, wait)
-            return "Brainstorming failed; source finding queued for fixing"
+            st.fail_run(
+                self.state,
+                "focused design discussion ended without agreement; "
+                "the original work and candidate are preserved",
+                unit=unit,
+                type_="brainstorming_no_agreement",
+            )
+            self._save()
+            raise StopStep("Brainstorming ended without agreement")
 
         if (
             "source_base_revision" in handoff
@@ -7658,7 +7575,7 @@ class Driver(object):
                 accepted_revision=handoff["accepted_revision"],
             )
             return (
-                "Brainstorming sealed repository changes; %s will run fresh"
+                "Brainstorming accepted repository state; %s will run fresh"
                 % kind
             )
 
@@ -8464,19 +8381,6 @@ class Driver(object):
                 result,
                 raw_path,
                 raw_name,
-                pre_snapshot={
-                    "refs": pre_refs,
-                    "sym": pre_sym,
-                    "head": pre_head,
-                    "tree": pre_tree,
-                    "stash": pre_stash,
-                    "implementation_size": copy.deepcopy(
-                        implementation_size
-                    ),
-                    "implementation_stabilized": bool(
-                        implementation_stabilized
-                    ),
-                },
             )
         if output.get("status") == "gap":
             # The builder met a build-changing hole/conflict and stopped
@@ -10712,14 +10616,6 @@ class Driver(object):
                 result,
                 raw_path,
                 raw_name,
-                pre_snapshot={
-                    "refs": pre_refs,
-                    "sym": pre_sym,
-                    "head": pre_head,
-                    "tree": pre_tree,
-                    "worktree_tree": pre_worktree_tree,
-                    "stash": pre_stash,
-                },
             )
         if output.get("status") == "gap":
             pending_agreement = self._fixer_brainstorming_agreement(

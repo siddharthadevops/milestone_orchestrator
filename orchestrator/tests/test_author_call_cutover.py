@@ -122,6 +122,88 @@ class AuthorCallPreparationTest(unittest.TestCase):
         with self.assertRaises(contracts.ContractError):
             prepared.validate(invalid)
 
+    def test_runtime_mounts_problem_only_rethink_on_eligible_authors(self):
+        draft_values = implement_values(self.temp.name)
+        draft_values["kind"] = "draft_slice_note"
+        draft_values.pop("soft_lines")
+        draft_values.pop("hard_lines")
+        cases = (
+            (
+                "draft_slice_note@slice_doc", "document", draft_values,
+                "If drafting the slice exposes this condition",
+            ),
+            (
+                "implement@slice_impl", "code",
+                implement_values(self.temp.name),
+                "If implementation exposes this condition",
+            ),
+        )
+        for job, material, values, kind_instruction in cases:
+            with self.subTest(job=job):
+                prepared = author_calls.prepare(
+                    self.temp.name,
+                    job=job,
+                    material=material,
+                    values=values,
+                )
+                self.assertEqual(
+                    prepared.bound.registered_section_ids.count(
+                        "need_rethink"
+                    ),
+                    1,
+                )
+                self.assertIn("NEED_RETHINK", prepared.prompt)
+                self.assertIn(kind_instruction, prepared.prompt)
+                self.assertIn(
+                    '"status":"need_rethink","problem":',
+                    prepared.prompt,
+                )
+                reply = {
+                    "status": "need_rethink",
+                    "problem": "Two governing requirements contradict.",
+                    "questions": answered(prepared.bound),
+                }
+                self.assertEqual(
+                    prepared.validate(copy.deepcopy(reply)), reply
+                )
+
+        skeleton = author_calls.prepare(
+            self.temp.name,
+            job="draft_skeleton@skeleton",
+            material="document",
+            values=draft_skeleton_values(self.temp.name),
+        )
+        self.assertNotIn("need_rethink", skeleton.bound.registered_section_ids)
+        self.assertNotIn("NEED_RETHINK", skeleton.prompt)
+
+    def test_named_author_rung_with_retired_rethink_fragment_falls_whole(self):
+        self.assertTrue(prompt_sets.ensure_default(self.temp.name))
+        implement_path = os.path.join(
+            prompt_sets.prompt_set_dir(self.temp.name, "default"),
+            "milestone",
+            "implement.json",
+        )
+        with open(implement_path, "r", encoding="utf-8") as handle:
+            document = json.load(handle)
+        document["output_contract"]["sections"].append({
+            "id": "need_rethink_author",
+            "text": ["Return need_rethink with target_path."],
+            "variables": [],
+        })
+        with open(implement_path, "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+
+        prepared = self.prepare(prompt_set="default")
+
+        self.assertEqual(
+            prepared.prompt_set_fallback,
+            prompt_sets.PROMPT_SET_FALLBACK_SEED,
+        )
+        self.assertIn("NEED_RETHINK", prepared.prompt)
+        self.assertNotIn(
+            "Return need_rethink with target_path.", prepared.prompt
+        )
+
     def test_implementation_charge_renders_exact_current_part_scope(self):
         scope = {
             "part": "b",
@@ -573,7 +655,10 @@ class AuthorCallPreparationTest(unittest.TestCase):
             )
         )
         self.assertTrue(questions_only.bound.question_ids)
-        self.assertFalse(questions_only.bound.registered_section_ids)
+        self.assertEqual(
+            questions_only.bound.registered_section_ids,
+            ("need_rethink",),
+        )
 
         with self.assertRaisesRegex(
             verifiers.PolicyConfigError,
@@ -1408,20 +1493,31 @@ class DriverAuthorFindingRegressionTest(unittest.TestCase):
             result.prompt_set_fallback = "rung-1"
             result.session_ref = "provider-session"
             checked = {
-                "status": "need_rethink",
-                "kind": contracts.KIND_IMPLEMENT,
-                "request": "Resolve one bounded question.",
-                "finding": {"id": "F1", "summary": "Question"},
-                "target_path": "proposal.md",
-                "max_rounds": 20,
-                "result_mode": "proposal",
+                "problem": (
+                    "The governing design and required persistence "
+                    "contradict each other."
+                ),
             }
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=ws,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
             created = {
                 "id": "bs-fallback",
                 "state": {
+                    "request": {"context": {"source_payload": {
+                        "session_charge": {"repository": {
+                            "state_path": state_path,
+                            "skeleton_path": "seed.txt",
+                            "pre_session_commit": base,
+                        }}
+                    }}},
                     "completed_turns": [],
                     "rounds_used": 0,
-                    "recovery_baseline_revision": "baseline",
+                    "recovery_baseline_revision": base,
                     "accepted_target_revision": None,
                 },
             }

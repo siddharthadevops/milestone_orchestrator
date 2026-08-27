@@ -123,30 +123,6 @@
       ],
       "variables": []
     },
-    "design_contradiction_author": {
-      "text": [
-        "DESIGN CONTRADICTION — USE NEED_RETHINK",
-        "- If you confirm one concrete design contradiction, still inside the",
-        "  MANDATE, whose resolution requires changing the current design",
-        "  baseline, return `need_rethink`: put the contradiction and its",
-        "  evidence in `finding` and name the artifact it lives in. Do not",
-        "  code around it, silently rewrite design documents, or stop the run",
-        "  merely because those documents need an edit."
-      ],
-      "variables": []
-    },
-    "design_contradiction_fixer": {
-      "text": [
-        "DESIGN CONTRADICTION — USE NEED_RETHINK",
-        "- If you confirm one queued finding whose valid resolution requires",
-        "  changing the current design baseline — a design contradiction still",
-        "  inside the MANDATE — return `need_rethink`: copy exactly that",
-        "  complete queued finding into `finding` and name the artifact it",
-        "  lives in. Do not code around it, silently rewrite design documents,",
-        "  or stop the run merely because those documents need an edit."
-      ],
-      "variables": []
-    },
     "evidence": {
       "text": [
         "EVIDENCE",
@@ -259,15 +235,21 @@
     },
     "rethink_charge": {
       "text": [
-        "RETHINK CHARGE (complete source finding)",
-        "{{rethink_finding}}"
+        "TASK",
+        "Resolve the problem below. Work directly in the project Git repository.",
+        "Make whatever repository changes are necessary so the problem no longer",
+        "prevents the work from continuing; clarifying the governing documentation",
+        "may be the complete solution. Return `ready` only after the complete",
+        "resolution is present in the repository.",
+        "",
+        "PROBLEM",
+        "{{rethink_problem}}"
       ],
       "variables": [
         {
-          "name": "rethink_finding",
-          "required": false,
-          "drop_unit_if_absent": true,
-          "description": "Opaque JSON rendering of the complete validated source finding."
+          "name": "rethink_problem",
+          "required": true,
+          "description": "The exact problem explanation returned by the originating worker."
         }
       ]
     },
@@ -594,21 +576,6 @@
         }
       ]
     },
-    "need_rethink_author": {
-      "text": [
-        "`status: \"need_rethink\"` — you found a design contradiction the",
-        "Brainstorming process must resolve before you can finish. Return EXACTLY:",
-        "  \"status\": \"need_rethink\"",
-        "  \"kind\": \"<echo the current kind>\"",
-        "  \"finding\": {<the contradiction, with its evidence>}",
-        "  \"target_path\": \"<workspace-relative artifact the contradiction lives in>\"",
-        "  \"questions\": [...]   (the QUESTIONS entries are required here too:",
-        "   asking for a rethink is only legitimate AFTER asking and answering them)",
-        "No proposed direction and no other fields — the orchestrator runs the",
-        "session from the finding alone."
-      ],
-      "variables": []
-    },
     "design_correction_verdict": {
       "text": [
         "A provisional design-correction delta supplies its complete retained context here and requires design_correction_verdict={decision, reason}."
@@ -643,19 +610,6 @@
         "Impossible task:",
         "{\"status\":\"blocked\",\"kind\":\"<echo KIND>\",\"blocked_reason\":\"...\",",
         " \"questions\":[...]}   (the QUESTIONS entries are required in EVERY reply)"
-      ],
-      "variables": []
-    },
-    "review_need_rethink": {
-      "text": [
-        "Focused discussion before finishing this judgment:",
-        "{\"status\":\"need_rethink\",\"kind\":\"<echo KIND>\",",
-        " \"finding\":{<one complete current finding>},",
-        " \"target_path\":\"<workspace-relative artifact it lives in>\",",
-        " \"questions\":[...]}   (required in EVERY reply: a rethink is only",
-        "legitimate after asking and answering them)",
-        "No proposed direction; beyond these, return no other fields with",
-        "`blocked` or `need_rethink`."
       ],
       "variables": []
     },

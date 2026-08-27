@@ -12,14 +12,6 @@ PROJECT CONTEXT (standing project law; binding)
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/tutor — a READ-ONLY grant: you may read it for evidence; never edit it.
 
-DESIGN CONTRADICTION — USE NEED_RETHINK
-- If you confirm one queued finding whose valid resolution requires
-  changing the current design baseline — a design contradiction still
-  inside the MANDATE — return `need_rethink`: copy exactly that
-  complete queued finding into `finding` and name the artifact it
-  lives in. Do not code around it, silently rewrite design documents,
-  or stop the run merely because those documents need an edit.
-
 OPERATOR AMENDMENTS (binding; they refine the MANDATE)
 These bind like the TASK itself.
 [A1] Ladders are ordered by capability. A family's models ladder runs from the least to the most capable model, as the operator judges it; price is not the criterion, even where it happens to coincide. step_up exists to add intelligence when work is stuck - first more effort, then a more capable model - never to change cost. The initial conversion writes today's order (luna < terra < sol; sonnet < opus < fable) as operator data in the document, and only the operator reorders it.
@@ -37,9 +29,7 @@ ADVERSARIAL FINDING VALIDATION
   route.
 
 QUEUED FINDINGS (claims, not facts — verify each against the
-real code/doc before deciding). These are the exact stored objects;
-if you request `need_rethink`, copy exactly one complete object into
-`finding` without shortening, normalizing, or dropping fields:
+real code/doc before deciding). These are the exact stored objects:
 [
   {
     "contests": null,
@@ -169,6 +159,14 @@ PROCESS AUTHORITY
 - Never invoke, spawn, or consult another LLM or agent. Only the
   deterministic driver dispatches model calls.
 
+NEED_RETHINK
+Use `need_rethink` when a confirmed contradiction in the governing
+design prevents you from completing this order, while the MANDATE
+itself remains workable. In `problem`, explain what prevents
+completion and why, including the evidence needed to understand it.
+Do not propose a direction or claim completion.
+If the queued work exposes this condition, return `need_rethink` and explain the actual obstacle in `problem`. Do not copy or disposition a queued finding in the same reply.
+
 QUESTIONS (answer each in output, backed by an explanation)
 - environment_fit: What standard does the surrounding work live at, and do any fixes you applied exceed it where the mandate did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found.
 - human_scale: Put your fixes next to the findings: did you repair at the grain and size the mandate means, or feed literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
@@ -203,15 +201,13 @@ Impossible worker task (not a finding disposition):
 {"status":"blocked","kind":"fix_findings","blocked_reason":"...",
  "questions":[...]}   (the QUESTIONS entries are required in EVERY reply)
 
-Focused discussion before deciding one queued finding:
-{"status":"need_rethink","kind":"fix_findings",
- "finding":{<one complete queued finding>},
- "target_path":"<workspace-relative artifact it lives in>",
- "questions":[...]}   (required in EVERY reply)
-No proposed direction and no other fields; sibling findings stay
-queued — the orchestrator runs the session from the finding alone.
-
 "questions": [{"id": "<id>", "answer": "<the answer, backed by an explanation>"}, ...]
   (one entry per QUESTIONS id above, in EVERY reply whatever its status;
    each entry ANSWERS its question and briefly describes the work behind
    it — the machine requires one non-empty answer per mounted id; it does not judge substance or length)
+
+Unresolved governing-design contradiction:
+{"status":"need_rethink","problem":"<what prevents completion, why, and the supporting evidence>"}
+Also include fields independently required by another mounted output
+section, such as the exact `questions` answers. Do not include origin
+metadata, source-finding data, a proposed solution, or ordinary work results.

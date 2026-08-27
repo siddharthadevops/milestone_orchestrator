@@ -2126,6 +2126,70 @@ def design_correction_verdict_section(design_correction):
     }
 
 
+_NEED_RETHINK_KIND_INSTRUCTIONS = {
+    contracts.KIND_DRAFT_SLICE_NOTE: (
+        "If drafting the slice exposes this condition, return `need_rethink` "
+        "instead of an artifact or slice-plan claim."
+    ),
+    contracts.KIND_IMPLEMENT: (
+        "If implementation exposes this condition, return `need_rethink` "
+        "instead of claiming files changed or an implementation cut."
+    ),
+    contracts.KIND_REVIEW_ROUND: (
+        "If one confirmed problem meets this rule, return `need_rethink` and "
+        "explain the actual obstacle in `problem` instead of completing the "
+        "review with findings. Other problems remain ordinary findings; you "
+        "are report-only in either case."
+    ),
+    contracts.KIND_DELTA_REVIEW: (
+        "If one confirmed in-scope problem meets this rule, return "
+        "`need_rethink` and explain the actual obstacle in `problem` instead "
+        "of completing the delta review with findings. Other problems remain "
+        "ordinary findings; you are report-only in either case."
+    ),
+    contracts.KIND_FIX_FINDINGS: (
+        "If the queued work exposes this condition, return `need_rethink` and "
+        "explain the actual obstacle in `problem`. Do not copy or disposition "
+        "a queued finding in the same reply."
+    ),
+}
+
+
+def need_rethink_instruction(kind):
+    """Runtime-owned decision law mounted on every eligible worker call."""
+    try:
+        kind_instruction = _NEED_RETHINK_KIND_INSTRUCTIONS[kind]
+    except KeyError as exc:
+        raise ValueError("kind %r has no need_rethink exit" % kind) from exc
+    return {
+        "text": [
+            "NEED_RETHINK",
+            "Use `need_rethink` when a confirmed contradiction in the governing",
+            "design prevents you from completing this order, while the MANDATE",
+            "itself remains workable. In `problem`, explain what prevents",
+            "completion and why, including the evidence needed to understand it.",
+            "Do not propose a direction or claim completion.",
+            kind_instruction,
+        ],
+        "variables": [],
+    }
+
+
+def need_rethink_output_section():
+    """One injected problem-only branch shared by every eligible kind."""
+    return {
+        "id": "need_rethink",
+        "text": [
+            "Unresolved governing-design contradiction:",
+            '{"status":"need_rethink","problem":"<what prevents completion, why, and the supporting evidence>"}',
+            "Also include fields independently required by another mounted output",
+            "section, such as the exact `questions` answers. Do not include origin",
+            "metadata, source-finding data, a proposed solution, or ordinary work results.",
+        ],
+        "variables": [],
+    }
+
+
 def build_delta_review(family, workspace, goal, unit_desc, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, debt=None, wave_docs=None,

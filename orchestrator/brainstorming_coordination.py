@@ -1036,13 +1036,15 @@ class BrainstormingCoordinator:
     @staticmethod
     def _external_input(state):
         request = state["request"]
-        return {
+        supplied = {
             "request": request["request"],
             "context": request["context"],
             "workspace_path": request["workspace_path"],
-            "target_path": request["target_path"],
             "transcript_ref": state["transcript_ref"],
         }
+        if not brainstorming.repository_rethink_request(request):
+            supplied["target_path"] = request["target_path"]
+        return supplied
 
     def _external_intervention(
         self,

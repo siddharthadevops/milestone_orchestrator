@@ -108,13 +108,13 @@ PROCESS AUTHORITY
 - Never invoke, spawn, or consult another LLM or agent. Only the
   deterministic driver dispatches model calls.
 
-DESIGN CONTRADICTION — USE NEED_RETHINK
-- If you confirm one concrete design contradiction, still inside the
-  MANDATE, whose resolution requires changing the current design
-  baseline, return `need_rethink`: put the contradiction and its
-  evidence in `finding` and name the artifact it lives in. Do not
-  code around it, silently rewrite design documents, or stop the run
-  merely because those documents need an edit.
+NEED_RETHINK
+Use `need_rethink` when a confirmed contradiction in the governing
+design prevents you from completing this order, while the MANDATE
+itself remains workable. In `problem`, explain what prevents
+completion and why, including the evidence needed to understand it.
+Do not propose a direction or claim completion.
+If drafting the slice exposes this condition, return `need_rethink` instead of an artifact or slice-plan claim.
 
 QUESTIONS (answer each in output, backed by an explanation)
 - due_diligence_count: How many Due Diligence rows did you answer in the document?
@@ -127,23 +127,12 @@ Respond with EXACTLY ONE JSON object and nothing else: no prose before or
 after it, no markdown fences. The object must satisfy:
 
 Common fields:
-  "status": "ok" | "blocked" | "need_rethink"
+  "status": "ok" | "blocked"
   "kind": "<echo the KIND header of this prompt>"
   "blocked_reason": string    (required when status is "blocked": explain
                                precisely what stops you; the run will end
                                with this explanation in the log)
   "notes": string             (optional, short)
-
-`status: "need_rethink"` — you found a design contradiction the
-Brainstorming process must resolve before you can finish. Return EXACTLY:
-  "status": "need_rethink"
-  "kind": "<echo the current kind>"
-  "finding": {<the contradiction, with its evidence>}
-  "target_path": "<workspace-relative artifact the contradiction lives in>"
-  "questions": [...]   (the QUESTIONS entries are required here too:
-   asking for a rethink is only legitimate AFTER asking and answering them)
-No proposed direction and no other fields — the orchestrator runs the
-session from the finding alone.
 
 Kind draft_slice_note adds:
   "artifact": "<workspace-relative path of the slice note you wrote>"
@@ -152,3 +141,9 @@ Kind draft_slice_note adds:
   (one entry per QUESTIONS id above, in EVERY reply whatever its status;
    each entry ANSWERS its question and briefly describes the work behind
    it — the machine requires one non-empty answer per mounted id; it does not judge substance or length)
+
+Unresolved governing-design contradiction:
+{"status":"need_rethink","problem":"<what prevents completion, why, and the supporting evidence>"}
+Also include fields independently required by another mounted output
+section, such as the exact `questions` answers. Do not include origin
+metadata, source-finding data, a proposed solution, or ordinary work results.

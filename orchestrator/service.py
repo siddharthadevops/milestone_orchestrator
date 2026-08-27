@@ -3589,7 +3589,13 @@ def _require_unowned_workspace(
             continue
         if live_sessions_only and session.get("process") != "running":
             continue
-        if gitsync.paths_overlap(session.get("target_path"), workspace):
+        mutation_path = (
+            session.get("target_path") or session.get("workspace_path")
+        )
+        if (
+            isinstance(mutation_path, str)
+            and gitsync.paths_overlap(mutation_path, workspace)
+        ):
             raise ApiError(409, WORK_AREA_BUSY)
 
 

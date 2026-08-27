@@ -83,15 +83,19 @@ class PromptContractsTest(unittest.TestCase):
             for item in document["output_contract"]["sections"]:
                 shipped.add(item.get("ref", item.get("id")))
         self.assertNotIn(None, shipped)
-        self.assertEqual(shipped, set(prompt_contracts.REGISTERED_SECTIONS))
+        self.assertNotIn(prompt_contracts.NEED_RETHINK_SECTION_ID, shipped)
+        self.assertEqual(
+            shipped | {prompt_contracts.NEED_RETHINK_SECTION_ID},
+            set(prompt_contracts.REGISTERED_SECTIONS),
+        )
         self.assertTrue(all(
             callable(check)
             for check in prompt_contracts.REGISTERED_SECTIONS.values()
         ))
-        rethink = {"status": "need_rethink", "kind": "implement",
-                   "finding": {"fact": "conflict"}, "target_path": "note.md"}
-        review_rethink = dict(rethink, kind="review_round",
-                              finding=report_finding())
+        rethink = {
+            "status": "need_rethink",
+            "problem": "The governing design requires incompatible outcomes.",
+        }
         cases = [
             ("envelope_verbose", "implement", {}, []),
             ("envelope_compact", "review_round", {}, []),
@@ -108,8 +112,8 @@ class PromptContractsTest(unittest.TestCase):
             ("implement_result", "implement",
              {"status": "ok", "kind": "implement", "files_changed": []},
              {"status": "ok", "kind": "implement"}),
-            ("need_rethink_author", "implement", rethink,
-             dict(rethink, target_path="../note.md")),
+            ("need_rethink", "implement", rethink,
+             dict(rethink, problem="  ")),
             ("review_contract", "review_round",
              {"status": "ok", "kind": "review_round", "findings": []},
              {"status": "ok", "kind": "review_round"}),
@@ -117,8 +121,6 @@ class PromptContractsTest(unittest.TestCase):
              {"status": "blocked", "kind": "review_round",
               "blocked_reason": "Cannot judge"},
              {"status": "blocked", "kind": "review_round"}),
-            ("review_need_rethink", "review_round", review_rethink,
-             dict(review_rethink, finding={})),
             ("fix_results", "fix_findings",
              {"status": "ok", "kind": "fix_findings", "findings": [],
               "files_changed": []},
@@ -127,9 +129,6 @@ class PromptContractsTest(unittest.TestCase):
              {"status": "blocked", "kind": "fix_findings",
               "blocked_reason": "Cannot fix"},
              {"status": "blocked", "kind": "fix_findings"}),
-            ("fix_need_rethink", "fix_findings",
-             dict(review_rethink, kind="fix_findings"),
-             dict(review_rethink, kind="fix_findings", finding={})),
             ("reclassify_result", "reclassify",
              {"status": "ok", "kind": "reclassify", "drift_risk": "low",
               "drift_damage": "medium", "reason": "Bounded change"},
@@ -165,13 +164,9 @@ class PromptContractsTest(unittest.TestCase):
                     bound = prompt_contracts.bind(
                         prompt(kind, (section_id,), question_ids)
                     )
-                    queued_findings = (
-                        [copy.deepcopy(valid["finding"])]
-                        if section_id == "fix_need_rethink" else []
-                    )
                     options = {
                         "workspace": root,
-                        "queued_findings": queued_findings,
+                        "queued_findings": [],
                     }
                     self.assertEqual(
                         prompt_contracts.validate(bound, copy.deepcopy(valid),
@@ -508,42 +503,59 @@ class PromptContractsTest(unittest.TestCase):
         result["severity"] = "P1"
         prompt_contracts.validate(bound, reply, queued_findings=queued)
 
-    def test_fixer_rethink_must_copy_one_complete_queued_finding(self):
+    def test_need_rethink_is_problem_only_for_every_eligible_kind(self):
+        for kind in (
+            "draft_slice_note", "implement", "review_round",
+            "delta_review", "fix_findings",
+        ):
+            with self.subTest(kind=kind):
+                served = prompt(kind, (), ("q1",))
+                bound = prompt_contracts.bind(
+                    served,
+                    consumer_sections=(section("need_rethink"),),
+                )
+                reply = {
+                    "status": "need_rethink",
+                    "problem": "Two governing requirements contradict.",
+                    "questions": [{"id": "q1", "answer": "Inspected."}],
+                }
+                self.assertEqual(
+                    prompt_contracts.validate(
+                        bound, copy.deepcopy(reply), queued_findings=[]
+                    ),
+                    reply,
+                )
+                for invalid in (
+                    dict(reply, problem=""),
+                    dict(reply, problem=7),
+                    dict(reply, kind=kind),
+                    dict(reply, finding=report_finding()),
+                    dict(reply, target_path="docs/design.md"),
+                    {key: value for key, value in reply.items()
+                     if key != "questions"},
+                ):
+                    with self.assertRaises(contracts.ContractError):
+                        prompt_contracts.validate(
+                            bound, invalid, queued_findings=[]
+                        )
+
+    def test_need_rethink_does_not_depend_on_the_fixer_queue(self):
         bound = prompt_contracts.bind(
-            prompt("fix_findings", ("fix_need_rethink",))
+            prompt("fix_findings", ()),
+            consumer_sections=(section("need_rethink"),),
         )
-        queued = [
-            report_finding(),
-            dict(report_finding(), id="F2", summary="Second problem"),
-        ]
         reply = {
             "status": "need_rethink",
-            "kind": "fix_findings",
-            "finding": copy.deepcopy(queued[0]),
-            "target_path": "note.md",
+            "problem": "The queued work exposes a governing contradiction.",
         }
-        prompt_contracts.validate(bound, reply, queued_findings=queued)
-
-        mutations = {
-            "id": lambda finding: finding.update(id="invented"),
-            "severity": lambda finding: finding.update(severity="P1"),
-            "summary": lambda finding: finding.update(summary="Rewritten"),
-            "body": lambda finding: finding["validity"].update(
-                actual_outcome="Different outcome"
-            ),
-            "missing field": lambda finding: finding.pop("example"),
-            "extra field": lambda finding: finding.update(detail="invented"),
-        }
-        for name, mutate in mutations.items():
-            with self.subTest(name=name):
-                changed = copy.deepcopy(queued[0])
-                mutate(changed)
-                with self.assertRaises(contracts.ContractError):
+        for queued in ([], [report_finding()]):
+            with self.subTest(queued=bool(queued)):
+                self.assertEqual(
                     prompt_contracts.validate(
-                        bound,
-                        dict(reply, finding=changed),
-                        queued_findings=queued,
-                    )
+                        bound, copy.deepcopy(reply), queued_findings=queued
+                    ),
+                    reply,
+                )
 
     def test_prevention_requires_declared_changed_path_and_meaningful_note(self):
         bound = prompt_contracts.bind(
@@ -678,7 +690,7 @@ class PromptContractsTest(unittest.TestCase):
                 "implement",
                 (
                     "common_fields",
-                    "need_rethink_author",
+                    "need_rethink",
                     "implement_result",
                 ),
             )
@@ -704,9 +716,7 @@ class PromptContractsTest(unittest.TestCase):
             },
             {
                 "status": "need_rethink",
-                "kind": "implement",
-                "finding": {"fact": "Conflict"},
-                "target_path": "note.md",
+                "problem": "The design contradicts itself.",
                 "notes": "Status-incompatible claim",
             },
         )

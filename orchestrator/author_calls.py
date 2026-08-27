@@ -50,6 +50,19 @@ def prepare(
             "job %r is not a direct milestone author charge" % job
         )
     charge_values = dict(values)
+    kind = prompt_router.DIRECT_ROUTES[job][0]
+    rethink_enabled = kind in (
+        "draft_slice_note", "implement",
+    )
+    runtime_instructions = (
+        (prompts.need_rethink_instruction(kind),)
+        if rethink_enabled else ()
+    )
+    runtime_sections = (
+        (prompts.need_rethink_output_section(),)
+        if rethink_enabled else ()
+    )
+    mounted_consumer_sections = tuple(consumer_sections) + runtime_sections
     recovery = charge_values.get("author_recovery")
     if recovery is None:
         charge_values.pop("author_recovery", None)
@@ -128,14 +141,18 @@ def prepare(
 
     def validate_author_prompt(prompt, defaulted_variables):
         try:
-            prompt_contracts.bind(
-                prompt, consumer_sections=consumer_sections
+            bound_prompt = prompt_contracts.bind(
+                prompt,
+                consumer_sections=mounted_consumer_sections,
+                consumer_instructions=runtime_instructions,
             )
         except contracts.ContractError as exc:
             raise prompt_sets.PromptSetError(
                 "routed author prompt cannot bind its served contract: %s" % exc
             ) from exc
-        rendered_prompt = prompt_router.render(prompt, charge_values)
+        rendered_prompt = prompt_router.render(
+            bound_prompt.prompt, charge_values
+        )
         absent_runtime_inputs = set()
         if implementation_scope is None:
             absent_runtime_inputs.add("implementation_scope")
@@ -218,7 +235,9 @@ def prepare(
         prompt_validator=validate_author_prompt,
     )
     bound = prompt_contracts.bind(
-        resolution.prompt, consumer_sections=consumer_sections
+        resolution.prompt,
+        consumer_sections=mounted_consumer_sections,
+        consumer_instructions=runtime_instructions,
     )
     reserved = prompt_contracts.reserved_output_fields(bound)
     for extension in frozen_extensions:

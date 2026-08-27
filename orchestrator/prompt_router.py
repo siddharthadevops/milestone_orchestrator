@@ -117,7 +117,11 @@ def _route(job, executor, material, role, lead, artifact_type):
         raise PromptRouterError(
             "producer jobs derive artifact type from their canonical job"
         )
-    tags = {"role:%s" % role, "target:%s" % target_type}
+    tags = {
+        "role:%s" % role,
+        "target:%s" % target_type,
+        "job:%s" % ("rethink" if job == "rethink" else "producer"),
+    }
     variants = {"role_stance": role} if kind == "discussion_turn" else {}
     borrowed = job.split("@", 1)[0] if lead and job != "rethink" else None
     return _Route(kind, target_type, variants, frozenset(tags), borrowed)

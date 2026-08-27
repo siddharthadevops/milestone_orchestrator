@@ -248,105 +248,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                           'to report, never a promise '
                                                           'to write down.'],
                                                  'variables': []},
-                                  'design_contradiction_author': {'text': ['DESIGN '
-                                                                           'CONTRADICTION '
-                                                                           '— USE '
-                                                                           'NEED_RETHINK',
-                                                                           '- If you '
-                                                                           'confirm '
-                                                                           'one '
-                                                                           'concrete '
-                                                                           'design '
-                                                                           'contradiction, '
-                                                                           'still '
-                                                                           'inside the',
-                                                                           '  MANDATE, '
-                                                                           'whose '
-                                                                           'resolution '
-                                                                           'requires '
-                                                                           'changing '
-                                                                           'the '
-                                                                           'current '
-                                                                           'design',
-                                                                           '  '
-                                                                           'baseline, '
-                                                                           'return '
-                                                                           '`need_rethink`: '
-                                                                           'put the '
-                                                                           'contradiction '
-                                                                           'and its',
-                                                                           '  evidence '
-                                                                           'in '
-                                                                           '`finding` '
-                                                                           'and name '
-                                                                           'the '
-                                                                           'artifact '
-                                                                           'it lives '
-                                                                           'in. Do not',
-                                                                           '  code '
-                                                                           'around it, '
-                                                                           'silently '
-                                                                           'rewrite '
-                                                                           'design '
-                                                                           'documents, '
-                                                                           'or stop '
-                                                                           'the run',
-                                                                           '  merely '
-                                                                           'because '
-                                                                           'those '
-                                                                           'documents '
-                                                                           'need an '
-                                                                           'edit.'],
-                                                                  'variables': []},
-                                  'design_contradiction_fixer': {'text': ['DESIGN '
-                                                                          'CONTRADICTION '
-                                                                          '— USE '
-                                                                          'NEED_RETHINK',
-                                                                          '- If you '
-                                                                          'confirm one '
-                                                                          'queued '
-                                                                          'finding '
-                                                                          'whose valid '
-                                                                          'resolution '
-                                                                          'requires',
-                                                                          '  changing '
-                                                                          'the current '
-                                                                          'design '
-                                                                          'baseline — '
-                                                                          'a design '
-                                                                          'contradiction '
-                                                                          'still',
-                                                                          '  inside '
-                                                                          'the MANDATE '
-                                                                          '— return '
-                                                                          '`need_rethink`: '
-                                                                          'copy '
-                                                                          'exactly '
-                                                                          'that',
-                                                                          '  complete '
-                                                                          'queued '
-                                                                          'finding '
-                                                                          'into '
-                                                                          '`finding` '
-                                                                          'and name '
-                                                                          'the '
-                                                                          'artifact it',
-                                                                          '  lives in. '
-                                                                          'Do not code '
-                                                                          'around it, '
-                                                                          'silently '
-                                                                          'rewrite '
-                                                                          'design '
-                                                                          'documents,',
-                                                                          '  or stop '
-                                                                          'the run '
-                                                                          'merely '
-                                                                          'because '
-                                                                          'those '
-                                                                          'documents '
-                                                                          'need an '
-                                                                          'edit.'],
-                                                                 'variables': []},
                                   'evidence': {'text': ['EVIDENCE',
                                                         '- The local filesystem '
                                                         'checkout is the source of '
@@ -568,22 +469,39 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                'one '
                                                                                'per '
                                                                                'line.'}]},
-                                  'rethink_charge': {'text': ['RETHINK CHARGE '
-                                                              '(complete source '
-                                                              'finding)',
-                                                              '{{rethink_finding}}'],
-                                                     'variables': [{'name': 'rethink_finding',
-                                                                    'required': False,
-                                                                    'drop_unit_if_absent': True,
-                                                                    'description': 'Opaque '
-                                                                                   'JSON '
-                                                                                   'rendering '
-                                                                                   'of '
+                                  'rethink_charge': {'text': ['TASK',
+                                                              'Resolve the problem '
+                                                              'below. Work directly in '
+                                                              'the project Git '
+                                                              'repository.',
+                                                              'Make whatever '
+                                                              'repository changes are '
+                                                              'necessary so the '
+                                                              'problem no longer',
+                                                              'prevents the work from '
+                                                              'continuing; clarifying '
+                                                              'the governing '
+                                                              'documentation',
+                                                              'may be the complete '
+                                                              'solution. Return '
+                                                              '`ready` only after the '
+                                                              'complete',
+                                                              'resolution is present '
+                                                              'in the repository.',
+                                                              '',
+                                                              'PROBLEM',
+                                                              '{{rethink_problem}}'],
+                                                     'variables': [{'name': 'rethink_problem',
+                                                                    'required': True,
+                                                                    'description': 'The '
+                                                                                   'exact '
+                                                                                   'problem '
+                                                                                   'explanation '
+                                                                                   'returned '
+                                                                                   'by '
                                                                                    'the '
-                                                                                   'complete '
-                                                                                   'validated '
-                                                                                   'source '
-                                                                                   'finding.'}]},
+                                                                                   'originating '
+                                                                                   'worker.'}]},
                                   'altitude_review': {'text': ['ALTITUDE '
                                                                '(documentation '
                                                                'discipline)',
@@ -1233,86 +1151,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                               'from '
                                                                                               'the '
                                                                                               'validator.'}]},
-                                              'need_rethink_author': {'text': ['`status: '
-                                                                               '"need_rethink"` '
-                                                                               '— you '
-                                                                               'found '
-                                                                               'a '
-                                                                               'design '
-                                                                               'contradiction '
-                                                                               'the',
-                                                                               'Brainstorming '
-                                                                               'process '
-                                                                               'must '
-                                                                               'resolve '
-                                                                               'before '
-                                                                               'you '
-                                                                               'can '
-                                                                               'finish. '
-                                                                               'Return '
-                                                                               'EXACTLY:',
-                                                                               '  '
-                                                                               '"status": '
-                                                                               '"need_rethink"',
-                                                                               '  '
-                                                                               '"kind": '
-                                                                               '"<echo '
-                                                                               'the '
-                                                                               'current '
-                                                                               'kind>"',
-                                                                               '  '
-                                                                               '"finding": '
-                                                                               '{<the '
-                                                                               'contradiction, '
-                                                                               'with '
-                                                                               'its '
-                                                                               'evidence>}',
-                                                                               '  '
-                                                                               '"target_path": '
-                                                                               '"<workspace-relative '
-                                                                               'artifact '
-                                                                               'the '
-                                                                               'contradiction '
-                                                                               'lives '
-                                                                               'in>"',
-                                                                               '  '
-                                                                               '"questions": '
-                                                                               '[...]   '
-                                                                               '(the '
-                                                                               'QUESTIONS '
-                                                                               'entries '
-                                                                               'are '
-                                                                               'required '
-                                                                               'here '
-                                                                               'too:',
-                                                                               '   '
-                                                                               'asking '
-                                                                               'for a '
-                                                                               'rethink '
-                                                                               'is '
-                                                                               'only '
-                                                                               'legitimate '
-                                                                               'AFTER '
-                                                                               'asking '
-                                                                               'and '
-                                                                               'answering '
-                                                                               'them)',
-                                                                               'No '
-                                                                               'proposed '
-                                                                               'direction '
-                                                                               'and no '
-                                                                               'other '
-                                                                               'fields '
-                                                                               '— the '
-                                                                               'orchestrator '
-                                                                               'runs '
-                                                                               'the',
-                                                                               'session '
-                                                                               'from '
-                                                                               'the '
-                                                                               'finding '
-                                                                               'alone.'],
-                                                                      'variables': []},
                                               'design_correction_verdict': {'text': ['A '
                                                                                      'provisional '
                                                                                      'design-correction '
@@ -1437,55 +1275,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           'EVERY '
                                                                           'reply)'],
                                                                  'variables': []},
-                                              'review_need_rethink': {'text': ['Focused '
-                                                                               'discussion '
-                                                                               'before '
-                                                                               'finishing '
-                                                                               'this '
-                                                                               'judgment:',
-                                                                               '{"status":"need_rethink","kind":"<echo '
-                                                                               'KIND>",',
-                                                                               ' '
-                                                                               '"finding":{<one '
-                                                                               'complete '
-                                                                               'current '
-                                                                               'finding>},',
-                                                                               ' '
-                                                                               '"target_path":"<workspace-relative '
-                                                                               'artifact '
-                                                                               'it '
-                                                                               'lives '
-                                                                               'in>",',
-                                                                               ' '
-                                                                               '"questions":[...]}   '
-                                                                               '(required '
-                                                                               'in '
-                                                                               'EVERY '
-                                                                               'reply: '
-                                                                               'a '
-                                                                               'rethink '
-                                                                               'is '
-                                                                               'only',
-                                                                               'legitimate '
-                                                                               'after '
-                                                                               'asking '
-                                                                               'and '
-                                                                               'answering '
-                                                                               'them)',
-                                                                               'No '
-                                                                               'proposed '
-                                                                               'direction; '
-                                                                               'beyond '
-                                                                               'these, '
-                                                                               'return '
-                                                                               'no '
-                                                                               'other '
-                                                                               'fields '
-                                                                               'with',
-                                                                               '`blocked` '
-                                                                               'or '
-                                                                               '`need_rethink`.'],
-                                                                      'variables': []},
                                               'questions_output': {'text': ['"questions": '
                                                                             '[{"id": '
                                                                             '"<id>", '
@@ -2356,8 +2145,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                  'variables': []},
                                                                 {'ref': 'altitude_doc'},
                                                                 {'ref': 'reuse_gate'},
-                                                                {'ref': 'process_authority'},
-                                                                {'ref': 'design_contradiction_author'}]},
+                                                                {'ref': 'process_authority'}]},
                                      'questions': {'intro': ['QUESTIONS (answer each '
                                                              'in output, backed by an '
                                                              'explanation)'],
@@ -2451,10 +2239,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       {'ref': 'common_fields',
                                                                        'defaults': {'status_vocabulary': '"ok" '
                                                                                                          '| '
-                                                                                                         '"blocked" '
-                                                                                                         '| '
-                                                                                                         '"need_rethink"'}},
-                                                                      {'ref': 'need_rethink_author'},
+                                                                                                         '"blocked"'}},
                                                                       {'ref': 'draft_slice_note_result'},
                                                                       {'ref': 'questions_output'}]}},
  'milestone/implement.json': {'kind': 'implement',
@@ -2510,8 +2295,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                          {'ref': 'implementation_metering',
                                                           'mount': ['executor:agent_call']},
                                                          {'ref': 'reuse_gate'},
-                                                         {'ref': 'process_authority'},
-                                                         {'ref': 'design_contradiction_author'}]},
+                                                         {'ref': 'process_authority'}]},
                               'questions': {'items': [{'id': 'machinery_trust',
                                                        'text': 'Does the code or tests '
                                                                'you delivered defend '
@@ -2570,10 +2354,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                {'ref': 'common_fields',
                                                                 'defaults': {'status_vocabulary': '"ok" '
                                                                                                   '| '
-                                                                                                  '"blocked" '
-                                                                                                  '| '
-                                                                                                  '"need_rethink"'}},
-                                                               {'ref': 'need_rethink_author'},
+                                                                                                  '"blocked"'}},
                                                                {'ref': 'implement_result'},
                                                                {'ref': 'questions_output'}]}},
  'milestone/review_round.json': {'kind': 'review_round',
@@ -2649,7 +2430,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                  'output_contract': {'sections': [{'ref': 'envelope_compact'},
                                                                   {'ref': 'review_contract'},
                                                                   {'ref': 'review_blocked'},
-                                                                  {'ref': 'review_need_rethink'},
                                                                   {'ref': 'questions_output'}]},
                                  'variants': {'target_frame': {'slice_unit': {'text': ['TASK: '
                                                                                        '{{task}} '
@@ -2932,7 +2712,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                  'output_contract': {'sections': [{'ref': 'envelope_compact'},
                                                                   {'ref': 'review_contract'},
                                                                   {'ref': 'review_blocked'},
-                                                                  {'ref': 'review_need_rethink'},
                                                                   {'ref': 'questions_output'}]},
                                  'variants': {'target_frame': {'slice_unit': {'text': ['TASK: '
                                                                                        'incremental '
@@ -3472,7 +3251,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                             {'ref': 'implementation_scope',
                                                              'mount': ['target:implementation']},
                                                             {'ref': 'project_context'},
-                                                            {'ref': 'design_contradiction_fixer'},
                                                             {'ref': 'operator_amendments_author'},
                                                             {'text': ['ADVERSARIAL '
                                                                       'FINDING '
@@ -3526,18 +3304,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'deciding). '
                                                                       'These are the '
                                                                       'exact stored '
-                                                                      'objects;',
-                                                                      'if you request '
-                                                                      '`need_rethink`, '
-                                                                      'copy exactly '
-                                                                      'one complete '
-                                                                      'object into',
-                                                                      '`finding` '
-                                                                      'without '
-                                                                      'shortening, '
-                                                                      'normalizing, or '
-                                                                      'dropping '
-                                                                      'fields:',
+                                                                      'objects:',
                                                                       '{{queued_findings}}'],
                                                              'variables': [{'name': 'queued_findings',
                                                                             'required': True,
@@ -3952,48 +3719,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'required '
                                                                             'in EVERY '
                                                                             'reply)'],
-                                                                   'variables': []},
-                                                                  {'id': 'fix_need_rethink',
-                                                                   'text': ['Focused '
-                                                                            'discussion '
-                                                                            'before '
-                                                                            'deciding '
-                                                                            'one '
-                                                                            'queued '
-                                                                            'finding:',
-                                                                            '{"status":"need_rethink","kind":"fix_findings",',
-                                                                            ' '
-                                                                            '"finding":{<one '
-                                                                            'complete '
-                                                                            'queued '
-                                                                            'finding>},',
-                                                                            ' '
-                                                                            '"target_path":"<workspace-relative '
-                                                                            'artifact '
-                                                                            'it lives '
-                                                                            'in>",',
-                                                                            ' '
-                                                                            '"questions":[...]}   '
-                                                                            '(required '
-                                                                            'in EVERY '
-                                                                            'reply)',
-                                                                            'No '
-                                                                            'proposed '
-                                                                            'direction '
-                                                                            'and no '
-                                                                            'other '
-                                                                            'fields; '
-                                                                            'sibling '
-                                                                            'findings '
-                                                                            'stay',
-                                                                            'queued — '
-                                                                            'the '
-                                                                            'orchestrator '
-                                                                            'runs the '
-                                                                            'session '
-                                                                            'from the '
-                                                                            'finding '
-                                                                            'alone.'],
                                                                    'variables': []},
                                                                   {'ref': 'questions_output'}]},
                                  'variants': {'target_frame': {'slice_unit': {'text': ['TASK: '
@@ -4948,7 +4673,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                              'and '
                                                                              'continue '
                                                                              'naturally.'],
-                                                                    'variables': []},
+                                                                    'variables': [],
+                                                                    'mount': ['job:producer']},
                                                                    {'ref': 'project_context'},
                                                                    {'ref': 'operator_amendments_author',
                                                                     'mount': ['role:initial_position']},
@@ -4958,7 +4684,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                    {'ref': 'bs_workarea'},
                                                                    {'ref': 'process_authority'},
                                                                    {'ref': 'bs_sources'},
-                                                                   {'ref': 'rethink_charge'},
+                                                                   {'ref': 'rethink_charge',
+                                                                    'mount': ['job:rethink']},
                                                                    {'text': ['TURN',
                                                                              '- '
                                                                              'participant_id: '
@@ -4986,7 +4713,29 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                   {'name': 'target_authority',
                                                                                    'required': True},
                                                                                   {'name': 'target_state',
-                                                                                   'required': True}]},
+                                                                                   'required': True}],
+                                                                    'mount': ['job:producer']},
+                                                                   {'text': ['TURN',
+                                                                             '- '
+                                                                             'participant_id: '
+                                                                             '{{participant_id}}',
+                                                                             '- role: '
+                                                                             '{{role}}',
+                                                                             '- round: '
+                                                                             '{{round}}',
+                                                                             '- '
+                                                                             'repository '
+                                                                             'authority: '
+                                                                             '{{repository_authority}}'],
+                                                                    'variables': [{'name': 'participant_id',
+                                                                                   'required': True},
+                                                                                  {'name': 'role',
+                                                                                   'required': True},
+                                                                                  {'name': 'round',
+                                                                                   'required': True},
+                                                                                  {'name': 'repository_authority',
+                                                                                   'required': True}],
+                                                                    'mount': ['job:rethink']},
                                                                    {'one_of': 'role_stance'},
                                                                    {'ref': 'two_register',
                                                                     'mount': ['role:initial_position',
@@ -5333,7 +5082,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                    'Do '
                                                                                    'not '
                                                                                    'add '
-                                                                                   'target',
+                                                                                   'source',
                                                                                    'content '
                                                                                    'or '
                                                                                    'control '
@@ -5386,8 +5135,18 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                   {'name': 'target_path',
                                                                                    'required': True},
                                                                                   {'name': 'reference_documents',
-                                                                                   'required': True}]},
-                                                                   {'ref': 'rethink_charge'},
+                                                                                   'required': True}],
+                                                                    'mount': ['job:producer']},
+                                                                   {'ref': 'bs_sources',
+                                                                    'mount': ['job:rethink']},
+                                                                   {'ref': 'rethink_charge',
+                                                                    'mount': ['job:rethink']},
+                                                                   {'text': ['REPOSITORY '
+                                                                             'AUTHORITY',
+                                                                             '{{repository_authority}}'],
+                                                                    'variables': [{'name': 'repository_authority',
+                                                                                   'required': True}],
+                                                                    'mount': ['job:rethink']},
                                                                    {'text': ['PERSONA',
                                                                              '- This '
                                                                              'scene '

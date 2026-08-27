@@ -93,13 +93,13 @@ _REQUIRED_JOB_PAYLOADS = {
 
 _REQUIRED_CONTRACT_SECTIONS = {
     "review_round": frozenset((
-        "review_contract", "review_blocked", "review_need_rethink",
+        "review_contract", "review_blocked", "need_rethink",
     )),
     "delta_review": frozenset((
-        "review_contract", "review_blocked", "review_need_rethink",
+        "review_contract", "review_blocked", "need_rethink",
     )),
     "fix_findings": frozenset((
-        "fix_results", "fix_blocked", "fix_need_rethink",
+        "fix_results", "fix_blocked", "need_rethink",
     )),
     "reclassify": frozenset(("reclassify_result",)),
     "merge_repair": frozenset(("merge_repair_result",)),
@@ -290,18 +290,33 @@ def prepare(
         frozen_suite_repair = copy.deepcopy(suite_repair)
 
     if design_correction is None:
-        consumer_sections = ()
+        design_correction_sections = ()
     elif kind != "delta_review" or not isinstance(design_correction, dict) \
             or not design_correction:
         raise prompt_router.PromptRouterError(
             "design_correction requires a non-empty delta-review context"
         )
     else:
-        consumer_sections = (
+        design_correction_sections = (
             prompts.design_correction_verdict_section(
                 copy.deepcopy(design_correction)
             ),
         )
+
+    rethink_enabled = kind in (
+        contracts.KIND_REVIEW_ROUND,
+        contracts.KIND_DELTA_REVIEW,
+        contracts.KIND_FIX_FINDINGS,
+    )
+    runtime_instructions = (
+        (prompts.need_rethink_instruction(kind),)
+        if rethink_enabled else ()
+    )
+    runtime_sections = (
+        (prompts.need_rethink_output_section(),)
+        if rethink_enabled else ()
+    )
+    consumer_sections = design_correction_sections + runtime_sections
 
     charge_values = dict(values)
     implementation_scope = charge_values.get("implementation_scope")
@@ -451,7 +466,9 @@ def prepare(
                 )
         try:
             bound_prompt = prompt_contracts.bind(
-                prompt, consumer_sections=consumer_sections
+                prompt,
+                consumer_sections=consumer_sections,
+                consumer_instructions=runtime_instructions,
             )
         except contracts.ContractError as exc:
             raise prompt_sets.PromptSetError(
@@ -489,7 +506,9 @@ def prepare(
         prompt_validator=validate_judgment_prompt,
     )
     bound = prompt_contracts.bind(
-        resolution.prompt, consumer_sections=consumer_sections
+        resolution.prompt,
+        consumer_sections=consumer_sections,
+        consumer_instructions=runtime_instructions,
     )
     reserved = prompt_contracts.reserved_output_fields(bound)
     for extension in frozen_extensions:

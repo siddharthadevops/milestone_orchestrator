@@ -44,6 +44,8 @@ MOUNT_TAGS = frozenset((
     "role:common_sense",
     "target:document",
     "target:implementation",
+    "job:producer",
+    "job:rethink",
 ))
 CANONICAL_MEMBERS = (
     "shared/shared.json",
@@ -285,7 +287,7 @@ def _validate_mount(part, ctx):
         tag.startswith("role:") for tag in tags
     ):
         raise PromptSetError("%s.mount cannot match a canonical route" % ctx)
-    for prefix in ("role:", "target:"):
+    for prefix in ("role:", "target:", "job:"):
         if sum(tag.startswith(prefix) for tag in tags) > 1:
             raise PromptSetError(
                 "%s.mount has conflicting %s tags" % (ctx, prefix[:-1])
