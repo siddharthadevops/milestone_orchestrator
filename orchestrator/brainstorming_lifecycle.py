@@ -69,7 +69,6 @@ _REGISTRY_LOCKS = {}
 _REGISTRY_LOCKS_GUARD = threading.Lock()
 _CHILDREN = {}  # pid -> (home, session_id, Popen-compatible process)
 _CHILDREN_LOCK = threading.Lock()
-_UNSET = object()
 
 
 class PublicLifecycleError(RuntimeError):
@@ -174,9 +173,8 @@ def _validate_record(record):
         # The staffing router's durable binding on this registry. Presence of
         # `staffing_session` says the router staffs the automatic calls; its
         # value is the session they resolve through, or `None` for the default
-        # document. A production discussion also carries its admitted optional
-        # material beside it. Older and non-production records have no such
-        # material key and therefore send none.
+        # document. Historical production records may also carry a frozen
+        # `staffing_material`; it remains readable but no longer routes calls.
         ("staffing_session", "staffing_material"),
         "service_record",
     )
@@ -590,10 +588,9 @@ def _executable_available(argv, workspace):
 # agreement rule. It no longer chooses the intelligence behind an automatic
 # seat: a router-backed discussion inherits ONE staffing session from its
 # owner and asks it immediately before every physical provider call. A
-# production discussion also carries its task's admitted material. Session
-# and document edits reach the next call — a later turn, a closure vote, the
-# failure classifier, or the agreed production effect — while the task-local
-# material and every call already made stay unchanged.
+# The session's material is the milestone's theme. Session and document edits
+# reach the next call — a later turn, a closure vote, the failure classifier,
+# or the agreed production effect — while calls already made stay unchanged.
 #
 # Nothing here is a snapshot. The roster still records a family per seat
 # because the durable run config has always carried one, and that entry is
@@ -608,9 +605,9 @@ class _SeatStaffing:
     current-participant resolver, and it carries the LAST answer's fallback
     note beside itself — the milestone driver's own dispatch-resolver shape
     — so the activity entry for that call can say the default document
-    answered without the answer growing a fourth key. A production task's
-    material is fixed on this resolver while the session and document stay
-    live at each call.
+    answered without the answer growing a fourth key. Milestone material is
+    read from the session at each call too; standalone sessions keep their
+    existing resolver semantics.
     """
 
     def __init__(
@@ -620,15 +617,15 @@ class _SeatStaffing:
         role,
         index,
         families,
-        material=None,
         round_number=None,
+        milestone_material=False,
     ):
         self.home = home
         self.session = session
         self.role = role
         self.index = index
         self.families = tuple(families or ())
-        self.material = material
+        self.milestone_material = bool(milestone_material)
         # Fixed for a seat whose action has no discussion round of its own
         # (the failure classifier); otherwise the caller supplies it.
         self.round_number = round_number
@@ -644,7 +641,10 @@ class _SeatStaffing:
                 self.round_number if self.round_number is not None
                 else round_number
             ),
-            material=self.material,
+            material=(
+                staffing.session_material(self.home, self.session)
+                if self.milestone_material else None
+            ),
             families=list(self.families),
         )
         self.staffing_fallback = resolution.staffing_fallback
@@ -686,19 +686,25 @@ def _router_roster_families(staffing_binding, families):
     may omit a roster position; that position inherits role index 1 exactly as
     resolution does.
     """
+    material = (
+        staffing.session_material(
+            staffing_binding["home"], staffing_binding["session"]
+        )
+        if staffing_binding.get("milestone_material") else None
+    )
     try:
         seats = staffing.session_seats(
             staffing_binding["home"],
             staffing_binding["session"],
             "brainstorm",
-            material=staffing_binding.get("material"),
+            material=material,
             families=families,
         )
         seat_families = staffing.session_seat_families(
             staffing_binding["home"],
             staffing_binding["session"],
             "brainstorm",
-            material=staffing_binding.get("material"),
+            material=material,
             families=families,
         )
     except staffing.StaffingError as exc:
@@ -1156,19 +1162,17 @@ def resolve_static_participants(
     return brainstorming._json_copy(resolved, "resolved participants")
 
 
-def _staffing_binding(home, session, material=_UNSET):
-    """Where this discussion's automatic calls ask and what they carry.
+def _staffing_binding(home, session, milestone_material=False):
+    """Where this discussion's automatic calls ask.
 
     ``home`` is the service home the router's documents and sessions live
     under — the same home this service already runs from — and ``session``
-    is the staffing session id, or ``None`` for the default document. A
-    supplied ``material`` is the admitted production task's fixed optional
-    request input. Kept as one small mapping so the roster builder, dispatch
-    resolvers and read-only view all read the same facts.
+    is the staffing session id, or ``None`` for the default document.
+    The session itself is the single live material authority.
     """
     binding = {"home": os.path.abspath(home), "session": session}
-    if material is not _UNSET:
-        binding["material"] = material
+    if milestone_material:
+        binding["milestone_material"] = True
     return binding
 
 
@@ -1181,39 +1185,22 @@ def _validate_staffing_session(value):
     return value
 
 
-def _validate_staffing_material(value):
-    """Accept one task-local material: storable text, or nothing."""
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise PublicLifecycleError(400, INVALID_REQUEST)
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
-    return value
-
-
 def _record_staffing_binding(
-    home, record, supplied=None, supplied_material=_UNSET
+    home, record, supplied=None, milestone_material=False,
 ):
     """Where one stored record's automatic calls ask, or ``None``.
 
     ``None`` is the pre-cutover answer and the whole of compatibility: a
     stored explicit static binding keeps its own pins, and nothing here
-    rewrites its record to say otherwise. A record's own material wins over
-    any launch-time value just as its own session does.
+    rewrites its record to say otherwise. Historical task-local material is
+    readable but no longer participates in routing.
     """
     if not _router_staffed(record):
         return None
-    material = (
-        record["staffing_material"]
-        if "staffing_material" in record else supplied_material
-    )
     return _staffing_binding(
         home,
         record_staffing_session(record, supplied),
-        material,
+        milestone_material=milestone_material,
     )
 
 
@@ -2043,14 +2030,18 @@ def _create_session_with_context(
     staffing_binding = None
     if staffing_selection is not None:
         session = _validate_staffing_session(staffing_selection.get("session"))
-        if "material" in staffing_selection:
-            staffing_binding = _staffing_binding(
-                home,
-                session,
-                _validate_staffing_material(staffing_selection["material"]),
-            )
-        else:
-            staffing_binding = _staffing_binding(home, session)
+        source_payload = (
+            (checked["request"].get("context") or {}).get("source_payload")
+            or {}
+        )
+        staffing_binding = _staffing_binding(
+            home,
+            session,
+            milestone_material=(
+                isinstance(source_payload, dict)
+                and "session_charge" in source_payload
+            ),
+        )
     runtime, run_config, eligible = _runtime_and_roster(
         config,
         checked["participants"],
@@ -2137,7 +2128,7 @@ def _create_session_with_context(
                 # The child is released only after the record below is
                 # durable, so a router-backed session needs no launch
                 # argument at creation: its own record already names the
-                # staffing session and optional material it resolves through.
+                # staffing session it resolves through.
                 launch = launcher(home, session_id)
             except Exception as exc:
                 raise PublicLifecycleError(503, UNAVAILABLE) from exc
@@ -2186,8 +2177,6 @@ def _create_session_with_context(
                 record["target_identity"] = identity
             if staffing_binding is not None:
                 record["staffing_session"] = staffing_binding["session"]
-                if "material" in staffing_binding:
-                    record["staffing_material"] = staffing_binding["material"]
             document["sessions"].append(record)
             _save_registry(home, document)
         projected = _projection(home, record)
@@ -2549,7 +2538,9 @@ def _projected_seat_staffing(staffing_binding, index, families):
         "brainstorm",
         index,
         families,
-        material=staffing_binding.get("material"),
+        milestone_material=staffing_binding.get(
+            "milestone_material", False
+        ),
     )
     try:
         return resolver(1)
@@ -2714,7 +2705,14 @@ def view_session(
                 # reached; the record's own mark still decides whether this
                 # session is router-backed at all.
                 supplied = None
-        staffing_binding = _record_staffing_binding(home, record, supplied)
+        staffing_binding = _record_staffing_binding(
+            home,
+            record,
+            supplied,
+            milestone_material=(
+                session_calls.charge_from_state(state) is not None
+            ),
+        )
         closing_summary = state.get("closing_summary")
         final_agreement = None
         if state["status"] == "success" and closing_summary is not None:
@@ -3195,7 +3193,9 @@ def _participant_execution(
                 "brainstorm",
                 positions[participant["id"]],
                 available,
-                material=staffing_binding.get("material"),
+                milestone_material=staffing_binding.get(
+                    "milestone_material", False
+                ),
             )
 
         bindings[binding_ref] = execution.RunnerParticipantExecutor(
@@ -3237,8 +3237,10 @@ def _participant_execution(
                 "classify",
                 1,
                 available,
-                material=staffing_binding.get("material"),
                 round_number=1,
+                milestone_material=staffing_binding.get(
+                    "milestone_material", False
+                ),
             )
             classifier = cls_model = cls_effort = None
         error_type, resume_at, evidence = errclass.classify_worker_failure(
@@ -3285,15 +3287,13 @@ def apply_production_effect(
     prompt,
     validator,
     staffing_session=None,
-    staffing_material=_UNSET,
     participant_process_factory=None,
 ):
     """Dispatch post-agreement work through the session's resolved lead.
 
     The agreed production call is an automatic call like any other: a
     router-backed discussion resolves it afresh here, so a session or
-    document edit made after the discussion closed reaches it while the
-    discussion record's admitted material remains fixed.
+    document or material edit made after the discussion closed reaches it.
     """
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
@@ -3309,10 +3309,8 @@ def apply_production_effect(
             home,
             record,
             _validate_staffing_session(staffing_session),
-            supplied_material=(
-                staffing_material
-                if staffing_material is _UNSET else
-                _validate_staffing_material(staffing_material)
+            milestone_material=(
+                session_calls.charge_from_state(snapshot.state) is not None
             ),
         ),
     )
@@ -3608,15 +3606,23 @@ def run_lifecycle(
         if require_pid_claim and record["pid"] != os.getpid():
             return 2
         store = brainstorming.SessionStore(state_directory(home))
+        seed = store.read(session_id)
+        milestone_material = bool(
+            seed is not None
+            and session_calls.charge_from_state(seed.state) is not None
+        )
+        staffing_binding = _record_staffing_binding(
+            home,
+            record,
+            staffing_session,
+            milestone_material=milestone_material,
+        )
         participant_execution = _participant_execution(
             store,
             record,
             participant_process_factory or _spawn_participant,
-            staffing_binding=_record_staffing_binding(
-                home, record, staffing_session
-            ),
+            staffing_binding=staffing_binding,
         )
-        seed = store.read(session_id)
         turn_preparer = (
             None
             if seed is None
@@ -3629,6 +3635,10 @@ def run_lifecycle(
                             round_number,
                             target_revision,
                             correction,
+                            staffing_session=(
+                                staffing_binding["session"]
+                                if staffing_binding is not None else None
+                            ),
                         )
         )
         coordinator = coordination.BrainstormingCoordinator(

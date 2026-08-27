@@ -84,7 +84,6 @@ def canonical_skeleton_document(title="Core"):
             "id": 1,
             "title": title,
             "intent": "Exercise finding-debt routing for one slice.",
-            "material": "code",
             "producer_task_executor": {
                 "draft_slice_note": "agent_call",
                 "implement": "agent_call",

@@ -195,7 +195,7 @@ def _text(value, context):
     return value
 
 
-def _shape(payload):
+def _shape(payload, *, legacy_material=False):
     root = _decode(payload)
     _exact_keys(root, ("slices",), (), "canonical plan")
     slices = root["slices"]
@@ -207,7 +207,7 @@ def _shape(payload):
         _exact_keys(
             slice_plan,
             ("id", "title", "intent", "producer_task_executor"),
-            ("material",),
+            ("material",) if legacy_material else (),
             context,
         )
         slice_id = slice_plan["id"]
@@ -218,7 +218,7 @@ def _shape(payload):
         seen.add(slice_id)
         _text(slice_plan["title"], "%s.title" % context)
         _text(slice_plan["intent"], "%s.intent" % context)
-        if "material" in slice_plan:
+        if legacy_material and "material" in slice_plan:
             _text(slice_plan["material"], "%s.material" % context)
         producers = slice_plan["producer_task_executor"]
         _exact_keys(producers, _PRODUCERS, (), "%s producers" % context)
@@ -255,31 +255,46 @@ def _project(slices, anchored_slices):
             "intent": slice_plan["intent"],
             "producer_task_executor": producers,
         }
-        if "material" in slice_plan:
-            item["material"] = slice_plan["material"]
         projected.append(item)
     return projected
 
 
-def validate_canonical_plan(document, anchored_document=None):
-    """Validate one block and return its raw slices and state projection.
-
-    A retired executor spelling is readable only when it is byte-for-byte the
-    spelling for the same slice id and producer in the anchored prior block.
-    """
+def _validated_plan(document, anchored_document, *, legacy_material):
+    """Validate one current block, optionally reading its retired material."""
     block, payload, _span = _extract(document)
-    slices = _shape(payload)
+    slices = _shape(payload, legacy_material=legacy_material)
     anchored_slices = None
     if anchored_document is not None:
         _anchored_block, anchored_payload, _anchored_span = _extract(
             anchored_document
         )
-        anchored_slices = _shape(anchored_payload)
+        anchored_slices = _shape(anchored_payload, legacy_material=True)
+    operative_slices = copy.deepcopy(slices)
+    for slice_plan in operative_slices:
+        slice_plan.pop("material", None)
     return {
         "block": block,
-        "slices": copy.deepcopy(slices),
-        "projection": _project(slices, anchored_slices),
+        "slices": operative_slices,
+        "projection": _project(operative_slices, anchored_slices),
     }
+
+
+def validate_canonical_plan(document, anchored_document=None):
+    """Validate a newly authored block and return its state projection.
+
+    A retired executor spelling is readable only when it is byte-for-byte the
+    spelling for the same slice id and producer in the anchored prior block.
+    """
+    return _validated_plan(
+        document, anchored_document, legacy_material=False
+    )
+
+
+def read_canonical_plan(document, anchored_document=None):
+    """Read an existing pre-cutover block, ignoring retired material."""
+    return _validated_plan(
+        document, anchored_document, legacy_material=True
+    )
 
 
 def _relative_path(path):
@@ -818,7 +833,7 @@ def establish_current_plan(state, skeleton_path):
             )
             return copy.deepcopy(previous)
 
-    plan = validate_canonical_plan(document, anchored_document)
+    plan = read_canonical_plan(document, anchored_document)
     anchor = {"path": skeleton_path, "revision": revision}
     gitops.pin_canonical_plan_commit(workspace, skeleton_path, revision)
     state["milestone"]["slices"] = plan["projection"]

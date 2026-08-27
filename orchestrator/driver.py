@@ -653,7 +653,8 @@ def staffing_work_area(run_state):
 
 
 def open_run_staffing_session(state_path, model_profiles_home, document,
-                              rigor, material=None, run_state=None,
+                              rigor, material=staffing.DEFAULT_MATERIAL,
+                              run_state=None,
                               derived=False):
     """Open the run's ONE staffing session and record its id in run state.
 
@@ -676,7 +677,7 @@ def open_run_staffing_session(state_path, model_profiles_home, document,
         "document": document,
         "rigor": rigor,
     }
-    if material:
+    if material is not None:
         body["material"] = material
     record = staffing.create_session(model_profiles_home, body)
     st.bind_staffing_session(run_state, record["id"])
@@ -742,9 +743,11 @@ def resolve_current_review_model(state_path, model_profiles_home, run_state=None
     config = interpreter.effective_config(run_state)
     families = list(config.get("families_order") or [])
     session = st.staffing_session(run_state)
+    material = staffing.session_material(model_profiles_home, session)
     try:
         seats = staffing.session_seats(
-            model_profiles_home, session, "review", families=families
+            model_profiles_home, session, "review", material=material,
+            families=families
         )
         index = int(unit.get("family_index") or 0)
         if index >= len(seats):
@@ -757,6 +760,7 @@ def resolve_current_review_model(state_path, model_profiles_home, run_state=None
                 "review",
                 index=seats[index],
                 round=round_number,
+                material=material,
                 families=families,
             ).answer
 
@@ -849,19 +853,17 @@ class _RoleDispatch(object):
     return value the runner would have to learn about.
     """
 
-    def __init__(self, driver, role, index=1, round=1, material=None,
-                 episode_unit=None):
+    def __init__(self, driver, role, index=1, round=1, episode_unit=None):
         self._driver = driver
         self.role = role
         self.index = index
         self.round = round
-        self.material = material
         self.episode_unit = episode_unit
         self.staffing_fallback = None
 
     def __call__(self):
         resolution = self._driver._staffing_resolution(
-            self.role, self.index, self.round, material=self.material,
+            self.role, self.index, self.round,
             episode_unit=self.episode_unit,
         )
         self.staffing_fallback = resolution.staffing_fallback
@@ -1678,19 +1680,12 @@ class Driver(object):
         """The configured prompt store, or a seed-only local read root."""
         return self.model_profiles_home or os.path.dirname(self.state_path)
 
-    def _author_material(self, unit, kind, task=None):
-        if kind == contracts.KIND_DRAFT_SKELETON:
-            return "document"
-        material = (
-            tasks.order_staffing_material(task["order"])
-            if task is not None
-            else self._worker_staffing_material(unit, kind)
-        )
-        if material:
-            return material
-        return (
-            "document"
-            if kind == contracts.KIND_DRAFT_SLICE_NOTE else "code"
+    def _milestone_material(self):
+        """The material in force now, with the ordinary default fallback."""
+        if self.model_profiles_home is None:
+            return staffing.DEFAULT_MATERIAL
+        return staffing.session_material(
+            self.model_profiles_home, st.staffing_session(self.state)
         )
 
     def _author_coordinates(self, unit, kind, task=None):
@@ -1789,8 +1784,7 @@ class Driver(object):
         return values
 
     def _session_charge(
-        self, job, material, values, authority, repository,
-        artifact_type=None,
+        self, job, values, authority, repository, artifact_type=None,
     ):
         accepted = [
             copy.deepcopy(item)
@@ -1800,7 +1794,6 @@ class Driver(object):
         ]
         charge = {
             "job": job,
-            "material": material,
             "prompt_set": self.state[st.PROMPT_SET_KEY],
             "values": copy.deepcopy(values),
             "amendments_path": self._amendments_path(),
@@ -1860,7 +1853,7 @@ class Driver(object):
         )
 
     def _author_prepare_call(
-        self, unit, kind, material, raw_name, recovery=None, meter=None,
+        self, unit, kind, raw_name, recovery=None, meter=None,
         author_coordinates=None,
     ):
         """Build the fresh routed package and proportional plan boundary."""
@@ -1868,6 +1861,7 @@ class Driver(object):
         logical_source_base = None
 
         def prepare(repair_error):
+            material = self._milestone_material()
             authority = self._worker_episode_authority(unit, kind)
             self._activate_worker_episode_authority(authority)
             call_recovery = recovery
@@ -1981,14 +1975,6 @@ class Driver(object):
             raise st.IllegalTransition("unsupported judgment unit kind")
         return "%s@%s" % (kind, target)
 
-    def _judgment_material(self, unit):
-        if unit["kind"] == st.UNIT_SKELETON:
-            return "document"
-        material = tasks.slice_material(self._slice_info(unit["slice_id"]))
-        if material:
-            return material
-        return "code" if unit["kind"] == st.UNIT_SLICE_IMPL else "document"
-
     def _judgment_values(self, unit, kind, context):
         self._ensure_goal_ledger()
         skeleton = self._skeleton_artifact()
@@ -2068,10 +2054,10 @@ class Driver(object):
         # package for the already-admitted judgment, not a new scheduling
         # decision, so keep its original route coordinates.
         job = self._judgment_job(unit, kind)
-        material = self._judgment_material(unit)
         logical_source_base = None
 
         def prepare(repair_error):
+            material = self._milestone_material()
             authority = self._worker_episode_authority(unit, kind)
             self._activate_worker_episode_authority(authority)
             prepared = judgment_calls.prepare(
@@ -2849,6 +2835,7 @@ class Driver(object):
         skeleton_path = self._skeleton_artifact()
 
         def prepare(repair_error):
+            material = self._milestone_material()
             authority = self._worker_episode_authority(
                 unit, contracts.KIND_SUITE_CHECKPOINT
             )
@@ -2856,7 +2843,7 @@ class Driver(object):
             prepared = judgment_calls.prepare(
                 self._author_prompt_home(),
                 job="suite_checkpoint@workspace",
-                material="code",
+                material=material,
                 values={
                     "kind": contracts.KIND_SUITE_CHECKPOINT,
                     "workspace": self.workspace,
@@ -2898,7 +2885,7 @@ class Driver(object):
                             {
                                 "executor": "agent_call",
                                 "job": "suite_checkpoint@workspace",
-                                "material": "code",
+                                "material": material,
                                 "unit": st.unit_key(unit),
                                 "physical_attempt": physical_attempt,
                             },
@@ -4934,8 +4921,9 @@ class Driver(object):
             ),
         }
 
-    def _reconciliation_prepare_call(self, record, unit, material):
+    def _reconciliation_prepare_call(self, record, unit):
         def prepare(repair_error):
+            material = self._milestone_material()
             if repair_error is not None:
                 raise st.IllegalTransition(
                     "merge_repair has no contract-correction attempt"
@@ -5208,12 +5196,6 @@ class Driver(object):
                 )
             record = plan_reconciliation.validate_dispatch_state(self.state)
             unit = self._reconciliation_source_unit(record)
-            source = record.get("source") or {}
-            material = source.get("material")
-            if not isinstance(material, str) or not material:
-                raise plan_reconciliation.PlanReconciliationError(
-                    "reconciliation source material is missing"
-                )
         except (
             plan_reconciliation.PlanReconciliationError,
             st.IllegalTransition,
@@ -5223,12 +5205,8 @@ class Driver(object):
         ) as exc:
             return self._fail_reconciliation(str(exc), unit=locals().get("unit"))
 
-        family, model, effort = self._staff(
-            "sync", material=material, episode_unit=unit
-        )
-        dispatch = self._dispatch_for_role(
-            "sync", material=material, episode_unit=unit
-        )
+        family, model, effort = self._staff("sync", episode_unit=unit)
+        dispatch = self._dispatch_for_role("sync", episode_unit=unit)
         raw_name = "accepted-range-merge-repair"
         output, result, raw_path = self._call(
             family,
@@ -5239,7 +5217,7 @@ class Driver(object):
             effort=effort,
             dispatch_resolver=dispatch,
             prepare_call=self._reconciliation_prepare_call(
-                record, unit, material
+                record, unit
             ),
             episode_unit=unit,
             single_attempt=True,
@@ -5508,6 +5486,7 @@ class Driver(object):
                         self.model_profiles_home,
                         st.staffing_session(self.state),
                         role,
+                        material=self._milestone_material(),
                         families=list(self.config["families_order"]),
                     ).answer
                 except staffing.StaffingConditionError:
@@ -6204,7 +6183,6 @@ class Driver(object):
             repository = self._session_repository_context(unit)
             session_charge = self._session_charge(
                 "rethink",
-                self._judgment_material(unit),
                 {"rethink_problem": checked["problem"]},
                 authority,
                 repository,
@@ -6291,7 +6269,6 @@ class Driver(object):
                 "plan_source": {
                     "executor": "brainstorming",
                     "job": session_charge["job"],
-                    "material": session_charge["material"],
                     "unit": st.unit_key(unit),
                     "physical_attempt": "repository_session",
                     "session_id": created["id"],
@@ -7024,7 +7001,6 @@ class Driver(object):
         repository = self._session_repository_context(unit)
         session_charge = self._session_charge(
             job,
-            self._judgment_material(unit),
             values,
             authority,
             repository,
@@ -7104,7 +7080,7 @@ class Driver(object):
                 order,
                 self.config,
                 self.workspace,
-                staffing_selection=self._brainstorming_staffing(order),
+                staffing_selection=self._brainstorming_staffing(),
             )
         except tasks.TaskRequestError as exc:
             reason = "Brainstorming producer admission failed: %s" % exc.code
@@ -7160,9 +7136,7 @@ class Driver(object):
                 record["id"],
                 self.config,
                 home,
-                staffing_selection=self._brainstorming_staffing(
-                    record["order"]
-                ),
+                staffing_selection=self._brainstorming_staffing(),
             )
         except brainstorming_lifecycle.PublicLifecycleError as exc:
             if exc.code == brainstorming_lifecycle.STOP_INCOMPLETE:
@@ -7201,8 +7175,6 @@ class Driver(object):
                     "executor": "brainstorming",
                     "job": record["order"]["request"]["context"]
                         ["session_charge"]["job"],
-                    "material": record["order"]["request"]["context"]
-                        ["session_charge"]["material"],
                     "unit": st.unit_key(unit),
                     "physical_attempt": "repository_session",
                     "task_id": record["id"],
@@ -8124,7 +8096,7 @@ class Driver(object):
             "attempt."
             if active_task is not None else None
         )
-        material = self._author_material(unit, kind, active_task)
+        material = self._milestone_material()
         author_coordinates = self._author_coordinates(
             unit, kind, active_task
         )
@@ -8282,7 +8254,6 @@ class Driver(object):
             validate_opts = self._worker_task_validate_opts(
                 task, validate_opts
             )
-            material = self._author_material(unit, kind, task)
             if kind == contracts.KIND_IMPLEMENT:
                 def dispatch(request):
                     # The admitted order is immutable scheduling history. A
@@ -8312,7 +8283,6 @@ class Driver(object):
                             self._author_prepare_call(
                                 unit,
                                 kind,
-                                material,
                                 raw_name,
                                 recovery=recovery,
                                 meter=meter,
@@ -8354,7 +8324,6 @@ class Driver(object):
                         prepare_call=self._author_prepare_call(
                             unit,
                             kind,
-                            material,
                             raw_name,
                             recovery=resume_context,
                             author_coordinates=author_coordinates,
@@ -9476,8 +9445,9 @@ class Driver(object):
             self._save()
         raise StopStep(reason)
 
-    def _staffing_resolution(self, role, index=1, round=1, material=None,
-                             episode_unit=None):
+    def _staffing_resolution(
+        self, role, index=1, round=1, episode_unit=None
+    ):
         """One router answer, read live from the run's session."""
         try:
             return staffing.resolve(
@@ -9486,27 +9456,25 @@ class Driver(object):
                 role,
                 index=index,
                 round=round,
-                material=material,
+                material=self._milestone_material(),
                 families=list(self.config["families_order"]),
             )
         except staffing.StaffingConditionError as exc:
             self._fail_staffing(exc, episode_unit=episode_unit)
 
-    def _staff(self, role, index=1, round=1, material=None,
-               episode_unit=None):
+    def _staff(self, role, index=1, round=1, episode_unit=None):
         """(family, model, effort) for one driver-made call."""
         answer = self._staffing_resolution(
-            role, index, round, material=material,
-            episode_unit=episode_unit,
+            role, index, round, episode_unit=episode_unit,
         ).answer
         return answer["agent"], answer["model"], answer["effort"]
 
-    def _dispatch_for_role(self, role, index=1, round=1, material=None,
-                           episode_unit=None):
+    def _dispatch_for_role(
+        self, role, index=1, round=1, episode_unit=None
+    ):
         """A fresh router resolution for every physical provider dispatch."""
         return _RoleDispatch(
-            self, role, index=index, round=round, material=material,
-            episode_unit=episode_unit,
+            self, role, index=index, round=round, episode_unit=episode_unit,
         )
 
     # -- the review cycle IS the document's `review` seats ------------------
@@ -9534,6 +9502,7 @@ class Driver(object):
             self.model_profiles_home,
             st.staffing_session(self.state),
             "review",
+            material=self._milestone_material(),
             families=list(self.config["families_order"]),
         )
 
@@ -9562,6 +9531,7 @@ class Driver(object):
             self.model_profiles_home,
             st.staffing_session(self.state),
             "review",
+            material=self._milestone_material(),
             families=list(self.config["families_order"]),
         )
 
@@ -9751,22 +9721,8 @@ class Driver(object):
         return self._staff(
             role,
             round=round_number,
-            material=self._worker_staffing_material(unit, kind),
             episode_unit=unit,
         )
-
-    def _worker_staffing_material(self, unit, kind):
-        """The admitted production material, or the value about to be admitted.
-
-        Recovery reads the active task's immutable order.  Only a task with no
-        admitted record yet consults the prospective slice plan.
-        """
-        if kind not in tasks.PRODUCER_TASK_KINDS:
-            return None
-        active = self._active_worker_task(unit, kind)
-        if active is not None:
-            return tasks.order_staffing_material(active["order"])
-        return tasks.slice_material(self._slice_info(unit["slice_id"]))
 
     def _order_role(self, unit, kind):
         """The process step one admitted agent-call order records.
@@ -9881,7 +9837,6 @@ class Driver(object):
             return self._dispatch_for_role(
                 role,
                 round=round_number,
-                material=self._worker_staffing_material(unit, kind),
                 episode_unit=unit,
             )
         if kind == contracts.KIND_DRAFT_SKELETON:
@@ -9995,7 +9950,7 @@ class Driver(object):
         }
         return lead, counterpart
 
-    def _brainstorming_staffing(self, order=None):
+    def _brainstorming_staffing(self):
         """The run's one staffing session, for a discussion it owns.
 
         A discussion the milestone starts is staffed by the same session
@@ -10012,24 +9967,13 @@ class Driver(object):
         binding a session at a later resume does not reach back into a
         discussion already created.
 
-        For a selected production order the same mapping also carries that
-        order's admitted optional material. It is request context, not a
-        copied staffing answer: every physical call still resolves the live
-        session and document.
-
         `None` — no selection at all — only for a `Driver` built without a
         catalogue home, which has no document store to read and keeps
         today's configuration-act seats.
         """
         if self.model_profiles_home is None:
             return None
-        selection = {"session": st.staffing_session(self.state)}
-        if order is not None:
-            # Production discussions inherit the task order's admitted
-            # material, including an explicit absence.  Other discussions
-            # have no slice-material source and keep the selection's old shape.
-            selection["material"] = tasks.order_staffing_material(order)
-        return selection
+        return {"session": st.staffing_session(self.state)}
 
     def _modern_design_updates(self):
         # Compatibility must never restore retired redocumentation machinery.
@@ -11726,12 +11670,8 @@ class Driver(object):
             )
             return "fixer suite result reused; %s" % closed
         if self.model_profiles_home is not None:
-            family, model, effort = self._staff(
-                "implement", material="code", episode_unit=unit
-            )
-            dispatch = self._dispatch_for_role(
-                "implement", material="code", episode_unit=unit
-            )
+            family, model, effort = self._staff("implement", episode_unit=unit)
+            dispatch = self._dispatch_for_role("implement", episode_unit=unit)
         else:
             family, model, effort = self._act_profile("implementer")
             dispatch = self._dispatch_for_act("implementer")

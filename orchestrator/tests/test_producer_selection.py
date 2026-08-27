@@ -58,7 +58,7 @@ def material_document(name, materials):
     return document
 
 
-def canonical_skeleton_step(material=None):
+def canonical_skeleton_step():
     planned = {
         "id": 1,
         "title": "One",
@@ -68,8 +68,6 @@ def canonical_skeleton_step(material=None):
             "implement": "agent_call",
         },
     }
-    if material is not None:
-        planned["material"] = material
     document = (
         "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
         % json.dumps({"slices": [planned]})
@@ -126,21 +124,18 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
             return None
         return json.JSONDecoder().raw_decode(block[1])[0]
 
-    def test_canonical_plan_material_replaces_the_legacy_prompt_catalogue(self):
+    def test_legacy_material_is_neither_solicited_nor_projected(self):
         path = self.bound_to(material_document("vocab", self.VOCABULARY))
-        subject = self.driver_for(path, [canonical_skeleton_step("research")])
+        subject = self.driver_for(path, [canonical_skeleton_step()])
 
         subject.step()
         drafted = subject.runner.calls[-1]
         self.assertEqual(drafted[1], "draft_skeleton")
         self.assertIsNone(self.catalogue_in(drafted[2]))
         self.assertNotIn("reading unfamiliar code", drafted[2])
-        self.assertEqual(
-            subject.state["milestone"]["slices"][0]["material"],
-            "research",
-        )
+        self.assertNotIn("material", subject.state["milestone"]["slices"][0])
 
-    def test_canonical_plan_material_is_optional_nonempty_utf8_text(self):
+    def test_legacy_material_is_readable_but_removed_from_projection(self):
         base = {
             "id": 1,
             "title": "one",
@@ -163,8 +158,11 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
                 % json.dumps({"slices": [planned]}, ensure_ascii=True)
             )
             with self.subTest(material=value):
-                validated = canonical_plan.validate_canonical_plan(document)
-                self.assertEqual(validated["projection"][0]["material"], value)
+                with self.assertRaises(canonical_plan.CanonicalPlanError):
+                    canonical_plan.validate_canonical_plan(document)
+                validated = canonical_plan.read_canonical_plan(document)
+                self.assertNotIn("material", validated["slices"][0])
+                self.assertNotIn("material", validated["projection"][0])
 
         absent_document = (
             "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
@@ -183,7 +181,7 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
             with self.subTest(material=value), self.assertRaises(
                 canonical_plan.CanonicalPlanError
             ):
-                canonical_plan.validate_canonical_plan(document)
+                canonical_plan.read_canonical_plan(document)
 
 
 class ProducerSelectionTest(unittest.TestCase):
@@ -306,14 +304,16 @@ class ProducerSelectionTest(unittest.TestCase):
 
         status, detail = self._json("GET", "/api/runs/%s" % run_id)
         self.assertEqual(status, 200, detail)
-        self.assertEqual(detail["summary"]["slices"], planned)
+        self.assertEqual(
+            detail["summary"]["slices"], tasks.effective_slice_plan(planned)
+        )
         order = tasks.producer_order(
             planned[0],
             contracts.KIND_IMPLEMENT,
             _request(workspace, contracts.KIND_IMPLEMENT, "slice_impl-01"),
         )
         self.assertEqual(order["task_executor"], "agent_call")
-        self.assertEqual(order["staffing_material"], "code")
+        self.assertNotIn("staffing_material", order)
         for owner, name in (
             (service, "set_slice_producer"),
             (service, "set_slice_material"),

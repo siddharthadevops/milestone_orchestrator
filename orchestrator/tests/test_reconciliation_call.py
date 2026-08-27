@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from orchestrator import canonical_plan, contracts, driver, gitops
+from orchestrator import judgment_calls
 from orchestrator import plan_reconciliation, tasks
 from orchestrator import runners
 from orchestrator import state as st
@@ -261,6 +262,36 @@ class ReconciliationCallTest(unittest.TestCase):
         self.assertIsNone(deleted["closed_record"])
         self.assertNotIn("preserved_candidate", deleted)
         self.assertEqual(self._git("status", "--porcelain"), "")
+
+    def test_merge_repair_uses_current_not_source_material(self):
+        subject = driver.Driver(
+            self.state_path,
+            model_profiles_home=self.model_home.name,
+            runner=runners.MockRunner([{
+                "expect_kind": "merge_repair",
+                "side_effect": self._repair_from_boundary(),
+                "response": self._response(),
+            }]),
+        )
+        staffing.edit_session(
+            self.model_home.name,
+            st.staffing_session(subject.state),
+            {"material": "lawyer"},
+        )
+        seen = []
+        real_prepare = judgment_calls.prepare
+
+        def capture(*args, **kwargs):
+            seen.append(kwargs["material"])
+            return real_prepare(*args, **kwargs)
+
+        with mock.patch.object(
+            judgment_calls, "prepare", side_effect=capture
+        ):
+            action, _note = subject.step()
+
+        self.assertEqual(action.type, driver.A_RECONCILIATION)
+        self.assertEqual(seen, ["lawyer"])
 
     def test_run_continues_after_success_instead_of_returning_frozen(self):
         subject = driver.Driver(

@@ -326,9 +326,11 @@ class TaskContractsTest(unittest.TestCase):
             task_request(context={}),
         )
         admitted_production_order = tasks.validate_order(production_order)
-        self.assertEqual(
-            tasks.order_staffing_material(admitted_production_order),
-            "analysis",
+        self.assertNotIn("staffing_material", admitted_production_order)
+        self.assert_request_error(
+            tasks.INVALID_TASK_REQUEST,
+            tasks.validate_order,
+            {**production_order, "staffing_material": "analysis"},
         )
         self.assertEqual(admitted_production_order["request"]["context"], {})
 

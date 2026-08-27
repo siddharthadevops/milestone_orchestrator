@@ -722,7 +722,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         context = request["context"]
         charge = context["session_charge"]
         self.assertEqual(charge["job"], "draft_slice_note@slice_doc")
-        self.assertEqual(charge["material"], "document")
+        self.assertNotIn("material", charge)
         self.assertEqual(charge["values"]["slice_id"], "1")
         self.assertEqual(charge["values"]["slice_note_path"], planned)
         self.assertEqual(context["planned_slice_note_path"], planned)

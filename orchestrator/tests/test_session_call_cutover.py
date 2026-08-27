@@ -17,7 +17,7 @@ from orchestrator import brainstorming_tasks
 from orchestrator import canonical_plan
 from orchestrator import contracts, prompt_authority, prompt_router, prompt_sets
 from orchestrator import driver, ledgers, runners, session_calls
-from orchestrator import session_repository, state, tasks
+from orchestrator import session_repository, staffing, state, tasks
 from orchestrator.tests.test_driver_mock import prompt_response
 
 
@@ -101,6 +101,14 @@ class SessionCallCutoverTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="orch-session-call-")
         self.addCleanup(self.temp.cleanup)
         self.workspace = self.temp.name
+
+    def test_opaque_standalone_payload_has_no_milestone_charge(self):
+        for payload in (1, ["session_charge"], "session_charge"):
+            with self.subTest(payload=payload):
+                state = {
+                    "request": {"context": {"source_payload": payload}}
+                }
+                self.assertIsNone(session_calls.charge_from_state(state))
 
     def prepare(self, job, role, lead, artifact_type=None, **changes):
         values = turn_values(self.workspace, role)
@@ -188,7 +196,6 @@ class SessionCallCutoverTest(unittest.TestCase):
         amendments.write_text('{"amendments":[]}', encoding="utf-8")
         charge = {
             "job": "implement@slice_impl",
-            "material": "code",
             "prompt_set": "default",
             "values": {},
             "amendments_path": str(amendments),
@@ -247,19 +254,13 @@ class SessionCallCutoverTest(unittest.TestCase):
                 {"tasks": []}, mismatched, {}, self.workspace
             )
 
-        wrong_material = copy.deepcopy(order)
-        wrong_material["request"]["context"]["session_charge"][
+        legacy_material = copy.deepcopy(order)
+        legacy_material["request"]["context"]["session_charge"][
             "material"
         ] = "document"
-        with (
-            mock.patch.object(
-                brainstorming_tasks, "resolve_staffing",
-                return_value=resolved,
-            ),
-            self.assertRaises(tasks.TaskRequestError),
-        ):
+        with self.assertRaises(prompt_router.PromptRouterError):
             brainstorming_tasks.admit_task(
-                {"tasks": []}, wrong_material, {}, self.workspace
+                {"tasks": []}, legacy_material, {}, self.workspace
             )
 
         for job in (
@@ -380,7 +381,7 @@ class SessionCallCutoverTest(unittest.TestCase):
         )
         charge = record["order"]["request"]["context"]["session_charge"]
         self.assertEqual(charge["job"], "implement@slice_impl")
-        self.assertEqual(charge["material"], "code")
+        self.assertNotIn("material", charge)
         self.assertEqual(
             charge["prompt_set"], subject.state[state.PROMPT_SET_KEY]
         )
@@ -559,7 +560,6 @@ class SessionCallCutoverTest(unittest.TestCase):
 
         charge = {
             "job": "rethink",
-            "material": "document",
             "prompt_set": "default",
             "values": {"rethink_problem": RETHINK_PROBLEM},
             "amendments_path": str(Path(self.workspace) / "amendments.json"),
@@ -568,6 +568,8 @@ class SessionCallCutoverTest(unittest.TestCase):
             "repository": repository_context(self.workspace),
         }
         session_calls.validate_charge(charge)
+        with self.assertRaises(prompt_router.PromptRouterError):
+            session_calls.validate_charge(dict(charge, material="document"))
         missing_problem = copy.deepcopy(charge)
         missing_problem["values"] = {}
         with self.assertRaises(prompt_router.PromptRouterError):
@@ -702,7 +704,6 @@ class SessionCallCutoverTest(unittest.TestCase):
                     "source_payload": {
                         "session_charge": {
                             "job": "rethink",
-                            "material": "document",
                             "prompt_set": "default",
                             "values": {
                                 "rethink_problem": RETHINK_PROBLEM,
@@ -734,6 +735,14 @@ class SessionCallCutoverTest(unittest.TestCase):
             "revision": "1" * 40,
             "anchor": None,
         }
+        staffing.ensure_documents(self.workspace)
+        material_session = staffing.create_session(self.workspace, {
+            "work_area": {"workspace_path": self.workspace},
+            "families": ["codex"],
+            "document": "default",
+            "rigor": "medium",
+            "material": "lawyer",
+        })["id"]
         with (
             mock.patch.object(
                 session_repository,
@@ -750,9 +759,16 @@ class SessionCallCutoverTest(unittest.TestCase):
                 "complete_attempt",
                 return_value=boundary,
             ),
+            mock.patch.object(
+                prompt_router, "resolve", wraps=prompt_router.resolve
+            ) as routed,
         ):
             first = session_calls.prepare_turn(
-                self.workspace, state, participant, 1, target
+                self.workspace, state, participant, 1, target,
+                staffing_session=material_session,
+            )
+            staffing.edit_session(
+                self.workspace, material_session, {"material": "code"}
             )
             amendments.write_text(
                 json.dumps({
@@ -761,8 +777,13 @@ class SessionCallCutoverTest(unittest.TestCase):
                 encoding="utf-8",
             )
             second = session_calls.prepare_turn(
-                self.workspace, state, participant, 1, target
+                self.workspace, state, participant, 1, target,
+                staffing_session=material_session,
             )
+        self.assertEqual(
+            [call.kwargs["material"] for call in routed.call_args_list[-2:]],
+            ["lawyer", "code"],
+        )
         self.assertNotEqual(first.prompt, second.prompt)
         expected_values = {
             "workspace": self.workspace,
@@ -856,7 +877,6 @@ class SessionCallCutoverTest(unittest.TestCase):
         amendments.write_text('{"amendments":[]}', encoding="utf-8")
         charge = {
             "job": "rethink",
-            "material": "document",
             "prompt_set": "default",
             "values": {"rethink_problem": RETHINK_PROBLEM},
             "amendments_path": str(amendments),
@@ -893,6 +913,28 @@ class SessionCallCutoverTest(unittest.TestCase):
             participants,
         )
         store.transition("routed", created.revision, "running")
+        key = brainstorming._session_key("routed")
+        stored = store._store.read(key)
+        legacy_state = copy.deepcopy(stored["value"])
+        legacy_state["request"]["context"]["source_payload"][
+            "session_charge"
+        ]["material"] = "document"
+        self.assertTrue(
+            store._store.cas(
+                key, stored["revision"], legacy_state
+            ).ok
+        )
+        legacy_snapshot = store.read("routed")
+        self.assertEqual(
+            legacy_snapshot.state["request"]["context"]["source_payload"][
+                "session_charge"
+            ]["material"],
+            "document",
+        )
+        self.assertNotIn(
+            "material",
+            session_calls.charge_from_state(legacy_snapshot.state),
+        )
         reply = {
             "kind": "discussion_turn",
             "markdown": "The focused issue is resolved.",

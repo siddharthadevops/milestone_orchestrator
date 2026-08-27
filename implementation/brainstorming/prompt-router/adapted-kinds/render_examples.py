@@ -52,6 +52,7 @@ GOAL = 'implementation/milestones/staffing-router/goal.md'
 SKELETON = 'implementation/milestones/staffing-router/skeleton.md'
 NOTE10 = 'implementation/milestones/staffing-router/slices/slice-10.md'
 ROUNDS = '20'
+MILESTONE_MATERIAL = 'default'
 # Stable, existing Git commits used as topology fixtures; the prompt payloads
 # are representative, not claims about what those historical commits changed.
 WIPE_REVISION = '3abbd13e7c966cbeeac773870dfd0eb115d596f1'
@@ -74,7 +75,7 @@ BS_COMMON = {
 RUNS = {
     'merge_repair': {
         'route': {'job': 'merge_repair@workspace', 'executor': 'agent_call',
-                  'material': 'code'},
+                  'material': MILESTONE_MATERIAL},
         'values': {'kind': 'merge_repair', 'workspace': WS,
                    'ecosystem_map': ECOSYSTEM,
                    'operator_amendments': AMENDMENTS_A,
@@ -90,7 +91,7 @@ RUNS = {
     'merge_repair.agent_call': {
         'kind_file': 'merge_repair',
         'route': {'job': 'merge_repair@workspace', 'executor': 'agent_call',
-                  'material': 'code'},
+                  'material': MILESTONE_MATERIAL},
         'values': {'kind': 'merge_repair', 'workspace': WS,
                    'ecosystem_map': ECOSYSTEM,
                    'operator_amendments': AMENDMENTS_A,
@@ -105,7 +106,7 @@ RUNS = {
     },
     'suite_checkpoint': {
         'route': {'job': 'suite_checkpoint@workspace', 'executor': 'agent_call',
-                  'material': 'code'},
+                  'material': MILESTONE_MATERIAL},
         'values': {'kind': 'suite_checkpoint', 'workspace': WS,
                    'ecosystem_map': ECOSYSTEM,
                    'operator_amendments': AMENDMENTS_A,
@@ -114,7 +115,7 @@ RUNS = {
     },
     'draft_skeleton': {
         'route': {'job': 'draft_skeleton@skeleton', 'executor': 'agent_call',
-                  'material': 'document'},
+                  'material': MILESTONE_MATERIAL},
         'values': {'kind': 'draft_skeleton', 'workspace': WS,
                    'goal_path': GOAL, 'skeleton_path': SKELETON,
                    'project': 'orchestrators', 'work_area': 'implementation', 'ecosystem_map': ECOSYSTEM,
@@ -123,7 +124,7 @@ RUNS = {
     },
     'draft_slice_note': {
         'route': {'job': 'draft_slice_note@slice_doc', 'executor': 'agent_call',
-                  'material': 'document'},
+                  'material': MILESTONE_MATERIAL},
         'values': {'kind': 'draft_slice_note', 'workspace': WS,
                    'slice_id': '10', 'slice_title': 'Compatibility and conformance',
                    'skeleton_path': SKELETON, 'goal_path': GOAL, 'slice_note_path': NOTE10,
@@ -134,7 +135,7 @@ RUNS = {
     },
     'implement': {
         'route': {'job': 'implement@slice_impl', 'executor': 'agent_call',
-                  'material': 'code'},
+                  'material': MILESTONE_MATERIAL},
         'options': {'implementation_metering': True},
         'values': {'kind': 'implement', 'workspace': WS,
                    'slice_id': '10', 'slice_title': 'Compatibility and conformance',
@@ -152,7 +153,7 @@ RUNS = {
     },
     'review_round': {
         'route': {'job': 'review_round@slice_impl', 'executor': 'agent_call',
-                  'material': 'code'},
+                  'material': MILESTONE_MATERIAL},
         'variants': {'target_frame': 'slice_unit'},
         'values': {'kind': 'review_round', 'workspace': WS,
                    'task': 'full review round of the slice 10 implementation (Compatibility and conformance).',
@@ -168,7 +169,7 @@ RUNS = {
     },
     'delta_review': {
         'route': {'job': 'delta_review@slice_doc', 'executor': 'agent_call',
-                  'material': 'document'},
+                  'material': MILESTONE_MATERIAL},
         'variants': {'target_frame': 'slice_unit'},
         'values': {'kind': 'delta_review', 'workspace': WS,
                    'task_subject': 'the slice 10 note (Compatibility and conformance)',
@@ -183,7 +184,7 @@ RUNS = {
     },
     'reclassify': {
         'route': {'job': 'reclassify@doc', 'executor': 'agent_call',
-                  'material': 'document'},
+                  'material': MILESTONE_MATERIAL},
         'values': {'kind': 'reclassify', 'workspace': WS,
                    'project': 'orchestrators', 'work_area': 'implementation', 'ecosystem_map': ECOSYSTEM,
                    'operator_amendments': AMENDMENTS_A,
@@ -196,7 +197,7 @@ RUNS = {
     },
     'fix_findings': {
         'route': {'job': 'fix_findings@slice_doc', 'executor': 'agent_call',
-                  'material': 'document'},
+                  'material': MILESTONE_MATERIAL},
         'variants': {'target_frame': 'slice_unit'},
         'values': {'kind': 'fix_findings', 'workspace': WS,
                    'task_subject': 'the slice 10 note (Compatibility and conformance)',
@@ -211,7 +212,7 @@ RUNS = {
     },
     'discussion_turn': {
         'route': {'job': 'rethink', 'executor': 'brainstorming',
-                  'material': 'document', 'role': 'initial_position',
+                  'material': MILESTONE_MATERIAL, 'role': 'initial_position',
                   'lead': True, 'artifact_type': 'document'},
         'options': {'two_register': True, 'altitude_doc': True, 'reuse_gate': True},
         'values': {**BS_COMMON, 'kind': 'discussion_turn', 'workspace': BS_COMMON['workspace_path'], 'participant_id': 'initial-position', 'role': 'initial_position', 'round': '3',
@@ -221,7 +222,7 @@ RUNS = {
     'discussion_turn.contrary': {
         'kind_file': 'discussion_turn',
         'route': {'job': 'rethink', 'executor': 'brainstorming',
-                  'material': 'document', 'role': 'contrary_position',
+                  'material': MILESTONE_MATERIAL, 'role': 'contrary_position',
                   'lead': False, 'artifact_type': 'document'},
         'options': {'evidence': True, 'altitude_review': True},
         'values': {**BS_COMMON, 'kind': 'discussion_turn', 'workspace': BS_COMMON['workspace_path'], 'participant_id': 'contrary-position', 'role': 'contrary_position', 'round': '3',
@@ -230,7 +231,7 @@ RUNS = {
     },
     'questioner_turn': {'options': {'reuse_gate_questioner': True, 'altitude_questioner': True},
         'route': {'job': 'rethink', 'executor': 'brainstorming',
-                  'material': 'document', 'role': 'common_sense',
+                  'material': MILESTONE_MATERIAL, 'role': 'common_sense',
                   'lead': False, 'artifact_type': 'document'},
         'values': {**BS_COMMON, 'kind': 'questioner_turn', 'workspace': BS_COMMON['workspace_path'],
                    'repository_authority': f'Git commit {BS_ACCEPTED_REVISION}'}},

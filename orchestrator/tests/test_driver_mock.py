@@ -428,7 +428,6 @@ def canonical_skeleton_document():
             "id": 1,
             "title": "Calculator core",
             "intent": "Build the bounded calculator CLI and its tests.",
-            "material": "code",
             "producer_task_executor": {
                 "draft_slice_note": "agent_call",
                 "implement": "agent_call",
@@ -629,7 +628,6 @@ class TestHappyLifecycle(DriverTestCase):
                     "id": 1,
                     "title": "Calculator core",
                     "intent": "Build the bounded calculator CLI and its tests.",
-                    "material": "code",
                     "producer_task_executor": {
                         "draft_slice_note": {
                             "task_executor": "agent_call",

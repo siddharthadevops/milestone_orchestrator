@@ -1331,8 +1331,8 @@ def _validate_participant(participant, ctx):
     return checked
 
 
-def validate_request(request):
-    """Validate and return a detached JSON-compatible request copy."""
+def _validate_request(request, *, legacy_charge):
+    """Validate one request, optionally reading a pre-cutover charge."""
     target_free_rethink = repository_rethink_request(request)
     _exact_keys(
         request,
@@ -1386,9 +1386,11 @@ def validate_request(request):
             try:
                 from orchestrator import session_calls
 
-                charge = session_calls.validate_charge(
-                    payload["session_charge"]
+                validator = (
+                    session_calls.read_charge
+                    if legacy_charge else session_calls.validate_charge
                 )
+                charge = validator(payload["session_charge"])
             except (TypeError, ValueError, RuntimeError) as exc:
                 raise ContractError(
                     "request carries an invalid milestone session charge"
@@ -1420,6 +1422,16 @@ def validate_request(request):
                     "request.context.amendments[%d].id" % index,
                 )
     return _json_copy(request, "request")
+
+
+def validate_request(request):
+    """Validate a newly admitted request."""
+    return _validate_request(request, legacy_charge=False)
+
+
+def read_request(request):
+    """Read an existing request without migrating its retired charge."""
+    return _validate_request(request, legacy_charge=True)
 
 
 def delivers_chat(request):
@@ -2144,7 +2156,7 @@ def closing_summary_with_ballot_facts(summary, ballot, run_config):
 
 def validate_result(result, terminal_status, request, transcript_ref):
     """Validate the retained representation of a terminal outcome."""
-    checked_request = validate_request(request)
+    checked_request = read_request(request)
     target_free_rethink = repository_rethink_request(checked_request)
     _object(result, "result")
     outcome = result.get("outcome")
@@ -2361,7 +2373,7 @@ def validate_session_state(state):
         ) + _COORDINATION_FIELDS,
         "state",
     )
-    request = validate_request(state["request"])
+    request = read_request(state["request"])
     run_config = validate_run_config(state["run_config"])
     transcript_ref = validate_transcript_ref(state["transcript_ref"])
     if "participant_sessions" in state:
@@ -3543,7 +3555,7 @@ class SessionStore:
     def delivered_transcript_ref(self, session_id, request):
         """Return the final chat artifact placed beside the target."""
         session_id = kvstore.validate_fragment(session_id, "session_id")
-        checked = validate_request(request)
+        checked = read_request(request)
         if repository_rethink_request(checked):
             raise ContractError(
                 "repository rethink transcripts have no delivered target path"

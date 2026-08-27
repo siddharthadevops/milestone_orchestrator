@@ -28,7 +28,7 @@ from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import brainstorming_milestone
 from orchestrator import brainstorming_tasks as tasks
-from orchestrator import service, staffing
+from orchestrator import service, session_calls, staffing
 from orchestrator import state as st
 
 
@@ -54,7 +54,6 @@ CONFIG = {
     },
     "timeouts": {},
 }
-_UNSET = object()
 
 
 def milestone_roster():
@@ -240,13 +239,25 @@ class BrainstormingCutoverTest(unittest.TestCase):
         ).answer
         return resolved["agent"], resolved["model"], resolved["effort"]
 
-    def roster(self, participants=None, config=None, material=_UNSET):
+    def milestone_charge(self, job="draft_slice_note@slice_doc"):
+        return {
+            "job": job,
+            "prompt_set": "default",
+            "values": {},
+            "amendments_path": os.path.join(
+                self.workspace, "amendments.json"
+            ),
+            "accepted_amendments": [],
+            "repository": {
+                "state_path": os.path.join(self.workspace, "state.json"),
+                "skeleton_path": "docs/skeleton.md",
+                "pre_session_commit": "0" * 40,
+            },
+        }
+
+    def roster(self, participants=None, config=None):
         """Build one router-backed runtime and run config."""
-        binding = (
-            lifecycle._staffing_binding(self.home, self.session)
-            if material is _UNSET else
-            lifecycle._staffing_binding(self.home, self.session, material)
-        )
+        binding = lifecycle._staffing_binding(self.home, self.session)
         runtime, run_config, eligible = lifecycle._runtime_and_roster(
             CONFIG if config is None else config,
             participants or milestone_roster(),
@@ -261,11 +272,8 @@ class BrainstormingCutoverTest(unittest.TestCase):
         session_id,
         participants=None,
         staffing_session=True,
-        staffing_material=_UNSET,
     ):
-        runtime, run_config, eligible = self.roster(
-            participants, material=staffing_material
-        )
+        runtime, run_config, eligible = self.roster(participants)
         created = self.store.create(
             session_id,
             {
@@ -306,8 +314,6 @@ class BrainstormingCutoverTest(unittest.TestCase):
         }
         if staffing_session:
             record["staffing_session"] = self.session
-            if staffing_material is not _UNSET:
-                record["staffing_material"] = staffing_material
         return lifecycle._validate_record(record)
 
     def narrator_turn(self, session_id):
@@ -345,6 +351,11 @@ class BrainstormingCutoverTest(unittest.TestCase):
 
     def executors(self, record, recorder=None, dispatching=False,
                   supplied=None):
+        snapshot = self.store.read(record["id"])
+        milestone_material = bool(
+            snapshot is not None
+            and session_calls.charge_from_state(snapshot.state) is not None
+        )
         with mock.patch.object(
             staffing, "resolve", side_effect=recorder or staffing.resolve
         ):
@@ -353,7 +364,10 @@ class BrainstormingCutoverTest(unittest.TestCase):
                 record,
                 lifecycle._spawn_participant if dispatching else None,
                 staffing_binding=lifecycle._record_staffing_binding(
-                    self.home, record, supplied
+                    self.home,
+                    record,
+                    supplied,
+                    milestone_material=milestone_material,
                 ),
             )
 
@@ -429,7 +443,6 @@ class BrainstormingCutoverTest(unittest.TestCase):
         caller=None,
         static_pins=None,
         max_rounds=1,
-        staffing_material=_UNSET,
     ):
         """One registry-backed session whose seats dispatch real processes.
 
@@ -445,13 +458,7 @@ class BrainstormingCutoverTest(unittest.TestCase):
             static_binding=static_pins is not None,
             staffing_binding=(
                 None if static_pins is not None
-                else (
-                    lifecycle._staffing_binding(self.home, self.session)
-                    if staffing_material is _UNSET else
-                    lifecycle._staffing_binding(
-                        self.home, self.session, staffing_material
-                    )
-                )
+                else lifecycle._staffing_binding(self.home, self.session)
             ),
         )
         target_path = os.path.join(self.workspace, "%s.md" % session_id)
@@ -497,8 +504,6 @@ class BrainstormingCutoverTest(unittest.TestCase):
         }
         if static_pins is None:
             record["staffing_session"] = self.session
-            if staffing_material is not _UNSET:
-                record["staffing_material"] = staffing_material
         return self.register(lifecycle._validate_record(record))
 
     # -- acceptance ------------------------------------------------------
@@ -614,10 +619,10 @@ class BrainstormingCutoverTest(unittest.TestCase):
         self.assertNotEqual(first, second)
         self.assertEqual(second, self.answer(1, 1))
 
-    def test_slice_material_reaches_agent_call_and_brainstorming_production(
+    def test_producer_choices_share_session_without_a_slice_material(
         self,
     ):
-        """Both producer choices carry one admitted material end to end."""
+        """Both producer choices follow the one live session material."""
         document = staffing.default_document_seed()
         document["name"] = "production-materials"
         document["materials"] = {
@@ -641,7 +646,9 @@ class BrainstormingCutoverTest(unittest.TestCase):
         }
         staffing.save(self.home, document)
         staffing.edit_session(
-            self.home, self.session, {"document": document["name"]}
+            self.home,
+            self.session,
+            {"document": document["name"], "material": "analysis"},
         )
 
         request = {
@@ -689,7 +696,6 @@ class BrainstormingCutoverTest(unittest.TestCase):
                 plan = {
                     "id": 1,
                     "title": "One",
-                    "material": "analysis",
                     "producer_task_executor": {
                         kind: {"task_executor": executor}
                         for kind, executor in producer_map.items()
@@ -704,24 +710,18 @@ class BrainstormingCutoverTest(unittest.TestCase):
                     order = tasks.tasks.validate_order(
                         tasks.tasks.producer_order(plan, kind, admitted_request)
                     )
-                    self.assertEqual(
-                        tasks.tasks.order_staffing_material(order), "analysis"
-                    )
+                    self.assertNotIn("staffing_material", order)
                     if order["task_executor"] == "agent_call":
                         driver._RoleDispatch(
                             resolver_owner,
                             role,
-                            material=tasks.tasks.order_staffing_material(order),
                         )()
                         agent_roles.append(role)
                     else:
                         selection = driver.Driver._brainstorming_staffing(
-                            owner, order
+                            owner
                         )
-                        self.assertEqual(selection, {
-                            "session": self.session,
-                            "material": "analysis",
-                        })
+                        self.assertEqual(selection, {"session": self.session})
                         brainstorming_selection = selection
 
             self.assertEqual(sorted(agent_roles), ["draft", "implement"])
@@ -769,7 +769,7 @@ class BrainstormingCutoverTest(unittest.TestCase):
                 )
             session_id = created["id"]
             record = lifecycle._record_by_id(self.home, session_id)
-            self.assertEqual(record["staffing_material"], "analysis")
+            self.assertNotIn("staffing_material", record)
 
             subject = self.executors(record, recorder, dispatching=True)
             lead_ref = self.store.read(session_id).state["run_config"][
@@ -779,17 +779,10 @@ class BrainstormingCutoverTest(unittest.TestCase):
             lead.prepare_dispatch(1)
             first = (lead.model_family, lead.model, lead.effort)
 
-            # A later plan projection cannot retarget the admitted discussion.
-            plan["material"] = "delivery"
-            lead.prepare_dispatch(1)
-            self.assertEqual(
-                (lead.model_family, lead.model, lead.effort), first
+            # The session edit reaches the next call without any plan field.
+            staffing.edit_session(
+                self.home, self.session, {"material": "delivery"}
             )
-
-            # Staffing is still live: changing what ANALYSIS means reaches
-            # the next call without retargeting the task to DELIVERY.
-            document["overrides"]["analysis"] = seats(2)
-            staffing.save(self.home, document)
             lead.prepare_dispatch(2)
             second = (lead.model_family, lead.model, lead.effort)
             self.assertNotEqual(first, second)
@@ -825,9 +818,7 @@ class BrainstormingCutoverTest(unittest.TestCase):
                 self.home, session_id, staffing_session=self.session
             )
             restarted_record = lifecycle._record_by_id(self.home, session_id)
-            self.assertEqual(
-                restarted_record["staffing_material"], "analysis"
-            )
+            self.assertNotIn("staffing_material", restarted_record)
             restarted = self.executors(
                 restarted_record, recorder, dispatching=True
             )
@@ -862,9 +853,121 @@ class BrainstormingCutoverTest(unittest.TestCase):
 
         self.assertTrue(recorder.requests)
         self.assertEqual(
-            {item["material"] for item in recorder.requests}, {"analysis"}
+            {item["material"] for item in recorder.requests}, {None}
         )
         self.assertIn("classify", {item["role"] for item in recorder.requests})
+
+    def test_milestone_brainstorming_reads_live_material_after_restart(self):
+        document = staffing.default_document_seed()
+        document["name"] = "milestone-live-material"
+        document["materials"] = {
+            "analysis": {"examples": ["Understand the problem."]},
+            "delivery": {"examples": ["Apply the agreed change."]},
+        }
+        document["overrides"] = {
+            "analysis": {
+                "assignment": {
+                    "draft": {"1": 1},
+                    "implement": {"1": 1},
+                    "brainstorm": {"1": 1, "2": 1, "3": 1},
+                    "classify": {"1": 1},
+                },
+            },
+            "delivery": {
+                "assignment": {
+                    "draft": {"1": 2},
+                    "implement": {"1": 2},
+                    "brainstorm": {"1": 2, "2": 2, "3": 2},
+                    "classify": {"1": 2},
+                },
+            },
+        }
+        staffing.save(self.home, document)
+        staffing.edit_session(self.home, self.session, {
+            "document": document["name"], "material": "analysis",
+        })
+
+        target = os.path.join(self.workspace, "milestone-production.md")
+        with open(target, "wb") as handle:
+            handle.write(b"initial target")
+        body = {
+            "request": {
+                "workspace_path": self.workspace,
+                "target_path": target,
+                "request": "Produce one milestone artifact.",
+                "context": {
+                    "brief": "One milestone production task.",
+                    "source_payload": {
+                        "session_charge": self.milestone_charge()
+                    },
+                },
+                "max_rounds": 1,
+            },
+            "participants": llm_roster(),
+            "closure_policy": "unanimity",
+        }
+        launch = lifecycle.GatedLaunch(
+            process=types.SimpleNamespace(pid=999999, poll=lambda: None),
+            release=mock.Mock(),
+            abort=mock.Mock(),
+        )
+        with mock.patch.object(lifecycle, "_track_child"):
+            created = lifecycle.create_resolved_session(
+                self.home,
+                body,
+                "task-profile:milestone-material",
+                {
+                    "workspace_path": self.workspace,
+                    "project": None,
+                    "work_area": None,
+                    "primary": None,
+                    "additional": [],
+                },
+                self.provider_config(),
+                launcher=lambda _home, _session_id: launch,
+                owned_target_path=target,
+                staffing_selection={"session": self.session},
+            )
+        session_id = created["id"]
+        record = lifecycle._record_by_id(self.home, session_id)
+        recorder = _Recorder()
+        subject = self.executors(record, recorder, dispatching=True)
+        lead_ref = self.store.read(session_id).state["run_config"][
+            "participants"
+        ][0]["executor_ref"]
+        lead = subject.executors[lead_ref]
+
+        with mock.patch.object(staffing, "resolve", side_effect=recorder):
+            lead.prepare_dispatch(1)
+        first = (lead.model_family, lead.model, lead.effort)
+        self.assertEqual(recorder.requests[-1]["material"], "analysis")
+
+        staffing.edit_session(
+            self.home, self.session, {"material": "delivery"}
+        )
+        with mock.patch.object(staffing, "resolve", side_effect=recorder):
+            lead.prepare_dispatch(2)
+        second = (lead.model_family, lead.model, lead.effort)
+        self.assertEqual(recorder.requests[-1]["material"], "delivery")
+        self.assertNotEqual(first, second)
+
+        lifecycle._clear_pid(self.home, session_id, 999999)
+        launched = self.restart(
+            session_id,
+            lambda _record: (_ for _ in ()).throw(
+                AssertionError("a marked record consulted its owner")
+            ),
+        )
+        launched.assert_called_once_with(
+            self.home, session_id, staffing_session=self.session
+        )
+        restarted_record = lifecycle._record_by_id(self.home, session_id)
+        restarted = self.executors(
+            restarted_record, recorder, dispatching=True
+        )
+        with mock.patch.object(staffing, "resolve", side_effect=recorder):
+            restarted.executors[lead_ref].prepare_dispatch(2)
+        self.assertEqual(recorder.requests[-1]["material"], "delivery")
 
     def test_retired_selectors_decide_nothing_for_a_router_session(self):
         # A caller-pinned seat, the family rotation and the configured

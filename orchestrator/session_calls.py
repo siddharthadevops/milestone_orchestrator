@@ -13,6 +13,7 @@ from . import (
     prompt_sets,
     prompts,
     session_repository,
+    staffing,
     verifiers,
 )
 
@@ -23,10 +24,12 @@ SESSION_JOBS = frozenset((
     "rethink",
 ))
 _CHARGE_REQUIRED = frozenset((
-    "job", "material", "prompt_set", "values", "amendments_path",
+    "job", "prompt_set", "values", "amendments_path",
     "accepted_amendments", "repository",
 ))
-_CHARGE_OPTIONAL = frozenset(("artifact_type", "project_context"))
+_CHARGE_OPTIONAL = frozenset((
+    "artifact_type", "project_context",
+))
 
 PreparedSessionCall = collections.namedtuple(
     "PreparedSessionCall",
@@ -60,15 +63,16 @@ def read_current_amendments(path, accepted=()):
     )
 
 
-def validate_charge(charge):
-    """Validate the stable route identity persisted with one session."""
+def _validate_charge(charge, *, legacy_material):
+    """Validate one route identity, optionally reading its retired material."""
     if not isinstance(charge, dict):
         raise prompt_router.PromptRouterError(
             "milestone session charge must be an object"
         )
     keys = set(charge)
     missing = sorted(_CHARGE_REQUIRED - keys)
-    unexpected = sorted(keys - _CHARGE_REQUIRED - _CHARGE_OPTIONAL)
+    optional = _CHARGE_OPTIONAL | ({"material"} if legacy_material else set())
+    unexpected = sorted(keys - _CHARGE_REQUIRED - optional)
     if missing or unexpected:
         detail = (
             "missing %r" % missing[0]
@@ -81,11 +85,18 @@ def validate_charge(charge):
         raise prompt_router.PromptRouterError(
             "unknown milestone session job %r" % charge["job"]
         )
-    for field in ("material", "prompt_set", "amendments_path"):
+    for field in ("prompt_set", "amendments_path"):
         if not isinstance(charge[field], str) or not charge[field].strip():
             raise prompt_router.PromptRouterError(
                 "milestone session charge.%s must be non-empty" % field
             )
+    if legacy_material and "material" in charge and (
+        not isinstance(charge["material"], str)
+        or not charge["material"].strip()
+    ):
+        raise prompt_router.PromptRouterError(
+            "milestone session charge.material must be non-empty"
+        )
     if not isinstance(charge["values"], dict):
         raise prompt_router.PromptRouterError(
             "milestone session charge.values must be an object"
@@ -114,7 +125,19 @@ def validate_charge(charge):
         raise prompt_router.PromptRouterError(
             "producer session charge cannot carry a rethink problem"
         )
-    return copy.deepcopy(charge)
+    checked = copy.deepcopy(charge)
+    checked.pop("material", None)
+    return checked
+
+
+def validate_charge(charge):
+    """Validate a newly admitted milestone session charge."""
+    return _validate_charge(charge, legacy_material=False)
+
+
+def read_charge(charge):
+    """Read an existing pre-cutover charge, ignoring retired material."""
+    return _validate_charge(charge, legacy_material=True)
 
 
 def charge_from_state(state):
@@ -123,13 +146,15 @@ def charge_from_state(state):
         payload = state["request"]["context"].get("source_payload") or {}
     except (KeyError, TypeError):
         return None
+    if not isinstance(payload, dict):
+        return None
     charge = payload.get("session_charge")
-    return None if charge is None else validate_charge(charge)
+    return None if charge is None else read_charge(charge)
 
 
 def prepare_turn(
     home, state, participant, round_number, target_revision,
-    correction=None,
+    correction=None, staffing_session=None,
 ):
     """Prepare one routed seat attempt from durable session identity."""
     charge = charge_from_state(state)
@@ -198,7 +223,7 @@ def prepare_turn(
     prepared = prepare(
         home,
         job=charge["job"],
-        material=charge["material"],
+        material=staffing.session_material(home, staffing_session),
         role=role,
         lead=seat[role],
         values=values,

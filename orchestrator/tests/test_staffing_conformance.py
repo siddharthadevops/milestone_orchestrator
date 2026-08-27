@@ -388,7 +388,7 @@ class StaffingConformanceTest(driver_cases.StaffingCutoverTestCase):
             ),
             (
                 brainstorming_cases.BrainstormingCutoverTest,
-                "test_slice_material_reaches_agent_call_and_brainstorming_production",
+                "test_milestone_brainstorming_reads_live_material_after_restart",
             ),
             (
                 brainstorming_cases.BrainstormingCutoverTest,

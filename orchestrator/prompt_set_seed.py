@@ -53,13 +53,11 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                  'delivery. Each slice '
                                                                  'has exactly a unique '
                                                                  'integer `id`, '
-                                                                 'non-empty `title`',
-                                                                 'and `intent`, '
-                                                                 'optional non-empty '
-                                                                 '`material`, and',
+                                                                 'non-empty `title`,',
+                                                                 '`intent`, and '
                                                                  '`producer_task_executor` '
                                                                  'with exactly '
-                                                                 '`draft_slice_note` '
+                                                                 '`draft_slice_note`',
                                                                  'and `implement`.',
                                                                  'Choose both executor '
                                                                  'ids from the '

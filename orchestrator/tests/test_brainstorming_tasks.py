@@ -254,6 +254,50 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         )
         self.assertIsNone(record["result"])
 
+    def test_pre_cutover_task_charge_starts_without_carrying_old_material(self):
+        record = adapter.admit_task(
+            {}, self.order(), self.config, self.workspace
+        )
+        legacy = copy.deepcopy(record)
+        legacy["order"]["staffing_material"] = "analysis"
+        legacy["order"]["request"]["context"] = {
+            "task_kind": "implement",
+            "session_charge": {
+                "job": "implement@slice_impl",
+                "material": "code",
+                "prompt_set": "default",
+                "values": {},
+                "amendments_path": os.path.join(
+                    self.workspace, "amendments.json"
+                ),
+                "accepted_amendments": [],
+                "repository": {
+                    "state_path": os.path.join(self.workspace, "state.json"),
+                    "skeleton_path": "docs/skeleton.md",
+                    "pre_session_commit": "0" * 40,
+                },
+            },
+        }
+
+        body = adapter._creation_body(
+            legacy,
+            adapter._frozen_participants(legacy),
+            "/private/agreement.md",
+            self.workspace,
+        )
+
+        charge = body["request"]["context"]["source_payload"][
+            "session_charge"
+        ]
+        self.assertNotIn("material", charge)
+        self.assertEqual(
+            legacy["order"]["request"]["context"]["session_charge"][
+                "material"
+            ],
+            "code",
+        )
+        bs.validate_request(body["request"])
+
     def test_participant_transcript_includes_caller_task_context(self):
         state = {}
         task_context = {

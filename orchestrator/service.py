@@ -2032,6 +2032,7 @@ def _validated_launch_staffing(value, supplied=True):
         return {
             "document": staffing.DEFAULT_DOCUMENT_NAME,
             "rigor": staffing.FALLBACK_RIGOR,
+            "material": staffing.DEFAULT_MATERIAL,
         }
     if not isinstance(value, dict):
         raise ApiError(
@@ -2053,9 +2054,14 @@ def _validated_launch_staffing(value, supplied=True):
             % (" and ".join(missing), staffing.DEFAULT_DOCUMENT_NAME,
                staffing.FALLBACK_RIGOR),
         )
-    selection = {"document": value["document"], "rigor": value["rigor"]}
-    if value.get("material") is not None:
-        selection["material"] = value["material"]
+    selection = {
+        "document": value["document"],
+        "rigor": value["rigor"],
+        "material": (
+            staffing.DEFAULT_MATERIAL
+            if value.get("material") is None else value["material"]
+        ),
+    }
     try:
         staffing.validate_session(dict(
             selection,

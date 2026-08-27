@@ -346,15 +346,15 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         # and a delta review asks at a review seat like any other review.
         self.assertIn(("review", 1, 1), seats)
         self.assertIn(("review", 2, 1), seats)
-        # No role outside the driver's own worker calls, and no request
-        # carries a material or a brief before slice 9.
+        # No role outside the driver's own worker calls. Every milestone
+        # request carries the one material currently named by its session.
         self.assertEqual(
             sorted({role for role, _index, _round in seats}),
             ["draft", "fix", "implement", "plan", "review"],
         )
         for request in requests:
             self.assertEqual(request["session"], session)
-            self.assertIsNone(request["material"])
+            self.assertEqual(request["material"], "default")
             self.assertIsNone(request["brief"])
             self.assertEqual(request["families"], ["codex", "claude"])
 
@@ -371,7 +371,7 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         self.assertIn((contracts.KIND_REVIEW_ROUND,) + REVIEW_2, ran)
         self.assertIn((contracts.KIND_DELTA_REVIEW,) + REVIEW_2, ran)
 
-    def test_unknown_slice_material_degrades_and_nonproduction_calls_stay_unset(
+    def test_live_milestone_material_replaces_slice_and_job_material(
         self,
     ):
         document = stf.default_document_seed()
@@ -419,35 +419,26 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
                 unit, contracts.KIND_DRAFT_SLICE_NOTE
             ),
         )
-        self.assertEqual(
-            tasks.order_staffing_material(admitted["order"]), "removed"
-        )
+        self.assertNotIn("staffing_material", admitted["order"])
 
-        # A later canonical projection moves on, while the admitted order
-        # retains the material frozen at admission.
-        subject.state["milestone"]["slices"][0]["material"] = "later"
-        subject._save()
-
-        # The admitted name then disappears from the live document. Existing
-        # router law ignores it and falls through to the session default.
-        del document["materials"]["removed"]
-        del document["overrides"]["removed"]
-        stf.save(self.home, document)
-        expected = stf.resolve(
+        previous = stf.resolve(
             self.home,
             session,
             "draft",
-            material="removed",
+            material="fallback",
             families=["codex", "claude"],
         ).answer
-        mutable_plan_answer = stf.resolve(
+        # The order is already admitted and the old slice value remains, but
+        # a session edit changes the next call without rewriting either.
+        stf.edit_session(self.home, session, {"material": "later"})
+        expected = stf.resolve(
             self.home,
             session,
             "draft",
             material="later",
             families=["codex", "claude"],
         ).answer
-        self.assertNotEqual(expected, mutable_plan_answer)
+        self.assertNotEqual(previous, expected)
 
         requests, patched = self.captured()
         restarted = self.driver_for(path)
@@ -457,7 +448,7 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
                 unit, contracts.KIND_DRAFT_SLICE_NOTE
             )()
 
-            # Every adjacent driver call has no production material source.
+            # Every adjacent milestone call reads the same live theme.
             skeleton = restarted.state["units"][0]
             restarted._dispatch_for_worker_kind(
                 skeleton, contracts.KIND_DRAFT_SKELETON
@@ -528,24 +519,21 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         self.assertEqual(
             ran, (expected["agent"], expected["model"], expected["effort"])
         )
-        draft_requests = [
-            request for request in requests if request["role"] == "draft"
-        ]
-        self.assertEqual(len(draft_requests), 1)
-        self.assertEqual(draft_requests[0]["material"], "removed")
-        adjacent = [
-            request for request in requests if request["role"] != "draft"
-        ]
+        milestone_requests = requests[:6]
         self.assertEqual(
-            sorted(request["role"] for request in adjacent),
+            sorted(request["role"] for request in milestone_requests),
             [
-                "classify", "fix", "implement", "plan", "review",
-                "review", "sync",
+                "classify", "draft", "fix", "plan", "review", "review",
             ],
         )
         self.assertTrue(all(
-            request["material"] is None for request in adjacent
+            request["material"] == "later" for request in milestone_requests
         ))
+        self.assertEqual(
+            [(request["role"], request["material"])
+             for request in requests[6:]],
+            [("implement", None), ("sync", None)],
+        )
 
     def test_the_failure_classifier_asks_the_classify_seat(self):
         """The classifier is a `classify` seat, not the opposite of the
@@ -2032,7 +2020,7 @@ class RunBinding(StaffingCutoverTestCase):
         # Nothing else is derived: no override is written from acts.json,
         # and no profile file or act sidecar is edited or deleted.
         self.assertNotIn("overrides", record)
-        self.assertNotIn("material", record)
+        self.assertEqual(record["material"], "default")
         self.assertEqual(
             read_bytes(os.path.join(os.path.dirname(path), "acts.json")),
             acts_bytes)
@@ -2194,7 +2182,7 @@ class LaunchBinding(unittest.TestCase):
             st.load(self.state_path_of(body))["staffing_session"])
         self.assertEqual((plain["document"], plain["rigor"]),
                          ("default", "medium"))
-        self.assertNotIn("material", plain)
+        self.assertEqual(plain["material"], "default")
 
     def test_a_launch_that_cannot_be_honoured_creates_nothing(self):
         for label, payload in (

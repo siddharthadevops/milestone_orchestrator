@@ -463,7 +463,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 "id": 1,
                 "title": "Feature",
                 "intent": "Build the bounded feature.",
-                "material": "code",
                 "producer_task_executor": {
                     "draft_slice_note": "agent_call",
                     "implement": "agent_call",

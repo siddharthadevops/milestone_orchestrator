@@ -1340,14 +1340,14 @@ def _fix_gap_block():
 def build_draft_skeleton(family, workspace, goal, amendments=None,
                          artifact_path="docs/skeleton.md",
                          project_context=None, gap_enabled=False,
-                         two_register=False, battery=None, materials=None):
+                         two_register=False, battery=None):
     return (
         _header(contracts.KIND_DRAFT_SKELETON, family, workspace)
         + "\nTASK: draft the milestone skeleton for this goal.\n"
         + "GOAL: %s\n\n" % goal
         + _amendments_block(amendments)
         + _project_context_block(project_context)
-        + _producer_planning_block(materials)
+        + _producer_planning_block()
         + "Write a concise skeleton document at %s\n" % artifact_path
         + "inside the workspace: goal restatement, boundary/non-goals, and\n"
         "a short table of planned slices. Keep it thin: intent and\n"
@@ -1376,16 +1376,8 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
     )
 
 
-def _producer_planning_block(materials=None):
-    """Give slice planners the same catalogue later used at admission.
-
-    *materials* is the operator's own vocabulary for KINDS OF WORK, read
-    from the document the run's staffing session references at this prompt
-    boundary — a snapshot of a live input, not a subscription: a later
-    document edit reaches the next such prompt and never one already sent.
-    An unreadable session or document leaves it empty, which asks for no
-    proposal and stops nothing.
-    """
+def _producer_planning_block():
+    """Give slice planners the TaskExecutor catalogue used at admission."""
     return (
         "SLICE PRODUCER PLANNING\n"
         "For every planned slice, propose two independent prospective choices\n"
@@ -1404,101 +1396,26 @@ def _producer_planning_block(materials=None):
             sort_keys=True,
             indent=2,
         )
-        + _material_planning_block(materials)
     )
-
-
-def _material_planning_block(materials=None):
-    """The operator's material vocabulary, beside the executor catalogue.
-
-    It travels WITH the TaskExecutor catalogue and never on its own, so a
-    prompt states each planning vocabulary exactly where it states the
-    other, and a quoted request keeps whichever pair it was dispatched
-    with.
-    """
-    return (
-        "SLICE MATERIAL PLANNING\n"
-        "A slice may also carry one `material`: the kind of work it contains, from\n"
-        "the operator's vocabulary below. Show that name in a visible material\n"
-        "column of the skeleton's slice table; structured result and document must\n"
-        "agree. Omitting it leaves that column empty and the session's default\n"
-        "material in force. A material names WORK, never staffing: propose no\n"
-        "agent, model, effort or seat, and infer none from a material name.\n"
-        "MATERIAL CATALOGUE (name to usage phrases):\n%s\n\n"
-        % _material_catalogue_json(materials)
-    )
-
-
-def _material_catalogue_json(materials):
-    """The catalogue as JSON this prompt can actually be SENT as.
-
-    An operator's own words are quoted as themselves, because they are what
-    the planner has to read. JSON also admits an escaped unpaired surrogate,
-    which the document store keeps and hands back as an ordinary `str`, and
-    no UTF-8 encoder emits one — a prompt quoting it raw would be a request
-    no task order accepts, so the run would stop at admission with nothing
-    dispatched. Exactly that document falls back to ASCII escaping: the same
-    escape its own stored bytes carry, the same mapping under any reader's
-    `json.loads`, and every ordinary name in it still present. Dropping the
-    offending name, or the whole catalogue, would instead leave a readable
-    document supplying less than it validated.
-    """
-    catalogue = _material_catalogue(materials)
-    block = json.dumps(
-        catalogue, ensure_ascii=False, sort_keys=True, indent=2
-    )
-    try:
-        block.encode("utf-8")
-    except UnicodeEncodeError:
-        block = json.dumps(
-            catalogue, ensure_ascii=True, sort_keys=True, indent=2
-        )
-    return block
 
 
 def _planning_precedence_line():
-    """Say which planning catalogue wins when a prompt quotes two of them.
-
-    A continuation quotes its frozen request verbatim, so a planning
-    continuation carries the catalogues that request was DISPATCHED with
-    AND the ones read at this call's own boundary. The TaskExecutor
-    catalogue is the same bytes either way, but the material vocabulary is
-    a live document read: an edit between the two calls leaves a retired
-    name quoted above beside the current one below, each block telling the
-    author to use "the vocabulary below". Naming the live block as the
-    authority is what keeps this boundary's read the one that governs;
-    editing the quotation instead would falsify the record of the call.
-    """
+    """Say which TaskExecutor catalogue wins in a quoted continuation."""
     return (
         "PLANNING VOCABULARY PRECEDENCE\n"
         "The frozen request above is quoted to the byte, so any SLICE PRODUCER\n"
-        "PLANNING or SLICE MATERIAL PLANNING catalogue inside it is the one that\n"
-        "task was DISPATCHED with and may name choices that no longer exist. The\n"
-        "matching section below was read at THIS call's boundary: it is the\n"
-        "current catalogue and it alone governs the producer and material you\n"
-        "propose now. Nothing else about the frozen request changes; its task and\n"
-        "OUTPUT CONTRACT still stand exactly as quoted.\n\n"
+        "PLANNING catalogue inside it is the one that task was dispatched with.\n"
+        "The matching section below is current and alone governs the producer\n"
+        "choices you propose now. Nothing else about the frozen request changes;\n"
+        "its task and OUTPUT CONTRACT still stand exactly as quoted.\n\n"
     )
-
-
-def _material_catalogue(materials):
-    """The document's `materials` mapping as name to its usage phrases."""
-    if not isinstance(materials, dict):
-        return {}
-    catalogue = {}
-    for name, entry in materials.items():
-        if not isinstance(name, str):
-            continue
-        examples = entry.get("examples") if isinstance(entry, dict) else entry
-        catalogue[name] = list(examples) if isinstance(examples, list) else []
-    return catalogue
 
 
 def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
                            amendments=None, note_path=None,
                            project_context=None, gap_enabled=False,
                            two_register=False, battery=None,
-                           editable_design_paths=None, materials=None):
+                           editable_design_paths=None):
     return (
         _header(contracts.KIND_DRAFT_SLICE_NOTE, family, workspace)
         + "\nTASK: draft the slice note for slice %d (%s).\n"
@@ -1527,7 +1444,7 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + "\n"
         + _editable_design_block(editable_design_paths)
         + (
-            _producer_planning_block(materials)
+            _producer_planning_block()
             if editable_design_paths else ""
         )
         + _access_block(edit_allowed=True)
@@ -1622,8 +1539,7 @@ def _updated_design_assignment_block(
 def build_implement(family, workspace, goal, slice_info, note_path,
                     amendments=None, project_context=None, gap_enabled=False,
                     skeleton_path=None, remodeled=False,
-                    editable_design_paths=None, implementation_scope=None,
-                    materials=None):
+                    editable_design_paths=None, implementation_scope=None):
     remodel_block = _updated_design_assignment_block(
         skeleton_path, remodeled
     )
@@ -1651,7 +1567,7 @@ def build_implement(family, workspace, goal, slice_info, note_path,
         + "\n"
         + _editable_design_block(editable_design_paths)
         + (
-            _producer_planning_block(materials)
+            _producer_planning_block()
             if editable_design_paths else ""
         )
         + _access_block(edit_allowed=True)
@@ -1852,7 +1768,6 @@ def build_rethink_continuation(
     original_request=None,
     episode_authority=None,
     producer_planning=False,
-    materials=None,
 ):
     finding_application = kind == contracts.KIND_FIX_FINDINGS
     authority = {
@@ -1934,7 +1849,7 @@ def build_rethink_continuation(
             _planning_precedence_line()
             if producer_planning and original_request is not None else ""
         )
-        + (_producer_planning_block(materials) if producer_planning else "")
+        + (_producer_planning_block() if producer_planning else "")
         + (
             "Finish the original task now under the exact frozen request and\n"
             "OUTPUT CONTRACT above. Only that ordinary envelope may advance\n"
@@ -2020,10 +1935,8 @@ def _producer_review_block(context):
         "consumes. For every skeleton covered by this review, verify that\n"
         "every slice visibly contains both producer choices and that each\n"
         "choice is structurally well-formed. A missing or malformed choice\n"
-        "is always a finding. Compare each visible producer and optional\n"
-        "material value directly with this canonical projection. A material\n"
-        "names a KIND OF WORK, never an agent, model, or effort, and is not\n"
-        "checked against any catalogue here.\n"
+        "is always a finding. Compare each visible producer directly with\n"
+        "this canonical projection.\n"
         + json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2)
         + "\n\n"
     )
@@ -2439,7 +2352,6 @@ def build_fix_findings(
     editable_design_paths=None,
     implementation_scope=None,
     producer_planning=False,
-    materials=None,
     suite_repair_commands=None,
     suite_repair_cadence=None,
 ):
@@ -2661,9 +2573,9 @@ def build_fix_findings(
             "  table exactly — the orchestrator builds the milestone's\n"
             "  units from that field, never by parsing the document.\n\n"
         )
-        slice_table_block += _producer_planning_block(materials)
+        slice_table_block += _producer_planning_block()
     elif producer_planning:
-        slice_table_block = _producer_planning_block(materials)
+        slice_table_block = _producer_planning_block()
     rethink_block = (
         (_fix_gap_block() if gap_enabled else "")
         if legacy_design_process else _design_rethink_block(fixer=True)

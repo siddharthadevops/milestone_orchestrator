@@ -65,7 +65,6 @@ class TargetFreeRethinkLifecycleTest(unittest.TestCase):
     def charge(self, job="rethink"):
         charge = {
             "job": job,
-            "material": "code",
             "prompt_set": "default",
             "values": {},
             "amendments_path": os.path.join(

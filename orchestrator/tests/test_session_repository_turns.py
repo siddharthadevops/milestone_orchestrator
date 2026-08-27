@@ -127,13 +127,11 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         del role
         values = {}
         artifact_type = None
-        material = "code" if job == "implement@slice_impl" else "document"
         if job == "rethink":
             values["rethink_problem"] = "Resolve the contradiction."
             artifact_type = "document"
         charge = {
             "job": job,
-            "material": material,
             "prompt_set": "default",
             "values": values,
             "amendments_path": self.amendments,

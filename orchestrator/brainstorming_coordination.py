@@ -201,7 +201,7 @@ def _exclusive_target_turn(
 
 def resolve_target_path(request):
     """Resolve the target exactly as a participant's workspace-relative path."""
-    checked = brainstorming.validate_request(request)
+    checked = brainstorming.read_request(request)
     target_path = checked["target_path"]
     if os.path.isabs(target_path):
         return os.path.abspath(target_path)

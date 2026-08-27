@@ -51,11 +51,11 @@ class TaskPanelTests(unittest.TestCase):
         self.assertEqual(self.task_ui.count("await postJSON(path, payload)"), 1)
 
     def test_slice_plan_values_are_visible_and_read_only(self):
-        self.assertIn("function slicePlanSummary(producerMap, material)",
+        self.assertIn("function slicePlanSummary(producerMap)",
                       self.panel)
         self.assertIn("choices.draft_slice_note", self.panel)
         self.assertIn("choices.implement", self.panel)
-        self.assertIn("JSON.stringify(material)", self.panel)
+        self.assertNotIn("JSON.stringify(material)", self.panel)
         for retired in (
             "openProducerTask", "openSliceMaterial", "writeSliceMaterial",
             "slicematerialdlg", "/slices/${", "taskProducerTarget",

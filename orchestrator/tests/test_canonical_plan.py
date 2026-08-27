@@ -17,7 +17,6 @@ def slice_plan(slice_id=1, **changes):
         "id": slice_id,
         "title": "A bounded slice",
         "intent": "Deliver one reviewed outcome.",
-        "material": "document",
         "producer_task_executor": {
             "draft_slice_note": "agent_call",
             "implement": "agent_call",
@@ -120,8 +119,9 @@ class CanonicalPlanContractTest(unittest.TestCase):
             "empty intent": changed(
                 slices, lambda value: value[0].__setitem__("intent", "")
             ),
-            "empty material": changed(
-                slices, lambda value: value[0].__setitem__("material", "")
+            "retired material": changed(
+                slices,
+                lambda value: value[0].__setitem__("material", "document"),
             ),
             "boolean id": changed(
                 slices, lambda value: value[0].__setitem__("id", True)
@@ -154,6 +154,20 @@ class CanonicalPlanContractTest(unittest.TestCase):
             with self.subTest(name=name):
                 with self.assertRaises(canonical_plan.CanonicalPlanError):
                     canonical_plan.validate_canonical_plan(candidate)
+
+    def test_historical_material_reads_but_new_authorship_refuses_it(self):
+        legacy_slices = [slice_plan(material="document")]
+        legacy_document = document(legacy_slices)
+
+        with self.assertRaises(canonical_plan.CanonicalPlanError):
+            canonical_plan.validate_canonical_plan(legacy_document)
+
+        read = canonical_plan.read_canonical_plan(legacy_document)
+        self.assertNotIn("material", read["slices"][0])
+        self.assertNotIn("material", read["projection"][0])
+        self.assertEqual(read["block"], canonical_plan.canonical_block_bytes(
+            legacy_document
+        ))
 
     def test_anchored_executor_spelling_is_read_compatible_only(self):
         legacy = [
@@ -452,7 +466,10 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
         slices, head, old_anchor = self.establish()
         state = st.load(self.state_path)
         snapshot = canonical_plan.begin_author_call(state, self.skeleton)
-        changed_slices = slices + [slice_plan(3)]
+        changed_slices = copy.deepcopy(slices)
+        for slice_plan_value in changed_slices:
+            slice_plan_value.pop("material", None)
+        changed_slices.append(slice_plan(3))
         self.write_skeleton(document(changed_slices))
 
         result = canonical_plan.complete_author_call(state, snapshot)
@@ -566,7 +583,10 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
         slices, head, _anchor = self.establish()
         state = st.load(self.state_path)
         snapshot = canonical_plan.begin_author_call(state, self.skeleton)
-        changed_slices = slices + [slice_plan(3)]
+        changed_slices = copy.deepcopy(slices)
+        for slice_plan_value in changed_slices:
+            slice_plan_value.pop("material", None)
+        changed_slices.append(slice_plan(3))
         self.write_skeleton(document(changed_slices))
         unrelated = os.path.join(self.workspace, "trusted-output.txt")
         with open(unrelated, "w", encoding="utf-8") as handle:

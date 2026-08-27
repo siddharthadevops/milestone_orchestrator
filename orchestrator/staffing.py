@@ -1588,6 +1588,10 @@ DISTINCT_FAMILIES_UNSATISFIABLE = "distinct_families_unsatisfiable"
 # marker carries it in its own slice; nothing here stores it.
 STAFFING_FALLBACK_DEFAULT_DOCUMENT = "default_document"
 
+# The theme of an unconfigured milestone.  It is an ordinary open-vocabulary
+# material name: a document with no matching override simply keeps its base.
+DEFAULT_MATERIAL = "default"
+
 # The rigor an unreadable session resolves at. Rigor is chosen ON the
 # session, so when there is no session to read there is no choice to honour
 # and the middle of the three is the one the goal names.
@@ -1758,6 +1762,21 @@ def _material_in_force(document, requested, session_material):
         if candidate and candidate in document["materials"]:
             return candidate
     return None
+
+
+def session_material(home, session):
+    """The milestone material named by one live session.
+
+    Missing or unreadable session state has the same simple answer as an
+    omitted material: ``default``.  The name is returned verbatim and is not
+    checked against either router's catalogue; unknown names already degrade
+    to each router's base behavior.
+    """
+    try:
+        record = read_session(home, session)
+    except StaffingError:
+        return DEFAULT_MATERIAL
+    return record.get("material") or DEFAULT_MATERIAL
 
 
 def _layers(document, selection, material):

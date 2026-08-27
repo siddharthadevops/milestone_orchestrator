@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from orchestrator import driver, prompt_sets, registry, service
+from orchestrator import driver, prompt_sets, registry, service, tasks
 from orchestrator import state as st
 
 
@@ -263,7 +263,9 @@ class PromptSetBindingTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(detail["summary"]["prompt_set"], "operator")
-        self.assertEqual(detail["summary"]["slices"], projected)
+        self.assertEqual(
+            detail["summary"]["slices"], tasks.effective_slice_plan(projected)
+        )
         self.assertEqual(
             [item["id"] for item in detail["summary"]["slices"]], [20, 3]
         )
@@ -290,7 +292,7 @@ class PromptSetBindingTests(unittest.TestCase):
         self.assertIn("(sum.slices || []).forEach(sl =>", panel)
         self.assertNotIn("sort((a, b) => a.id - b.id)", panel)
         self.assertNotIn("^[A-Za-z0-9_-]+$", panel)
-        self.assertIn("slicePlanSummary(sl.producer_task_executor, sl.material)",
+        self.assertIn("slicePlanSummary(sl.producer_task_executor)",
                       panel)
         self.assertNotIn("openProducerTask", panel)
         self.assertNotIn("openSliceMaterial", panel)

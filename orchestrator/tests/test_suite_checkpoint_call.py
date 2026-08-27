@@ -206,6 +206,28 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         self.assertTrue(event["stable"])
         self.assertEqual(event["commands"], [self.command])
 
+    def test_checkpoint_uses_the_live_milestone_material(self):
+        subject = self._subject(self._response())
+        staffing.edit_session(
+            self.model_home.name,
+            st.staffing_session(subject.state),
+            {"material": "lawyer"},
+        )
+        seen = []
+        real_prepare = judgment_calls.prepare
+
+        def capture(*args, **kwargs):
+            seen.append(kwargs["material"])
+            return real_prepare(*args, **kwargs)
+
+        with mock.patch.object(
+            judgment_calls, "prepare", side_effect=capture
+        ):
+            note, _seal = self._verify(subject)
+
+        self.assertIn("passed", note)
+        self.assertEqual(seen, ["lawyer"])
+
     def test_ordinary_mutation_is_restored_and_status_discarded(self):
         def mutate(_workspace):
             self._write("app.txt", "changed by checkpoint\n")

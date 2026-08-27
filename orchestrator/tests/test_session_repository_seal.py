@@ -82,7 +82,6 @@ class RepositorySealTest(unittest.TestCase):
                 "source_payload": {
                     "session_charge": {
                         "job": "implement@slice_impl",
-                        "material": "code",
                         "prompt_set": "default",
                         "values": {},
                         "amendments_path": self.amendments,
@@ -165,7 +164,6 @@ class RepositorySealTest(unittest.TestCase):
         problem = "The design requires persistence without database access."
         charge = {
             "job": "rethink",
-            "material": "code",
             "prompt_set": "default",
             "values": {"rethink_problem": problem},
             "amendments_path": self.amendments,

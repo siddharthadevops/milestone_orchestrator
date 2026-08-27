@@ -93,6 +93,12 @@ class RunSessionPanelControls(PanelSourceMixin, StaffingApiTestCase):
 
     def test_run_session_controls_read_edit_clear_and_warn(self):
         # -- what the panel asks for ------------------------------------
+        self.assertIn('id="f_staffing_material"', self.panel)
+        self.assertIn(
+            'material: document.getElementById("f_staffing_material")',
+            self.panel,
+        )
+        self.assertIn('value="default"', self.panel)
         # The binding comes from the summary's id and nothing else, and the
         # selection is read live from the session's own route.
         self.assertIn("(d.summary || {}).staffing_session", self.panel)
@@ -129,6 +135,7 @@ class RunSessionPanelControls(PanelSourceMixin, StaffingApiTestCase):
                         )["summary"]["staffing_session"], bound)
         view = self.expect(200, "GET", self.session_path(bound))
         self.assertEqual(view["session"], stf.read_session(self.home, bound))
+        self.assertEqual(view["session"]["material"], "default")
 
         # A declared split this session cannot honour is projected beside
         # the record and blocks neither the read nor the write.

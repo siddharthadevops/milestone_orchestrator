@@ -58,7 +58,7 @@ def _committed_plan(workspace, revision, path, anchored_document=None):
         raise PlanReconciliationError(
             "canonical-plan revision cannot resolve its skeleton"
         )
-    validated = canonical_plan.validate_canonical_plan(
+    validated = canonical_plan.read_canonical_plan(
         document,
         document if anchored_document is None else anchored_document,
     )

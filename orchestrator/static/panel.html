@@ -619,11 +619,9 @@
       floors and the risk threshold that chooses fixing versus tracked debt.
       Every profile uses the same deterministic seal. No seed is pre-selected
       on purpose — the choice is explicit.</p>
-    <p><b>Staffing document</b> — the document and rigor this run is
-      staffed from: every call it makes resolves through the staffing
-      session opened here, and no seat, model or effort is chosen at
-      launch. Change either from the run's Edit page while it runs; the
-      change reaches the next call.</p>
+    <p><b>Staffing and material</b> — the document, rigor and milestone theme
+      used from launch. No seat, model or effort is chosen here. Change any
+      of them from the run's Edit page; the next call uses the new value.</p>
     <p><b>Prompt set</b> — the named prompt wording this run uses. The chooser
       lists names only; readability and fallback are decided afresh for each
       worker call.</p>
@@ -659,6 +657,11 @@
       </select>
     </div>
     <div class="hint" id="f_staffing_hint"></div></div>
+  <div class="field"><label>Milestone material</label>
+    <input id="f_staffing_material" class="mono" value="default"
+      placeholder="default">
+    <div class="hint">The work's theme, not its task type. A live change
+      applies to the next call.</div></div>
   <div class="field"><label>Prompt set</label>
     <div class="pathrow">
       <select id="f_prompt_set"><option value="default">default</option></select>
@@ -1105,10 +1108,10 @@
     <select id="ss_rigor">
       <option>low</option><option>medium</option><option>high</option>
     </select></div>
-  <div class="field"><label>Default material (optional)</label>
-    <input id="ss_material" class="mono" placeholder="none">
-    <div class="hint">The material every call of this run resolves under
-      unless its own request names one. Empty clears it.</div></div>
+  <div class="field"><label>Milestone material</label>
+    <input id="ss_material" class="mono" placeholder="default">
+    <div class="hint">The theme every call of this run uses. Empty means
+      <code>default</code>.</div></div>
   <div class="field"><label>Session overrides (optional)</label>
     <textarea id="ss_overrides" class="jsonarea" spellcheck="false"></textarea>
     <div class="hint">The document's own shape (`assignment`, `tuning`),
@@ -3836,7 +3839,7 @@ async function refreshDetail() {
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>${
-          slicePlanSummary(sl.producer_task_executor, sl.material)}
+          slicePlanSummary(sl.producer_task_executor)}
           <span class="slice-intent">${esc(sl.intent)}</span>` : "";
       };
       const catRow = (label, title, stat, duration, tokens,
@@ -4477,8 +4480,7 @@ function staffingSessionCard() {
   return `<div class="card"><h3>Staffing session</h3>
     <div class="amendform">
       <span class="amend-hint mono" style="flex:1">${esc(record.document)}@${
-        esc(record.rigor)}${record.material
-          ? ` · material ${esc(record.material)}` : ""}${
+        esc(record.rigor)} · material ${esc(record.material || "default")}${
         overrides ? ` · overrides: ${esc(overrides)}` : ""}</span>
       <button class="btn" onclick="openStaffingSession()">Change…</button>
     </div>
@@ -4503,7 +4505,7 @@ async function openStaffingSession() {
   document.getElementById("ss_document_hint").textContent =
     staffingDocumentsError || "";
   document.getElementById("ss_rigor").value = record.rigor;
-  document.getElementById("ss_material").value = record.material || "";
+  document.getElementById("ss_material").value = record.material || "default";
   document.getElementById("ss_overrides").value =
     record.overrides ? JSON.stringify(record.overrides, null, 1) : "";
   document.getElementById("ss_facts").textContent =
@@ -5126,6 +5128,8 @@ async function submitForm() {
   payload.staffing = {
     document: document.getElementById("f_staffing_document").value || "default",
     rigor: document.getElementById("f_staffing_rigor").value,
+    material: document.getElementById("f_staffing_material").value.trim()
+      || "default",
   };
   payload.prompt_set = document.getElementById("f_prompt_set").value;
   try {
@@ -5770,14 +5774,11 @@ function planSelectionLabel(selection) {
     : [];
   return selection.task_executor + (values.length ? ` · ${values.join(", ")}` : "");
 }
-function slicePlanSummary(producerMap, material) {
+function slicePlanSummary(producerMap) {
   const choices = producerMap || {};
-  const materialLabel = material === null || material === undefined
-    ? "session default" : JSON.stringify(material);
   return `<span class="plan-values">
     <span class="plan-value">Note · ${esc(planSelectionLabel(choices.draft_slice_note))}</span>
     <span class="plan-value">Implementation · ${esc(planSelectionLabel(choices.implement))}</span>
-    <span class="plan-value">Material · ${esc(materialLabel)}</span>
   </span>`;
 }
 async function submitTaskForm() {

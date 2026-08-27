@@ -482,6 +482,30 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
             contracts.validate_worker_output(obj, contracts.KIND_IMPLEMENT), obj
         )
 
+    def test_new_worker_outputs_refuse_retired_slice_material(self):
+        slices = [{"id": 1, "title": "one", "material": "old"}]
+        cases = {
+            contracts.KIND_DRAFT_SKELETON: {
+                "artifact": "docs/skeleton.md", "slices": slices,
+            },
+            contracts.KIND_DRAFT_SLICE_NOTE: {
+                "artifact": "docs/slice-01.md", "slices": slices,
+            },
+            contracts.KIND_IMPLEMENT: {
+                "files_changed": [], "slices": slices,
+            },
+            contracts.KIND_FIX_FINDINGS: {
+                "findings": [], "files_changed": [], "slices": slices,
+            },
+        }
+        for kind, fields in cases.items():
+            with self.subTest(kind=kind), self.assertRaises(
+                contracts.ContractError
+            ):
+                contracts.validate_worker_output(
+                    ok_output(kind, **fields), kind
+                )
+
     def test_implement_may_report_a_driver_requested_coherent_cut(self):
         obj = ok_output(
             contracts.KIND_IMPLEMENT,

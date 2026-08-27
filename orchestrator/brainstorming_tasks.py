@@ -186,18 +186,6 @@ def admit_task(
                 tasks.INVALID_TASK_REQUEST,
                 "Brainstorming producer charge does not match its task kind",
             )
-        expected_material = (
-            tasks.order_staffing_material(checked)
-            or (
-                "document"
-                if task_kind == "draft_slice_note" else "code"
-            )
-        )
-        if checked_charge["material"] != expected_material:
-            raise tasks.TaskRequestError(
-                tasks.INVALID_TASK_REQUEST,
-                "Brainstorming producer charge does not match its admitted material",
-            )
     staffing = resolve_staffing(
         config, os.path.realpath(primary_workspace), staffing_selection
     )
@@ -287,8 +275,13 @@ def _creation_body(record, participants, target, workspace):
     order = record["order"]
     request = order["request"]
     configuration = order["configuration"]
+    task_context = copy.deepcopy(request["context"])
+    if "session_charge" in task_context:
+        task_context["session_charge"] = session_calls.read_charge(
+            task_context["session_charge"]
+        )
     repository_backed = "repository" in (
-        request.get("context", {}).get("session_charge") or {}
+        task_context.get("session_charge") or {}
     )
     brief = (
         "Work directly in the shared project repository. Initial Position "
@@ -311,7 +304,7 @@ def _creation_body(record, participants, target, workspace):
                     brief
                     + "\n\nCaller-supplied task context (binding background):\n"
                     + json.dumps(
-                        request["context"],
+                        task_context,
                         ensure_ascii=False,
                         indent=2,
                         sort_keys=True,
@@ -319,15 +312,15 @@ def _creation_body(record, participants, target, workspace):
                 ),
                 "references": list(request["reference_documents"]),
                 "source_payload": {
-                    "task_context": copy.deepcopy(request["context"]),
+                    "task_context": copy.deepcopy(task_context),
                     "work_area": copy.deepcopy(request["work_area"]),
                     **(
                         {
                             "session_charge": copy.deepcopy(
-                                request["context"]["session_charge"]
+                                task_context["session_charge"]
                             )
                         }
-                        if "session_charge" in request["context"] else {}
+                        if "session_charge" in task_context else {}
                     ),
                     **(
                         {"output_directory": request["output_directory"]}
@@ -967,10 +960,6 @@ def apply_agreed_effects(
             staffing_kwargs["staffing_session"] = staffing_selection.get(
                 "session"
             )
-            if "material" in staffing_selection:
-                staffing_kwargs["staffing_material"] = staffing_selection[
-                    "material"
-                ]
         completion, _result = lifecycle.apply_production_effect(
             home,
             session_id,

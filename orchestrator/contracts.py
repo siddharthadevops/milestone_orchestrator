@@ -215,49 +215,28 @@ def _validate_finding_validity(
 
 
 def _require_material(material, sctx):
-    """A proposed slice material must be a string this run can store.
-
-    Shape first, exactly as the acceptance reads: a string, or nothing.
-    Then the one property a shape check cannot see. JSON admits an escaped
-    unpaired surrogate and `json.loads` returns it as an ordinary `str`,
-    but no UTF-8 encoder can emit it, so the promise to preserve the string
-    verbatim in state and summary is unkeepable for that value: state's own
-    `json.dump(..., ensure_ascii=False)` raises instead, and the planner's
-    completed result never installs.
-
-    Refusing here is what the promise leaves: worker output is validated
-    before anything is recorded, so this answers with the repairable
-    ContractError the malformed shapes already raise and nothing mutates.
-    It is the same judgement the slice's own material route already makes
-    on the other write surface (`service._require_encodable`), and it is
-    not catalogue validation: an unknown name is still admitted verbatim.
-    """
+    """Validate the UTF-8 shape of a retired material on historical state."""
     if not isinstance(material, str):
         raise ContractError(
-            "%s: key 'material' must be a string when present (omit it to "
-            "leave the session default material in force)" % sctx
+            "%s: historical key 'material' must be a string" % sctx
         )
     try:
         material.encode("utf-8")
     except UnicodeEncodeError as exc:
         raise ContractError(
-            "%s: key 'material' must be storable UTF-8 text (this one carries "
-            "an unpaired surrogate, which no run state could preserve)" % sctx
+            "%s: historical key 'material' must be storable UTF-8 text" % sctx
         ) from exc
 
 
-def validate_slices(slices, ctx):
-    """Validate slice identity, prospective producer selections, and material.
+def validate_slices(slices, ctx, *, legacy_material=False):
+    """Validate slice identity and prospective producer selections.
 
     Producer omissions remain valid compatibility state and resolve only when
     projected or ordered.  The lazy import keeps the shared TaskExecutor
     catalogue as the sole configuration authority without a module cycle.
 
-    `material` is the planner's word for the kind of work the slice contains.
-    Only its SHAPE, and that it is storable at all, are checked here — see
-    `_require_material`.  Checking it against the live document's catalogue
-    would turn a harmless rename into a refused plan; the staffing router owns
-    what the name means, and an unknown one already degrades there.
+    Historical state readers opt in to the retired `material` key. New worker
+    output uses the closed schema and refuses it.
     """
     seen = set()
     for i, sl in enumerate(slices):
@@ -270,7 +249,9 @@ def validate_slices(slices, ctx):
                 "%s: key 'id' must be an integer, not a boolean" % sctx
             )
         _require(sl, "title", str, sctx)
-        if "material" in sl:
+        if "material" in sl and not legacy_material:
+            raise ContractError("%s: unexpected key 'material'" % sctx)
+        if legacy_material and "material" in sl:
             _require_material(sl["material"], sctx)
         if "producer_task_executor" in sl:
             from orchestrator import tasks

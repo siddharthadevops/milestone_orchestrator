@@ -72,6 +72,23 @@ class StaffingSessionStoreTest(unittest.TestCase):
 
     # -- the record contract -----------------------------------------------
 
+    def test_live_material_reader_defaults_without_changing_the_session(self):
+        record = stf.create_session(self.home, session_body())
+        self.assertEqual(
+            stf.session_material(self.home, record["id"]), "default"
+        )
+        stf.edit_session(self.home, record["id"], {"material": "lawyer"})
+        self.assertEqual(
+            stf.session_material(self.home, record["id"]), "lawyer"
+        )
+        stf.edit_session(self.home, record["id"], {"material": None})
+        self.assertEqual(
+            stf.session_material(self.home, record["id"]), "default"
+        )
+        self.assertEqual(
+            stf.session_material(self.home, "stf-missing"), "default"
+        )
+
     def test_session_shape_is_closed_and_write_is_loud(self):
         """Every departure from the closed shape is refused BEFORE any byte
         changes, on create and on edit alike, and the stored session
