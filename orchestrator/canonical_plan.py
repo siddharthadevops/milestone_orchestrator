@@ -1,7 +1,7 @@
 """The skeleton's canonical slice-plan boundary.
 
-This module is deliberately not a Markdown parser.  It recognizes the one
-reviewed heading/fence form, validates the JSON fields it consumes, projects
+This module is deliberately not a Markdown parser.  It recognizes the narrow
+reviewed heading/fence forms, validates the JSON fields it consumes, projects
 them through the existing TaskExecutor catalogue, and anchors accepted bytes
 to Git.  Unknown JSON fields remain inert so persisted plans survive prompt and
 schema evolution without a migration.
@@ -113,16 +113,20 @@ def _extract(document):
             "canonical-plan document must contain exactly one heading"
         )
     heading = headings[0]
+    fence = heading + 1
+    if fence < len(lines) and _line_body(lines[fence]) == b"":
+        fence += 1
     if (
-        heading + 1 >= len(lines)
-        or _line_body(lines[heading + 1]) != OPEN_FENCE
+        fence >= len(lines)
+        or _line_body(lines[fence]) != OPEN_FENCE
     ):
         raise CanonicalPlanError(
-            "canonical-plan heading must be immediately followed by ```json"
+            "canonical-plan heading must be followed by ```json directly "
+            "or after one empty line"
         )
     close = next(
         (
-            index for index in range(heading + 2, len(lines))
+            index for index in range(fence + 1, len(lines))
             if _line_body(lines[index]) == CLOSE_FENCE
         ),
         None,
@@ -133,7 +137,7 @@ def _extract(document):
     start = sum(len(line) for line in lines[:heading])
     return (
         block,
-        b"".join(lines[heading + 2:close]),
+        b"".join(lines[fence + 1:close]),
         (start, start + len(block)),
     )
 

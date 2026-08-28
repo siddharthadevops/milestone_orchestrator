@@ -30,7 +30,7 @@ SKELETON SCOPE
   never an imagined stronger one.
 
 SLICE PRODUCER PLANNING
-Write exactly one `## Canonical slice plan` heading immediately followed
+Write exactly one `## Canonical slice plan` heading followed directly, or after one empty line,
 by one fenced `json` object rooted `{"slices":[...]}`. Array order is
 delivery. Each slice has exactly a unique integer `id`, non-empty `title`,
 `intent`, and `producer_task_executor` with exactly `draft_slice_note`
