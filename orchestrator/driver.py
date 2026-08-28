@@ -352,23 +352,13 @@ def _current_author_unit(state):
     return active[0] if active else st.current_unit(state)
 
 
-def decide(state):
-    """Pure decision function: the single legal next action for a state."""
-    if state["failure"] is not None or state["milestone"]["status"] == st.M_FAILED:
-        return Action(A_FAILED, reason=(state["failure"] or {}).get("reason"))
-    if state["milestone"]["status"] == st.M_CLOSED:
-        return Action(A_DONE)
-    reconciliation = state["milestone"].get(
-        canonical_plan.RECONCILIATION_KEY
-    )
-    if (
-        isinstance(reconciliation, dict)
-        and reconciliation.get("status") == "open"
-    ):
-        return Action(A_RECONCILIATION)
-    unit = _current_author_unit(state)
-    if unit is None:
-        return Action(A_DONE)  # run() closes the milestone
+def decide_reviewed_work(state, unit):
+    """Return the next action for one already-selected production.
+
+    Selection and milestone terminality deliberately stay with ``decide``;
+    this boundary owns only the selected unit's production-through-seal
+    progression.
+    """
     if unit.get("brainstorming_wait"):
         return Action(A_BRAINSTORM_WAIT, unit=st.unit_key(unit))
     status = unit["status"]
@@ -399,6 +389,26 @@ def decide(state):
     raise st.IllegalTransition("no action for unit status %r" % status)
 
 
+def decide(state):
+    """Pure decision function: the single legal next action for a state."""
+    if state["failure"] is not None or state["milestone"]["status"] == st.M_FAILED:
+        return Action(A_FAILED, reason=(state["failure"] or {}).get("reason"))
+    if state["milestone"]["status"] == st.M_CLOSED:
+        return Action(A_DONE)
+    reconciliation = state["milestone"].get(
+        canonical_plan.RECONCILIATION_KEY
+    )
+    if (
+        isinstance(reconciliation, dict)
+        and reconciliation.get("status") == "open"
+    ):
+        return Action(A_RECONCILIATION)
+    unit = _current_author_unit(state)
+    if unit is None:
+        return Action(A_DONE)  # run() closes the milestone
+    return decide_reviewed_work(state, unit)
+
+
 # ---------------------------------------------------------------------------
 # Driver
 
@@ -416,6 +426,50 @@ class _StandingLawError(RuntimeError):
     proceeding without its standing safeguards is the incident this
     machinery exists to prevent), never a worker repair (the fault is the
     operator's store, not the worker's output)."""
+
+
+class ReviewedWorkLifecycle(object):
+    """Execute the existing lifecycle for one selected production.
+
+    The host supplies the established call, state, and Git mechanisms.  The
+    lifecycle deliberately neither selects another unit nor closes a
+    milestone; its only completion effect is the selected unit's gate.
+    """
+
+    _HANDLERS = {
+        A_DRAFT: "_do_draft",
+        A_VERIFY: "_do_verify",
+        A_REVIEW_ROUND: "_do_review_round",
+        A_FIX: "_do_fix",
+        A_DELTA_REVIEW: "_do_delta_review",
+        A_SEAL_ATTEMPT: "_do_seal_attempt",
+        A_BRAINSTORM_WAIT: "_do_brainstorming_wait",
+    }
+
+    def __init__(self, host):
+        self.host = host
+
+    def next_action(self, unit):
+        return decide_reviewed_work(self.host.state, unit)
+
+    def execute(self, action, before_gate=None):
+        unit = self.host._unit_by_key(action.params["unit"])
+        was_sealed = unit.get("status") == st.U_SEALED
+        note = getattr(self.host, self._HANDLERS[action.type])()
+        sealed_unit = (
+            unit
+            if not was_sealed and unit.get("status") == st.U_SEALED
+            else None
+        )
+        gate_context = None
+        if sealed_unit is not None:
+            gate_context = self.gate(sealed_unit, before_gate=before_gate)
+        return note, sealed_unit, gate_context
+
+    def gate(self, unit, before_gate=None):
+        gate_context = before_gate(unit) if before_gate is not None else None
+        self.host._gate_commit(unit)
+        return gate_context
 
 
 def _runtime_sidecar_path(state_path, filename):
@@ -926,6 +980,7 @@ class Driver(object):
             stall_min_cpu_s=self.config.get("worker_stall_min_cpu_s"),
             prompt_recorder=self._record_llm_prompt,
         )
+        self.reviewed_work = ReviewedWorkLifecycle(self)
         # Account for an interrupted provider before any startup check can
         # append a different state transition and obscure the stale call.
         self._consume_stale_marker()
@@ -7729,22 +7784,23 @@ class Driver(object):
             action, boundary_note = self._decide_at_strategy_boundary()
             if action.type in (A_DONE, A_FAILED):
                 return action, boundary_note
-            handler = {
-                A_DRAFT: self._do_draft,
-                A_VERIFY: self._do_verify,
-                A_REVIEW_ROUND: self._do_review_round,
-                A_FIX: self._do_fix,
-                A_DELTA_REVIEW: self._do_delta_review,
-                A_SEAL_ATTEMPT: self._do_seal_attempt,
-                A_BRAINSTORM_WAIT: self._do_brainstorming_wait,
-                A_RECONCILIATION: self._do_reconciliation,
-            }[action.type]
             waiting_session = (
                 self._brainstorming_wait_session()
                 if action.type == A_BRAINSTORM_WAIT else None
             )
             try:
-                note = handler()
+                if action.type == A_RECONCILIATION:
+                    note = self._do_reconciliation()
+                    sealed_unit = None
+                else:
+                    note, sealed_unit, gate_context = self.reviewed_work.execute(
+                        action,
+                        before_gate=self._prepare_milestone_gate,
+                    )
+                if sealed_unit is not None:
+                    self._advance_milestone_after_gate(
+                        sealed_unit, gate_context=gate_context
+                    )
             except PlanReconciliationOpened as exc:
                 return Action(A_RECONCILIATION), str(exc)
             except StopStep as exc:
@@ -11553,7 +11609,6 @@ class Driver(object):
             st.U_SEALED,
             reason="all reviewers effectively clean on current bytes",
         )
-        self._after_seal(unit)
         return "%s sealed from reviews %s" % (
             st.unit_key(unit), ", ".join(cite)
         )
@@ -12545,7 +12600,8 @@ class Driver(object):
         )
         return docs
 
-    def _after_seal(self, unit):
+    def _prepare_milestone_gate(self, unit):
+        """Apply milestone-owned state needed in the unit's gate commit."""
         if unit["kind"] == st.UNIT_SLICE_IMPL:
             st.close_slice(self.state, unit)
         # A driver upgraded while a historical wave was still alive may reach
@@ -12557,7 +12613,11 @@ class Driver(object):
         )
         if is_anchor:
             self._retire_reviewed_redoc_wave(unit)
-        self._gate_commit(unit)
+        return {"redoc_anchor": is_anchor}
+
+    def _advance_milestone_after_gate(self, unit, gate_context=None):
+        """Advance milestone coordination after reviewed work is gated."""
+        is_anchor = bool((gate_context or {}).get("redoc_anchor"))
         # The gate first attributes every changed design document to this
         # commit; only then may the temporary design authority be retired.
         unit.pop("design_update", None)
@@ -12569,6 +12629,13 @@ class Driver(object):
         nxt = st.ensure_due_unit(self.state)
         if nxt is None and st.maybe_close_milestone(self.state):
             self._final_commit()
+
+    def _after_seal(self, unit):
+        """Complete the historical direct seal hook through the boundary."""
+        gate_context = self.reviewed_work.gate(
+            unit, before_gate=self._prepare_milestone_gate
+        )
+        self._advance_milestone_after_gate(unit, gate_context=gate_context)
 
     def _gate_message(self, unit):
         if unit["kind"] == st.UNIT_SKELETON:
