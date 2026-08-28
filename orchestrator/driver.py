@@ -454,8 +454,13 @@ class ReviewedWorkLifecycle(object):
 
     def execute(self, action, before_gate=None):
         unit = self.host._unit_by_key(action.params["unit"])
+        if unit is None:
+            raise st.IllegalTransition(
+                "reviewed-work action names an unknown unit %r"
+                % action.params["unit"]
+            )
         was_sealed = unit.get("status") == st.U_SEALED
-        note = getattr(self.host, self._HANDLERS[action.type])()
+        note = getattr(self.host, self._HANDLERS[action.type])(unit=unit)
         sealed_unit = (
             unit
             if not was_sealed and unit.get("status") == st.U_SEALED
@@ -7425,12 +7430,17 @@ class Driver(object):
                 time.sleep(self._INSPECTION_RETRY_DELAY_S)
         return call()
 
-    def _do_brainstorming_wait(self):
+    def _do_brainstorming_wait(self, unit=None):
         # Repository-backed seats may refresh only the canonical anchor and
         # plan projection while this long-lived driver polls the child. Merge
         # that boundary before this process writes any terminal handoff state.
+        unit_key = st.unit_key(unit) if unit is not None else None
         self.state = st.load(self.state_path)
-        unit = _current_author_unit(self.state)
+        unit = (
+            self._unit_by_key(unit_key)
+            if unit_key is not None
+            else _current_author_unit(self.state)
+        )
         if unit is None or not unit.get("brainstorming_wait"):
             raise st.IllegalTransition(
                 "brainstorming wait action has no attached unit"
@@ -8063,8 +8073,8 @@ class Driver(object):
         )
         return None
 
-    def _do_draft(self):
-        unit = _current_author_unit(self.state)
+    def _do_draft(self, unit=None):
+        unit = unit if unit is not None else _current_author_unit(self.state)
         if unit.get("preserved_candidate"):
             prepared = self._resume_preserved_candidate(unit)
             if prepared is not None:
@@ -10207,8 +10217,8 @@ class Driver(object):
         output, result, raw_path = tasks.execute_worker(task, dispatch)
         return output, result, raw_path
 
-    def _do_fix(self):
-        unit = st.current_unit(self.state)
+    def _do_fix(self, unit=None):
+        unit = unit if unit is not None else st.current_unit(self.state)
         source = unit.get("fix_source") or {}
         suite_repair = (
             source.get("suite_repair")
@@ -11044,8 +11054,8 @@ class Driver(object):
                 )
         return claims
 
-    def _do_delta_review(self):
-        unit = st.current_unit(self.state)
+    def _do_delta_review(self, unit=None):
+        unit = unit if unit is not None else st.current_unit(self.state)
         correction = unit.get("design_correction") or {}
         provisional = (
             correction if correction.get("phase") == "proposed" else None
@@ -11613,8 +11623,8 @@ class Driver(object):
             st.unit_key(unit), ", ".join(cite)
         )
 
-    def _do_verify(self):
-        unit = st.current_unit(self.state)
+    def _do_verify(self, unit=None):
+        unit = unit if unit is not None else st.current_unit(self.state)
         stage = unit["status"]
 
         if stage == st.U_PRE_REVIEW_VERIFY:
@@ -12205,8 +12215,8 @@ class Driver(object):
             pass
         return debt, retained
 
-    def _do_review_round(self):
-        unit = st.current_unit(self.state)
+    def _do_review_round(self, unit=None):
+        unit = unit if unit is not None else st.current_unit(self.state)
         review_inputs = self._review_evidence_inputs(unit)
         (
             evidence_fingerprint,
@@ -12524,9 +12534,9 @@ class Driver(object):
         return ("%s round: %d finding(s) queued for the fixer; %d deferred"
                 % (family, len(fix_findings), len(deferred)))
 
-    def _do_seal_attempt(self):
+    def _do_seal_attempt(self, unit=None):
         """Close a recovered sealing state without launching seal reviewers."""
-        unit = st.current_unit(self.state)
+        unit = unit if unit is not None else st.current_unit(self.state)
         current_fingerprint = self._review_evidence_fingerprint(unit)
         cite = self._seal_reviews(
             unit, current_fingerprint=current_fingerprint

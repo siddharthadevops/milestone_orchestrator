@@ -156,6 +156,55 @@ class DefaultReviewedLifecycleParityTest(unittest.TestCase):
                     gate_by_subject[GATE_MSG_SKELETON],
                 )
 
+    def test_boundary_executes_the_supplied_non_current_production(self):
+        with tempfile.TemporaryDirectory(
+            prefix="orch-reviewed-selected-"
+        ) as workspace:
+            path = init_state(workspace, make_config())
+            state = st.load(path)
+            state["milestone"]["slices"] = [{
+                "id": 1,
+                "title": "Selected production",
+                "intent": "Exercise the supplied reviewed-work unit.",
+                "producer_task_executor": {
+                    "draft_slice_note": "agent_call",
+                    "implement": "agent_call",
+                },
+            }]
+            current = state["units"][0]
+            st.transition_unit(
+                state,
+                current,
+                st.U_PRE_REVIEW_VERIFY,
+                reason="fixture leaves milestone-current production eligible",
+            )
+            selected = st.ensure_next_unit(state)
+            st.transition_unit(
+                state,
+                selected,
+                st.U_PRE_REVIEW_VERIFY,
+                reason="fixture selects a non-current production",
+            )
+            st.save(path, state)
+
+            subject = drv.Driver(path, runner=runners.MockRunner([]))
+            lifecycle = subject.reviewed_work
+            selected = subject._unit_by_key("slice_doc-01")
+            action = lifecycle.next_action(selected)
+
+            with subject._exclusive():
+                subject._assert_not_stale()
+                lifecycle.execute(action)
+                subject._save()
+                subject._clear_busy()
+
+            self.assertEqual(action.type, drv.A_VERIFY)
+            self.assertEqual(selected["status"], st.U_ROUNDS)
+            self.assertEqual(
+                subject._unit_by_key("skeleton")["status"],
+                st.U_PRE_REVIEW_VERIFY,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
