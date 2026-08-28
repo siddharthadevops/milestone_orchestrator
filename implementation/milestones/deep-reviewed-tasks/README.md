@@ -281,4 +281,5 @@ The goal is achieved when:
 
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
-| skeleton | reviewed | 5 | satisfied | - |
+| skeleton | reviewed | 5 | satisfied | c583a24 |
+| slice_doc-01 (Default reviewed-lifecycle parity) | reviewed | 2 | satisfied | - |

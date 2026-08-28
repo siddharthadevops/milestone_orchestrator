@@ -25,3 +25,22 @@
 - `codex-codex-RT-SKEL-004` (raised codex, cleared codex): The hard register prescribes internal mechanisms beyond observable contracts. — A careful builder should derive the recovery, uniqueness, accounting, and reuse guarantees from context, but could over-literalize the prescribed transition mechanism and incur bounded in-unit redesign during review.
 - `codex-codex-RT-SKEL-005` (raised codex, cleared codex): Several hard-register citations do not substantiate the claims attached to them. — The contract statements remain correct and discoverable nearby, but misleading implementation pins could cause bounded seam rediscovery or rework before the unit’s own review.
 
+## slice_doc-01 (Default reviewed-lifecycle parity)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-01.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-01-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-01-codex-r1.txt` |
+| slice_doc-01-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-01-codex-r1`, `slice_doc-01-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-S1-GIT-PARITY` (raised codex, cleared codex): The hard register would collapse permitted fixer-owned commits — The hard register wrongly pins commit-collapsing behavior despite strict parity requiring fixer-owned commits to survive beneath a separate gate, while correction is bounded within this slice and should be caught by its retained focused tests.
+- `codex-S1-STATE-APPEND` (raised codex, cleared codex): The note incorrectly makes entire state saves append-only — The false append-only rule appears twice as a hard persistence guarantee and could plausibly drive unnecessary machinery or rejection of legitimate status and marker updates, but correction remains bounded to this unit and should be caught during its review.
+- `claude-S1-GAP-REDOC-UNALLOCATED` (raised claude, cleared codex): The note allocates every in-cycle exit of the current reviewed lifecycle except the gap / re-documentation-wave exit, so nothing decides whether cross-unit design repair lands inside or outside the extracted boundary, and no named check can fail either way. — A careful builder should infer from the explicit milestone ownership of design repair that gap handling must exit the reusable boundary, but the missing gap-specific contract could mislead a hasty extraction and require bounded boundary rework at its own review.
+
