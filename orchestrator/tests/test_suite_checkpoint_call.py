@@ -177,7 +177,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
             }]),
         )
 
-    def _verify(self, subject):
+    def _verify(self, subject, call_preparation=None):
         with mock.patch.object(
             subject, "_review_evidence_fingerprint", return_value="reviewed"
         ), mock.patch.object(
@@ -188,7 +188,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         ), mock.patch.object(
             subject, "_complete_seal_from_reviews", return_value="sealed"
         ) as seal:
-            note = subject._do_verify()
+            note = subject._do_verify(call_preparation=call_preparation)
         return note, seal
 
     def test_unchanged_configured_checkpoint_can_seal(self):
@@ -249,6 +249,39 @@ class SuiteCheckpointCallTest(unittest.TestCase):
             candidate.get("type") == "suite_checkpoint_rerun_required"
             for candidate in subject.state["events"]
         ))
+
+    def test_reusable_lifecycle_retains_checkpoint_repository_boundary(self):
+        def mutate(_workspace):
+            self._write("app.txt", "changed by reusable checkpoint\n")
+
+        subject = self._subject(self._response(), side_effect=mutate)
+        preparation = driver.ReviewedWorkCallPreparation(subject)
+        note, seal = self._verify(subject, preparation)
+
+        self.assertIn("invalidated", note)
+        seal.assert_not_called()
+        self.assertIsNone(subject.state["failure"])
+        with open(
+            os.path.join(self.workspace, "app.txt"), encoding="utf-8"
+        ) as handle:
+            self.assertEqual(handle.read(), "baseline\n")
+        event = subject.state["events"][-1]
+        self.assertEqual(event["type"], "verification")
+        self.assertFalse(event["ok"])
+        self.assertFalse(event["stable"])
+
+    def test_reusable_lifecycle_unchanged_checkpoint_can_seal(self):
+        subject = self._subject(self._response())
+        preparation = driver.ReviewedWorkCallPreparation(subject)
+
+        note, seal = self._verify(subject, preparation)
+
+        self.assertIn("passed", note)
+        seal.assert_called_once()
+        self.assertIsNone(subject.state["failure"])
+        event = subject.state["events"][-1]
+        self.assertTrue(event["ok"])
+        self.assertTrue(event["stable"])
 
     def test_contract_correction_gets_a_fresh_restored_attempt(self):
         malformed = self._response(commands=["wrong configured command"])

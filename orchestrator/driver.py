@@ -429,7 +429,7 @@ class _StandingLawError(RuntimeError):
 
 
 class ReviewedWorkCallPreparation(object):
-    """Fresh routed calls with no milestone planning side effects."""
+    """Fresh routed calls with the checkpoint's repository boundary."""
 
     def __init__(self, host):
         self.host = host
@@ -448,7 +448,7 @@ class ReviewedWorkCallPreparation(object):
         )
 
     def suite_checkpoint(self, unit, cadence, configured_commands):
-        return self.host._routed_suite_checkpoint_prepare_call(
+        return self.host._suite_checkpoint_prepare_call(
             unit, cadence, configured_commands
         )
 
@@ -467,11 +467,6 @@ class MilestoneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
     def judgment(self, unit, kind, raw_name, **kwargs):
         return self.host._judgment_prepare_call(
             unit, kind, raw_name, **kwargs
-        )
-
-    def suite_checkpoint(self, unit, cadence, configured_commands):
-        return self.host._suite_checkpoint_prepare_call(
-            unit, cadence, configured_commands
         )
 
 
