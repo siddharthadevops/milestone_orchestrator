@@ -428,6 +428,53 @@ class _StandingLawError(RuntimeError):
     operator's store, not the worker's output)."""
 
 
+class ReviewedWorkCallPreparation(object):
+    """Fresh routed calls with no milestone planning side effects."""
+
+    def __init__(self, host):
+        self.host = host
+
+    def ensure_author_plan(self, unit, kind):
+        return False
+
+    def author(self, unit, kind, raw_name, **kwargs):
+        return self.host._routed_author_prepare_call(
+            unit, kind, raw_name, **kwargs
+        )
+
+    def judgment(self, unit, kind, raw_name, **kwargs):
+        return self.host._routed_judgment_prepare_call(
+            unit, kind, raw_name, **kwargs
+        )
+
+    def suite_checkpoint(self, unit, cadence, configured_commands):
+        return self.host._routed_suite_checkpoint_prepare_call(
+            unit, cadence, configured_commands
+        )
+
+
+class MilestoneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
+    """Milestone-owned canonical-plan handling around reviewed calls."""
+
+    def ensure_author_plan(self, unit, kind):
+        return self.host._ensure_author_plan(unit, kind)
+
+    def author(self, unit, kind, raw_name, **kwargs):
+        return self.host._author_prepare_call(
+            unit, kind, raw_name, **kwargs
+        )
+
+    def judgment(self, unit, kind, raw_name, **kwargs):
+        return self.host._judgment_prepare_call(
+            unit, kind, raw_name, **kwargs
+        )
+
+    def suite_checkpoint(self, unit, cadence, configured_commands):
+        return self.host._suite_checkpoint_prepare_call(
+            unit, cadence, configured_commands
+        )
+
+
 class ReviewedWorkLifecycle(object):
     """Execute the existing lifecycle for one selected production.
 
@@ -452,7 +499,7 @@ class ReviewedWorkLifecycle(object):
     def next_action(self, unit):
         return decide_reviewed_work(self.host.state, unit)
 
-    def execute(self, action, before_gate=None):
+    def execute(self, action, before_gate=None, call_preparation=None):
         unit = self.host._unit_by_key(action.params["unit"])
         if unit is None:
             raise st.IllegalTransition(
@@ -460,7 +507,10 @@ class ReviewedWorkLifecycle(object):
                 % action.params["unit"]
             )
         was_sealed = unit.get("status") == st.U_SEALED
-        note = getattr(self.host, self._HANDLERS[action.type])(unit=unit)
+        calls = call_preparation or ReviewedWorkCallPreparation(self.host)
+        note = getattr(self.host, self._HANDLERS[action.type])(
+            unit=unit, call_preparation=calls
+        )
         sealed_unit = (
             unit
             if not was_sealed and unit.get("status") == st.U_SEALED
@@ -986,6 +1036,9 @@ class Driver(object):
             prompt_recorder=self._record_llm_prompt,
         )
         self.reviewed_work = ReviewedWorkLifecycle(self)
+        self.milestone_reviewed_calls = (
+            MilestoneReviewedWorkCallPreparation(self)
+        )
         # Account for an interrupted provider before any startup check can
         # append a different state transition and obscure the stale call.
         self._consume_stale_marker()
@@ -1912,13 +1965,12 @@ class Driver(object):
             workspace=self.workspace,
         )
 
-    def _author_prepare_call(
+    def _routed_author_prepare_call(
         self, unit, kind, raw_name, recovery=None, meter=None,
-        author_coordinates=None,
+        author_coordinates=None, _attempt_context=None,
     ):
-        """Build the fresh routed package and proportional plan boundary."""
-        skeleton_path = self._skeleton_artifact()
-        logical_source_base = None
+        """Build fresh routed author attempts without milestone planning."""
+        attempt_context = _attempt_context
 
         def prepare(repair_error):
             material = self._milestone_material()
@@ -1936,7 +1988,10 @@ class Driver(object):
                     "%s\n\n%s" % (call_recovery, correction)
                     if call_recovery else correction
                 )
-            prepared = self._prepare_author_package(
+            if attempt_context is not None:
+                attempt_context.clear()
+                attempt_context["material"] = material
+            return self._prepare_author_package(
                 unit,
                 kind,
                 material,
@@ -1945,6 +2000,30 @@ class Driver(object):
                 meter=meter,
                 author_coordinates=author_coordinates,
             )
+
+        return prepare
+
+    def _author_prepare_call(
+        self, unit, kind, raw_name, recovery=None, meter=None,
+        author_coordinates=None,
+    ):
+        """Build the fresh routed package and proportional plan boundary."""
+        skeleton_path = self._skeleton_artifact()
+        logical_source_base = None
+        attempt_context = {}
+        routed_prepare = self._routed_author_prepare_call(
+            unit,
+            kind,
+            raw_name,
+            recovery=recovery,
+            meter=meter,
+            author_coordinates=author_coordinates,
+            _attempt_context=attempt_context,
+        )
+
+        def prepare(repair_error):
+            prepared = routed_prepare(repair_error)
+            material = attempt_context["material"]
             snapshot = canonical_plan.begin_author_call(
                 self.state,
                 skeleton_path,
@@ -2104,23 +2183,26 @@ class Driver(object):
             )
         return values
 
-    def _judgment_prepare_call(
-        self, unit, kind, raw_name, context=None, queued_findings=None
+    def _routed_judgment_prepare_call(
+        self, unit, kind, raw_name, context=None, queued_findings=None,
+        _attempt_context=None,
     ):
+        """Build fresh routed judgments without milestone planning."""
         context = dict(context or {})
-        skeleton_path = self._skeleton_artifact()
         # The plan observer may validly delete or replace this slice before a
         # contract correction is prepared.  The correction is a fresh prompt
         # package for the already-admitted judgment, not a new scheduling
         # decision, so keep its original route coordinates.
         job = self._judgment_job(unit, kind)
-        logical_source_base = None
 
         def prepare(repair_error):
             material = self._milestone_material()
             authority = self._worker_episode_authority(unit, kind)
             self._activate_worker_episode_authority(authority)
-            prepared = judgment_calls.prepare(
+            if _attempt_context is not None:
+                _attempt_context.clear()
+                _attempt_context.update({"job": job, "material": material})
+            return judgment_calls.prepare(
                 self._author_prompt_home(),
                 job=job,
                 material=material,
@@ -2135,6 +2217,29 @@ class Driver(object):
                 design_correction=context.get("design_correction"),
                 suite_repair=context.get("suite_repair"),
             )
+
+        return prepare
+
+    def _judgment_prepare_call(
+        self, unit, kind, raw_name, context=None, queued_findings=None
+    ):
+        context = dict(context or {})
+        skeleton_path = self._skeleton_artifact()
+        logical_source_base = None
+        attempt_context = {}
+        routed_prepare = self._routed_judgment_prepare_call(
+            unit,
+            kind,
+            raw_name,
+            context=context,
+            queued_findings=queued_findings,
+            _attempt_context=attempt_context,
+        )
+
+        def prepare(repair_error):
+            prepared = routed_prepare(repair_error)
+            material = attempt_context["material"]
+            job = attempt_context["job"]
             editing = kind == contracts.KIND_FIX_FINDINGS
             snapshot = canonical_plan.begin_author_call(
                 self.state, skeleton_path
@@ -2888,19 +2993,20 @@ class Driver(object):
             raise StopStep(reason)
         return list(configured)
 
-    def _suite_checkpoint_prepare_call(
-        self, unit, cadence, configured_commands
+    def _routed_suite_checkpoint_prepare_call(
+        self, unit, cadence, configured_commands, _attempt_context=None
     ):
-        """Build one fresh routed checkpoint and its read-only Git boundary."""
-        skeleton_path = self._skeleton_artifact()
-
+        """Build fresh routed checkpoints without milestone planning."""
         def prepare(repair_error):
             material = self._milestone_material()
             authority = self._worker_episode_authority(
                 unit, contracts.KIND_SUITE_CHECKPOINT
             )
             self._activate_worker_episode_authority(authority)
-            prepared = judgment_calls.prepare(
+            if _attempt_context is not None:
+                _attempt_context.clear()
+                _attempt_context["material"] = material
+            return judgment_calls.prepare(
                 self._author_prompt_home(),
                 job="suite_checkpoint@workspace",
                 material=material,
@@ -2916,6 +3022,25 @@ class Driver(object):
                 correction=repair_error,
                 configured_suite_commands=configured_commands,
             )
+
+        return prepare
+
+    def _suite_checkpoint_prepare_call(
+        self, unit, cadence, configured_commands
+    ):
+        """Build one fresh routed checkpoint and its read-only Git boundary."""
+        skeleton_path = self._skeleton_artifact()
+        attempt_context = {}
+        routed_prepare = self._routed_suite_checkpoint_prepare_call(
+            unit,
+            cadence,
+            configured_commands,
+            _attempt_context=attempt_context,
+        )
+
+        def prepare(repair_error):
+            prepared = routed_prepare(repair_error)
+            material = attempt_context["material"]
             snapshot = canonical_plan.begin_author_call(
                 self.state, skeleton_path
             )
@@ -7430,7 +7555,7 @@ class Driver(object):
                 time.sleep(self._INSPECTION_RETRY_DELAY_S)
         return call()
 
-    def _do_brainstorming_wait(self, unit=None):
+    def _do_brainstorming_wait(self, unit=None, call_preparation=None):
         # Repository-backed seats may refresh only the canonical anchor and
         # plan projection while this long-lived driver polls the child. Merge
         # that boundary before this process writes any terminal handoff state.
@@ -7806,6 +7931,7 @@ class Driver(object):
                     note, sealed_unit, gate_context = self.reviewed_work.execute(
                         action,
                         before_gate=self._prepare_milestone_gate,
+                        call_preparation=self.milestone_reviewed_calls,
                     )
                 if sealed_unit is not None:
                     self._advance_milestone_after_gate(
@@ -8073,8 +8199,11 @@ class Driver(object):
         )
         return None
 
-    def _do_draft(self, unit=None):
+    def _do_draft(self, unit=None, call_preparation=None):
         unit = unit if unit is not None else _current_author_unit(self.state)
+        call_preparation = (
+            call_preparation or self.milestone_reviewed_calls
+        )
         if unit.get("preserved_candidate"):
             prepared = self._resume_preserved_candidate(unit)
             if prepared is not None:
@@ -8110,7 +8239,7 @@ class Driver(object):
             st.UNIT_SLICE_DOC: contracts.KIND_DRAFT_SLICE_NOTE,
             st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
         }[unit["kind"]]
-        if self._ensure_author_plan(unit, kind):
+        if call_preparation.ensure_author_plan(unit, kind):
             return "canonical plan established; work order refreshed"
         if (
             kind in tasks.PRODUCER_TASK_KINDS
@@ -8346,7 +8475,7 @@ class Driver(object):
                             )
                         ),
                         prepare_author=lambda recovery, meter: (
-                            self._author_prepare_call(
+                            call_preparation.author(
                                 unit,
                                 kind,
                                 raw_name,
@@ -8387,7 +8516,7 @@ class Driver(object):
                         start_session=start_session,
                         dispatch_resolver=dispatch_resolver,
                         task_id=task["id"],
-                        prepare_call=self._author_prepare_call(
+                        prepare_call=call_preparation.author(
                             unit,
                             kind,
                             raw_name,
@@ -10217,8 +10346,11 @@ class Driver(object):
         output, result, raw_path = tasks.execute_worker(task, dispatch)
         return output, result, raw_path
 
-    def _do_fix(self, unit=None):
+    def _do_fix(self, unit=None, call_preparation=None):
         unit = unit if unit is not None else st.current_unit(self.state)
+        call_preparation = (
+            call_preparation or self.milestone_reviewed_calls
+        )
         source = unit.get("fix_source") or {}
         suite_repair = (
             source.get("suite_repair")
@@ -10494,7 +10626,7 @@ class Driver(object):
                     start_session=True,
                     dispatch_resolver=dispatch_resolver,
                     task_id=task["id"],
-                    prepare_call=self._judgment_prepare_call(
+                    prepare_call=call_preparation.judgment(
                         unit,
                         contracts.KIND_FIX_FINDINGS,
                         raw_name,
@@ -11054,8 +11186,11 @@ class Driver(object):
                 )
         return claims
 
-    def _do_delta_review(self, unit=None):
+    def _do_delta_review(self, unit=None, call_preparation=None):
         unit = unit if unit is not None else st.current_unit(self.state)
+        call_preparation = (
+            call_preparation or self.milestone_reviewed_calls
+        )
         correction = unit.get("design_correction") or {}
         provisional = (
             correction if correction.get("phase") == "proposed" else None
@@ -11346,7 +11481,7 @@ class Driver(object):
             ),
             task_id=(active_task or {}).get("id"),
             project_context=project_context,
-            prepare_call=self._judgment_prepare_call(
+            prepare_call=call_preparation.judgment(
                 unit,
                 contracts.KIND_DELTA_REVIEW,
                 raw_name,
@@ -11425,6 +11560,7 @@ class Driver(object):
                     ),
                     defer_threshold=result_policy["p3_defer_max_risk"],
                     gap_backstop=result_policy["gap_backstop"],
+                    call_preparation=call_preparation,
                 )
                 retained_ids = {
                     finding.get("id") for finding, _family in retained
@@ -11623,8 +11759,11 @@ class Driver(object):
             st.unit_key(unit), ", ".join(cite)
         )
 
-    def _do_verify(self, unit=None):
+    def _do_verify(self, unit=None, call_preparation=None):
         unit = unit if unit is not None else st.current_unit(self.state)
+        call_preparation = (
+            call_preparation or self.milestone_reviewed_calls
+        )
         stage = unit["status"]
 
         if stage == st.U_PRE_REVIEW_VERIFY:
@@ -11749,7 +11888,7 @@ class Driver(object):
             model=model,
             effort=effort,
             dispatch_resolver=dispatch,
-            prepare_call=self._suite_checkpoint_prepare_call(
+            prepare_call=call_preparation.suite_checkpoint(
                 unit, cadence, configured_commands
             ),
             episode_unit=unit,
@@ -11940,6 +12079,7 @@ class Driver(object):
         parent_call=None,
         defer_threshold=None,
         gap_backstop=None,
+        call_preparation=None,
     ):
         """Rate candidates independently and split debt from fix work.
 
@@ -11948,6 +12088,9 @@ class Driver(object):
         that finding for the fixer; one serious finding can never drag other,
         independently deferred findings into the fix queue.
         """
+        call_preparation = (
+            call_preparation or self.milestone_reviewed_calls
+        )
         debt = []
         retained = []
         levels = contracts.DRIFT_RISK_LEVELS
@@ -12121,7 +12264,7 @@ class Driver(object):
                                     if effective_gap_backstop else None
                                 ),
                                 dispatch_resolver=resolve_rater,
-                                prepare_call=self._judgment_prepare_call(
+                                prepare_call=call_preparation.judgment(
                                     unit,
                                     contracts.KIND_RECLASSIFY,
                                     raw_name,
@@ -12215,8 +12358,11 @@ class Driver(object):
             pass
         return debt, retained
 
-    def _do_review_round(self, unit=None):
+    def _do_review_round(self, unit=None, call_preparation=None):
         unit = unit if unit is not None else st.current_unit(self.state)
+        call_preparation = (
+            call_preparation or self.milestone_reviewed_calls
+        )
         review_inputs = self._review_evidence_inputs(unit)
         (
             evidence_fingerprint,
@@ -12402,7 +12548,7 @@ class Driver(object):
             ),
             task_id=(active_review or {}).get("id"),
             project_context=project_context,
-            prepare_call=self._judgment_prepare_call(
+            prepare_call=call_preparation.judgment(
                 unit, contracts.KIND_REVIEW_ROUND, raw_name
             ),
         )
@@ -12473,6 +12619,7 @@ class Driver(object):
                     ),
                     defer_threshold=result_policy["p3_defer_max_risk"],
                     gap_backstop=result_policy["gap_backstop"],
+                    call_preparation=call_preparation,
                 )
                 retained_ids = {f.get("id") for f, _family in retained}
                 fix_findings = [
@@ -12534,7 +12681,7 @@ class Driver(object):
         return ("%s round: %d finding(s) queued for the fixer; %d deferred"
                 % (family, len(fix_findings), len(deferred)))
 
-    def _do_seal_attempt(self, unit=None):
+    def _do_seal_attempt(self, unit=None, call_preparation=None):
         """Close a recovered sealing state without launching seal reviewers."""
         unit = unit if unit is not None else st.current_unit(self.state)
         current_fingerprint = self._review_evidence_fingerprint(unit)

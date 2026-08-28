@@ -1,5 +1,7 @@
 """Parity coverage for the reusable reviewed-work lifecycle boundary."""
 
+import json
+import os
 import tempfile
 import unittest
 
@@ -11,7 +13,9 @@ from orchestrator.tests.test_driver_mock import (
     git_subjects,
     init_state,
     make_config,
+    prompt_response,
     skeleton_script,
+    step,
 )
 
 
@@ -47,6 +51,8 @@ def _seal_evidence(unit):
 def _event_evidence_through_gate(state):
     evidence = []
     for event in state["events"]:
+        if event["type"] == "canonical_plan_established":
+            continue
         evidence.append(tuple(
             event.get(key)
             for key in (
@@ -139,6 +145,12 @@ class DefaultReviewedLifecycleParityTest(unittest.TestCase):
                     _event_evidence_through_gate(boundary_state),
                     _event_evidence_through_gate(entry_state),
                 )
+                self.assertNotIn(
+                    "canonical_plan_anchor", boundary_state["milestone"]
+                )
+                self.assertIn(
+                    "canonical_plan_anchor", entry_state["milestone"]
+                )
                 self.assertIsNone(boundary_state["failure"])
                 self.assertEqual(boundary_unit["status"], st.U_SEALED)
                 self.assertEqual(len(boundary_state["units"]), 1)
@@ -155,6 +167,90 @@ class DefaultReviewedLifecycleParityTest(unittest.TestCase):
                     boundary_unit["gate_commit"],
                     gate_by_subject[GATE_MSG_SKELETON],
                 )
+
+    def test_boundary_matches_failure_and_stop_outcomes(self):
+        blocked_review = step(
+            "review_round",
+            prompt_response({
+                "status": "blocked",
+                "kind": "review_round",
+                "blocked_reason": "operator input needed",
+            }),
+            family="codex",
+        )
+
+        failure_states = []
+        for boundary_only in (False, True):
+            with self.subTest(outcome="failure", boundary_only=boundary_only):
+                with tempfile.TemporaryDirectory(
+                    prefix="orch-reviewed-failure-"
+                ) as workspace:
+                    path = init_state(workspace, make_config())
+                    subject = drv.Driver(
+                        path,
+                        runner=runners.MockRunner([
+                            skeleton_script()[0], blocked_review,
+                        ]),
+                    )
+                    for _ in range(3):
+                        selected = subject._unit_by_key("skeleton")
+                        action = (
+                            subject.reviewed_work.next_action(selected)
+                            if boundary_only else None
+                        )
+                        if boundary_only:
+                            with subject._exclusive():
+                                subject._assert_not_stale()
+                                try:
+                                    subject.reviewed_work.execute(action)
+                                    subject._save()
+                                except drv.StopStep:
+                                    pass
+                                finally:
+                                    subject._clear_busy()
+                        else:
+                            subject.step()
+                    failed = st.load(path)
+                    self.assertEqual(
+                        failed["failure"]["type"], "worker_blocked"
+                    )
+                    failure_states.append(failed)
+
+        self.assertEqual(
+            failure_states[0]["failure"]["reason"],
+            failure_states[1]["failure"]["reason"],
+        )
+        failure_units = [state["units"][0] for state in failure_states]
+        self.assertEqual(failure_units[0]["status"], failure_units[1]["status"])
+        self.assertEqual(
+            _round_evidence(failure_units[0]),
+            _round_evidence(failure_units[1]),
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="orch-reviewed-stop-"
+        ) as workspace:
+            path = init_state(workspace, make_config())
+            control_path = os.path.join(os.path.dirname(path), "control.json")
+            with open(control_path, "w", encoding="utf-8") as handle:
+                json.dump({"stop_after_seal": True}, handle)
+            runner = runners.MockRunner(skeleton_script())
+            subject = drv.Driver(path, runner=runner)
+
+            self.assertEqual(subject.run(), 4)
+            stopped = st.load(path)
+            self.assertEqual(
+                subject._unit_by_key("skeleton")["status"], st.U_SEALED
+            )
+            self.assertEqual(runner.script, [])
+            self.assertEqual(
+                [
+                    event["units"]
+                    for event in stopped["events"]
+                    if event["type"] == "paused_after_seal"
+                ],
+                [["skeleton"]],
+            )
 
     def test_boundary_executes_the_supplied_non_current_production(self):
         with tempfile.TemporaryDirectory(
