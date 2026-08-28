@@ -96,14 +96,43 @@ class CanonicalPlanContractTest(unittest.TestCase):
             ],
             slices,
         )
+        separated_by_one_empty_line = valid.replace(
+            b"## Canonical slice plan\n```json",
+            b"## Canonical slice plan\n\n```json",
+        )
+        separated_by_one_crlf_empty_line = valid.replace(
+            b"## Canonical slice plan\n```json",
+            b"## Canonical slice plan\r\n\r\n```json",
+        )
+        for separator, candidate in (
+            ("lf", separated_by_one_empty_line),
+            ("crlf", separated_by_one_crlf_empty_line),
+        ):
+            with self.subTest(separator=separator):
+                self.assertEqual(
+                    canonical_plan.validate_canonical_plan(candidate)[
+                        "slices"
+                    ],
+                    slices,
+                )
+        self.assertNotEqual(
+            canonical_plan.canonical_block_bytes(valid),
+            canonical_plan.canonical_block_bytes(
+                separated_by_one_empty_line
+            ),
+        )
 
         variants = {
             "missing": b"# Reviewed skeleton without a plan\n",
             "quoted plan": b"````markdown\n" + valid + b"````\n",
             "duplicate": valid + b"\n" + valid,
-            "separated": valid.replace(
+            "separated by two empty lines": valid.replace(
                 b"## Canonical slice plan\n```json",
-                b"## Canonical slice plan\n\n```json",
+                b"## Canonical slice plan\n\n\n```json",
+            ),
+            "separated by prose": valid.replace(
+                b"## Canonical slice plan\n```json",
+                b"## Canonical slice plan\nnot the plan\n```json",
             ),
             "wrong fence": valid.replace(b"```json", b"```JSON", 1),
             "malformed": framed('{"slices":['),
@@ -454,7 +483,10 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
             state, self.skeleton, allow_unanchored=True
         )
         planned = [slice_plan(3), slice_plan(1)]
-        self.write_skeleton(document(planned))
+        self.write_skeleton(document(planned).replace(
+            b"## Canonical slice plan\n```json",
+            b"## Canonical slice plan\n\n```json",
+        ))
 
         result = canonical_plan.complete_author_call(
             state, snapshot, message="physical draft plan"

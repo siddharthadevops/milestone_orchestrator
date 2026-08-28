@@ -45,7 +45,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                  'Write exactly one '
                                                                  '`## Canonical slice '
                                                                  'plan` heading '
-                                                                 'immediately followed',
+                                                                 'followed directly, or '
+                                                                 'after one empty line,',
                                                                  'by one fenced `json` '
                                                                  'object rooted '
                                                                  '`{"slices":[...]}`. '
