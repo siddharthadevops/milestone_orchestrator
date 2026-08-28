@@ -1,5 +1,6 @@
 """Focused proof for real-repository milestone Brainstorming turns."""
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -187,6 +188,40 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         )
         self.assertFalse(empty["committed"])
         self.assertEqual(gitops.head_full_sha(self.workspace), after)
+
+    def test_editor_turn_ignores_unknown_plan_fields(self):
+        attempt = self.begin("initial_position")
+        updated = copy.deepcopy(PLAN)
+        updated["future_root_field"] = {"opaque": True}
+        updated_slice = updated["slices"][0]
+        updated_slice["title"] = "One evolved"
+        updated_slice["material"] = "historical theme"
+        updated_slice["future_slice_field"] = ["opaque"]
+        updated_slice["producer_task_executor"]["future_producer"] = (
+            "not-an-executor"
+        )
+        skeleton = Path(self.workspace, self.skeleton_path)
+        skeleton.write_text(
+            "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
+            % json.dumps(updated, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+        outcome = session_repository.complete_attempt(attempt, "lead", 1)
+
+        self.assertTrue(outcome["accept_reply"])
+        self.assertTrue(outcome["committed"])
+        self.assertTrue(outcome["plan_changed"])
+        persisted = state.load(self.state_path)
+        projected = persisted["milestone"]["slices"][0]
+        self.assertEqual(projected["title"], "One evolved")
+        self.assertNotIn("material", projected)
+        self.assertNotIn("future_slice_field", projected)
+        self.assertEqual(
+            set(projected["producer_task_executor"]),
+            {"draft_slice_note", "implement"},
+        )
+        self.assertIn('"material":"historical theme"', skeleton.read_text())
 
     def test_producer_session_uses_the_project_target_without_a_private_copy(self):
         charge = self.charge("implement@slice_impl")

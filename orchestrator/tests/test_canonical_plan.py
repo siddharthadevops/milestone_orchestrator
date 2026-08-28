@@ -75,7 +75,7 @@ class CanonicalPlanContractTest(unittest.TestCase):
             canonical_plan.canonical_block_bytes(new),
         )
 
-    def test_canonical_plan_block_and_closed_schema(self):
+    def test_canonical_plan_block_and_required_schema(self):
         slices = [slice_plan()]
         valid = document(slices)
         result = canonical_plan.validate_canonical_plan(valid)
@@ -108,20 +108,12 @@ class CanonicalPlanContractTest(unittest.TestCase):
             "wrong fence": valid.replace(b"```json", b"```JSON", 1),
             "malformed": framed('{"slices":['),
             "wrong root": framed('{"plan":[]}'),
-            "root extra": framed('{"slices":[],"other":true}'),
             "duplicate JSON key": framed('{"slices":[],"slices":[]}'),
-            "slice extra": changed(
-                slices, lambda value: value[0].__setitem__("other", True)
-            ),
             "empty title": changed(
                 slices, lambda value: value[0].__setitem__("title", " ")
             ),
             "empty intent": changed(
                 slices, lambda value: value[0].__setitem__("intent", "")
-            ),
-            "retired material": changed(
-                slices,
-                lambda value: value[0].__setitem__("material", "document"),
             ),
             "boolean id": changed(
                 slices, lambda value: value[0].__setitem__("id", True)
@@ -155,19 +147,42 @@ class CanonicalPlanContractTest(unittest.TestCase):
                 with self.assertRaises(canonical_plan.CanonicalPlanError):
                     canonical_plan.validate_canonical_plan(candidate)
 
-    def test_historical_material_reads_but_new_authorship_refuses_it(self):
-        legacy_slices = [slice_plan(material="document")]
-        legacy_document = document(legacy_slices)
+    def test_unknown_fields_are_preserved_in_bytes_but_ignored_in_projection(self):
+        payload = {
+            "slices": [{
+                **slice_plan(),
+                "material": "document",
+                "future_slice_field": {"anything": True},
+                "producer_task_executor": {
+                    **slice_plan()["producer_task_executor"],
+                    "future_producer": "not-an-executor",
+                },
+            }],
+            "future_root_field": ["opaque", {"value": 1}],
+        }
+        forward_document = framed(json.dumps(payload, separators=(",", ":")))
 
-        with self.assertRaises(canonical_plan.CanonicalPlanError):
-            canonical_plan.validate_canonical_plan(legacy_document)
-
-        read = canonical_plan.read_canonical_plan(legacy_document)
-        self.assertNotIn("material", read["slices"][0])
-        self.assertNotIn("material", read["projection"][0])
-        self.assertEqual(read["block"], canonical_plan.canonical_block_bytes(
-            legacy_document
-        ))
+        expected = [slice_plan()]
+        for reader in (
+            canonical_plan.validate_canonical_plan,
+            canonical_plan.read_canonical_plan,
+        ):
+            with self.subTest(reader=reader.__name__):
+                result = reader(forward_document)
+                self.assertEqual(result["slices"], expected)
+                self.assertEqual(
+                    result["projection"][0]["producer_task_executor"],
+                    {
+                        "draft_slice_note": {
+                            "task_executor": "agent_call"
+                        },
+                        "implement": {"task_executor": "agent_call"},
+                    },
+                )
+                self.assertEqual(
+                    result["block"],
+                    canonical_plan.canonical_block_bytes(forward_document),
+                )
 
     def test_anchored_executor_spelling_is_read_compatible_only(self):
         legacy = [

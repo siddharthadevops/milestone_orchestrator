@@ -135,7 +135,7 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
         self.assertNotIn("reading unfamiliar code", drafted[2])
         self.assertNotIn("material", subject.state["milestone"]["slices"][0])
 
-    def test_legacy_material_is_readable_but_removed_from_projection(self):
+    def test_unknown_material_is_ignored_by_every_plan_reader(self):
         base = {
             "id": 1,
             "title": "one",
@@ -150,6 +150,12 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
             "research",
             "no-such-material",
             json.loads('"re\\ud800\\udc00search"'),
+            None,
+            True,
+            "",
+            ["research"],
+            {"name": "research"},
+            3,
         ):
             planned = copy.deepcopy(base)
             planned["material"] = value
@@ -158,11 +164,13 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
                 % json.dumps({"slices": [planned]}, ensure_ascii=True)
             )
             with self.subTest(material=value):
-                with self.assertRaises(canonical_plan.CanonicalPlanError):
-                    canonical_plan.validate_canonical_plan(document)
-                validated = canonical_plan.read_canonical_plan(document)
-                self.assertNotIn("material", validated["slices"][0])
-                self.assertNotIn("material", validated["projection"][0])
+                for reader in (
+                    canonical_plan.validate_canonical_plan,
+                    canonical_plan.read_canonical_plan,
+                ):
+                    validated = reader(document)
+                    self.assertNotIn("material", validated["slices"][0])
+                    self.assertNotIn("material", validated["projection"][0])
 
         absent_document = (
             "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
@@ -170,18 +178,6 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
         )
         absent = canonical_plan.validate_canonical_plan(absent_document)
         self.assertNotIn("material", absent["projection"][0])
-
-        for value in (None, True, "", ["research"], {"name": "research"}, 3):
-            planned = copy.deepcopy(base)
-            planned["material"] = value
-            document = (
-                "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
-                % json.dumps({"slices": [planned]})
-            )
-            with self.subTest(material=value), self.assertRaises(
-                canonical_plan.CanonicalPlanError
-            ):
-                canonical_plan.read_canonical_plan(document)
 
 
 class ProducerSelectionTest(unittest.TestCase):
@@ -355,13 +351,16 @@ class ProducerSelectionTest(unittest.TestCase):
             },
         )
 
+        forward_map = copy.deepcopy(planned)
+        forward_map["producer_task_executor"]["review_round"] = "agent_call"
+        forward = canonical_plan.validate_canonical_plan(document(forward_map))
+        self.assertEqual(
+            forward["projection"][0]["producer_task_executor"],
+            validated["projection"][0]["producer_task_executor"],
+        )
+
         invalid_maps = (
             {"draft_slice_note": "agent_call"},
-            {
-                "draft_slice_note": "agent_call",
-                "implement": "brainstorming",
-                "review_round": "agent_call",
-            },
             {
                 "draft_slice_note": "agent_call",
                 "implement": "no-such-executor",

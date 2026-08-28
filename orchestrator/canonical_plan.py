@@ -1,8 +1,10 @@
 """The skeleton's canonical slice-plan boundary.
 
 This module is deliberately not a Markdown parser.  It recognizes the one
-reviewed heading/fence form, validates the closed JSON contract, projects it
-through the existing TaskExecutor catalogue, and anchors accepted bytes to Git.
+reviewed heading/fence form, validates the JSON fields it consumes, projects
+them through the existing TaskExecutor catalogue, and anchors accepted bytes
+to Git.  Unknown JSON fields remain inert so persisted plans survive prompt and
+schema evolution without a migration.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ _PRODUCERS = ("draft_slice_note", "implement")
 
 
 class CanonicalPlanError(ValueError):
-    """The canonical block, its anchor, or its closed schema is invalid."""
+    """The canonical block, its anchor, or its required fields are invalid."""
 
     call_boundary_failure = True
 
@@ -171,18 +173,12 @@ def _decode(payload):
         raise CanonicalPlanError("canonical-plan payload is not strict JSON") from exc
 
 
-def _exact_keys(value, required, optional, context):
+def _required_keys(value, required, context):
     if not isinstance(value, dict):
         raise CanonicalPlanError("%s must be an object" % context)
-    allowed = set(required) | set(optional)
     missing = sorted(set(required) - set(value))
-    extra = sorted(set(value) - allowed)
     if missing:
         raise CanonicalPlanError("%s is missing %s" % (context, missing))
-    if extra:
-        raise CanonicalPlanError(
-            "%s has unsupported fields %s" % (context, extra)
-        )
 
 
 def _text(value, context):
@@ -195,19 +191,19 @@ def _text(value, context):
     return value
 
 
-def _shape(payload, *, legacy_material=False):
+def _shape(payload):
     root = _decode(payload)
-    _exact_keys(root, ("slices",), (), "canonical plan")
+    _required_keys(root, ("slices",), "canonical plan")
     slices = root["slices"]
     if not isinstance(slices, list):
         raise CanonicalPlanError("canonical plan.slices must be an array")
     seen = set()
+    known_slices = []
     for index, slice_plan in enumerate(slices):
         context = "canonical plan.slices[%d]" % index
-        _exact_keys(
+        _required_keys(
             slice_plan,
             ("id", "title", "intent", "producer_task_executor"),
-            ("material",) if legacy_material else (),
             context,
         )
         slice_id = slice_plan["id"]
@@ -218,13 +214,19 @@ def _shape(payload, *, legacy_material=False):
         seen.add(slice_id)
         _text(slice_plan["title"], "%s.title" % context)
         _text(slice_plan["intent"], "%s.intent" % context)
-        if legacy_material and "material" in slice_plan:
-            _text(slice_plan["material"], "%s.material" % context)
         producers = slice_plan["producer_task_executor"]
-        _exact_keys(producers, _PRODUCERS, (), "%s producers" % context)
+        _required_keys(producers, _PRODUCERS, "%s producers" % context)
         for producer in _PRODUCERS:
             _text(producers[producer], "%s.%s" % (context, producer))
-    return slices
+        known_slices.append({
+            "id": slice_id,
+            "title": slice_plan["title"],
+            "intent": slice_plan["intent"],
+            "producer_task_executor": {
+                producer: producers[producer] for producer in _PRODUCERS
+            },
+        })
+    return known_slices
 
 
 def _project(slices, anchored_slices):
@@ -259,23 +261,20 @@ def _project(slices, anchored_slices):
     return projected
 
 
-def _validated_plan(document, anchored_document, *, legacy_material):
-    """Validate one current block, optionally reading its retired material."""
+def _validated_plan(document, anchored_document):
+    """Validate and project only the fields the orchestrator understands."""
     block, payload, _span = _extract(document)
-    slices = _shape(payload, legacy_material=legacy_material)
+    slices = _shape(payload)
     anchored_slices = None
     if anchored_document is not None:
         _anchored_block, anchored_payload, _anchored_span = _extract(
             anchored_document
         )
-        anchored_slices = _shape(anchored_payload, legacy_material=True)
-    operative_slices = copy.deepcopy(slices)
-    for slice_plan in operative_slices:
-        slice_plan.pop("material", None)
+        anchored_slices = _shape(anchored_payload)
     return {
         "block": block,
-        "slices": operative_slices,
-        "projection": _project(operative_slices, anchored_slices),
+        "slices": slices,
+        "projection": _project(slices, anchored_slices),
     }
 
 
@@ -285,16 +284,12 @@ def validate_canonical_plan(document, anchored_document=None):
     A retired executor spelling is readable only when it is byte-for-byte the
     spelling for the same slice id and producer in the anchored prior block.
     """
-    return _validated_plan(
-        document, anchored_document, legacy_material=False
-    )
+    return _validated_plan(document, anchored_document)
 
 
 def read_canonical_plan(document, anchored_document=None):
-    """Read an existing pre-cutover block, ignoring retired material."""
-    return _validated_plan(
-        document, anchored_document, legacy_material=True
-    )
+    """Read an existing block, ignoring fields outside the known projection."""
+    return _validated_plan(document, anchored_document)
 
 
 def _relative_path(path):
