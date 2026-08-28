@@ -32,6 +32,10 @@ class CanonicalPlanError(ValueError):
     call_boundary_failure = True
 
 
+class CanonicalPlanRejectedRestored(CanonicalPlanError):
+    """A rejected call was restored exactly and may be retried later."""
+
+
 class CanonicalPlanDrift(CanonicalPlanError):
     """The worktree plan differs from its last accepted Git anchor."""
 
@@ -480,7 +484,7 @@ def _reject_author_call(snapshot, cause):
             "canonical-plan call was rejected and its repository snapshot "
             "could not be restored: %s" % restore_error
         ) from restore_error
-    raise CanonicalPlanError(
+    raise CanonicalPlanRejectedRestored(
         "canonical-plan call was rejected and its pre-call repository "
         "snapshot was restored: %s" % cause
     ) from cause

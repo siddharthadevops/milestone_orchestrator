@@ -3775,6 +3775,13 @@ def run_lifecycle(
                     return 0
     except LifecycleStop:
         return 3
+    except session_repository.ResumableRepositoryTurnError:
+        # The completed participant call was rejected, and the canonical
+        # boundary restored the exact pre-turn Git state. This also covers a
+        # routed external narrator. Stop without closing the discussion so
+        # Start, after a runtime repair, repeats this same seat and round.
+        traceback.print_exc(file=sys.stderr)
+        return 3
     except Exception:
         traceback.print_exc(file=sys.stderr)
         try:

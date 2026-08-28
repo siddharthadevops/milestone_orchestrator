@@ -387,7 +387,7 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                     "forbidden\n", encoding="utf-8"
                 )
                 with self.assertRaises(
-                    session_repository.SessionRepositoryError
+                    session_repository.ResumableRepositoryTurnError
                 ):
                     session_repository.complete_attempt(
                         attempt, role, 1
@@ -396,6 +396,196 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                 self.assertEqual(
                     git(self.workspace, "status", "--porcelain"), ""
                 )
+
+    def test_restored_rejection_repeats_the_same_repository_turn(self):
+        lead = {
+            "id": "lead", "role": "initial_position", "delivery": "llm",
+            "executor_ref": "lead-executor", "model_family": "codex",
+        }
+        contrary = {
+            "id": "contrary", "role": "contrary_position",
+            "delivery": "llm", "executor_ref": "contrary-executor",
+            "model_family": "codex",
+        }
+        store = self._store([lead, contrary])
+        prepared = session_calls.prepare(
+            self.home,
+            job="rethink",
+            material="document",
+            role="initial_position",
+            lead=True,
+            artifact_type="document",
+            values={
+                "workspace": self.workspace,
+                "chat_path": os.path.join(self.temp.name, "chat.md"),
+                "reference_documents": "  - %s" % self.skeleton_path,
+                "participant_id": "lead",
+                "role": "initial_position",
+                "round": "1",
+                "repository_authority": "Git commit current",
+                "rethink_problem": self.charge()["values"][
+                    "rethink_problem"
+                ],
+            },
+            operator_amendments=[],
+        )
+        reply = json.dumps({
+            "kind": "discussion_turn",
+            "markdown": "Resolve the same seat after the runtime repair.",
+            "ready": False,
+            "questions": question_answers(prepared),
+        })
+        skeleton = Path(self.workspace, self.skeleton_path)
+        target = Path(self.workspace, self.target_path)
+
+        def invalid_plan():
+            skeleton.write_text(
+                "# Skeleton\n\n## Canonical slice plan\n```json\n{bad}\n```\n",
+                encoding="utf-8",
+            )
+            target.write_text("rejected\n", encoding="utf-8")
+
+        executor = CallbackExecutor(
+            [reply, reply],
+            callbacks=[
+                invalid_plan,
+                lambda: target.write_text("resolved\n", encoding="utf-8"),
+            ],
+        )
+        execution = brainstorming_execution.ParticipantExecution(
+            store,
+            {
+                "lead-executor": executor,
+                "contrary-executor": CallbackExecutor([]),
+            },
+        )
+
+        def turn_preparer(
+            session_state, participant, round_number, target_revision,
+            correction,
+        ):
+            return session_calls.prepare_turn(
+                self.home,
+                session_state,
+                participant,
+                round_number,
+                target_revision,
+                correction,
+            )
+
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            store, execution, turn_preparer=turn_preparer
+        )
+        before = gitops.head_full_sha(self.workspace)
+        with self.assertRaises(
+            session_repository.ResumableRepositoryTurnError
+        ):
+            coordinator.run_next_turn("repository-session", {})
+
+        paused = store.read("repository-session")
+        self.assertEqual(paused.state["status"], "running")
+        self.assertEqual(paused.state["completed_turns"], [])
+        self.assertEqual(paused.state["rounds_used"], 0)
+        self.assertIsNone(paused.state.get("result"))
+        self.assertIsNone(store.read_turn_attempt("repository-session"))
+        self.assertEqual(gitops.head_full_sha(self.workspace), before)
+        self.assertEqual(git(self.workspace, "status", "--porcelain"), "")
+
+        resumed = coordinator.run_next_turn("repository-session", {})
+        self.assertEqual(resumed.state["status"], "running")
+        self.assertEqual(len(resumed.state["completed_turns"]), 1)
+        self.assertEqual(
+            resumed.state["completed_turns"][0]["participant_id"], "lead"
+        )
+        self.assertEqual(len(executor.calls), 2)
+
+    def test_lifecycle_pauses_instead_of_closing_a_restored_rejection(self):
+        participants = [
+            {
+                "id": "lead", "role": "initial_position",
+                "delivery": "llm", "executor_ref": "lead-executor",
+                "model_family": "codex",
+            },
+            {
+                "id": "contrary", "role": "contrary_position",
+                "delivery": "llm", "executor_ref": "contrary-executor",
+                "model_family": "codex",
+            },
+        ]
+        store = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        )
+        created = store.create(
+            "paused-repository-session",
+            self.session_state()["request"],
+            brainstorming.resolve_run_config(
+                participants, "unanimity", participants
+            ),
+            participants,
+        )
+        store.transition(
+            "paused-repository-session", created.revision, "running"
+        )
+        record = {
+            "id": "paused-repository-session",
+            "caller": "milestone:test:slice_impl-01",
+            "project": None,
+            "work_area": None,
+            "pid": None,
+            "created_at": "2026-08-28T00:00:00+0000",
+            "runtime": {},
+            "execution_context": {},
+        }
+
+        class RejectedCoordinator:
+            def __init__(self, session_store, _execution, turn_preparer=None):
+                del turn_preparer
+                self.store = session_store
+
+            def reconcile_external_intervention(self, session_id):
+                return self.store.read(session_id)
+
+            def prepare(self, session_id):
+                return self.store.read(session_id)
+
+            @staticmethod
+            def run_next_turn(_session_id, _execution_context):
+                raise session_repository.ResumableRepositoryTurnError(
+                    "restored rejection"
+                )
+
+        with mock.patch.object(
+            brainstorming_lifecycle.coordination,
+            "BrainstormingCoordinator",
+            RejectedCoordinator,
+        ), mock.patch.object(
+            brainstorming_lifecycle,
+            "_load_registry",
+            return_value={"sessions": [record]},
+        ), mock.patch.object(
+            brainstorming_lifecycle,
+            "_participant_execution",
+            return_value=object(),
+        ), mock.patch.object(
+            brainstorming_lifecycle,
+            "_safe_operational_failure",
+            side_effect=AssertionError("session must not be closed"),
+        ), mock.patch.object(
+            brainstorming_lifecycle.traceback,
+            "print_exc",
+        ) as print_exc:
+            code = brainstorming_lifecycle.run_lifecycle(
+                self.home,
+                "paused-repository-session",
+                require_pid_claim=False,
+            )
+
+        self.assertEqual(code, 3)
+        print_exc.assert_called_once()
+        paused = store.read("paused-repository-session")
+        self.assertEqual(paused.state["status"], "running")
+        self.assertIsNone(paused.state.get("failure_origin"))
+        self.assertIsNone(paused.state.get("result"))
 
     def _store(self, participants, charge=None):
         store = brainstorming.SessionStore(
@@ -853,6 +1043,12 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
+        def reject_plan():
+            Path(self.workspace, self.skeleton_path).write_text(
+                "# Skeleton\n\n## Canonical slice plan\n```json\n{bad}\n```\n",
+                encoding="utf-8",
+            )
+
         execution = brainstorming_execution.ParticipantExecution(
             store,
             {
@@ -864,10 +1060,11 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                 ]),
                 "operator-dante": CallbackExecutor(
                     [
+                        reply("common_sense", False, "Rejected plan.", True),
                         reply("common_sense", False, "Changed plan.", True),
                         reply("common_sense", False, "Clean question.", True),
                     ],
-                    callbacks=[change_plan, lambda: None],
+                    callbacks=[reject_plan, change_plan, lambda: None],
                 ),
             },
         )
@@ -900,6 +1097,35 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                 }
             },
         }
+        with self.assertRaises(
+            session_repository.ResumableRepositoryTurnError
+        ):
+            brainstorming_lifecycle._wait_for_external_response(
+                store,
+                execution,
+                record,
+                first_pending.exception,
+                {},
+                turn_preparer,
+            )
+        rejected = store.read("repository-session")
+        self.assertEqual(rejected.state["status"], "running")
+        self.assertEqual(len(rejected.state["completed_turns"]), 2)
+        self.assertEqual(
+            rejected.state["accepted_target_revision"], first_revision
+        )
+        same_intervention = store.read_external_intervention(
+            "repository-session"
+        )
+        self.assertEqual(
+            same_intervention["token"],
+            first_pending.exception.intervention["token"],
+        )
+        self.assertEqual(same_intervention["participant_id"], "dante")
+        self.assertEqual(same_intervention["round"], 1)
+        self.assertTrue(same_intervention["provider_quiescent"])
+        self.assertEqual(gitops.head_full_sha(self.workspace), first_revision)
+
         brainstorming_lifecycle._wait_for_external_response(
             store,
             execution,

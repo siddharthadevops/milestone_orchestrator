@@ -16,6 +16,10 @@ class SessionRepositoryError(RuntimeError):
     call_boundary_failure = True
 
 
+class ResumableRepositoryTurnError(SessionRepositoryError):
+    """A rejected turn was restored and can resume with updated runtime."""
+
+
 class ReadOnlyTurnInvalidated(SessionRepositoryError):
     """A read-only physical call changed governed repository state."""
 
@@ -182,6 +186,10 @@ def complete_attempt(attempt, participant_id, round_number):
             return copy.deepcopy(outcome)
     except SessionRepositoryError:
         raise
+    except canonical_plan.CanonicalPlanRejectedRestored as exc:
+        raise ResumableRepositoryTurnError(
+            "session repository attempt was rejected and restored: %s" % exc
+        ) from exc
     except (canonical_plan.CanonicalPlanError, gitops.GitError, OSError) as exc:
         raise SessionRepositoryError(
             "session repository attempt failed: %s" % exc
