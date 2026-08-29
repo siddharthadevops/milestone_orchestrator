@@ -239,6 +239,9 @@ class ServiceApiTest(unittest.TestCase):
             'document.getElementById("b_deliver_chat").checked = false;',
             text,
         )
+        self.assertIn("Dante's vote counts", text)
+        self.assertIn("every voting seat to accept", text)
+        self.assertNotIn("Dante does not vote", text)
         self.assertIn("function browseGoalDoc", text)
         self.assertIn('"~/Development/source"', text)
         self.assertIn("picker.transform", text)

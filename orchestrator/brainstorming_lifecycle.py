@@ -3504,6 +3504,7 @@ def _wait_for_external_response(
                         {
                             "markdown": envelope["markdown"],
                             "target_revision": completed_revision,
+                            "ready": envelope.get("ready") is True,
                         },
                     )
             else:

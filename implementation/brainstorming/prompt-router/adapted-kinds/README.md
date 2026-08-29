@@ -781,7 +781,19 @@ captured evidence it was pruned from.
     the fresh-checkpoint portions of decisions 71 and 72; no output parser,
     `tests_modified` declaration, or generic skip flag is introduced.
 
+79. **Dante's agreement is binding** (operator ruling, 2026-08-29): every
+    newly created Brainstorming session persists agreement protocol version 2.
+    Under that protocol every roster seat gates closure: standalone sessions
+    include Dante in the binding closure ballot, and repository sessions
+    require Dante's `ready` on the same Git revision as every other seat. A
+    material anti-drift question or objection means object/not-ready; no
+    remaining material objection means accept/ready. Dante still asks rather
+    than proposes a solution. Sessions whose persisted run config predates the
+    version field retain the historical two-position rule, so stored history
+    is not reinterpreted. This supersedes the non-voting/questioner-never-ready
+    parts of decisions 45 and 68.
+
 ## Content observations left untouched (not adaptation's call)
 
-- The Dante questioner keeps its fiction wrapper and all-caps MANDATORY line.
+- The Dante questioner keeps its fiction wrapper and an all-caps MANDATORY line.
 - Brainstorming Sources still mix absolute and relative paths.

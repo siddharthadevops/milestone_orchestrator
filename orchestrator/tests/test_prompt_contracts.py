@@ -85,13 +85,38 @@ class PromptContractsTest(unittest.TestCase):
         self.assertNotIn(None, shipped)
         self.assertNotIn(prompt_contracts.NEED_RETHINK_SECTION_ID, shipped)
         self.assertEqual(
-            shipped | {prompt_contracts.NEED_RETHINK_SECTION_ID},
+            shipped | {
+                "binding_agreement",
+                prompt_contracts.NEED_RETHINK_SECTION_ID,
+                "questioner_readiness",
+            },
             set(prompt_contracts.REGISTERED_SECTIONS),
         )
         self.assertTrue(all(
             callable(check)
             for check in prompt_contracts.REGISTERED_SECTIONS.values()
         ))
+
+    def test_questioner_readiness_cannot_mount_on_another_kind(self):
+        bound = prompt_contracts.bind(
+            prompt("discussion_turn", ("discussion_turn_envelope",)),
+            consumer_sections=(section("questioner_readiness"),),
+        )
+        with self.assertRaisesRegex(contracts.ContractError, "prompt kind"):
+            prompt_contracts.validate(bound, {
+                "kind": "discussion_turn",
+                "markdown": "Position.",
+                "ready": True,
+            })
+
+        bound = prompt_contracts.bind(
+            prompt("implement", ()),
+            consumer_sections=(section("binding_agreement"),),
+        )
+        with self.assertRaisesRegex(contracts.ContractError, "prompt kind"):
+            prompt_contracts.validate(bound, {})
+
+    def test_registered_contract_examples(self):
         rethink = {
             "status": "need_rethink",
             "problem": "The governing design requires incompatible outcomes.",
@@ -138,8 +163,8 @@ class PromptContractsTest(unittest.TestCase):
              {"kind": "discussion_turn", "markdown": "Position", "ready": True},
              {"kind": "discussion_turn", "markdown": ""}),
             ("questioner_turn_envelope", "questioner_turn",
-             {"kind": "questioner_turn", "markdown": "Question"},
-             {"kind": "questioner_turn", "markdown": "Question", "ready": True}),
+             {"kind": "questioner_turn", "markdown": "Question", "ready": True},
+             {"kind": "questioner_turn", "markdown": "Question", "ready": "yes"}),
             ("merge_repair_result", "merge_repair",
              {"status": "ok", "kind": "merge_repair", "files_changed": []},
              {"status": "ok", "kind": "merge_repair"}),

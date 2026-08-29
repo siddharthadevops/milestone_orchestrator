@@ -297,15 +297,18 @@ other hosts). The default roster is an Initial Position, a Contrary
 Position, and Dante as an external narrator: roles and delivery, not
 families — which family runs each of those seats is the discussion's
 staffing session's answer (below). Dante asks anti-drift questions in the
-language used by the request and discussion, and never votes. That control
-has retired: the dialog's roster rows carry the position and nothing about
-who runs it, and the form's one staffing choice — document, rigor and an
-optional material — opens the session that answers every seat. Dante's turn
-enters through the durable external contract.
-Unanimity requires every position to accept the exact proposal. Majority
-requires a strict majority; ties and round-limit disagreement end as an
-irreducible gap. The coordinator records that result mechanically and never
-chooses a side.
+language used by the request and discussion, then casts a binding judgment:
+his vote counts, and under unanimity an unresolved material objection blocks
+closure. New sessions persist
+agreement protocol version 2, under which every roster seat votes; historical
+sessions without that field retain their original two-position rule. The
+dialog's roster rows carry the position and nothing about who runs it, and the
+form's one staffing choice — document, rigor and an optional material — opens
+the session that answers every seat. Dante's turn enters through the durable
+external contract. Unanimity requires every voting seat to accept the exact
+proposal. Majority requires a strict majority; ties and round-limit
+disagreement end as an irreducible gap. The coordinator records that result
+mechanically and never chooses a side.
 Participant prompts use the Markdown chat as shared memory, point to the target
 and reference documents, and carry only the applicable amendments instead of
 duplicating the full transcript and caller payload on every turn.
@@ -605,11 +608,12 @@ Tiers:
   the (possibly half-mutated) workspace. Bookkeeping never duplicates —
   records exist only once saved — but LLM cost and workspace edits from the
   lost execution are not rolled back.
-- **One driver invocation at a time.** Each step takes an advisory
-  `flock` on `<state>.lock` and refuses (`ConcurrentRunError`) if the
-  in-memory state is stale relative to disk — BEFORE running any worker
-  call. Two concurrent `run`/`step` invocations on the same state fail
-  fast instead of double-executing side effects. (`serve` is read-only and
+- **One driver mutation at a time.** Each action takes an advisory `flock`
+  on `<state>.lock` and refuses (`ConcurrentRunError`) if the in-memory state
+  is stale relative to disk — BEFORE running any worker call. A non-terminal
+  Brainstorming wait poll is read-only and skips that mutation lock; terminal,
+  stale, and failed polls retain the locked path. Two concurrent `run`/`step`
+  invocations cannot double-execute side effects. (`serve` is read-only and
   needs no lock.)
 - **Snapshot exclusions.** Workspace snapshots skip runtime dirs and
   common Python tool caches (`.git`, `.orchestrator`, `__pycache__`,

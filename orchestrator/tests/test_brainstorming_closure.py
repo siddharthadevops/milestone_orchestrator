@@ -192,7 +192,7 @@ class BrainstormingClosureTest(unittest.TestCase):
         )
         return subject, roster, executors, target, sibling
 
-    def test_common_sense_participant_never_votes_on_closure(self):
+    def test_common_sense_participant_casts_binding_closure_vote(self):
         roster = participants() + [
             {
                 "id": "dante",
@@ -225,8 +225,19 @@ class BrainstormingClosureTest(unittest.TestCase):
         )
         subject.run_next_turn("external-closure-crash", context)
 
+        with self.assertRaises(coordination.ExternalInterventionPending):
+            subject.run_closure("external-closure-crash", context)
+        closure_pending = self.store.read_external_intervention(
+            "external-closure-crash"
+        )
+        self.assertEqual(closure_pending["action_kind"], "closure_vote")
+        self.store.submit_external_intervention(
+            "external-closure-crash",
+            closure_pending["token"],
+            {"vote": "object"},
+        )
         terminal = subject.run_closure("external-closure-crash", context)
-        self.assertEqual(terminal.state["status"], "success")
+        self.assertEqual(terminal.state["status"], "failure")
         self.assertIsNone(
             self.store.read_external_intervention("external-closure-crash")
         )
@@ -237,7 +248,73 @@ class BrainstormingClosureTest(unittest.TestCase):
         ]
         self.assertEqual(
             [vote["participant_id"] for vote in ballots[-1]["votes"]],
-            ["lead", "critic-1"],
+            ["lead", "critic-1", "dante"],
+        )
+        self.assertEqual(ballots[-1]["votes"][-1]["vote"], "object")
+
+    def test_external_closure_advances_from_contrary_to_dante(self):
+        roster = [
+            {
+                "id": "critic-1", "role": "contrary_position",
+                "delivery": "external", "external_ref": "external-critic",
+            },
+            participants()[0],
+            {
+                "id": "dante", "role": "common_sense",
+                "delivery": "external", "external_ref": "external-dante",
+            },
+        ]
+        subject, _roster, _executors, _target, _sibling = self._make(
+            "two-external-voters",
+            {"lead": [discussion("Lead turn."), proposal()]},
+            roster=roster,
+            max_rounds=1,
+        )
+        context = object()
+        with self.assertRaises(coordination.ExternalInterventionPending):
+            subject.run_next_turn("two-external-voters", context)
+        pending = self.store.read_external_intervention(
+            "two-external-voters"
+        )
+        self.assertEqual(pending["participant_id"], "critic-1")
+        self.store.submit_external_intervention(
+            "two-external-voters", pending["token"],
+            {"markdown": "critic-1 discussion."},
+        )
+        subject.run_next_turn("two-external-voters", context)
+        subject.run_next_turn("two-external-voters", context)
+        with self.assertRaises(coordination.ExternalInterventionPending):
+            subject.run_next_turn("two-external-voters", context)
+        pending = self.store.read_external_intervention(
+            "two-external-voters"
+        )
+        self.assertEqual(pending["participant_id"], "dante")
+        self.store.submit_external_intervention(
+            "two-external-voters", pending["token"],
+            {"markdown": "dante discussion."},
+        )
+        subject.run_next_turn("two-external-voters", context)
+
+        for expected_id in ("critic-1", "dante"):
+            with self.assertRaises(coordination.ExternalInterventionPending):
+                subject.run_closure("two-external-voters", context)
+            pending = self.store.read_external_intervention(
+                "two-external-voters"
+            )
+            self.assertEqual(pending["participant_id"], expected_id)
+            self.store.submit_external_intervention(
+                "two-external-voters", pending["token"], {"vote": "accept"}
+            )
+
+        terminal = subject.run_closure("two-external-voters", context)
+        self.assertEqual(terminal.state["status"], "success")
+        ballot = next(
+            event["fact"] for event in terminal.state["transcript_events"]
+            if event["kind"] == "closure_ballot"
+        )
+        self.assertEqual(
+            [item["participant_id"] for item in ballot["votes"]],
+            ["critic-1", "lead", "dante"],
         )
 
     @staticmethod

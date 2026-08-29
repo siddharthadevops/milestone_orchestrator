@@ -1896,8 +1896,16 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         ]
         self.assertEqual(
             [event["stage"] for event in dante_calls],
-            ["discussion"],
+            ["discussion", "vote"],
         )
+        ballot = next(
+            event["fact"]
+            for event in terminal["state"]["transcript_events"]
+            if event["kind"] == "closure_ballot"
+        )
+        self.assertEqual(ballot["votes"][-1], {
+            "participant_id": "dante", "vote": "accept",
+        })
 
     def test_narrator_cannot_occupy_a_voting_position(self):
         self._target("narrator-voter.md")

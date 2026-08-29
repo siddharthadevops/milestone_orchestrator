@@ -613,9 +613,14 @@ discussion gives him a solid reason, Dante may question, revise, or reject it.
 """
 
 
-DANTE_MANDATORY_LINE = (
+DANTE_MANDATORY_LEGACY_LINE = (
     "MANDATORY: DANTE MUST SOUND LIKE A REAL HUMAN ASKING NATURAL, DIRECT "
     "QUESTIONS. HE MUST NOT TAKE A POSITION OR PROPOSE A SOLUTION."
+)
+DANTE_MANDATORY_BINDING_LINE = (
+    "MANDATORY: DANTE MUST SOUND LIKE A REAL HUMAN ASKING NATURAL, DIRECT "
+    "QUESTIONS. HIS AGREEMENT JUDGMENT IS BINDING, BUT HE MUST NOT PROPOSE "
+    "A SOLUTION."
 )
 
 
@@ -838,7 +843,11 @@ def validate_closure_vote_envelope(envelope):
 
 def _closure_common_prompt(state, target_revision, execution_context=None):
     checked = brainstorming.validate_session_state(state)
-    revision = brainstorming.validate_target_revision(target_revision)
+    revision_id = (
+        brainstorming.validate_target_revision(target_revision)["revision"]
+        if isinstance(target_revision, dict)
+        else brainstorming.validate_coordination_revision_id(target_revision)
+    )
     return """\
 {intro}
 
@@ -858,7 +867,7 @@ does not create a target revision or consume a discussion turn.
         round_number=checked["rounds_used"],
         workspace_path=checked["request"]["workspace_path"],
         target_path=checked["request"]["target_path"],
-        target_revision=revision["revision"],
+        target_revision=revision_id,
         execution_context=_execution_context_block(execution_context),
     )
 
@@ -899,7 +908,7 @@ def build_closure_vote_prompt(
     closing_summary,
     execution_context=None,
 ):
-    """Ask one Contrary Position to vote on the exact proposal."""
+    """Ask one non-lead voting seat to judge the exact proposal."""
     checked_participant = brainstorming._validate_participant(
         participant, "participant"
     )
@@ -907,7 +916,28 @@ def build_closure_vote_prompt(
         raise brainstorming.ContractError(
             "ordinary closure prompts are only for llm delivery"
         )
+    if checked_participant["role"] not in (
+        "contrary_position", "common_sense"
+    ):
+        raise brainstorming.ContractError(
+            "closure vote prompt requires a non-lead voting seat"
+        )
     summary = brainstorming.validate_closing_summary_shape(closing_summary)
+    if checked_participant["role"] == "common_sense":
+        voting_instruction = (
+            "You are Dante, the common-sense seat. Vote `object` if any "
+            "material anti-drift question or objection remains; otherwise "
+            "vote `accept`. This judgment is binding, but it does not ask "
+            "you to propose or defend a solution."
+        )
+    else:
+        voting_instruction = (
+            "You are Contrary Position %s. Accept only if both the target "
+            "and this complete final agreement accurately represent the "
+            "discussion, including what changed, what deliberately stayed "
+            "unchanged, and what remains open."
+            % checked_participant["id"]
+        )
     return _closure_common_prompt(
         state, target_revision, execution_context
     ) + """\
@@ -916,14 +946,11 @@ The Initial Position has proposed this final agreement against the exact target
 revision:
 {closing_summary}
 
-You are Contrary Position {participant_id}. Accept only if both the target and this
-complete final agreement accurately represent the discussion, including what
-changed, what deliberately stayed unchanged, and what remains open. Return
-exactly one JSON object with kind "closure_vote" and vote equal to "accept" or
-"object". Add no rationale or other fields to the control envelope, and do not
-edit target_path.
+{voting_instruction} Return exactly one JSON object with kind "closure_vote"
+and vote equal to "accept" or "object". Add no rationale or other fields to the
+control envelope, and do not edit target_path.
 """.format(
-        participant_id=checked_participant["id"],
+        voting_instruction=voting_instruction,
         closing_summary=json.dumps(
             summary, ensure_ascii=False, sort_keys=True, indent=2
         ),
@@ -948,6 +975,9 @@ def build_external_narrator_prompt(state, intervention):
             "external intervention input no longer matches the session"
         )
     if pending["action_kind"] == "discussion_turn":
+        binding_dante = "common_sense" in brainstorming.agreement_roles(
+            checked["run_config"]
+        )
         return """\
 {scene}
 
@@ -971,9 +1001,32 @@ characters, but never omit a material question merely to fit.
             amendments=_amendments_block(
                 checked, DANTE_AMENDMENT_INTRO
             ),
-            mandatory=DANTE_MANDATORY_LINE,
+            mandatory=(
+                DANTE_MANDATORY_BINDING_LINE
+                if binding_dante else DANTE_MANDATORY_LEGACY_LINE
+            ),
         )
-    raise brainstorming.ContractError("Dante does not vote on closure")
+    if pending["action_kind"] == "closure_vote":
+        summary = pending["closure_context"]["closing_summary"]
+        return _closure_common_prompt(
+            checked,
+            pending["target_revision"],
+        ) + """\
+
+The Initial Position has proposed this final agreement:
+{closing_summary}
+
+You are Dante, the common-sense seat. Vote `object` if any material anti-drift
+question or objection remains; otherwise vote `accept`. Your judgment is
+binding, but do not propose or defend a solution. Return exactly one JSON
+object with kind "closure_vote" and vote equal to "accept" or "object". Add no
+rationale or other fields.
+""".format(
+            closing_summary=json.dumps(
+                summary, ensure_ascii=False, sort_keys=True, indent=2
+            )
+        )
+    raise brainstorming.ContractError("unknown Dante intervention action")
 
 
 class BrainstormingCoordinator:
@@ -1191,6 +1244,10 @@ class BrainstormingCoordinator:
             or accepted["participant_id"] != pending["participant_id"]
             or accepted["round"] != pending["round"]
             or accepted["markdown"] != payload["markdown"]
+            or (
+                "ready" in payload
+                and accepted.get("ready") is not payload["ready"]
+            )
             or (
                 payload.get("target_revision") is not None
                 and accepted["target_revision"]
@@ -1902,7 +1959,7 @@ class BrainstormingCoordinator:
                 participant["id"],
                 payload["markdown"],
                 revision,
-                False,
+                payload.get("ready") is True,
                 publish=False,
             )
             self.store.finish_external_intervention(
@@ -2433,7 +2490,7 @@ class BrainstormingCoordinator:
             ):
                 raise brainstorming.RevisionConflict(current)
             reason = (
-                "Irreducible gap: the positions did not agree before the "
+                "Irreducible gap: the voting seats did not agree before the "
                 "configured round limit."
             )
             summary = dict(summary, reason=reason)
@@ -2458,8 +2515,9 @@ class BrainstormingCoordinator:
             else None
         )
         reached_pending = pending_participant is None
-        for participant in participants:
-            if participant["role"] != "contrary_position":
+        voters = brainstorming.closure_voters(state["run_config"])
+        for participant in voters:
+            if participant["role"] == "initial_position":
                 continue
             if not reached_pending:
                 if participant["id"] != pending_participant:
@@ -2493,10 +2551,9 @@ class BrainstormingCoordinator:
             votes_by_id[participant["id"]] = vote["vote"]
         if not reached_pending:
             raise CoordinationRejected(
-                "the pending closure voter is not a Contrary Position"
+                "the pending closure participant is not a voting seat"
             )
 
-        voters = brainstorming.closure_voters(state["run_config"])
         votes = [
             {
                 "participant_id": participant["id"],
@@ -2536,7 +2593,7 @@ class BrainstormingCoordinator:
         outcome = "success" if ballot["approved"] else "failure"
         if not ballot["approved"]:
             reason = (
-                "Irreducible gap: the positions did not agree before the "
+                "Irreducible gap: the voting seats did not agree before the "
                 "configured round limit."
             )
             summary = dict(summary, reason=reason)

@@ -360,6 +360,19 @@ def _turn(expected_kind, allow_ready):
     return validate
 
 
+def _questioner_readiness(obj, bound, options, ctx):
+    """Require the binding common-sense judgment appended by the session."""
+    del options
+    _kind(bound, ("questioner_turn",))
+    _require(obj, "ready", bool, ctx)
+
+
+def _binding_agreement(obj, bound, options, ctx):
+    """Bind the versioned agreement prose only to session-turn kinds."""
+    del obj, options, ctx
+    _kind(bound, ("discussion_turn", "questioner_turn"))
+
+
 def _commands(value, ctx):
     return _paths(value, ctx)
 
@@ -521,6 +534,7 @@ def _merge_repair(obj, bound, options, ctx):
 
 
 REGISTERED_SECTIONS = {
+    "binding_agreement": _binding_agreement,
     "common_fields": _common,
     "draft_skeleton_result": _author_result("draft_skeleton", "artifact"),
     "draft_slice_note_result": _author_result("draft_slice_note", "artifact"),
@@ -536,7 +550,8 @@ REGISTERED_SECTIONS = {
     "fix_blocked": _fix_blocked,
     "fix_results": _fix_result,
     "merge_repair_result": _merge_repair,
-    "questioner_turn_envelope": _turn("questioner_turn", False),
+    "questioner_turn_envelope": _turn("questioner_turn", True),
+    "questioner_readiness": _questioner_readiness,
     "reclassify_result": _reclassify,
     "suite_checkpoint_result": _suite_checkpoint,
 }
@@ -614,7 +629,9 @@ def _allowed_fields(bound, obj):
         elif section_id == "discussion_turn_envelope":
             allowed.update(("kind", "markdown", "ready"))
         elif section_id == "questioner_turn_envelope":
-            allowed.update(("kind", "markdown"))
+            allowed.update(("kind", "markdown", "ready"))
+        elif section_id == "questioner_readiness":
+            allowed.add("ready")
         elif section_id == "reclassify_result":
             allowed.update((
                 "status", "kind", "drift_risk", "drift_damage", "reason",

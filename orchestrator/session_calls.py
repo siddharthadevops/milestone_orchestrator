@@ -6,6 +6,7 @@ import collections
 import copy
 
 from . import (
+    brainstorming,
     contracts,
     prompt_authority,
     prompt_contracts,
@@ -35,6 +36,54 @@ PreparedSessionCall = collections.namedtuple(
     "PreparedSessionCall",
     ("prompt", "validate", "prompt_set_fallback", "bound", "complete"),
 )
+
+QUESTIONER_READINESS_SECTION_ID = "questioner_readiness"
+BINDING_AGREEMENT_SECTION_ID = "binding_agreement"
+
+
+def binding_agreement_section():
+    """Override older stored prompts with the persisted v2 voting rule."""
+    return {
+        "id": BINDING_AGREEMENT_SECTION_ID,
+        "text": [
+            "BINDING AGREEMENT PROTOCOL VERSION 2",
+            "- Every roster seat gates repository agreement, including Dante.",
+            "- Every ready must anchor to the same current Git revision; a",
+            "  later commit voids earlier readiness.",
+            "- This rule supersedes any earlier statement that the questioner",
+            "  never readies or that only discussion positions gate closure.",
+        ],
+        "variables": [],
+    }
+
+
+def questioner_readiness_instruction():
+    """The versioned session rule that makes Dante's judgment binding."""
+    return {
+        "text": [
+            "BINDING COMMON-SENSE JUDGMENT",
+            "- Your questions remain your spoken contribution; do not propose",
+            "  or defend a solution.",
+            "- Also judge the current repository revision. Return ready: true",
+            "  only when no material anti-drift question or objection remains;",
+            "  otherwise return ready: false. This judgment is a binding vote",
+            "  and the session cannot close without it.",
+        ],
+        "variables": [],
+    }
+
+
+def questioner_readiness_section():
+    return {
+        "id": QUESTIONER_READINESS_SECTION_ID,
+        "text": [
+            "SESSION CONTROL OVERRIDE",
+            "The binding session protocol requires a top-level boolean ready.",
+            "For ready only, this rule supersedes any earlier instruction to",
+            "add no other fields.",
+        ],
+        "variables": [],
+    }
 
 
 def _mounted_variable_declarations(prompt):
@@ -161,6 +210,14 @@ def prepare_turn(
     if charge is None:
         return None
     role = participant.get("role") if isinstance(participant, dict) else None
+    run_config = state.get("run_config") if isinstance(state, dict) else None
+    binding_agreement = (
+        isinstance(run_config, dict)
+        and run_config.get(
+            "agreement_version",
+            brainstorming.LEGACY_AGREEMENT_VERSION,
+        ) == brainstorming.CURRENT_AGREEMENT_VERSION
+    )
     seat = {
         "initial_position": True,
         "contrary_position": False,
@@ -234,6 +291,10 @@ def prepare_turn(
         project_context=charge.get("project_context"),
         workspace=state["request"]["workspace_path"],
         correction=correction,
+        require_questioner_readiness=(
+            role == "common_sense" and binding_agreement
+        ),
+        binding_agreement=binding_agreement,
     )
     attempt = session_repository.begin_attempt(state, charge, role)
     return prepared._replace(
@@ -281,6 +342,8 @@ def prepare(
     project_context=None,
     workspace=None,
     correction=None,
+    require_questioner_readiness=False,
+    binding_agreement=False,
 ):
     """Resolve and bind one physical milestone Brainstorming seat attempt."""
     if job not in SESSION_JOBS:
@@ -295,6 +358,22 @@ def prepare(
     ):
         raise prompt_router.PromptRouterError(
             "rethink requires its complete source problem"
+        )
+    if type(require_questioner_readiness) is not bool:
+        raise prompt_router.PromptRouterError(
+            "require_questioner_readiness must be a boolean"
+        )
+    if type(binding_agreement) is not bool:
+        raise prompt_router.PromptRouterError(
+            "binding_agreement must be a boolean"
+        )
+    if require_questioner_readiness and role != "common_sense":
+        raise prompt_router.PromptRouterError(
+            "binding questioner readiness requires the common-sense seat"
+        )
+    if require_questioner_readiness and not binding_agreement:
+        raise prompt_router.PromptRouterError(
+            "binding questioner readiness requires agreement protocol v2"
         )
     if job != "rethink" and "rethink_problem" in values:
         raise prompt_router.PromptRouterError(
@@ -322,9 +401,31 @@ def prepare(
             )
         charge_values["contract_correction"] = correction
 
+    consumer_instructions = (
+        (questioner_readiness_instruction(),)
+        if require_questioner_readiness else ()
+    )
+    consumer_sections = tuple(
+        item for item in (
+            (
+                binding_agreement_section()
+                if binding_agreement else None
+            ),
+            (
+                questioner_readiness_section()
+                if require_questioner_readiness else None
+            ),
+        )
+        if item is not None
+    )
+
     def validate_selected(prompt, _defaulted_variables):
         try:
-            bound = prompt_contracts.bind(prompt)
+            bound = prompt_contracts.bind(
+                prompt,
+                consumer_sections=consumer_sections,
+                consumer_instructions=consumer_instructions,
+            )
         except contracts.ContractError as exc:
             raise prompt_sets.PromptSetError(
                 "routed session prompt cannot bind its served contract: %s"
@@ -375,7 +476,11 @@ def prepare(
         artifact_type=artifact_type,
         prompt_validator=validate_selected,
     )
-    bound = prompt_contracts.bind(resolution.prompt)
+    bound = prompt_contracts.bind(
+        resolution.prompt,
+        consumer_sections=consumer_sections,
+        consumer_instructions=consumer_instructions,
+    )
     reserved = prompt_contracts.reserved_output_fields(bound)
     for extension in extensions:
         if extension.field in reserved:

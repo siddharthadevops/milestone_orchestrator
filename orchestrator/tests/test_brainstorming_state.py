@@ -514,6 +514,10 @@ class BrainstormingStateTestCase(unittest.TestCase):
         different = run_config(cross_family_participants(), "unanimity")
         self.assertFalse(different["same_family_fallback"])
         self.assertEqual(
+            different["agreement_version"],
+            bs.CURRENT_AGREEMENT_VERSION,
+        )
+        self.assertEqual(
             [item["id"] for item in different["participants"]],
             ["editor", "critic"],
         )
@@ -626,11 +630,22 @@ class BrainstormingStateTestCase(unittest.TestCase):
         candidate = copy.deepcopy(different)
         candidate["same_family_fallback"] = 0
         invalid.append(candidate)
+        for agreement_version in (0, 1, 3, False, "2"):
+            candidate = copy.deepcopy(different)
+            candidate["agreement_version"] = agreement_version
+            invalid.append(candidate)
 
         for index, candidate in enumerate(invalid):
             self._assert_create_rejected(
                 "bad-config-%d" % index, config=candidate
             )
+
+        legacy = copy.deepcopy(different)
+        legacy.pop("agreement_version")
+        self.assertNotIn("agreement_version", bs.validate_run_config(legacy))
+        self.assertEqual(
+            bs.agreement_roles(legacy), bs.POSITION_ROLES
+        )
 
     def test_session_contract_is_immutable(self):
         created = self.store.create(

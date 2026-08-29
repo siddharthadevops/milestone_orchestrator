@@ -34,6 +34,11 @@ TERMINAL_STATUSES = ("success", "failure")
 CLOSURE_POLICIES = ("unanimity", "majority")
 ROLES = ("initial_position", "contrary_position", "common_sense")
 POSITION_ROLES = ("initial_position", "contrary_position")
+LEGACY_AGREEMENT_VERSION = 1
+CURRENT_AGREEMENT_VERSION = 2
+AGREEMENT_VERSIONS = (
+    CURRENT_AGREEMENT_VERSION,
+)
 DELIVERIES = ("llm", "external")
 TRANSCRIPT_EVENT_KINDS = (
     "material_interruption",
@@ -659,6 +664,7 @@ def validate_external_intervention(intervention):
 
     supplied = intervention["input"]
     target_free_rethink = repository_rethink_request(supplied)
+    repository_backed = repository_session({"request": supplied})
     _exact_keys(
         supplied,
         (
@@ -757,7 +763,11 @@ def validate_external_intervention(intervention):
             _exact_keys(
                 payload,
                 ("markdown",),
-                ("target_revision",),
+                (
+                    ("target_revision", "ready")
+                    if repository_backed else
+                    ("target_revision",)
+                ),
                 "external_intervention.response.payload",
             )
             payload = {
@@ -773,7 +783,16 @@ def validate_external_intervention(intervention):
                     }
                     if "target_revision" in payload else {}
                 ),
+                **(
+                    {"ready": payload["ready"]}
+                    if "ready" in payload else {}
+                ),
             }
+            if "ready" in payload and type(payload["ready"]) is not bool:
+                raise ContractError(
+                    "external_intervention.response.payload.ready must be "
+                    "a boolean"
+                )
         else:
             _exact_keys(
                 payload,
@@ -1450,7 +1469,7 @@ def validate_run_config(run_config):
     _exact_keys(
         run_config,
         ("participants", "closure_policy", "same_family_fallback"),
-        (),
+        ("agreement_version",),
         "run_config",
     )
     participants = run_config["participants"]
@@ -1501,7 +1520,32 @@ def validate_run_config(run_config):
             "same_family_fallback must record whether the resolved roster "
             "uses only one model family"
         )
+    if "agreement_version" in run_config:
+        agreement_version = run_config["agreement_version"]
+        if (
+            type(agreement_version) is not int
+            or agreement_version not in AGREEMENT_VERSIONS
+        ):
+            raise ContractError(
+                "run_config.agreement_version must be one of %s"
+                % (AGREEMENT_VERSIONS,)
+            )
     return _json_copy(run_config, "run_config")
+
+
+def agreement_roles(run_config):
+    """Return the persisted seats whose judgment gates agreement.
+
+    Sessions created before agreement_version was persisted retain the
+    historical two-position rule. New sessions bind every roster seat,
+    including common_sense/Dante, without rewriting stored history.
+    """
+    checked = validate_run_config(run_config)
+    if checked.get("agreement_version", LEGACY_AGREEMENT_VERSION) == (
+        LEGACY_AGREEMENT_VERSION
+    ):
+        return POSITION_ROLES
+    return ROLES
 
 
 def validate_participant_sessions(participant_sessions, run_config):
@@ -1665,8 +1709,6 @@ def _validate_coordination(state, request, run_config, status):
             ready = turn["ready"]
             if type(ready) is not bool:
                 raise ContractError("%s.ready must be a boolean" % ctx)
-            if participant["role"] == "common_sense" and ready:
-                raise ContractError("%s questioner cannot become ready" % ctx)
         elif participant["role"] == "initial_position":
             if revision is None:
                 raise ContractError(
@@ -1708,7 +1750,7 @@ def _validate_coordination(state, request, run_config, status):
 
 
 def repository_positions_ready(state, coordination=None):
-    """Whether every discussion seat last readied at the current Git SHA."""
+    """Whether every persisted voting seat readied at the current Git SHA."""
     if not repository_session(state):
         raise ContractError("repository readiness requires a repository session")
     coordination = coordination or coordination_projection(state)
@@ -1719,6 +1761,7 @@ def repository_positions_ready(state, coordination=None):
         or coordination["recovery_baseline_revision"]
     )
     latest = {}
+    voting_roles = agreement_roles(state["run_config"])
     roles = {
         item["id"]: item["role"]
         for item in state["run_config"]["participants"]
@@ -1726,14 +1769,14 @@ def repository_positions_ready(state, coordination=None):
     for turn in coordination["completed_turns"]:
         participant_id = turn["participant_id"]
         if (
-            roles.get(participant_id) in POSITION_ROLES
+            roles.get(participant_id) in voting_roles
             and turn["target_revision"] == revision
         ):
             latest[participant_id] = turn["ready"]
     discussion_ids = [
         item["id"]
         for item in state["run_config"]["participants"]
-        if item["role"] in POSITION_ROLES
+        if item["role"] in voting_roles
     ]
     return bool(discussion_ids) and all(
         latest.get(participant_id) is True
@@ -1803,6 +1846,7 @@ def resolve_run_config(participants, closure_policy, eligible_participants):
         "participants": participants,
         "closure_policy": closure_policy,
         "same_family_fallback": len(families) == 1,
+        "agreement_version": CURRENT_AGREEMENT_VERSION,
     }
     checked = validate_run_config(run_config)
     eligible = _validate_eligible_participants(eligible_participants)
@@ -1971,12 +2015,13 @@ def validate_floor_intervention(intervention):
 
 
 def closure_voters(run_config):
-    """Return only the positions whose agreement can close a session."""
+    """Return the seats whose persisted agreement rule gates closure."""
     checked = validate_run_config(run_config)
+    voting_roles = agreement_roles(checked)
     return [
         participant
         for participant in checked["participants"]
-        if participant["role"] in POSITION_ROLES
+        if participant["role"] in voting_roles
     ]
 
 
@@ -1985,7 +2030,7 @@ def _validate_closure_votes(votes, run_config):
     participants = closure_voters(checked_config)
     if not isinstance(votes, list) or len(votes) != len(participants):
         raise ContractError(
-            "closure_ballot.votes must contain every position once"
+            "closure_ballot.votes must contain every voting seat once"
         )
     checked_votes = []
     for index, (vote, participant) in enumerate(zip(votes, participants)):
@@ -2217,7 +2262,8 @@ def _validate_closure_lifecycle(
             or not repository_positions_ready(state, coordination)
         ):
             raise ContractError(
-                "repository success requires common readiness after Dante"
+                "repository success requires every voting seat ready on the "
+                "current Git revision"
             )
         if (
             status == "running"
@@ -2828,9 +2874,6 @@ def repository_completed_turn_successor(
         raise HistoryRewriteError(
             "repository turn does not match the next persisted participant"
         )
-    if participant["role"] == "common_sense" and ready:
-        raise HistoryRewriteError("the questioner cannot become ready")
-
     successor = copy.deepcopy(current)
     round_number = turn_index // len(participants) + 1
     successor["completed_turns"].append(
@@ -2852,13 +2895,13 @@ def repository_completed_turn_successor(
         successor, coordination_projection(successor)
     ):
         outcome = "success"
-        reason = "All discussion seats are ready on the current Git revision."
+        reason = "All voting seats are ready on the current Git revision."
     elif (
         full_pass
         and successor["rounds_used"] == successor["request"]["max_rounds"]
     ):
         outcome = "failure"
-        reason = "Discussion seats did not reach common repository readiness."
+        reason = "Voting seats did not reach common repository readiness."
 
     if outcome is None:
         return validate_session_state(successor)
@@ -3132,8 +3175,8 @@ def _quoted_markdown(value):
 
 def _closure_rule(policy):
     if policy == "unanimity":
-        return "Every position must agree before the session can close."
-    return "A strict majority of the positions decides; a tie is a gap."
+        return "Every voting seat must agree before the session can close."
+    return "A strict majority of the voting seats decides; a tie is a gap."
 
 
 def _entry(title, *parts):
@@ -3155,6 +3198,7 @@ def _repository_rethink_authority(state):
 
 def _render_repository_rethink_opening(state, labels):
     roster = []
+    voting_roles = agreement_roles(state["run_config"])
     for participant in state["run_config"]["participants"]:
         label = labels[participant["id"]]
         if participant["role"] == "initial_position":
@@ -3164,7 +3208,12 @@ def _render_repository_rethink_opening(state, labels):
                 "reviews the repository read-only and challenges the resolution"
             )
         else:
-            role = "reviews read-only and asks common-sense anti-drift questions"
+            role = (
+                "reviews read-only, asks common-sense anti-drift questions, "
+                "and casts a binding agreement judgment"
+                if participant["role"] in voting_roles else
+                "reviews read-only and asks common-sense anti-drift questions"
+            )
         roster.append("- **%s** — %s." % (label, role))
     rounds = state["request"]["max_rounds"]
     base, _accepted = _repository_rethink_authority(state)
@@ -3199,6 +3248,7 @@ def _render_opening(state, labels):
     if repository_rethink_session(state):
         return _render_repository_rethink_opening(state, labels)
     roster = []
+    voting_roles = agreement_roles(state["run_config"])
     for participant in state["run_config"]["participants"]:
         label = labels[participant["id"]]
         if participant["role"] == "initial_position":
@@ -3206,7 +3256,12 @@ def _render_opening(state, labels):
         elif participant["role"] == "contrary_position":
             role = "challenges the initial position"
         else:
-            role = "asks common-sense anti-drift questions and does not vote"
+            role = (
+                "asks common-sense anti-drift questions and casts a binding "
+                "closure vote"
+                if participant["role"] in voting_roles else
+                "asks common-sense anti-drift questions and does not vote"
+            )
         roster.append("- **%s** — %s." % (label, role))
     rounds = state["request"]["max_rounds"]
     return _entry(
@@ -3890,6 +3945,10 @@ class SessionStore:
                 "external intervention no longer belongs to a running session"
             )
         participants = snapshot.state["run_config"]["participants"]
+        voter_ids = {
+            item["id"]
+            for item in closure_voters(snapshot.state["run_config"])
+        }
         positions = {item["id"]: index for index, item in enumerate(participants)}
         old_index = positions.get(prior["participant_id"])
         new_index = positions.get(checked["participant_id"])
@@ -3904,17 +3963,14 @@ class SessionStore:
             )
 
         def expected_vote_ids(before_index):
-            included = {
+            return [
                 item["id"]
                 for index, item in enumerate(participants)
-                if item["role"] == "initial_position"
-                or (
-                    item["role"] == "contrary_position"
-                    and index < before_index
+                if item["id"] in voter_ids
+                and (
+                    item["role"] == "initial_position"
+                    or index < before_index
                 )
-            }
-            return [
-                item["id"] for item in participants if item["id"] in included
             ]
 
         prior_votes = prior["closure_context"]["votes"]
@@ -4050,11 +4106,10 @@ class SessionStore:
         def deliver(document):
             session_raw = self._store._raw_from_doc(document, session_key)
             session_public = self._store._public_from_raw(session_raw)
-            if (
-                not session_public["exists?"]
-                or validate_session_state(session_public["value"])["status"]
-                != "running"
-            ):
+            if not session_public["exists?"]:
+                return (False, "session is no longer running"), False
+            session_state = validate_session_state(session_public["value"])
+            if session_state["status"] != "running":
                 return (False, "session is no longer running"), False
             raw = self._store._raw_from_doc(document, intervention_key)
             public = self._store._public_from_raw(raw)
@@ -4065,6 +4120,17 @@ class SessionStore:
                 return (False, "external intervention token changed"), False
             if intervention["response"] is not None:
                 return (False, "external intervention is already answered"), False
+            if (
+                intervention["action_kind"] == "discussion_turn"
+                and repository_session(session_state)
+                and session_state["run_config"].get(
+                    "agreement_version", LEGACY_AGREEMENT_VERSION
+                ) == CURRENT_AGREEMENT_VERSION
+                and type(payload.get("ready")) is not bool
+            ):
+                raise ContractError(
+                    "repository voting response requires ready"
+                )
             if automatic:
                 if (
                     intervention["provider_attempt"] <= 0

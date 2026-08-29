@@ -232,7 +232,7 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             [],
         )
 
-    def test_dante_never_receives_a_closure_vote(self):
+    def test_dante_receives_a_binding_closure_vote_prompt(self):
         roster = participants() + [
             {
                 "id": "dante",
@@ -263,13 +263,19 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             run_config(roster),
             os.path.join(self.root, "chat.md"),
         )
+        target_revision = bs.make_target_revision(
+            True, b"accepted target", 0o644
+        )
+        state = bs.initialize_coordination_state(
+            bs.transition_session(state, "running"), target_revision
+        )
         intervention = {
             "token": "dante-closure",
             "participant_id": "dante",
             "action_kind": "closure_vote",
             "completed_turn_count": 3,
             "round": 1,
-            "target_revision": None,
+            "target_revision": target_revision["revision"],
             "input": {
                 "request": request["request"],
                 "context": request["context"],
@@ -297,8 +303,12 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             },
         }
 
-        with self.assertRaisesRegex(bs.ContractError, "does not vote"):
-            coordination.build_external_narrator_prompt(state, intervention)
+        closure_prompt = coordination.build_external_narrator_prompt(
+            state, intervention
+        )
+        self.assertIn("common-sense seat", closure_prompt)
+        self.assertIn("Your judgment is\nbinding", closure_prompt)
+        self.assertIn('kind "closure_vote"', closure_prompt)
 
         discussion = dict(intervention)
         discussion["action_kind"] = "discussion_turn"
@@ -317,11 +327,22 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         )
         self.assertNotIn("natural English", discussion_prompt)
         self.assertTrue(
-            discussion_prompt.endswith(coordination.DANTE_MANDATORY_LINE)
+            discussion_prompt.endswith(
+                coordination.DANTE_MANDATORY_BINDING_LINE
+            )
         )
         self.assertIn("Dante amended the project", discussion_prompt)
         self.assertIn("A1: Prefer the small path.", discussion_prompt)
         self.assertNotIn("DO NOT INLINE THIS", discussion_prompt)
+
+        legacy_state = copy.deepcopy(state)
+        legacy_state["run_config"].pop("agreement_version")
+        legacy_prompt = coordination.build_external_narrator_prompt(
+            legacy_state, discussion
+        )
+        self.assertTrue(legacy_prompt.endswith(
+            coordination.DANTE_MANDATORY_LEGACY_LINE
+        ))
 
     def _subject(self, roster, scripts, store=None, failure_classifier=None):
         store = store or self.store

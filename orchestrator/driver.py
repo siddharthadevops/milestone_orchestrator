@@ -419,6 +419,10 @@ class ConcurrentRunError(RuntimeError):
     BEFORE any side-effectful worker call is made."""
 
 
+class _ConcurrentRunLockError(ConcurrentRunError):
+    """The state lock, rather than a stale-state check, refused this step."""
+
+
 class _StandingLawError(RuntimeError):
     """Internal: a project-bound run's standing law (the policy store or
     the work-area meta family) could not be read or validated for a worker
@@ -1674,20 +1678,34 @@ class Driver(object):
         return runners.snapshot_changes(before_entries, after_entries)
 
     @contextlib.contextmanager
-    def _exclusive(self):
+    def _exclusive(self, defer_on_contention=False):
         """Advisory inter-process lock on <state>.lock for one step. Two
         concurrent invocations on the same state would each run
         side-effectful worker calls; without this, the divergence would be
-        detected only afterwards, at save time, as HistoryRewriteError."""
+        detected only afterwards, at save time, as HistoryRewriteError.
+
+        The sole deferred caller has already observed a non-terminal
+        Brainstorming wait whose inspection failed. It receives ``False`` on
+        contention so it can poll again without mutating; every ordinary
+        caller still gets the fail-fast concurrent-run error.
+        """
+        lock = contextlib.ExitStack()
         try:
-            with st.exclusive_mutation(self.state_path):
-                yield
+            lock.enter_context(st.exclusive_mutation(self.state_path))
         except st.ConcurrentStateMutation as exc:
-            raise ConcurrentRunError(
+            lock.close()
+            if defer_on_contention:
+                yield False
+                return
+            raise _ConcurrentRunLockError(
                 "another orchestrator invocation is active on %s "
                 "(advisory lock %s is held)"
                 % (self.state_path, self.state_path + ".lock")
             ) from exc
+        try:
+            yield True
+        finally:
+            lock.close()
 
     def _assert_not_stale(self):
         """Refuse stale in-memory state before any worker call."""
@@ -7897,13 +7915,88 @@ class Driver(object):
                 "run failed: %s" % exc,
             )
 
+    def _pending_brainstorming_poll(self):
+        """Classify one wait poll before taking the state lock.
+
+        A repository-backed Brainstorming seat publishes its canonical-plan
+        result under the same ``<state>.lock`` used by driver steps.  While
+        the child is non-terminal there is no milestone mutation for this
+        driver to make, so contending for that lock can only turn a harmless
+        poll into a false concurrent-run refusal.  The child cannot become
+        terminal until its repository completion callback has returned (and
+        therefore released the state lock).
+
+        Bypass the locked step only while fresh disk state still has the same
+        event history and attached wait, and the public child state is still
+        non-terminal.  A persistent inspection error keeps the ordinary typed
+        failure path, but may defer one poll if the child's repository write
+        still holds the lock.  Terminal and stale cases always retain the
+        ordinary locked path and concurrent-invocation refusal semantics.
+
+        Return ``(pending, deferred)``. ``pending`` is immediately safe to
+        return. ``deferred`` may be returned only if lock acquisition itself
+        fails; when the lock is free the normal handler records the inspection
+        error instead of hiding it.
+        """
+        session_id = self._brainstorming_wait_session()
+        if session_id is None:
+            return None, None
+        try:
+            disk = st.load(self.state_path)
+            if disk.get("events") != self.state.get("events"):
+                return None, None
+            action = decide(disk)
+            if action.type != A_BRAINSTORM_WAIT:
+                return None, None
+            unit = _current_author_unit(disk)
+            wait = (unit or {}).get("brainstorming_wait") or {}
+            if wait.get("session_id") != session_id:
+                return None, None
+        except Exception:
+            return None, None
+        try:
+            projected = brainstorming_milestone.inspect_session(
+                disk,
+                session_id,
+                active_home=self.model_profiles_home,
+            )
+            if (
+                projected["state"]["status"]
+                in brainstorming.TERMINAL_STATUSES
+            ):
+                return None, None
+        except Exception:
+            inspection_failed = True
+        else:
+            inspection_failed = False
+
+        self.state = disk
+        noun = (
+            "producer"
+            if (wait.get("origin") or {}).get("task_executor")
+            == "brainstorming"
+            else "session"
+        )
+        poll = (
+            action,
+            "waiting for Brainstorming %s %s" % (noun, session_id),
+        )
+        return (None, poll) if inspection_failed else (poll, None)
+
     def step(self):
         """Execute exactly one action. Returns (action, note).
 
         Ordinary worker calls have at-least-once semantics. The sole
         merge_repair exception persists its handoff immediately before
         dispatch and never re-dispatches a marked reconciliation."""
-        with self._exclusive():
+        pending_poll, deferred_poll = self._pending_brainstorming_poll()
+        if pending_poll is not None:
+            return pending_poll
+        with self._exclusive(
+            defer_on_contention=deferred_poll is not None
+        ) as acquired:
+            if not acquired:
+                return deferred_poll
             self._assert_not_stale()
             # A repository-backed child may publish its accepted plan or task
             # result without appending a milestone event.  Merge that durable

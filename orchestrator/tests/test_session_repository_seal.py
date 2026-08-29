@@ -222,15 +222,51 @@ class RepositorySealTest(unittest.TestCase):
         self.assertEqual(snapshot.state["status"], "running")
         self.assertEqual(snapshot.state["rounds_used"], 0)
 
-        sealed = self.append(snapshot, "dante", self.base, False)
+        snapshot = self.append(snapshot, "dante", self.base, False)
+        self.assertEqual(snapshot.state["status"], "running")
+        self.assertEqual(snapshot.state["rounds_used"], 1)
+
+        snapshot = self.append(snapshot, "lead", self.base, True)
+        snapshot = self.append(snapshot, "contrary", self.base, True)
+        sealed = self.append(snapshot, "dante", self.base, True)
 
         self.assertEqual(sealed.state["status"], "success")
-        self.assertEqual(sealed.state["rounds_used"], 1)
+        self.assertEqual(sealed.state["rounds_used"], 2)
         self.assertEqual(
             [item["status"] for item in sealed.state["history"]],
             ["created", "running", "success"],
         )
         self.assertEqual(sealed.state["transcript_events"], [])
+
+    def test_pre_version_repository_session_keeps_legacy_agreement(self):
+        config = brainstorming.resolve_run_config(
+            self.participants, "unanimity", self.participants
+        )
+        config.pop("agreement_version")
+        created = brainstorming.new_session_state(
+            self.request(), config,
+            os.path.join(self.temp.name, "legacy", "chat.md"),
+        )
+        running = brainstorming.transition_session(created, "running")
+        current = brainstorming.initialize_repository_coordination_state(
+            running, self.base
+        )
+        current = brainstorming.repository_completed_turn_successor(
+            current, "lead", "lead turn", self.base, True
+        )
+        current = brainstorming.repository_completed_turn_successor(
+            current, "contrary", "contrary turn", self.base, True
+        )
+        terminal = brainstorming.repository_completed_turn_successor(
+            current, "dante", "dante question", self.base, False
+        )
+
+        self.assertEqual(terminal["status"], "success")
+        self.assertNotIn("agreement_version", terminal["run_config"])
+        self.assertEqual(
+            [item["id"] for item in brainstorming.closure_voters(config)],
+            ["lead", "contrary"],
+        )
 
     def test_new_revision_invalidates_every_prior_readiness(self):
         snapshot = self.running()
@@ -253,7 +289,7 @@ class RepositorySealTest(unittest.TestCase):
 
         snapshot = self.append(snapshot, "lead", changed, True)
         snapshot = self.append(snapshot, "contrary", changed, True)
-        sealed = self.append(snapshot, "dante", changed, False)
+        sealed = self.append(snapshot, "dante", changed, True)
         self.assertEqual(sealed.state["status"], "success")
         self.assertEqual(sealed.state["accepted_target_revision"], changed)
 
@@ -275,13 +311,13 @@ class RepositorySealTest(unittest.TestCase):
         failed = self.append(snapshot, "dante", self.base, False)
         self.assertEqual(failed.state["status"], "failure")
         self.assertEqual(failed.state["transcript_events"], [])
-        self.assertIn("common repository readiness", failed.state["result"]["reason"])
+        self.assertIn("Voting seats did not reach", failed.state["result"]["reason"])
 
     def test_terminal_handoff_is_exact_repository_range(self):
         snapshot = self.running()
         snapshot = self.append(snapshot, "lead", self.base, True)
         snapshot = self.append(snapshot, "contrary", self.base, True)
-        sealed = self.append(snapshot, "dante", self.base, False)
+        sealed = self.append(snapshot, "dante", self.base, True)
         projection = {
             "state": copy.deepcopy(sealed.state),
             "work_duration_s": 0.3,
@@ -303,7 +339,7 @@ class RepositorySealTest(unittest.TestCase):
         snapshot = self.running()
         snapshot = self.append(snapshot, "lead", self.base, True)
         snapshot = self.append(snapshot, "contrary", self.base, True)
-        sealed = self.append(snapshot, "dante", self.base, False)
+        sealed = self.append(snapshot, "dante", self.base, True)
         charge = sealed.state["request"]["context"]["source_payload"][
             "session_charge"
         ]

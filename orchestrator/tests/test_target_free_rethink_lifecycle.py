@@ -119,7 +119,7 @@ class TargetFreeRethinkLifecycleTest(unittest.TestCase):
             "rethink", snapshot.revision, self.revision
         )
         for participant, ready in (
-            ("lead", True), ("critic", True), ("dante", False)
+            ("lead", True), ("critic", True), ("dante", True)
         ):
             snapshot = store.record_repository_turn(
                 "rethink",

@@ -482,14 +482,74 @@ class SessionCallCutoverTest(unittest.TestCase):
                 len(prepared.bound.question_ids),
                 len(set(prepared.bound.question_ids)),
             )
-        invalid = {
+        ready_reply = {
             "kind": "questioner_turn",
             "markdown": "Any remaining question?",
             "ready": True,
             "questions": question_answers(dante.bound),
         }
+        dante.validate(ready_reply)
+
+        binding_dante = self.prepare(
+            "rethink", "common_sense", False,
+            artifact_type="document",
+            binding_agreement=True,
+            require_questioner_readiness=True,
+        )
+        self.assertIn("questioner_readiness", binding_dante.bound.registered_section_ids)
+        self.assertIn("binding vote", binding_dante.prompt)
+        invalid = dict(ready_reply)
+        invalid.pop("ready")
         with self.assertRaises(contracts.ContractError):
-            dante.validate(invalid)
+            binding_dante.validate(invalid)
+        binding_dante.validate(ready_reply)
+
+    def test_binding_readiness_overrides_an_older_stored_questioner_prompt(self):
+        documents = copy.deepcopy(prompt_sets.default_seed().documents)
+        questioner = documents["brainstorming/questioner_turn.json"]
+        questioner["output_contract"]["sections"][0]["text"] = [
+            "Return kind questioner_turn and markdown. Add no other fields."
+        ]
+        self.write_set("legacy-questioner", documents)
+
+        prepared = self.prepare(
+            "rethink", "common_sense", False,
+            artifact_type="document",
+            prompt_set="legacy-questioner",
+            binding_agreement=True,
+            require_questioner_readiness=True,
+        )
+        self.assertIn("SESSION CONTROL OVERRIDE", prepared.prompt)
+        reply = {
+            "kind": "questioner_turn",
+            "markdown": "No further questions.",
+            "questions": question_answers(prepared.bound),
+        }
+        with self.assertRaises(contracts.ContractError):
+            prepared.validate(reply)
+        prepared.validate(dict(reply, ready=True))
+
+    def test_binding_agreement_overrides_an_older_stored_discussion_prompt(self):
+        documents = copy.deepcopy(prompt_sets.default_seed().documents)
+        discussion = documents["brainstorming/discussion_turn.json"]
+        discussion["output_contract"]["sections"][0]["text"] = [
+            "Only discussion positions gate closure; the questioner never readies."
+        ]
+        self.write_set("legacy-discussion", documents)
+
+        prepared = self.prepare(
+            "rethink", "initial_position", True,
+            artifact_type="document",
+            prompt_set="legacy-discussion",
+            binding_agreement=True,
+        )
+        self.assertIn("the questioner never readies", prepared.prompt)
+        self.assertIn("BINDING AGREEMENT PROTOCOL VERSION 2", prepared.prompt)
+        self.assertIn("Every roster seat gates", prepared.prompt)
+        self.assertGreater(
+            prepared.prompt.index("BINDING AGREEMENT PROTOCOL VERSION 2"),
+            prepared.prompt.index("the questioner never readies"),
+        )
 
     def test_session_project_extension_joins_the_bound_envelope(self):
         policy = {

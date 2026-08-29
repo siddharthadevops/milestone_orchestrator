@@ -257,7 +257,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             "Initial Position",
             "Contrary Position",
             "Contrary Position 2",
-            "Every position must agree",
+            "Every voting seat must agree",
             "at most 2 rounds",
         ):
             self.assertIn(expected, one)

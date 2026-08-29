@@ -24,6 +24,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from orchestrator import contracts
 from orchestrator import driver as drv
@@ -516,6 +517,21 @@ class TestSnapshotCacheExclusions(DriverTestCase):
 
 
 class TestConcurrentInvocationRefused(DriverTestCase):
+    @staticmethod
+    def _waiting_driver(workspace):
+        path = init_state(workspace, make_config())
+        document = st.load(path)
+        st.current_unit(document)["brainstorming_wait"] = {
+            "session_id": "session-1",
+            "signal": {
+                "status": "need_rethink",
+                "problem": "The governing plan needs focused repair.",
+            },
+            "origin": {"unit": "skeleton", "kind": "implement"},
+        }
+        st.save(path, document)
+        return path, drv.Driver(path, runner=runners.MockRunner([]))
+
     def test_stale_driver_refuses_before_any_worker_call(self):
         """P3: two driver invocations on the same state both used to run
         side-effectful worker calls, with divergence detected only at save
@@ -560,6 +576,118 @@ class TestConcurrentInvocationRefused(DriverTestCase):
             # Lock released: the same driver proceeds normally.
             action, _note = driver.step()
             self.assertEqual(action.type, drv.A_DRAFT)
+
+    @unittest.skipIf(drv.fcntl is None, "fcntl unavailable on this platform")
+    def test_pending_brainstorming_poll_does_not_contend_with_child_write(self):
+        import fcntl as fcntl_mod
+
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            path, driver = self._waiting_driver(ws)
+            fh = open(path + ".lock", "a+")
+            try:
+                fcntl_mod.flock(fh.fileno(), fcntl_mod.LOCK_EX)
+                with mock.patch.object(
+                    drv.brainstorming_milestone,
+                    "inspect_session",
+                    return_value={"state": {"status": "running"}},
+                ):
+                    action, note = driver.step()
+            finally:
+                fh.close()
+
+            self.assertEqual(action.type, drv.A_BRAINSTORM_WAIT)
+            self.assertEqual(
+                note, "waiting for Brainstorming session session-1"
+            )
+            self.assertEqual(driver.runner.calls, [])
+
+    @unittest.skipIf(drv.fcntl is None, "fcntl unavailable on this platform")
+    def test_terminal_brainstorming_poll_still_refuses_a_held_lock(self):
+        import fcntl as fcntl_mod
+
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            path, driver = self._waiting_driver(ws)
+            fh = open(path + ".lock", "a+")
+            try:
+                fcntl_mod.flock(fh.fileno(), fcntl_mod.LOCK_EX)
+                with mock.patch.object(
+                    drv.brainstorming_milestone,
+                    "inspect_session",
+                    return_value={"state": {"status": "success"}},
+                ):
+                    with self.assertRaises(drv.ConcurrentRunError):
+                        driver.step()
+            finally:
+                fh.close()
+            self.assertEqual(driver.runner.calls, [])
+
+    @unittest.skipIf(drv.fcntl is None, "fcntl unavailable on this platform")
+    def test_inspection_error_waits_for_child_lock_then_fails_typed(self):
+        import fcntl as fcntl_mod
+
+        failures = (
+            (
+                "unavailable",
+                lambda: drv.brainstorming_lifecycle.PublicLifecycleError(
+                    503, drv.brainstorming_lifecycle.UNAVAILABLE
+                ),
+            ),
+            ("runtime", lambda: RuntimeError("inspection broke")),
+        )
+        for label, failure in failures:
+            with self.subTest(failure=label), tempfile.TemporaryDirectory(
+                prefix="orch-fix-"
+            ) as ws:
+                path, driver = self._waiting_driver(ws)
+                fh = open(path + ".lock", "a+")
+                with (
+                    mock.patch.object(
+                        drv.brainstorming_milestone,
+                        "inspect_session",
+                        side_effect=lambda *_args, **_kwargs: failure(),
+                    ),
+                    mock.patch.object(drv.time, "sleep"),
+                ):
+                    try:
+                        fcntl_mod.flock(fh.fileno(), fcntl_mod.LOCK_EX)
+                        action, note = driver.step()
+                    finally:
+                        fh.close()
+
+                    self.assertEqual(action.type, drv.A_BRAINSTORM_WAIT)
+                    self.assertEqual(
+                        note, "waiting for Brainstorming session session-1"
+                    )
+                    self.assertIsNone(st.load(path)["failure"])
+
+                    action, note = driver.step()
+
+                self.assertEqual(action.type, drv.A_BRAINSTORM_WAIT)
+                self.assertIn("run failed", note)
+                persisted = st.load(path)
+                self.assertEqual(
+                    persisted["failure"]["type"],
+                    "brainstorming_operational",
+                )
+                self.assertEqual(driver.runner.calls, [])
+
+    def test_pending_brainstorming_poll_does_not_hide_stale_state(self):
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            path, driver = self._waiting_driver(ws)
+            changed = st.load(path)
+            st.append_event(changed, "unrelated_driver_update")
+            st.save(path, changed)
+
+            with mock.patch.object(
+                drv.brainstorming_milestone,
+                "inspect_session",
+                return_value={"state": {"status": "running"}},
+            ) as inspection:
+                with self.assertRaises(drv.ConcurrentRunError):
+                    driver.step()
+
+            inspection.assert_not_called()
+            self.assertEqual(driver.runner.calls, [])
 
 
 class TestDuplicateSliceIdsEndToEnd(DriverTestCase):

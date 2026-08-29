@@ -957,12 +957,22 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         ):
             coordinator.run_next_turn("repository-session", {})
         pending = store.read_external_intervention("repository-session")
+        with self.assertRaises(brainstorming.ContractError):
+            store.submit_external_intervention(
+                "repository-session",
+                pending["token"],
+                {
+                    "markdown": "Dante asks the bounded question.",
+                    "target_revision": gitops.head_full_sha(self.workspace),
+                },
+            )
         store.submit_external_intervention(
             "repository-session",
             pending["token"],
             {
                 "markdown": "Dante asks the bounded question.",
                 "target_revision": gitops.head_full_sha(self.workspace),
+                "ready": False,
             },
         )
 
@@ -973,6 +983,7 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
             accepted.state["completed_turns"][-1]["participant_id"],
             "dante",
         )
+        self.assertFalse(accepted.state["completed_turns"][-1]["ready"])
         self.assertIsNone(
             store.read_external_intervention("repository-session")
         )
@@ -993,7 +1004,7 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         }
         store = self._store([lead, contrary, dante])
 
-        def reply(role, lead_seat, markdown, questioner=False):
+        def reply(role, lead_seat, markdown, questioner=False, ready=False):
             package = session_calls.prepare(
                 self.home,
                 job="rethink",
@@ -1020,8 +1031,7 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                 "markdown": markdown,
                 "questions": question_answers(package),
             }
-            if not questioner:
-                payload["ready"] = False
+            payload["ready"] = ready if questioner else False
             return json.dumps(payload)
 
         updated = {
@@ -1062,7 +1072,10 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
                     [
                         reply("common_sense", False, "Rejected plan.", True),
                         reply("common_sense", False, "Changed plan.", True),
-                        reply("common_sense", False, "Clean question.", True),
+                        reply(
+                            "common_sense", False, "Clean question.", True,
+                            ready=True,
+                        ),
                     ],
                     callbacks=[reject_plan, change_plan, lambda: None],
                 ),
@@ -1169,6 +1182,7 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
             accepted.state["completed_turns"][-1]["target_revision"],
             accepted.state["accepted_target_revision"],
         )
+        self.assertTrue(accepted.state["completed_turns"][-1]["ready"])
 
     def test_questioner_uses_the_same_read_only_boundary(self):
         lead = {
