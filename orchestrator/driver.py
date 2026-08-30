@@ -495,6 +495,69 @@ class ReviewedWorkLifecycle(object):
     def __init__(self, host):
         self.host = host
 
+    @staticmethod
+    def _production_kind(unit):
+        return {
+            st.UNIT_SKELETON: contracts.KIND_DRAFT_SKELETON,
+            st.UNIT_SLICE_DOC: contracts.KIND_DRAFT_SLICE_NOTE,
+            st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
+        }[unit["kind"]]
+
+    def configure(self, unit, policy=None):
+        """Validate and durably freeze choices before production starts."""
+        unit_key = st.unit_key(unit)
+        with self.host._exclusive():
+            self.host._assert_not_stale()
+            selected = self.host._unit_by_key(unit_key)
+            if selected is None:
+                raise tasks.TaskRequestError(
+                    tasks.INVALID_TASK_REQUEST,
+                    "reviewed policy names an unknown selected production",
+                )
+            checked = tasks.resolve_reviewed_policy(
+                self._production_kind(selected), policy
+            )
+            existing = selected.get("reviewed_policy")
+            if existing is not None:
+                if existing != checked:
+                    raise tasks.TaskRequestError(
+                        tasks.INVALID_TASK_REQUEST,
+                        "reviewed policy is already frozen for %s" % unit_key,
+                    )
+                return copy.deepcopy(existing)
+            if (
+                selected.get("status") != st.U_PENDING
+                or selected.get("draft") is not None
+                or selected.get("active_task") is not None
+                or selected.get("brainstorming_wait") is not None
+            ):
+                raise tasks.TaskRequestError(
+                    tasks.INVALID_TASK_REQUEST,
+                    "reviewed policy must be frozen before production starts",
+                )
+            selected["reviewed_policy"] = copy.deepcopy(checked)
+            st.append_event(
+                self.host.state,
+                "reviewed_policy_frozen",
+                unit=unit_key,
+                task_kind=self._production_kind(selected),
+                task_executor=checked["producer"]["task_executor"],
+            )
+            self.host._save()
+            return copy.deepcopy(checked)
+
+    @classmethod
+    def producer(cls, unit, task_kind=None):
+        if (
+            task_kind is not None
+            and task_kind != cls._production_kind(unit)
+        ):
+            return None
+        policy = unit.get("reviewed_policy")
+        if policy is None:
+            return None
+        return copy.deepcopy(policy["producer"])
+
     def next_action(self, unit):
         return decide_reviewed_work(self.host.state, unit)
 
@@ -3782,6 +3845,9 @@ class Driver(object):
         if reference is not None:
             record = tasks.task_record(self.state, reference.get("id"))
             return record["order"]["task_executor"] == "brainstorming"
+        selection = self.reviewed_work.producer(unit, kind)
+        if selection is not None:
+            return selection["task_executor"] == "brainstorming"
         selection = tasks.effective_slice_producers(
             self._slice_info(unit["slice_id"])
         )[kind]
@@ -3861,7 +3927,16 @@ class Driver(object):
             "configuration": {},
             "request": request,
         }
-        if kind in tasks.PRODUCER_TASK_KINDS:
+        reviewed_producer = self.reviewed_work.producer(unit, kind)
+        if reviewed_producer is not None:
+            order = tasks.producer_order_from_selection(
+                reviewed_producer, request
+            )
+            if order["task_executor"] != "agent_call":
+                raise st.IllegalTransition(
+                    "selected production task is not an agent-call task"
+                )
+        elif kind in tasks.PRODUCER_TASK_KINDS:
             order = tasks.producer_order(
                 self._slice_info(unit["slice_id"]), kind, request
             )
@@ -7259,8 +7334,13 @@ class Driver(object):
             )
             return active, planned
         request, planned = self._brainstorming_production_request(unit, kind)
-        order = tasks.producer_order(
-            self._slice_info(unit["slice_id"]), kind, request
+        reviewed_producer = self.reviewed_work.producer(unit, kind)
+        order = (
+            tasks.producer_order_from_selection(reviewed_producer, request)
+            if reviewed_producer is not None
+            else tasks.producer_order(
+                self._slice_info(unit["slice_id"]), kind, request
+            )
         )
         if order["task_executor"] != "brainstorming":
             raise st.IllegalTransition(

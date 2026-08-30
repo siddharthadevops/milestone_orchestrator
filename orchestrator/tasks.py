@@ -24,6 +24,12 @@ PRODUCER_TASK_KINDS = (
     contracts.KIND_IMPLEMENT,
 )
 
+_REVIEWED_PRODUCTION_ROLES = {
+    contracts.KIND_DRAFT_SKELETON: "plan",
+    contracts.KIND_DRAFT_SLICE_NOTE: "draft",
+    contracts.KIND_IMPLEMENT: "implement",
+}
+
 _MISSING = object()
 _RESULT_STATUSES = ("success", "failure")
 _COST_FIELDS = ("api_usd", "real_usd")
@@ -322,6 +328,86 @@ def validate_producer_selection(value, context="producer selection"):
         return _validate_producer_selection(value, context, stored=True)
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
+
+
+def resolve_reviewed_producer(task_kind, value=_MISSING):
+    """Freeze one reviewed production's catalogue-backed producer.
+
+    The semantic job decides the agent-call role.  Producer configuration
+    may tune an offered executor, but it cannot turn production into a
+    review, fix, or another process step.
+    """
+    try:
+        role = _REVIEWED_PRODUCTION_ROLES.get(task_kind)
+        if role is None:
+            raise ContractError(
+                "reviewed production task_kind must be one of %s"
+                % (list(_REVIEWED_PRODUCTION_ROLES),)
+            )
+        if value is _MISSING:
+            value = {"task_executor": "agent_call"}
+        checked = _validate_producer_selection(
+            value, "reviewed policy.producer"
+        )
+        task_executor = checked["task_executor"]
+        if (
+            task_kind not in PRODUCER_TASK_KINDS
+            and task_executor != "agent_call"
+        ):
+            raise ContractError(
+                "TaskExecutor %r is not offered for %s"
+                % (task_executor, task_kind)
+            )
+        supplied = checked.get("configuration") or {}
+        if (
+            task_executor == "agent_call"
+            and "role" in supplied
+            and supplied["role"] != role
+        ):
+            raise ContractError(
+                "reviewed policy.producer.configuration.role cannot change "
+                "the %s semantic job" % task_kind
+            )
+        configuration = _resolve_configuration(
+            task_executor, checked.get("configuration", _MISSING)
+        )
+        if task_executor == "agent_call":
+            configuration["role"] = role
+        return _json_copy(
+            {
+                "task_executor": task_executor,
+                "configuration": configuration,
+            },
+            "reviewed policy.producer",
+        )
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def resolve_reviewed_policy(task_kind, value=None):
+    """Resolve the durable choices implemented by the current slice cut."""
+    try:
+        if value is None:
+            value = {}
+        _exact_keys(value, (), ("producer",), "reviewed policy")
+        return {
+            "producer": resolve_reviewed_producer(
+                task_kind, value.get("producer", _MISSING)
+            )
+        }
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def producer_order_from_selection(selection, request):
+    """Build an order from the trusted producer frozen on reviewed work."""
+    return {
+        "task_executor": selection["task_executor"],
+        "configuration": _json_copy(
+            selection["configuration"], "producer configuration"
+        ),
+        "request": _json_copy(request, "task request"),
+    }
 
 
 def validate_producer_map(value, context="producer_task_executor"):
