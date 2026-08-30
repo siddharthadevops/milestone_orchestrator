@@ -515,7 +515,14 @@ class ReviewedWorkLifecycle(object):
                     "reviewed policy names an unknown selected production",
                 )
             task_kind = self._production_kind(selected)
-            if task_kind in tasks.PRODUCER_TASK_KINDS:
+            existing = selected.get("reviewed_policy")
+            if existing is not None:
+                checked = tasks.resolve_reviewed_policy(
+                    task_kind,
+                    policy,
+                    default_producer=existing["producer"],
+                )
+            elif task_kind in tasks.PRODUCER_TASK_KINDS:
                 default_producer = tasks.effective_slice_producers(
                     self.host._slice_info(selected["slice_id"])
                 )[task_kind]
@@ -524,7 +531,6 @@ class ReviewedWorkLifecycle(object):
                 )
             else:
                 checked = tasks.resolve_reviewed_policy(task_kind, policy)
-            existing = selected.get("reviewed_policy")
             if existing is not None:
                 if existing != checked:
                     raise tasks.TaskRequestError(

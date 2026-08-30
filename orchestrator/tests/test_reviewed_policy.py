@@ -97,7 +97,7 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 ["slice_doc-01", "slice_impl-01"],
             )
 
-    def test_omitted_producer_freezes_the_current_slice_plan_choice(self):
+    def test_omitted_producer_freezes_plan_choice_across_restart(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-default-") as ws:
             path = init_state(ws, make_config())
             _units(path, {
@@ -123,6 +123,21 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 },
             )
             self.assertTrue(subject._brainstorming_producer_selected(
+                implementation, contracts.KIND_IMPLEMENT
+            ))
+
+            changed = st.load(path)
+            changed["milestone"]["slices"][0][
+                "producer_task_executor"
+            ]["implement"] = {"task_executor": "agent_call"}
+            st.save(path, changed)
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            implementation = _unit(recovered, st.UNIT_SLICE_IMPL)
+            self.assertEqual(
+                recovered.reviewed_work.configure(implementation, {}), frozen
+            )
+            self.assertTrue(recovered._brainstorming_producer_selected(
                 implementation, contracts.KIND_IMPLEMENT
             ))
 
@@ -169,7 +184,9 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 recovered.reviewed_work.configure(document, policy), frozen
             )
             with self.assertRaises(tasks.TaskRequestError) as changed:
-                recovered.reviewed_work.configure(document, {})
+                recovered.reviewed_work.configure(document, {
+                    "producer": {"task_executor": "agent_call"},
+                })
             self.assertEqual(changed.exception.code, tasks.INVALID_TASK_REQUEST)
             self.assertEqual(
                 sum(
