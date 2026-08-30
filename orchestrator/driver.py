@@ -503,61 +503,65 @@ class ReviewedWorkLifecycle(object):
             st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
         }[unit["kind"]]
 
+    def _configure_locked(self, unit, policy=None):
+        """Freeze one policy while the host's state lock is held."""
+        unit_key = st.unit_key(unit)
+        selected = self.host._unit_by_key(unit_key)
+        if selected is None:
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "reviewed policy names an unknown selected production",
+            )
+        task_kind = self._production_kind(selected)
+        existing = selected.get("reviewed_policy")
+        if existing is not None:
+            checked = tasks.resolve_reviewed_policy(
+                task_kind,
+                policy,
+                default_producer=existing["producer"],
+            )
+        elif task_kind in tasks.PRODUCER_TASK_KINDS:
+            default_producer = tasks.effective_slice_producers(
+                self.host._slice_info(selected["slice_id"])
+            )[task_kind]
+            checked = tasks.resolve_reviewed_policy(
+                task_kind, policy, default_producer=default_producer
+            )
+        else:
+            checked = tasks.resolve_reviewed_policy(task_kind, policy)
+        if existing is not None:
+            if existing != checked:
+                raise tasks.TaskRequestError(
+                    tasks.INVALID_TASK_REQUEST,
+                    "reviewed policy is already frozen for %s" % unit_key,
+                )
+            return copy.deepcopy(existing)
+        if (
+            selected.get("status") != st.U_PENDING
+            or selected.get("draft") is not None
+            or selected.get("active_task") is not None
+            or selected.get("brainstorming_wait") is not None
+        ):
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "reviewed policy must be frozen before production starts",
+            )
+        selected["reviewed_policy"] = copy.deepcopy(checked)
+        st.append_event(
+            self.host.state,
+            "reviewed_policy_frozen",
+            unit=unit_key,
+            task_kind=task_kind,
+            task_executor=checked["producer"]["task_executor"],
+        )
+        self.host._save()
+        return copy.deepcopy(checked)
+
     def configure(self, unit, policy=None):
         """Validate and durably freeze choices before production starts."""
-        unit_key = st.unit_key(unit)
         with self.host._exclusive():
             self.host._assert_not_stale()
-            selected = self.host._unit_by_key(unit_key)
-            if selected is None:
-                raise tasks.TaskRequestError(
-                    tasks.INVALID_TASK_REQUEST,
-                    "reviewed policy names an unknown selected production",
-                )
-            task_kind = self._production_kind(selected)
-            existing = selected.get("reviewed_policy")
-            if existing is not None:
-                checked = tasks.resolve_reviewed_policy(
-                    task_kind,
-                    policy,
-                    default_producer=existing["producer"],
-                )
-            elif task_kind in tasks.PRODUCER_TASK_KINDS:
-                default_producer = tasks.effective_slice_producers(
-                    self.host._slice_info(selected["slice_id"])
-                )[task_kind]
-                checked = tasks.resolve_reviewed_policy(
-                    task_kind, policy, default_producer=default_producer
-                )
-            else:
-                checked = tasks.resolve_reviewed_policy(task_kind, policy)
-            if existing is not None:
-                if existing != checked:
-                    raise tasks.TaskRequestError(
-                        tasks.INVALID_TASK_REQUEST,
-                        "reviewed policy is already frozen for %s" % unit_key,
-                    )
-                return copy.deepcopy(existing)
-            if (
-                selected.get("status") != st.U_PENDING
-                or selected.get("draft") is not None
-                or selected.get("active_task") is not None
-                or selected.get("brainstorming_wait") is not None
-            ):
-                raise tasks.TaskRequestError(
-                    tasks.INVALID_TASK_REQUEST,
-                    "reviewed policy must be frozen before production starts",
-                )
-            selected["reviewed_policy"] = copy.deepcopy(checked)
-            st.append_event(
-                self.host.state,
-                "reviewed_policy_frozen",
-                unit=unit_key,
-                task_kind=task_kind,
-                task_executor=checked["producer"]["task_executor"],
-            )
-            self.host._save()
-            return copy.deepcopy(checked)
+            return self._configure_locked(unit, policy)
 
     @classmethod
     def producer(cls, unit, task_kind=None):
@@ -581,6 +585,24 @@ class ReviewedWorkLifecycle(object):
                 "reviewed-work action names an unknown unit %r"
                 % action.params["unit"]
             )
+        if (
+            action.type == A_DRAFT
+            and self._production_kind(unit) in tasks.PRODUCER_TASK_KINDS
+            and unit.get("reviewed_policy") is None
+            and unit.get("status") == st.U_PENDING
+            and unit.get("draft") is None
+            and unit.get("active_task") is None
+            and unit.get("brainstorming_wait") is None
+            and unit.get("brainstorming_resume") is None
+            and unit.get("preserved_candidate") is None
+            and unit.get("implementation_attempt_snapshot") is None
+            and unit.get("implementation_stabilization") is None
+            and unit.get("pending_wip") is None
+        ):
+            # ``Driver.step`` holds the state lock around execute. Persist the
+            # resolved producer before canonical-plan preparation or either
+            # production adapter can make the first physical call.
+            self._configure_locked(unit)
         was_sealed = unit.get("status") == st.U_SEALED
         calls = call_preparation or ReviewedWorkCallPreparation(self.host)
         note = getattr(self.host, self._HANDLERS[action.type])(

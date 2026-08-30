@@ -36,6 +36,48 @@ def _unit(subject, kind):
 
 
 class ReviewedProducerPolicyTest(unittest.TestCase):
+    def test_runtime_execution_freezes_producer_before_dispatch(self):
+        with tempfile.TemporaryDirectory(prefix="orch-reviewed-runtime-") as ws:
+            path = init_state(ws, make_config())
+            _units(path, {
+                "draft_slice_note": {
+                    "task_executor": "brainstorming",
+                    "configuration": {"closure_policy": "majority"},
+                },
+                "implement": {"task_executor": "agent_call"},
+            })
+            state = st.load(path)
+            state["units"][0]["status"] = st.U_SEALED
+            st.save(path, state)
+            subject = drv.Driver(path, runner=runners.MockRunner([]))
+
+            observed = {}
+
+            def dispatch(unit, call_preparation):
+                observed["policy"] = st.load(path)["units"][1][
+                    "reviewed_policy"
+                ]
+                return "selected producer dispatched"
+
+            with mock.patch.object(
+                subject, "_do_draft", side_effect=dispatch
+            ) as production:
+                action, note = subject.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            self.assertEqual(note, "selected producer dispatched")
+            self.assertEqual(
+                observed["policy"]["producer"],
+                {
+                    "task_executor": "brainstorming",
+                    "configuration": {
+                        "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
+                        "closure_policy": "majority",
+                    },
+                },
+            )
+            production.assert_called_once()
+
     def test_default_and_non_default_producers_are_frozen_per_order(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-policy-") as ws:
             path = init_state(ws, make_config())
