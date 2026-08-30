@@ -10262,6 +10262,9 @@ class Driver(object):
         # Compatibility must never restore retired redocumentation machinery.
         # Persisted runs with a missing or false historical flag use the same
         # lightweight rethink/design-update path as newly created runs.
+        # Because this posture is unconditional, retained in-goal gap outputs
+        # return through _route_pending_gap's retired-retry branches before its
+        # historical skeleton/sibling re-documentation code can be reached.
         return True
 
     def _legacy_gap_enabled(self):

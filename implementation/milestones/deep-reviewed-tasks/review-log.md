@@ -44,3 +44,35 @@
 - `codex-S1-STATE-APPEND` (raised codex, cleared codex): The note incorrectly makes entire state saves append-only — The false append-only rule appears twice as a hard persistence guarantee and could plausibly drive unnecessary machinery or rejection of legitimate status and marker updates, but correction remains bounded to this unit and should be caught during its review.
 - `claude-S1-GAP-REDOC-UNALLOCATED` (raised claude, cleared codex): The note allocates every in-cycle exit of the current reviewed lifecycle except the gap / re-documentation-wave exit, so nothing decides whether cross-unit design repair lands inside or outside the extracted boundary, and no named check can fail either way. — A careful builder should infer from the explicit milestone ownership of design repair that gap handling must exit the reusable boundary, but the missing gap-specific contract could mislead a hasty extraction and require bounded boundary rework at its own review.
 
+## slice_impl-01 (Default reviewed-lifecycle parity)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r1.txt` |
+| slice_impl-01-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-fix1.txt` |
+| slice_impl-01-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-delta1.txt` |
+| slice_impl-01-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r2.txt` |
+| slice_impl-01-codex-r5 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-fix2.txt` |
+| slice_impl-01-codex-r6 | delta_review | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-delta2.txt` |
+| slice_impl-01-codex-r7 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-fix3.txt` |
+| slice_impl-01-codex-r8 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-delta3.txt` |
+| slice_impl-01-codex-r9 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r3.txt` |
+| slice_impl-01-codex-r10 | review_round | codex | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r4.txt` |
+| slice_impl-01-codex-r11 | fix_findings | codex | 1 | 1 rejected | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-fix4.txt` |
+| slice_impl-01-codex-r12 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-delta4.txt` |
+| slice_impl-01-codex-r13 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r5.txt` |
+| slice_impl-01-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-01-codex-r13`, `slice_impl-01-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DR-880D5A6-1` (raised codex, cleared codex): Reusable checkpoint preparation now owns milestone reconciliation — The reusable checkpoint path silently invokes milestone plan observation despite the pinned independence boundary, plausibly misleading later task work, while correction remains a bounded separation of repository restoration from milestone reconciliation plus focused tests.
+- `codex-DRT-S01-FULL-003` (raised codex, cleared codex): Missing test: test_boundary_keeps_brainstorming_and_gap_exits_outside_milestone_control — Despite its P3 label, this is a correctness-coverage gap: the ownership rule is stated correctly and repeatedly, but the direct proof omits two milestone-control exits, so a regression could pass focused verification yet would require only bounded lifecycle and test rework.
+- `claude-S01-FULL-R2-001` (raised claude, cleared codex): `_after_seal` survives as a production hook with no production caller, duplicating the step() gate composition that the new boundary now owns — The unused duplicate hook and seven direct-call tests could mislead a hasty builder about production coverage, but the production-versus-boundary golden compares events through the gate and would expose advance-before-gate ordering, leaving any correction as bounded Slice 1 hook-and-test rework.
+- `claude-S01-FULL-R2-002` (raised claude, cleared codex): The milestone step loop answers a non-terminal Brainstorming wait before reaching the reviewed-work boundary, so the boundary's own wait handler is unreachable on the milestone path — The accepted ownership contract is factually false on ordinary non-terminal rethink polls, so a later builder could extend or test only the boundary and miss milestone behavior, while correction remains a bounded polling-seam refactor with parity coverage and no state or public-contract migration.
+

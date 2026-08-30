@@ -2,4 +2,14 @@
 
 # Adjudicated Rejections
 
-(none)
+Settled findings: re-raising one requires referencing its id with
+genuinely new evidence (`contests`).
+
+## [slice_impl-01-codex-r10/DRT-S01-FULL-002]
+
+- unit: slice_impl-01
+- severity: P2
+- finding: Current posture cannot reach historical cross-unit gap repair
+- rationale: No harm beyond the permitted baseline; the claimed repair episode is unreachable.
+- prevention: orchestrator/driver.py (Clarified that unconditional modern design updates bypass historical skeleton and sibling re-documentation code.)
+
