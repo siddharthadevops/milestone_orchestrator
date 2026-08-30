@@ -384,7 +384,7 @@ def resolve_reviewed_producer(task_kind, value=_MISSING):
         _request_error(exc)
 
 
-def resolve_reviewed_policy(task_kind, value=None):
+def resolve_reviewed_policy(task_kind, value=None, default_producer=_MISSING):
     """Resolve the durable choices implemented by the current slice cut."""
     try:
         if value is None:
@@ -392,7 +392,7 @@ def resolve_reviewed_policy(task_kind, value=None):
         _exact_keys(value, (), ("producer",), "reviewed policy")
         return {
             "producer": resolve_reviewed_producer(
-                task_kind, value.get("producer", _MISSING)
+                task_kind, value.get("producer", default_producer)
             )
         }
     except (ContractError, TypeError, ValueError) as exc:

@@ -12,13 +12,13 @@ from orchestrator import tasks
 from orchestrator.tests.test_driver_mock import init_state, make_config
 
 
-def _units(path):
+def _units(path, producer_task_executor=None):
     state = st.load(path)
     state["milestone"]["slices"] = [{
         "id": 1,
         "title": "Policy",
         "intent": "Exercise one reviewed-work order.",
-        "producer_task_executor": {
+        "producer_task_executor": producer_task_executor or {
             "draft_slice_note": {"task_executor": "agent_call"},
             "implement": {"task_executor": "agent_call"},
         },
@@ -96,6 +96,35 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 ],
                 ["slice_doc-01", "slice_impl-01"],
             )
+
+    def test_omitted_producer_freezes_the_current_slice_plan_choice(self):
+        with tempfile.TemporaryDirectory(prefix="orch-reviewed-default-") as ws:
+            path = init_state(ws, make_config())
+            _units(path, {
+                "draft_slice_note": {"task_executor": "agent_call"},
+                "implement": {
+                    "task_executor": "brainstorming",
+                    "configuration": {"closure_policy": "majority"},
+                },
+            })
+            subject = drv.Driver(path, runner=runners.MockRunner([]))
+            implementation = _unit(subject, st.UNIT_SLICE_IMPL)
+
+            frozen = subject.reviewed_work.configure(implementation, {})
+
+            self.assertEqual(
+                frozen["producer"],
+                {
+                    "task_executor": "brainstorming",
+                    "configuration": {
+                        "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
+                        "closure_policy": "majority",
+                    },
+                },
+            )
+            self.assertTrue(subject._brainstorming_producer_selected(
+                implementation, contracts.KIND_IMPLEMENT
+            ))
 
     def test_restart_uses_the_frozen_producer_not_the_slice_plan(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-restart-") as ws:
