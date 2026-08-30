@@ -76,3 +76,24 @@
 - `claude-S01-FULL-R2-001` (raised claude, cleared codex): `_after_seal` survives as a production hook with no production caller, duplicating the step() gate composition that the new boundary now owns — The unused duplicate hook and seven direct-call tests could mislead a hasty builder about production coverage, but the production-versus-boundary golden compares events through the gate and would expose advance-before-gate ordering, leaving any correction as bounded Slice 1 hook-and-test rework.
 - `claude-S01-FULL-R2-002` (raised claude, cleared codex): The milestone step loop answers a non-terminal Brainstorming wait before reaching the reviewed-work boundary, so the boundary's own wait handler is unreachable on the milestone path — The accepted ownership contract is factually false on ordinary non-terminal rethink polls, so a later builder could extend or test only the boundary and miss milestone behavior, while correction remains a bounded polling-seam refactor with parity coverage and no state or public-contract migration.
 
+## slice_doc-02 (Producer, review breadth, debt, and caps)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-02.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-02-codex-r1 | review_round | codex | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-02-codex-r1.txt` |
+| slice_doc-02-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-02-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-02-codex-r1`, `slice_doc-02-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S02-FULL-001` (raised codex, cleared codex): Missing Git baseline posture contradicts the existing fail-closed size-control contract — The hard-register statement reverses the existing fail-before-worker contract and zero-call test, so a builder would likely implement or preserve incorrect behavior, while correction remains bounded to Slice 2's size-policy wiring and its own review before shipment or downstream propagation.
+- `codex-DRT-S02-FULL-002` (raised codex, cleared codex): The focused command omits two named Brainstorming producer integration checks — Risk is high because the authoritative focused command can silently certify producer selection without executing two required Brainstorming checks, while damage is medium because correction remains bounded to running the omitted module and repairing any exposed regression within this unit.
+- `codex-DRT-S02-FULL-003` (raised codex, cleared codex): The skeleton’s review-breadth/debt row cites unrelated verification code — The cited range is visibly unrelated, while Slice 02 supplies the correct debt-gate range and behavioral checks, so a strong builder is unlikely to be silently diverted and correction is only a local citation re-pin.
+- `claude-slice_doc-02-claude-r1/FULL-001` (raised claude, cleared codex): The note pins `distinct_families_unsatisfiable` — a document-scoped Staffing Router condition — as the enforcement for an order-scoped breadth contract, but that condition is provably not raised when the run's staffing document assigns `review` a single seat, so the new strict default ("never seals on one") has no mechanism that can refuse. — The hard register falsely presents the existing Staffing Router refusal as enforcing the strict two-family default even though one supported review seat bypasses it and seals, making wrong-contract implementation likely while correction remains bounded to Slice 2 breadth enforcement and focused test
+- `claude-slice_doc-02-claude-r1/FULL-002` (raised claude, cleared codex): The note never states what happens when the explicitly cheaper one-family order runs on a machine whose staffing document declares `review` split across two seats — the exact configuration where the cheap option is wanted — and today that combination fails the run rather than reviewing once. — The slice expressly requires one-family completion independent of the staffing document's arbitrary seat count, so a strong builder is unlikely to preserve the refusal, while any miss requires bounded Slice 2 routing and test rework.
+
