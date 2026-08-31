@@ -2549,6 +2549,86 @@ class Driver(object):
             return None
         return settings
 
+    def _ensure_implementation_attempt_snapshot(self, unit, source=None):
+        """Freeze one Git zero for every producer of this implementation."""
+        if (
+            unit.get("kind") != st.UNIT_SLICE_IMPL
+            or not gitops.enabled(self.config)
+        ):
+            return None
+        existing = unit.get("implementation_attempt_snapshot")
+        if existing:
+            return copy.deepcopy(existing)
+        if source is None:
+            try:
+                source = {
+                    "refs": gitops.snapshot_refs(self.workspace),
+                    "sym": gitops.head_symbolic_ref(self.workspace),
+                    "head": gitops.head_full_sha(self.workspace),
+                    "tree": gitops.snapshot_index_tree(self.workspace),
+                    "stash": gitops.snapshot_stash(self.workspace),
+                }
+            except gitops.GitError:
+                return None
+        if any(source.get(key) is None for key in ("refs", "sym", "head", "tree")):
+            return None
+        frozen = {
+            key: copy.deepcopy(source.get(key))
+            for key in ("refs", "sym", "head", "tree", "stash")
+        }
+        unit["implementation_attempt_snapshot"] = frozen
+        st.append_event(
+            self.state,
+            "implementation_size_baseline_recorded",
+            unit=st.unit_key(unit),
+            tree=frozen["tree"],
+        )
+        self._save()
+        return copy.deepcopy(frozen)
+
+    def _complete_brainstorming_implementation_size(self, unit, task_id):
+        """Apply the existing completion-between-polls outcome to Brainstorming."""
+        if (
+            unit.get("kind") != st.UNIT_SLICE_IMPL
+            or not gitops.enabled(self.config)
+            or unit.get("reviewed_policy") is None
+        ):
+            return
+        settings = self._implementation_size_settings(unit)
+        baseline = unit.get("implementation_attempt_snapshot") or {}
+        base_tree = baseline.get("tree")
+        if settings is None or not base_tree:
+            st.fail_run(
+                self.state,
+                "implementation size control is unavailable: the fixed Git "
+                "baseline is missing or implementation_size_control is invalid",
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            raise StopStep("implementation size control unavailable")
+        final_lines = self._implementation_line_count(base_tree)
+        if final_lines is None:
+            self._fail_implementation_size(
+                None,
+                settings["hard_lines"],
+                "the final implementation size could not be measured",
+                unit=unit,
+            )
+        if final_lines > settings["hard_lines"]:
+            # The repository-backed producer publishes only after its accepted
+            # session is terminal. As with a Worker that jumps the threshold
+            # between polls, there is no live call left to interrupt or rerun.
+            st.append_event(
+                self.state,
+                "implementation_size_overflow",
+                unit=st.unit_key(unit),
+                lines=final_lines,
+                hard_lines=settings["hard_lines"],
+                completed=True,
+                task_id=task_id,
+            )
+
     def _implementation_size_control(self, base_tree, task_id=None, unit=None):
         """Live Git budget monitor for one implementation call.
 
@@ -7410,8 +7490,19 @@ class Driver(object):
             )
         )
         coordinates = self._author_coordinates(unit, kind)
+        meter = (
+            self._implementation_size_settings(unit)
+            if kind == contracts.KIND_IMPLEMENT
+            and gitops.enabled(self.config)
+            and unit.get("reviewed_policy") is not None
+            else None
+        )
         values = self._author_values(
-            unit, kind, authority, author_coordinates=coordinates
+            unit,
+            kind,
+            authority,
+            meter=meter,
+            author_coordinates=coordinates,
         )
         values.pop("kind", None)
         values.pop("workspace", None)
@@ -7421,6 +7512,18 @@ class Driver(object):
             contracts.KIND_IMPLEMENT: "implement@slice_impl",
         }[kind]
         repository = self._session_repository_context(unit)
+        if meter is not None:
+            baseline = self._ensure_implementation_attempt_snapshot(unit)
+            if baseline is None:
+                st.fail_run(
+                    self.state,
+                    "implementation size control is unavailable: the fixed Git "
+                    "baseline is missing or implementation_size_control is invalid",
+                    unit=unit,
+                    type_="orchestrator",
+                )
+                self._save()
+                raise StopStep("implementation size control unavailable")
         session_charge = self._session_charge(
             job,
             values,
@@ -7679,6 +7782,8 @@ class Driver(object):
             raise PlanReconciliationOpened(
                 "accepted producer plan range requires reconciliation"
             )
+        if kind == contracts.KIND_IMPLEMENT:
+            self._complete_brainstorming_implementation_size(unit, task_id)
         st.record_draft(
             self.state,
             unit,
@@ -8663,26 +8768,9 @@ class Driver(object):
                     "tree": pre_tree,
                     "stash": pre_stash,
                 }
-                if (
-                    source.get("refs") is not None
-                    and source.get("sym") is not None
-                    and source.get("head") is not None
-                    and source.get("tree") is not None
-                ):
-                    implementation_attempt = {
-                        key: copy.deepcopy(source.get(key))
-                        for key in ("refs", "sym", "head", "tree", "stash")
-                    }
-                    unit["implementation_attempt_snapshot"] = (
-                        implementation_attempt
-                    )
-                    st.append_event(
-                        self.state,
-                        "implementation_size_baseline_recorded",
-                        unit=st.unit_key(unit),
-                        tree=implementation_attempt["tree"],
-                    )
-                    self._save()
+                implementation_attempt = (
+                    self._ensure_implementation_attempt_snapshot(unit, source)
+                )
             if implementation_attempt:
                 pre_refs = copy.deepcopy(implementation_attempt.get("refs"))
                 pre_sym = implementation_attempt.get("sym")

@@ -330,6 +330,41 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         self.assertEqual([row["order"]["task_executor"] for row in tasks.task_records(subject.state)],
                          ["agent_call", "brainstorming"])
 
+    def test_brainstorming_implementation_mounts_frozen_size_policy(self):
+        subject = self.ready_brainstorming_implementation()
+        implementation = st.current_unit(subject.state)
+        subject.reviewed_work.configure(implementation, {
+            "implementation_size_control": {
+                "soft_lines": 2,
+                "hard_lines": 6,
+                "unconfirmed_grace_s": 3,
+                "confirmed_grace_s": 7,
+            },
+        })
+
+        with mock.patch.object(
+            adapter, "resolve_staffing", side_effect=self.staffing
+        ), mock.patch.object(
+            adapter, "start_task", return_value={"id": "session-size"}
+        ):
+            subject.step()
+
+        state = st.load(self.path)
+        implementation = st.current_unit(state)
+        task_id = implementation["active_task"]["id"]
+        record = tasks.task_record(state, task_id)
+        charge = record["order"]["request"]["context"]["session_charge"]
+        self.assertEqual(charge["values"]["soft_lines"], "2")
+        self.assertEqual(charge["values"]["hard_lines"], "6")
+        self.assertEqual(
+            implementation["implementation_attempt_snapshot"]["tree"],
+            self._git(
+                self.workspace,
+                "rev-parse",
+                "%s^{tree}" % charge["repository"]["pre_session_commit"],
+            ),
+        )
+
     def test_brainstorming_implementation_reads_later_skeleton_assignment(self):
         self.planned("agent_call", "brainstorming")
         note = prompt_response({
