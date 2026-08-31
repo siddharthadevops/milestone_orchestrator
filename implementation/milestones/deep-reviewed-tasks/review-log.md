@@ -174,3 +174,24 @@
 - `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-010` (raised claude, cleared codex): The delta checkpoint lost its int coercion and zero clamp, so a malformed config value now crashes or inverts it — The behavior is a real but compatibility-edge correctness regression that a careful builder can distinguish from validated order-local values, while correction only restores the former local coercion and clamp.
 - `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-011` (raised claude, cleared codex): The two-seat special case in _staffing_resolution adds a second staffing-document read per review resolution and changes no reachable outcome — The proposed one-read simplification is correct, but the claim that no reachable outcome changes overlooks a live document rewrite between the two reads, so context is needed to recover the concurrency rationale while correction remains a small local change.
 
+## slice_impl-02-c (Producer, review breadth, debt, and caps)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-c-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-c-codex-r1.txt` |
+| slice_impl-02-c-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-c-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-c-codex-r1`, `slice_impl-02-c-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-slice_impl-02-c-codex-r1/DRT-S02C-001` (raised codex, cleared codex): Focused command omits two pinned producer checks — The authoritative focused command silently omits the module holding two explicitly pinned producer checks, making false-green guidance plausible, while both checks currently pass and correction is a one-line command expansion.
+- `codex-slice_impl-02-c-codex-r1/DRT-S02C-002` (raised codex, cleared codex): Custom grace overrides remain unproven — The named test can falsely certify order-local grace behavior despite asserting neither duration nor timing, but the runtime currently consumes the override and correction is a small focused assertion or local wiring fix.
+- `claude-REV-S02C-001` (raised claude, cleared codex): Default review breadth is never applied to the skeleton production, so the milestone skeleton reviews at the document's seat count instead of the mandated two distinct families — The skeleton silently violates the pinned two-family default and goldens bless that behavior, plausibly steering later lifecycle code and tests wrong, while correction remains bounded policy-freezing and coverage rework caught before publication.
+- `claude-REV-S02C-002` (raised claude, cleared codex): The named double-family check proves sealing and refusal only on the profileless fallback cycle, a path no real run takes — The artifact falsely certifies router-backed double-family selection and refusal through a named test that exercises only the profileless fallback, so later work can trust unproved production behavior, while correction is a focused homed test and at most a small local fix.
+- `claude-REV-S02C-003` (raised claude, cleared codex): Three of the nine new named checks in the slice's Verification Contract do not exist under those names — The incorrect test names and unasserted single-review citation can mislead someone who trusts the verification table, but a careful builder will expose the mismatch immediately and correction is limited to repinning the checks and adding one focused assertion.
+

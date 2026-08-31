@@ -9,7 +9,17 @@ from orchestrator import driver as drv
 from orchestrator import runners
 from orchestrator import state as st
 from orchestrator import tasks
-from orchestrator.tests.test_driver_mock import init_state, make_config
+from orchestrator.tests.test_driver_mock import (
+    append_file,
+    finding,
+    fix_ok,
+    init_state,
+    make_config,
+    report,
+    skeleton_script,
+    step,
+    triaged,
+)
 
 
 def _units(path, producer_task_executor=None):
@@ -36,6 +46,14 @@ def _unit(subject, kind):
 
 
 class ReviewedProducerPolicyTest(unittest.TestCase):
+    def _step_until(self, subject, predicate, max_steps=60):
+        for _ in range(max_steps):
+            if predicate(subject.state):
+                return
+            action, _note = subject.step()
+            self.assertNotEqual(action.type, drv.A_DONE)
+        self.fail("reviewed policy lifecycle did not reach its expected state")
+
     def test_runtime_establishes_plan_before_freezing_producer(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-runtime-") as ws:
             path = init_state(ws, make_config())
@@ -403,6 +421,206 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 record["order"]["configuration"], {"role": "review"}
             )
             self.assertEqual(subject.runner.calls, [])
+
+    def test_double_family_requires_two_distinct_current_reviews(self):
+        with tempfile.TemporaryDirectory(prefix="orch-reviewed-double-") as ws:
+            path = init_state(ws, make_config())
+            runner = runners.MockRunner([
+                skeleton_script()[0],
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+            ])
+            subject = drv.Driver(path, runner=runner)
+            unit = subject.state["units"][0]
+            subject.reviewed_work.configure(unit, {
+                "review_breadth": "double",
+            })
+
+            self._step_until(
+                subject,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
+            )
+
+            sealed = st.load(path)["units"][0]
+            cited = sealed["seals"][-1]["reviews"]
+            self.assertEqual(cited, [
+                "skeleton-codex-r1", "skeleton-claude-r1",
+            ])
+            cited_rounds = {
+                round_["id"]: round_
+                for round_ in sealed["rounds"]
+                if round_["id"] in cited
+            }
+            self.assertEqual(
+                [cited_rounds[round_id]["family"] for round_id in cited],
+                ["codex", "claude"],
+            )
+            self.assertEqual(
+                {
+                    cited_rounds[round_id]["evidence_fingerprint"]
+                    for round_id in cited
+                },
+                {sealed["review_evidence_fingerprint"]},
+            )
+            self.assertEqual(runner.script, [])
+
+        with tempfile.TemporaryDirectory(prefix="orch-reviewed-refusal-") as ws:
+            path = init_state(ws, make_config(
+                families_order=["codex"],
+                commands={"codex": ["fake-codex"]},
+            ))
+            runner = runners.MockRunner([skeleton_script()[0]])
+            subject = drv.Driver(path, runner=runner)
+            subject.reviewed_work.configure(subject.state["units"][0], {
+                "review_breadth": "double",
+            })
+
+            self._step_until(
+                subject, lambda state: state["failure"] is not None,
+            )
+
+            failed = st.load(path)
+            self.assertIn(
+                "distinct_families_unsatisfiable",
+                failed["failure"]["reason"],
+            )
+            self.assertEqual(failed["failure"]["unit"], "skeleton")
+            self.assertEqual(failed["units"][0]["status"], st.U_FAILED)
+            self.assertEqual(
+                [call[1] for call in runner.calls], ["draft_skeleton"],
+            )
+            self.assertEqual(runner.script, [])
+
+    def test_order_caps_survive_resume_without_leaking(self):
+        with tempfile.TemporaryDirectory(prefix="orch-reviewed-caps-") as ws:
+            path = init_state(ws, make_config(
+                max_rounds_per_family=7,
+                max_fix_loops=7,
+                delta_full_review_after_fixes=7,
+            ))
+            runner = runners.MockRunner([
+                skeleton_script()[0],
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "first defect")]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("F1", "fixed", "first defect")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=append_file("docs/skeleton.md", "\nfix one\n"),
+                ),
+                step(
+                    "delta_review",
+                    report("delta_review", [finding("D1", "delta defect")]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("D1", "fixed", "delta defect")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=append_file("docs/skeleton.md", "\nfix two\n"),
+                ),
+                step("review_round", report("review_round"), family="codex"),
+            ])
+            subject = drv.Driver(path, runner=runner)
+            selected = subject.reviewed_work.configure(
+                subject.state["units"][0],
+                {
+                    "review_breadth": "single",
+                    "max_rounds_per_family": 1,
+                    "max_fix_loops": 1,
+                    "delta_full_review_after_fixes": 2,
+                },
+            )
+
+            self._step_until(
+                subject,
+                lambda state: state["units"][0]["status"] == st.U_ROUNDS,
+            )
+            seeded = st.load(path)
+            st.record_round(
+                seeded,
+                seeded["units"][0],
+                "codex",
+                contracts.KIND_REVIEW_ROUND,
+                report("review_round"),
+                meta={"invalidated": "pre-resume capped review evidence"},
+            )
+            st.save(path, seeded)
+            subject = drv.Driver(path, runner=runner)
+            self._step_until(subject, lambda state: state["failure"] is not None)
+            first_failure = st.load(path)
+            self.assertIn(
+                "max_rounds_per_family=1", first_failure["failure"]["reason"]
+            )
+            self.assertTrue(first_failure["units"][0]["rounds"][0]["invalidated"])
+            self.assertEqual(
+                [call[1] for call in runner.calls], ["draft_skeleton"]
+            )
+
+            st.resume_run(first_failure)
+            st.save(path, first_failure)
+            subject = drv.Driver(path, runner=runner)
+            self.assertEqual(subject.state["units"][0]["reviewed_policy"], selected)
+            self._step_until(subject, lambda state: state["failure"] is not None)
+            second_failure = st.load(path)
+            self.assertIn(
+                "did not converge after 1 fixer+delta loops",
+                second_failure["failure"]["reason"],
+            )
+
+            st.resume_run(second_failure)
+            st.save(path, second_failure)
+            subject = drv.Driver(path, runner=runner)
+            self.assertEqual(subject.state["units"][0]["reviewed_policy"], selected)
+            self._step_until(
+                subject,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
+            )
+
+            completed = st.load(path)
+            unit = completed["units"][0]
+            checkpoints = [
+                event for event in completed["events"]
+                if event["type"] == "delta_checkpoint"
+            ]
+            self.assertEqual(
+                [(event["fixes"], event["dirty_deltas"])
+                 for event in checkpoints],
+                [(2, 1)],
+            )
+            self.assertEqual(
+                [call[1] for call in runner.calls],
+                [
+                    "draft_skeleton", "review_round", "fix_findings",
+                    "delta_review", "fix_findings", "review_round",
+                ],
+            )
+            self.assertEqual(
+                len([event for event in completed["events"]
+                     if event["type"] == "resumed"]),
+                2,
+            )
+            sibling = subject._unit_by_key("slice_doc-01")
+            sibling_policy = subject.reviewed_work.configure(sibling, {})
+            self.assertEqual(
+                (
+                    sibling_policy["max_rounds_per_family"],
+                    sibling_policy["max_fix_loops"],
+                    sibling_policy["delta_full_review_after_fixes"],
+                ),
+                (7, 7, 7),
+            )
+            self.assertEqual(unit["reviewed_policy"], selected)
+            self.assertEqual(runner.script, [])
 
     def test_invalid_policy_fails_before_any_physical_call(self):
         cases = (
