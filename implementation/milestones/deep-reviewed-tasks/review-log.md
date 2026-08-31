@@ -195,3 +195,24 @@
 - `claude-REV-S02C-002` (raised claude, cleared codex): The named double-family check proves sealing and refusal only on the profileless fallback cycle, a path no real run takes — The artifact falsely certifies router-backed double-family selection and refusal through a named test that exercises only the profileless fallback, so later work can trust unproved production behavior, while correction is a focused homed test and at most a small local fix.
 - `claude-REV-S02C-003` (raised claude, cleared codex): Three of the nine new named checks in the slice's Verification Contract do not exist under those names — The incorrect test names and unasserted single-review citation can mislead someone who trusts the verification table, but a careful builder will expose the mismatch immediately and correction is limited to repinning the checks and adding one focused assertion.
 
+## slice_doc-03 (Routed calls and rethink continuity)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-03.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-03-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-codex-r1.txt` |
+| slice_doc-03-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-fix1.txt` |
+| slice_doc-03-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-delta1.txt` |
+| slice_doc-03-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-codex-r2.txt` |
+| slice_doc-03-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-03-codex-r4`, `slice_doc-03-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S03-002` (raised codex, cleared codex): Complete Prompt Router matrix omits failure classification — The artifact wrongly calls its matrix complete while omitting a live model-classification prompt that controls recovery, plausibly preserving wrong routing and tests, but correction remains bounded to this slice before publication.
+- `claude-DRT-S03-R1-001` (raised claude, cleared codex): Slice 3 deletes the internal task record that today anchors mid-attempt recovery, without pinning any replacement contract for resumption framing or frozen validation/result strategy — The slice leaves attempt-resumption framing and frozen validation/result policy unpinned, so a hasty builder could lose them, but the milestone’s preservation rule and included recovery tests should alert a careful builder, while correction is bounded to restoring durable attempt metadata and focuse
+
