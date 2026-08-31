@@ -168,12 +168,6 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 "same_family_second_look": True,
                 "p3_reclassify_debt": True,
                 "max_fix_loops": 2,
-                "implementation_size_control": {
-                    "soft_lines": 40,
-                    "hard_lines": 60,
-                    "unconfirmed_grace_s": 3,
-                    "confirmed_grace_s": 7,
-                },
             })
 
             self.assertEqual(
@@ -211,9 +205,36 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             result_policy = recovered._worker_result_policy(implementation)
             self.assertTrue(result_policy["p3_reclassify_debt"])
             self.assertTrue(result_policy["same_family_second_look"])
+            self.assertNotIn("implementation_size_control", frozen)
             self.assertIsNone(
                 recovered._implementation_size_settings(implementation)
             )
+
+    def test_brainstorming_implementation_refuses_size_control_before_freeze(self):
+        with tempfile.TemporaryDirectory(prefix="orch-reviewed-no-size-") as ws:
+            path = init_state(ws, make_config())
+            _units(path, {
+                "draft_slice_note": {"task_executor": "agent_call"},
+                "implement": {"task_executor": "brainstorming"},
+            })
+            subject = drv.Driver(path, runner=runners.MockRunner([]))
+            implementation = _unit(subject, st.UNIT_SLICE_IMPL)
+            before = st.load(path)
+
+            with self.assertRaises(tasks.TaskRequestError) as refused:
+                subject.reviewed_work.configure(implementation, {
+                    "implementation_size_control": {
+                        "soft_lines": 40,
+                        "hard_lines": 60,
+                        "unconfirmed_grace_s": 3,
+                        "confirmed_grace_s": 7,
+                    },
+                })
+
+            self.assertEqual(refused.exception.code, tasks.INVALID_TASK_REQUEST)
+            self.assertIn("requires an agent_call", str(refused.exception))
+            self.assertEqual(st.load(path), before)
+            self.assertEqual(subject.runner.calls, [])
 
     def test_restart_uses_the_frozen_producer_not_the_slice_plan(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-restart-") as ws:

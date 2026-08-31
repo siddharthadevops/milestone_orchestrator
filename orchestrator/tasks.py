@@ -511,10 +511,23 @@ def resolve_reviewed_policy(
                 "reviewed policy.p3_defer_max_risk must be one of %s"
                 % (list(contracts.DRIFT_RISK_LEVELS),)
             )
+        producer = resolve_reviewed_producer(
+            task_kind, value.get("producer", default_producer)
+        )
+        size_control_applicable = (
+            task_kind == contracts.KIND_IMPLEMENT
+            and producer["task_executor"] == "agent_call"
+        )
+        if (
+            "implementation_size_control" in value
+            and not size_control_applicable
+        ):
+            raise ContractError(
+                "reviewed policy.implementation_size_control requires an "
+                "agent_call implementation producer"
+            )
         checked = {
-            "producer": resolve_reviewed_producer(
-                task_kind, value.get("producer", default_producer)
-            ),
+            "producer": producer,
             "review_breadth": breadth,
             "same_family_second_look": second_look,
             phase_floor: floor,
@@ -528,7 +541,7 @@ def resolve_reviewed_policy(
             checked[name] = _reviewed_non_negative_int(
                 effective[name], "reviewed policy.%s" % name
             )
-        if task_kind == contracts.KIND_IMPLEMENT:
+        if size_control_applicable:
             checked["implementation_size_control"] = _reviewed_size_control(
                 value.get("implementation_size_control"),
                 size_defaults,
