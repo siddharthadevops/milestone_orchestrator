@@ -36,7 +36,7 @@ def _unit(subject, kind):
 
 
 class ReviewedProducerPolicyTest(unittest.TestCase):
-    def test_runtime_execution_freezes_agent_call_default_before_dispatch(self):
+    def test_runtime_execution_freezes_plan_producer_before_dispatch(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-runtime-") as ws:
             path = init_state(ws, make_config())
             _units(path, {
@@ -69,8 +69,11 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             self.assertEqual(
                 observed["policy"]["producer"],
                 {
-                    "task_executor": "agent_call",
-                    "configuration": {"role": "draft"},
+                    "task_executor": "brainstorming",
+                    "configuration": {
+                        "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
+                        "closure_policy": "majority",
+                    },
                 },
             )
             production.assert_called_once()
@@ -136,7 +139,7 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 ["slice_doc-01", "slice_impl-01"],
             )
 
-    def test_omitted_producer_freezes_agent_call_across_restart(self):
+    def test_omitted_producer_freezes_plan_choice_across_restart(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-default-") as ws:
             path = init_state(ws, make_config())
             _units(path, {
@@ -154,11 +157,14 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             self.assertEqual(
                 frozen["producer"],
                 {
-                    "task_executor": "agent_call",
-                    "configuration": {"role": "implement"},
+                    "task_executor": "brainstorming",
+                    "configuration": {
+                        "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
+                        "closure_policy": "majority",
+                    },
                 },
             )
-            self.assertFalse(subject._brainstorming_producer_selected(
+            self.assertTrue(subject._brainstorming_producer_selected(
                 implementation, contracts.KIND_IMPLEMENT
             ))
 
@@ -173,7 +179,7 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             self.assertEqual(
                 recovered.reviewed_work.configure(implementation, {}), frozen
             )
-            self.assertFalse(recovered._brainstorming_producer_selected(
+            self.assertTrue(recovered._brainstorming_producer_selected(
                 implementation, contracts.KIND_IMPLEMENT
             ))
 
