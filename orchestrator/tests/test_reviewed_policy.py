@@ -211,11 +211,8 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             result_policy = recovered._worker_result_policy(implementation)
             self.assertTrue(result_policy["p3_reclassify_debt"])
             self.assertTrue(result_policy["same_family_second_look"])
-            self.assertEqual(
-                recovered._implementation_size_settings(implementation)[
-                    "hard_lines"
-                ],
-                60,
+            self.assertIsNone(
+                recovered._implementation_size_settings(implementation)
             )
 
     def test_restart_uses_the_frozen_producer_not_the_slice_plan(self):

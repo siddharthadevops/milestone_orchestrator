@@ -330,43 +330,8 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         self.assertEqual([row["order"]["task_executor"] for row in tasks.task_records(subject.state)],
                          ["agent_call", "brainstorming"])
 
-    def test_brainstorming_implementation_mounts_frozen_size_policy(self):
+    def test_brainstorming_implementation_never_activates_size_control(self):
         subject = self.ready_brainstorming_implementation()
-        implementation = st.current_unit(subject.state)
-        subject.reviewed_work.configure(implementation, {
-            "implementation_size_control": {
-                "soft_lines": 2,
-                "hard_lines": 6,
-                "unconfirmed_grace_s": 3,
-                "confirmed_grace_s": 7,
-            },
-        })
-
-        with mock.patch.object(
-            adapter, "resolve_staffing", side_effect=self.staffing
-        ), mock.patch.object(
-            adapter, "start_task", return_value={"id": "session-size"}
-        ):
-            subject.step()
-
-        state = st.load(self.path)
-        implementation = st.current_unit(state)
-        task_id = implementation["active_task"]["id"]
-        record = tasks.task_record(state, task_id)
-        charge = record["order"]["request"]["context"]["session_charge"]
-        self.assertEqual(charge["values"]["soft_lines"], "2")
-        self.assertEqual(charge["values"]["hard_lines"], "6")
-        self.assertEqual(
-            implementation["implementation_attempt_snapshot"]["tree"],
-            self._git(
-                self.workspace,
-                "rev-parse",
-                "%s^{tree}" % charge["repository"]["pre_session_commit"],
-            ),
-        )
-
-    def _live_brainstorming_size_subject(self, runner=None):
-        subject = self.ready_brainstorming_implementation(runner=runner)
         implementation = st.current_unit(subject.state)
         subject.reviewed_work.configure(implementation, {
             "implementation_size_control": {
@@ -376,158 +341,47 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
                 "confirmed_grace_s": 7,
             },
         })
+
         with mock.patch.object(
             adapter, "resolve_staffing", side_effect=self.staffing
         ), mock.patch.object(
             adapter, "start_task", return_value={"id": "session-size"}
         ):
             subject.step()
-        write_file("oversized.py", "one\ntwo\nthree\nfour\nfive\n")(
-            self.workspace
-        )
+
         implementation = st.current_unit(subject.state)
-        return subject, implementation, implementation["brainstorming_wait"]
-
-    @staticmethod
-    def _running_size_projection(turns=()):
-        return {
-            "process": "running",
-            "state": {"status": "running", "completed_turns": list(turns)},
-        }
-
-    def test_brainstorming_live_size_uses_unconfirmed_grace_before_stabilizing(self):
-        stabilizer = prompt_response({
-            "status": "ok",
-            "kind": contracts.KIND_IMPLEMENT,
-            "files_changed": ["oversized.py"],
-            "implementation_cut": {
-                "cut_scope": "coherent oversized core",
-                "remaining_scope": "remaining reviewed slice obligations",
-            },
-        })
-        subject, implementation, wait = self._live_brainstorming_size_subject(
-            runners.MockRunner([{"response": stabilizer}])
-        )
-        projection = self._running_size_projection()
-        intervention = {
-            "intervention": {"after_completed_turns": 0}
-        }
-        stopped = {
-            "process": "stopped",
-            "state": {"status": "running", "completed_turns": []},
-        }
-        with mock.patch.object(
-            subject,
-            "_brainstorming_size_intervention",
-            return_value=intervention,
-        ), mock.patch.object(
-            drv.time, "time", side_effect=(100.0, 102.9, 103.0)
-        ), mock.patch.object(
-            drv.brainstorming_lifecycle,
-            "stop_session",
-            return_value=stopped,
-        ) as stop, mock.patch.object(
-            adapter, "start_task", return_value=projection
-        ):
-            subject._monitor_brainstorming_implementation_size(
-                implementation, wait, "home", projection
-            )
-            subject._monitor_brainstorming_implementation_size(
-                implementation, wait, "home", projection
-            )
-            stop.assert_not_called()
-            subject._monitor_brainstorming_implementation_size(
-                implementation, wait, "home", projection
-            )
-
-        marker = implementation["implementation_stabilization"][
-            "implementation_size"
+        task_id = implementation["active_task"]["id"]
+        record = tasks.task_record(subject.state, task_id)
+        values = record["order"]["request"]["context"]["session_charge"][
+            "values"
         ]
-        self.assertEqual(marker["grace_kind"], "unconfirmed")
-        self.assertFalse(marker["steer_confirmed"])
-        stop.assert_called_once()
-        self.assertNotIn("brainstorming_wait", implementation)
-        self.assertNotIn("active_task", implementation)
-
-        subject.step()
-        self.assertEqual(
-            implementation["implementation_cut"]["cut_scope"],
-            "coherent oversized core",
+        self.assertIsNone(
+            subject._implementation_size_settings(implementation)
         )
-        self.assertEqual(
-            [record["order"]["task_executor"] for record in tasks.task_records(
-                subject.state
-            )],
-            ["brainstorming", "agent_call"],
+        self.assertNotIn("soft_lines", values)
+        self.assertNotIn("hard_lines", values)
+        self.assertNotIn("implementation_attempt_snapshot", implementation)
+        self.assertNotIn(
+            "implementation_size", implementation["brainstorming_wait"]
         )
 
-    def test_brainstorming_ack_switches_to_confirmed_grace(self):
-        subject, implementation, wait = self._live_brainstorming_size_subject()
-        empty = self._running_size_projection()
-        confirmed = self._running_size_projection([{
-            "markdown": drv.IMPLEMENTATION_SIZE_ACK,
-        }])
-        intervention = {
-            "intervention": {"after_completed_turns": 0}
-        }
-        stopped = {
-            "process": "stopped",
-            "state": {"status": "running", "completed_turns": []},
-        }
+        write_file(
+            "oversized.py", "one\ntwo\nthree\nfour\nfive\n"
+        )(self.workspace)
+        self._git(self.workspace, "add", "oversized.py")
         with mock.patch.object(
-            subject,
-            "_brainstorming_size_intervention",
-            return_value=intervention,
-        ), mock.patch.object(
-            drv.time, "time", side_effect=(100.0, 101.0, 107.9, 108.0)
-        ), mock.patch.object(
-            drv.brainstorming_lifecycle,
-            "stop_session",
-            return_value=stopped,
-        ) as stop, mock.patch.object(
-            adapter, "start_task", return_value=confirmed
+            adapter, "finish_task", side_effect=self.finish_success
         ):
-            subject._monitor_brainstorming_implementation_size(
-                implementation, wait, "home", empty
-            )
-            subject._monitor_brainstorming_implementation_size(
-                implementation, wait, "home", confirmed
-            )
-            subject._monitor_brainstorming_implementation_size(
-                implementation, wait, "home", confirmed
-            )
-            stop.assert_not_called()
-            subject._monitor_brainstorming_implementation_size(
-                implementation, wait, "home", confirmed
-            )
+            subject.step()
 
-        marker = implementation["implementation_stabilization"][
-            "implementation_size"
-        ]
-        self.assertEqual(marker["grace_kind"], "confirmed")
-        self.assertTrue(marker["steer_confirmed"])
-        self.assertEqual(marker["grace_deadline_at"], 108.0)
-        stop.assert_called_once()
-
-    def test_brainstorming_wait_poll_runs_live_size_monitor(self):
-        subject, _implementation, _wait = self._live_brainstorming_size_subject()
-        projection = self._running_size_projection()
-        with mock.patch.object(
-            drv.brainstorming_milestone,
-            "inspect_session",
-            return_value=projection,
-        ), mock.patch.object(
-            adapter, "finish_task", return_value=None
-        ), mock.patch.object(
-            subject,
-            "_monitor_brainstorming_implementation_size",
-            return_value="waiting for live size control",
-        ) as monitor:
-            action, note = subject.step()
-
-        self.assertEqual(action.type, drv.A_BRAINSTORM_WAIT)
-        self.assertEqual(note, "waiting for live size control")
-        monitor.assert_called_once()
+        implementation = st.current_unit(subject.state)
+        self.assertEqual(implementation["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertNotIn("implementation_cut", implementation)
+        self.assertNotIn("implementation_stabilization", implementation)
+        self.assertFalse(any(
+            event["type"].startswith("implementation_size_")
+            for event in subject.state["events"]
+        ))
 
     def test_brainstorming_implementation_reads_later_skeleton_assignment(self):
         self.planned("agent_call", "brainstorming")
