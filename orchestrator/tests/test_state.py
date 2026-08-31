@@ -2284,6 +2284,12 @@ class TestReconciliationStateSeams(TempWorkspaceCase):
             "implementation_attempt_snapshot": {"revision": "old"},
             "implementation_stabilization": {"status": "waiting"},
             "brainstorming_review_handoff": {"session_id": "old"},
+            "reviewed_policy": {
+                "producer": {
+                    "task_executor": "agent_call",
+                    "configuration": {"role": "implement"},
+                },
+            },
             "has_gap_remodel": True,
         })
         return state, unit
@@ -2319,7 +2325,7 @@ class TestReconciliationStateSeams(TempWorkspaceCase):
             "pending_wip", "preserved_candidate",
             "implementation_attempt_snapshot",
             "implementation_stabilization", "brainstorming_review_handoff",
-            "has_gap_remodel",
+            "reviewed_policy", "has_gap_remodel",
         ):
             self.assertNotIn(key, unit)
         event = state["events"][-1]

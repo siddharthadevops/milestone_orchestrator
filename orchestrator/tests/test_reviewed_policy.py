@@ -238,6 +238,59 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 1,
             )
 
+    def test_reconciliation_rebuild_freezes_the_repaired_plan_producer(self):
+        with tempfile.TemporaryDirectory(prefix="orch-reviewed-rebuild-") as ws:
+            path = init_state(ws, make_config())
+            _units(path)
+            subject = drv.Driver(path, runner=runners.MockRunner([]))
+            implementation = _unit(subject, st.UNIT_SLICE_IMPL)
+            subject.reviewed_work.configure(implementation, {})
+
+            state = st.load(path)
+            state["units"][0]["status"] = st.U_SEALED
+            state["units"][1]["status"] = st.U_SEALED
+            implementation = state["units"][2]
+            implementation["status"] = st.U_SEALED
+            st.save(path, state)
+
+            repaired = st.load(path)
+            repaired["milestone"]["slices"][0][
+                "producer_task_executor"
+            ]["implement"] = {"task_executor": "brainstorming"}
+            implementation = repaired["units"][2]
+            st.requeue_implementation_after_reconciliation(
+                repaired, implementation, "accepted-repair"
+            )
+            self.assertNotIn("reviewed_policy", implementation)
+            st.save(path, repaired)
+
+            rebuilt = drv.Driver(path, runner=runners.MockRunner([]))
+            observed = {}
+
+            def dispatch(unit, call_preparation):
+                observed["producer"] = unit["reviewed_policy"]["producer"]
+                return "repaired producer dispatched"
+
+            with mock.patch.object(
+                rebuilt, "_do_draft", side_effect=dispatch
+            ) as production:
+                action, note = rebuilt.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            self.assertEqual(note, "repaired producer dispatched")
+            self.assertEqual(
+                observed["producer"]["task_executor"], "brainstorming"
+            )
+            self.assertEqual(
+                [
+                    event["task_executor"]
+                    for event in st.load(path)["events"]
+                    if event["type"] == "reviewed_policy_frozen"
+                ],
+                ["agent_call", "brainstorming"],
+            )
+            production.assert_called_once()
+
     def test_selected_agent_call_keeps_the_semantic_job_role(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-agent-") as ws:
             path = init_state(ws, make_config())

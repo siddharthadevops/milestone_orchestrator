@@ -1806,6 +1806,10 @@ def requeue_implementation_after_reconciliation(
     # evidence already lives in rounds/seals/events; carrying them into the
     # rebuilt implementation would make the new author resume discarded work.
     for transient in (
+        # Ordinary restart retains the order-local producer.  Accepted-plan
+        # reconciliation is different: it explicitly starts a fresh draft
+        # from the repaired slice plan, which may select another producer.
+        "reviewed_policy",
         "implementation_attempt_snapshot",
         "implementation_stabilization",
         "pending_wip",
