@@ -141,3 +141,36 @@
 - `codex-S02A-201` (raised codex, cleared codex): The pinned producer-policy verification test is missing — Slice 2 explicitly requires one combined named producer regression that is absent, so a builder could overlook the proof gap despite passing component tests, but discovery is straightforward and correction is a small local test addition with no demonstrated runtime defect.
 - `claude-claude-slice_impl-02-a-r3/S02A-301` (raised claude, cleared codex): The slice-02 Verification Contract's focused command omits orchestrator/tests/test_brainstorming_slice_production.py, the only module holding two of the producer row's own named retained checks — exactly the Brainstorming production adapter this part rerouted through the frozen selection. — The pinned command can plausibly give the next builder false green proof while skipping the changed Brainstorming adapter, but correction is a local command amendment and rerun because the omitted 12-test module already passes.
 
+## slice_impl-02-b (Producer, review breadth, debt, and caps)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-b-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-codex-r1.txt` |
+| slice_impl-02-b-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-fix1.txt` |
+| slice_impl-02-b-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-delta1.txt` |
+| slice_impl-02-b-codex-r4 | fix_findings | codex | 1 | 1 rejected | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-fix2.txt` |
+| slice_impl-02-b-codex-r5 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-delta2.txt` |
+| slice_impl-02-b-codex-r6 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-codex-r2.txt` |
+| slice_impl-02-b-codex-r7 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-fix3.txt` |
+| slice_impl-02-b-codex-r8 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-delta3.txt` |
+| slice_impl-02-b-codex-r9 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-codex-r3.txt` |
+| slice_impl-02-b-claude-r1 | review_round | claude | 4 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-b-codex-r9`, `slice_impl-02-b-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-slice_impl-02-b-codex-r1/DRT-S02B-002` (raised codex, cleared codex): New skeleton work never freezes the required default policy — The skeleton path silently bypasses automatic policy freezing and contradicts the pinned exactly-two-family default that downstream lifecycle work will trust, while correction is a local pre-draft freeze and focused regression test rather than propagated rework.
+- `codex-slice_impl-02-b-codex-r1/DRT-S02B-003` (raised codex, cleared codex): Two non-delegated pinned checks are absent — The two strict named checks are absent and nearby coverage does not prove their full lifecycle and isolation claims, so a careful builder can detect the explicit gap while a hasty one may trust a green focused suite, with correction remaining bounded to this unit’s tests and any behavior they expose
+- `codex-codex-slice_impl-02-b-delta-r1/DRT-S02B-005` (raised codex, cleared codex): The retained Brainstorming size-isolation test now errors — The stale request fails deterministically before assertions in the required extended suite, so it cannot silently mislead a capable builder and correction is a small local test update restoring the retained runtime proof.
+- `codex-codex-slice_impl-02-b-review-r1/DRT-S02B-006` (raised codex, cleared codex): Double-family staffing refusal escapes without durable failure — The strict contract promises a durable staffing failure, but exact-breadth selection escapes its persistence handler, plausibly misleading downstream reviewed-task work while correction remains a bounded exception-path and regression-test repair within this unit.
+- `codex-codex-slice_impl-02-b-review-r1/DRT-S02B-007` (raised codex, cleared codex): Plan reconciliation erases unrelated order-local policy — The helper and its test explicitly discard all frozen policy despite the pinned durability contract, making wrong recovery semantics likely to be trusted, while correction remains bounded to preserving compatible order fields and updating reconciliation tests within this unit.
+- `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-008` (raised claude, cleared codex): Every default reviewed order now demands two distinct review families, hard-failing single-family runs before their first review call — The one-family regression is real, but it fails visibly at the first review and is already caught by retained goldens, while correction is bounded to reconciling Slice 2's conflicting default-breadth contract and focused tests.
+- `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-009` (raised claude, cleared codex): A default order re-arms implementation size control on a run whose config deliberately disabled it — The frozen policy silently contradicts the pinned default-parity contract when run-wide size control is disabled and can steer later implementation behavior, while correction remains bounded to preserving the disabled state through policy resolution plus focused regression coverage.
+- `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-010` (raised claude, cleared codex): The delta checkpoint lost its int coercion and zero clamp, so a malformed config value now crashes or inverts it — The behavior is a real but compatibility-edge correctness regression that a careful builder can distinguish from validated order-local values, while correction only restores the former local coercion and clamp.
+- `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-011` (raised claude, cleared codex): The two-seat special case in _staffing_resolution adds a second staffing-document read per review resolution and changes no reachable outcome — The proposed one-read simplification is correct, but the claim that no reachable outcome changes overlooks a live document rewrite between the two reads, so context is needed to recover the concurrency rationale while correction remains a small local change.
+

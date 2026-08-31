@@ -13,3 +13,11 @@ genuinely new evidence (`contests`).
 - rationale: No harm beyond the permitted baseline; the claimed repair episode is unreachable.
 - prevention: orchestrator/driver.py (Clarified that unconditional modern design updates bypass historical skeleton and sibling re-documentation code.)
 
+## [slice_impl-02-b-codex-r3/codex-slice_impl-02-b-r2/DRT-S02B-004]
+
+- unit: slice_impl-02-b
+- severity: P1
+- finding: Brainstorming bypasses the existing live implementation-size controller
+- rationale: None beyond the permitted baseline; no Brainstorming size-controller guarantee exists to lose.
+- prevention: implementation/milestones/deep-reviewed-tasks/skeleton.md (Clarified producer-gated size ownership and prohibited Brainstorming-specific size machinery.)
+

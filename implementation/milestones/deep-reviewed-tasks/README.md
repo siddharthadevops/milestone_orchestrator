@@ -285,4 +285,5 @@ The goal is achieved when:
 | slice_doc-01 (Default reviewed-lifecycle parity) | reviewed | 2 | satisfied | f8f08bb |
 | slice_impl-01 (Default reviewed-lifecycle parity) | reviewed | 14 | satisfied | d0daad8 |
 | slice_doc-02 (Producer, review breadth, debt, and caps) | reviewed | 2 | satisfied | 1305a96 |
-| slice_impl-02-a (Producer, review breadth, debt, and caps) | reviewed | 25 | satisfied | - |
+| slice_impl-02-a (Producer, review breadth, debt, and caps) | reviewed | 25 | satisfied | 8b8fcf2 |
+| slice_impl-02-b (Producer, review breadth, debt, and caps) | reviewed | 10 | satisfied | - |
