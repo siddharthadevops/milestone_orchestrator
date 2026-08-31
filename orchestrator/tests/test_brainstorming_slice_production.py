@@ -232,10 +232,14 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
             self.workspace, "rev-parse", "HEAD"
         )
         st.save(self.path, state)
-        return drv.Driver(
+        subject = drv.Driver(
             self.path,
             runner=runner if runner is not None else runners.MockRunner([]),
         )
+        subject.reviewed_work.configure(
+            st.current_unit(subject.state), {"review_breadth": "single"}
+        )
+        return subject
 
     def complete_brainstorming_implementation(self, subject, result=None):
         result = copy.deepcopy(result or task_success())
@@ -297,8 +301,8 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         impl = st.current_unit(subject.state)
         records = tasks.task_records(subject.state)
         self.assertEqual([row["order"]["task_executor"] for row in records],
-                         ["brainstorming", "agent_call"])
-        self.assertNotEqual(impl["draft"]["task_id"], first_id)
+                         ["brainstorming"])
+        self.assertNotIn("task_id", impl["draft"])
 
     def test_worker_note_then_target_free_brainstorming_implementation(self):
         self.planned("agent_call", "brainstorming")
@@ -328,19 +332,20 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         impl = st.current_unit(subject.state)
         self.assertEqual(impl["status"], st.U_PRE_REVIEW_VERIFY)
         self.assertEqual([row["order"]["task_executor"] for row in tasks.task_records(subject.state)],
-                         ["agent_call", "brainstorming"])
+                         ["brainstorming"])
 
     def test_brainstorming_implementation_never_activates_size_control(self):
         subject = self.ready_brainstorming_implementation()
         implementation = st.current_unit(subject.state)
-        subject.reviewed_work.configure(implementation, {
-            "implementation_size_control": {
-                "soft_lines": 2,
-                "hard_lines": 4,
-                "unconfirmed_grace_s": 3,
-                "confirmed_grace_s": 7,
-            },
-        })
+        with self.assertRaises(tasks.TaskRequestError):
+            subject.reviewed_work.configure(implementation, {
+                "implementation_size_control": {
+                    "soft_lines": 2,
+                    "hard_lines": 4,
+                    "unconfirmed_grace_s": 3,
+                    "confirmed_grace_s": 7,
+                },
+            })
 
         with mock.patch.object(
             adapter, "resolve_staffing", side_effect=self.staffing

@@ -966,6 +966,8 @@ class DurableTaskRecordsTest(unittest.TestCase):
                 driver.state["events"][-1]["task_id"], task["id"]
             )
 
+            implementation = st._new_unit(st.UNIT_SLICE_IMPL, 1)
+
             with mock.patch.object(
                 drv.gitops, "enabled", return_value=True
             ), mock.patch.object(
@@ -974,19 +976,19 @@ class DurableTaskRecordsTest(unittest.TestCase):
                 driver, "_matching_busy_call", return_value={}
             ):
                 control, marker = driver._implementation_size_control(
-                    "base-tree", task_id=task["id"]
+                    "base-tree", task_id=task["id"], unit=implementation
                 )
                 marker["interrupt_lines"] = 1600
                 control._bind(lambda _text: True, lambda _reason: True)
                 self.assertTrue(control.interrupt("hard size limit"))
                 control._close()
-            durable = st.current_unit(driver.state)[
+            durable = implementation[
                 "implementation_stabilization"
             ]["implementation_size"]
             self.assertEqual(durable["task_id"], task["id"])
 
             driver._ensure_implementation_stabilization_events(
-                st.current_unit(driver.state), durable
+                implementation, durable
             )
             interrupted = [
                 event for event in driver.state["events"]

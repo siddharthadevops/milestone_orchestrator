@@ -760,10 +760,7 @@ class DriverAuthorActivationTest(unittest.TestCase):
                 persisted["units"][0]["draft"]["prompt_set_fallback"],
                 fallback,
             )
-            self.assertEqual(
-                persisted["tasks"][0]["result"]["prompt_set_fallback"],
-                fallback,
-            )
+            self.assertEqual(tasks.task_records(persisted), [])
             draft_event = next(
                 event for event in persisted["events"]
                 if event["type"] == "draft_recorded"
@@ -932,7 +929,7 @@ class DriverAuthorActivationTest(unittest.TestCase):
                 )
                 for event in reloaded["events"]
             ))
-            self.assertIsNone(reloaded["tasks"][0]["result"])
+            self.assertEqual(tasks.task_records(reloaded), [])
 
 
 class DriverAuthorFindingRegressionTest(unittest.TestCase):

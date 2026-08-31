@@ -216,3 +216,21 @@
 - `codex-DRT-S03-002` (raised codex, cleared codex): Complete Prompt Router matrix omits failure classification — The artifact wrongly calls its matrix complete while omitting a live model-classification prompt that controls recovery, plausibly preserving wrong routing and tests, but correction remains bounded to this slice before publication.
 - `claude-DRT-S03-R1-001` (raised claude, cleared codex): Slice 3 deletes the internal task record that today anchors mid-attempt recovery, without pinning any replacement contract for resumption framing or frozen validation/result strategy — The slice leaves attempt-resumption framing and frozen validation/result policy unpinned, so a hasty builder could lose them, but the milestone’s preservation rule and included recovery tests should alert a careful builder, while correction is bounded to restoring durable attempt metadata and focuse
 
+## slice_impl-03-a (Routed calls and rethink continuity)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-codex-r1.txt` |
+| slice_impl-03-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-codex-r1`, `slice_impl-03-claude-r1`
+
+**Deferred debt (independently classified):**
+- `claude-DRT-S03A-001` (raised claude, cleared codex): Internal task-admission machinery is now unreachable but retained, and ~35 tests still pin it — The authoritative slice and live dispatch clearly establish direct reviewed calls, so a careful builder will recognize the callerless admission helper, stale comment, and roughly 35 test calls across nine modules as obsolete, while correction requires bounded cleanup and test refactoring within this
+- `claude-DRT-S03A-002` (raised claude, cleared codex): Rethink-continuity is proven for the implement origin only, not every eligible origin — Despite its P3 label, this is a real strict test-coverage gap: the artifact promises continuity for five origins while exercising only implementation, so a builder might trust the green suite, but correction remains bounded to rethink routing and its tests.
+

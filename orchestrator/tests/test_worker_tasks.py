@@ -492,7 +492,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             frozen_prompt,
         )
 
-    def test_default_milestone_worker_cutover_preserves_all_six_kinds(self):
+    def test_reviewed_calls_preserve_all_six_kinds_without_tasks(self):
         fixed = fix_ok([triaged("F1", "fixed", severity="P1")])
         cases = (
             (contracts.KIND_DRAFT_SKELETON, st.UNIT_SKELETON, st.U_PENDING,
@@ -509,17 +509,6 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             (contracts.KIND_DELTA_REVIEW, st.UNIT_SLICE_IMPL, st.U_DELTA_REVIEW,
              report(contracts.KIND_DELTA_REVIEW)),
         )
-        # The process step each milestone order records: its own seat for
-        # the three production kinds, the fixer's for a fix, and `review`
-        # for both report-only kinds.
-        roles = {
-            contracts.KIND_DRAFT_SKELETON: "plan",
-            contracts.KIND_DRAFT_SLICE_NOTE: "draft",
-            contracts.KIND_IMPLEMENT: "implement",
-            contracts.KIND_FIX_FINDINGS: "fix",
-            contracts.KIND_REVIEW_ROUND: "review",
-            contracts.KIND_DELTA_REVIEW: "review",
-        }
         for number, (kind, unit_kind, status, response) in enumerate(cases):
             with self.subTest(kind=kind):
                 path = self._path("kind-%d" % number, unit_kind, status)
@@ -548,20 +537,16 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                         mock.patch.object(drv.gitops, "amend", return_value="abc123"):
                     drv.Driver(path, runner=runner).step()
                 state = st.load(path)
-                task = self._task(state)
-                self.assertEqual(len(tasks.task_records(state)), 1)
-                self.assertEqual(task["order"]["task_executor"], "agent_call")
-                self.assertEqual(
-                    task["order"]["configuration"], {"role": roles[kind]}
+                self.assertEqual(tasks.task_records(state), [])
+                unit = next(
+                    item for item in state["units"]
+                    if item["kind"] == unit_kind
                 )
-                # These runs bind no session; the order records the absence
-                # as the deliberate value it is.
-                self.assertEqual(
-                    tasks.order_staffing_session(task["order"]), (True, None)
+                evidence = (
+                    unit["draft"]
+                    if kind in _AUTHOR_KINDS else unit["rounds"][-1]
                 )
-                self.assertEqual(task["order"]["request"]["context"]["task_kind"], kind)
-                self.assertEqual(task["result"]["status"], "success")
-                native = task["result"]["native_result"]
+                native = evidence["result"]
                 self.assertEqual(
                     {key: native[key] for key in response}, dict(response)
                 )
@@ -578,7 +563,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                     for record in ([unit.get("draft")] + unit.get("rounds", []))
                     if record
                 ]
-                self.assertEqual(links, [task["id"]])
+                self.assertEqual(links, [None])
 
     def test_worker_order_destination_is_admitted_once_and_forwarded_unchanged(self):
         path = self._path("destination", st.UNIT_SKELETON)
@@ -700,11 +685,11 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         drv.Driver(path, runner=runner).step()
         driver = drv.Driver(path, runner=runners.MockRunner([]))
         note = next(u for u in driver.state["units"] if u["kind"] == st.UNIT_SLICE_DOC)
-        task = self._task(driver.state)
+        self.assertEqual(tasks.task_records(driver.state), [])
         self.assertEqual(note["artifact"], declared)
         self.assertEqual(driver._artifact(note), declared)
         self.assertEqual(driver._slice_note_artifact(1), declared)
-        native = task["result"]["native_result"]
+        native = note["draft"]["result"]
         self.assertEqual(
             {key: native[key] for key in response}, dict(response)
         )
@@ -713,7 +698,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             list(runners.prompt_question_ids(runner.calls[0][2])),
         )
 
-    def test_continuable_worker_abandonments_fail_and_reentry_succeeds_new_task(self):
+    def test_continuable_reviewed_origins_fail_and_reenter_without_tasks(self):
         def paused(label):
             path = self._path(label)
             workspace = st.load(path)["workspace"]
@@ -739,18 +724,14 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             with mock.patch.object(adapter, "terminal_handoff", side_effect=effect):
                 drv.Driver(path, runner=runners.MockRunner([])).step()
             failed_state = st.load(path)
-            self.assertEqual(
-                self._task(failed_state)["result"]["status"], "failure"
-            )
+            self.assertEqual(tasks.task_records(failed_state), [])
             self.assertIsNotNone(failed_state["failure"])
 
         waiting = paused("recoverable")
         with mock.patch.object(adapter, "terminal_handoff", return_value=None):
             drv.Driver(waiting, runner=runners.MockRunner([])).step()
         waiting_state = st.load(waiting)
-        self.assertEqual(
-            self._task(waiting_state)["result"]["status"], "failure"
-        )
+        self.assertEqual(tasks.task_records(waiting_state), [])
         self.assertIn("brainstorming_wait", st.current_unit(waiting_state))
 
         retry = self._path("attachment")
@@ -766,13 +747,13 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                                side_effect=adapter.AdapterError("unavailable")):
             drv.Driver(retry, runner=runner).step()
         failed = st.load(retry)
-        predecessor = copy.deepcopy(self._task(failed))
+        self.assertEqual(tasks.task_records(failed), [])
         st.resume_run(failed)
         st.save(retry, failed)
         drv.Driver(retry, runner=runner).step()
-        records = tasks.task_records(st.load(retry))
-        self.assertEqual(records[0], predecessor)
-        self.assertNotEqual(records[0]["id"], records[1]["id"])
+        recovered = st.load(retry)
+        self.assertEqual(tasks.task_records(recovered), [])
+        self.assertIsNotNone(st.current_unit(recovered)["draft"])
 
     def test_fresh_stabilization_refreshes_authority(self):
         path = self._path("cutoff-recovery")
@@ -1188,6 +1169,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 "p3_reclassify_debt": True,
                 "p3_defer_max_risk": "low",
                 "gap_backstop": True,
+                "same_family_second_look": False,
             },
         )
 

@@ -3449,7 +3449,7 @@ class Driver(object):
         calls = deduped
         marker_unit = None
         for call in reversed(calls):
-            marker_unit = self._active_task_unit(call.get("task_id"))
+            marker_unit = self._worker_call_unit(call)
             if marker_unit is not None:
                 break
         marker_state = marker.get("state_digest")
@@ -3474,7 +3474,7 @@ class Driver(object):
             if not call.get("family"):
                 continue
             unit = (
-                self._active_task_unit(call.get("task_id"))
+                self._worker_call_unit(call)
                 or marker_unit
                 or st.current_unit(self.state)
             )
@@ -3526,7 +3526,7 @@ class Driver(object):
             self._clear_busy()
             return
         unit = (
-            self._active_task_unit(root_call.get("task_id"))
+            self._worker_call_unit(root_call)
             or marker_unit
             or st.current_unit(self.state)
         )
@@ -4137,7 +4137,9 @@ class Driver(object):
         }
 
     def _worker_task_result_policy(self, record, unit):
-        """Recover frozen post-result strategy, with pre-field compatibility."""
+        """Recover the reviewed result strategy, with task compatibility."""
+        if record is None:
+            return self._worker_result_policy(unit)
         context = ((record.get("order") or {}).get("request") or {}).get(
             "context"
         ) or {}
@@ -4232,6 +4234,8 @@ class Driver(object):
         retaining their prior fallback behavior; every new task freezes the
         value, including an explicit empty option set.
         """
+        if record is None:
+            return copy.deepcopy(fallback)
         context = ((record.get("order") or {}).get("request") or {}).get(
             "context"
         ) or {}
@@ -4350,6 +4354,17 @@ class Driver(object):
                 return unit
         return None
 
+    def _worker_call_unit(self, call):
+        """Resolve a call marker to its reviewed-work owner."""
+        if isinstance(call, dict):
+            key = call.get("unit")
+            if isinstance(key, str) and key:
+                unit = self._unit_by_key(key)
+                if unit is not None:
+                    return unit
+            return self._active_task_unit(call.get("task_id"))
+        return None
+
     @staticmethod
     def _retain_call_identity(call, model, effort, family=None):
         """Keep generic staffing available after the busy marker is gone."""
@@ -4380,7 +4395,8 @@ class Driver(object):
             return False
 
     def _mark_busy(self, label, kind, family, model=None, effort=None,
-                   nested=False, task_id=None, staffing_fallback=None):
+                   nested=False, task_id=None, staffing_fallback=None,
+                   unit=None):
         """Durable in-flight marker, with any unsaved parent calls.
 
         The top-level fields remain the panel's active-call projection.
@@ -4414,6 +4430,10 @@ class Driver(object):
                 "state_digest": state_digest,
             }
             marker.update(self._task_id_fields(task_id))
+            if unit is not None:
+                marker["unit"] = st.unit_key(unit)
+            elif pending and pending[-1].get("unit"):
+                marker["unit"] = pending[-1]["unit"]
             if staffing_fallback:
                 marker["staffing_fallback"] = staffing_fallback
             if pending:
@@ -4718,6 +4738,7 @@ class Driver(object):
             if not self._mark_busy(
                 raw_name, kind, call_family,
                 model=call_model, effort=call_effort, task_id=task_id,
+                unit=call_unit,
                 nested=nested,
                 staffing_fallback=getattr(
                     dispatch_resolver, "staffing_fallback", None
@@ -5810,12 +5831,14 @@ class Driver(object):
                 raw_name, task_id, unit=unit
             ),
             on_llm_start=self._classify_call_starter(
-                raw_name, task_id, resolver=resolver
+                raw_name, task_id, resolver=resolver, unit=unit
             ),
             resolve_dispatch=resolver,
         )
 
-    def _classify_call_starter(self, raw_name, task_id=None, resolver=None):
+    def _classify_call_starter(
+        self, raw_name, task_id=None, resolver=None, unit=None
+    ):
         """Mark the optional classifier only when its LLM call starts."""
         def _start(call):
             if not self._mark_busy(
@@ -5826,6 +5849,7 @@ class Driver(object):
                 effort=call.get("effort"),
                 nested=True,
                 task_id=task_id,
+                unit=unit,
                 staffing_fallback=getattr(
                     resolver, "staffing_fallback", None
                 ),
@@ -8757,18 +8781,9 @@ class Driver(object):
                 ),
             } or None
             start_session = kind in contracts.RETHINK_CONTINUATION_KINDS
-            task = self._admit_worker_task(
-                unit,
-                kind,
-                prompt,
-                family,
-                model=model,
-                effort=effort,
-                dispatch_resolver=dispatch_resolver,
-                project_context=project_context,
-                validate_opts=validate_opts,
-                author_coordinates=author_coordinates,
-            )
+            # New reviewed calls run directly.  ``active_task`` is retained
+            # only to drain a task admitted by an older driver.
+            task = active_task
             self._activate_worker_episode_authority(authority)
             validate_opts = self._worker_task_validate_opts(
                 task, validate_opts
@@ -8792,7 +8807,7 @@ class Driver(object):
                         (implementation_attempt or {}).get("tree") or pre_tree,
                         stabilizing=stabilization_size is not None,
                         dispatch_resolver=dispatch_resolver,
-                        task_id=task["id"],
+                        task_id=(task or {}).get("id"),
                         episode_refresher=lambda next_prompt: (
                             self._refresh_worker_episode(
                                 unit, kind, next_prompt
@@ -8818,16 +8833,15 @@ class Driver(object):
                     raw_path,
                     implementation_size,
                     implementation_stabilized,
-                ) = tasks.execute_worker(
-                    task,
-                    dispatch,
+                ) = (
+                    tasks.execute_worker(task, dispatch)
+                    if task is not None else dispatch(None)
                 )
                 if stabilization_size is not None:
                     implementation_size = stabilization_size
             else:
-                output, result, raw_path = tasks.execute_worker(
-                    task,
-                    lambda _request: self._call(
+                def dispatch(_request):
+                    return self._call(
                         family,
                         prompt,
                         kind,
@@ -8839,7 +8853,7 @@ class Driver(object):
                         validate_opts=validate_opts,
                         start_session=start_session,
                         dispatch_resolver=dispatch_resolver,
-                        task_id=task["id"],
+                        task_id=(task or {}).get("id"),
                         prepare_call=call_preparation.author(
                             unit,
                             kind,
@@ -8848,7 +8862,11 @@ class Driver(object):
                             author_coordinates=author_coordinates,
                         ),
                         episode_unit=unit,
-                    ),
+                    )
+
+                output, result, raw_path = (
+                    tasks.execute_worker(task, dispatch)
+                    if task is not None else dispatch(None)
                 )
             family, model, effort = self._result_identity(
                 result, family, model, effort
@@ -10700,24 +10718,13 @@ class Driver(object):
         report-only rounds the check never once caught a reviewer editing
         code, while its false positives (artifact churn a reviewer's own
         build or test run wrote) repeatedly discarded good reviews."""
-        task = None
-        if task_id is None:
-            task = self._admit_worker_task(
-                unit,
-                kind,
-                prompt,
-                family,
-                model=model,
-                effort=effort,
-                dispatch_resolver=dispatch_resolver,
-                output_directory=output_directory,
-                project_context=project_context,
-                project_safeguards=project_safeguards,
-                validate_opts=validate_opts,
-            )
-            task_id = task["id"]
-        else:
-            task = tasks.task_record(self.state, task_id)
+        # Reviewed calls are evidence of their owning reviewed work, not
+        # public agent-call tasks.  A task id can still arrive from an older
+        # in-flight run; drain that immutable record under its original law.
+        task = (
+            tasks.task_record(self.state, task_id)
+            if task_id is not None else None
+        )
         validate_opts = self._worker_task_validate_opts(task, validate_opts)
 
         def dispatch(_request):
@@ -10737,8 +10744,10 @@ class Driver(object):
                 episode_unit=unit,
             )
 
-        output, result, raw_path = tasks.execute_worker(task, dispatch)
-        return output, result, raw_path
+        return (
+            tasks.execute_worker(task, dispatch)
+            if task is not None else dispatch(None)
+        )
 
     def _do_fix(self, unit=None, call_preparation=None):
         unit = unit if unit is not None else st.current_unit(self.state)
@@ -10986,17 +10995,7 @@ class Driver(object):
                     ),
                 } or None
             )
-            task = self._admit_worker_task(
-                unit,
-                contracts.KIND_FIX_FINDINGS,
-                prompt,
-                family,
-                model=fix_model,
-                effort=fix_effort,
-                dispatch_resolver=dispatch_resolver,
-                project_context=project_context,
-                validate_opts=validate_opts,
-            )
+            task = active_task
             self._activate_worker_episode_authority(authority)
             validate_opts = self._worker_task_validate_opts(
                 task, validate_opts
@@ -11019,7 +11018,7 @@ class Driver(object):
                     validate_opts=validate_opts,
                     start_session=True,
                     dispatch_resolver=dispatch_resolver,
-                    task_id=task["id"],
+                    task_id=(task or {}).get("id"),
                     prepare_call=call_preparation.judgment(
                         unit,
                         contracts.KIND_FIX_FINDINGS,
@@ -11045,9 +11044,9 @@ class Driver(object):
                     episode_unit=unit,
                 )
 
-            output, result, raw_path = tasks.execute_worker(
-                task,
-                dispatch,
+            output, result, raw_path = (
+                tasks.execute_worker(task, dispatch)
+                if task is not None else dispatch(None)
             )
             if killed_notice:
                 unit.pop("killed_fix_notice", None)
@@ -11913,8 +11912,10 @@ class Driver(object):
             self._save()
             raise
         findings = list(output.get("findings") or [])
-        delta_task = tasks.task_record(
-            self.state, getattr(result, "task_id", None)
+        delta_task_id = getattr(result, "task_id", None)
+        delta_task = (
+            tasks.task_record(self.state, delta_task_id)
+            if delta_task_id is not None else None
         )
         result_policy = self._worker_task_result_policy(delta_task, unit)
         defer_scope = tuple(result_policy["defer_scope"])
@@ -12999,8 +13000,10 @@ class Driver(object):
             self._save()
             raise
         findings = output.get("findings", [])
-        review_task = tasks.task_record(
-            self.state, getattr(result, "task_id", None)
+        review_task_id = getattr(result, "task_id", None)
+        review_task = (
+            tasks.task_record(self.state, review_task_id)
+            if review_task_id is not None else None
         )
         result_policy = self._worker_task_result_policy(review_task, unit)
         # The admitted task freezes the per-phase classification floor.
