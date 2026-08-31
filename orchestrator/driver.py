@@ -520,13 +520,6 @@ class ReviewedWorkLifecycle(object):
                 policy,
                 default_producer=existing["producer"],
             )
-        elif task_kind in tasks.PRODUCER_TASK_KINDS:
-            default_producer = tasks.effective_slice_producers(
-                self.host._slice_info(selected["slice_id"])
-            )[task_kind]
-            checked = tasks.resolve_reviewed_policy(
-                task_kind, policy, default_producer=default_producer
-            )
         else:
             checked = tasks.resolve_reviewed_policy(task_kind, policy)
         if existing is not None:
