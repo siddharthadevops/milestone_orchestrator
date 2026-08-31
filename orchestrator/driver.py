@@ -2587,7 +2587,7 @@ class Driver(object):
         return copy.deepcopy(frozen)
 
     def _complete_brainstorming_implementation_size(self, unit, task_id):
-        """Apply the existing completion-between-polls outcome to Brainstorming."""
+        """Close the live Brainstorming meter at its terminal repository state."""
         if (
             unit.get("kind") != st.UNIT_SLICE_IMPL
             or not gitops.enabled(self.config)
@@ -2607,6 +2607,17 @@ class Driver(object):
             )
             self._save()
             raise StopStep("implementation size control unavailable")
+        wait = unit.get("brainstorming_wait") or {}
+        marker = copy.deepcopy(wait.get("implementation_size") or {})
+        if marker:
+            marker.setdefault("task_id", task_id)
+            self._ensure_implementation_size_events(unit, marker)
+        if unit.get("implementation_stabilization") is not None:
+            # A hard-stop successor is deliberately unmetered, exactly like the
+            # existing Worker stabilizer. The accepted Brainstorming revision is
+            # the coherent terminal boundary; review cannot open before it.
+            unit.pop("implementation_stabilization", None)
+            return
         final_lines = self._implementation_line_count(base_tree)
         if final_lines is None:
             self._fail_implementation_size(
@@ -2615,10 +2626,13 @@ class Driver(object):
                 "the final implementation size could not be measured",
                 unit=unit,
             )
-        if final_lines > settings["hard_lines"]:
-            # The repository-backed producer publishes only after its accepted
-            # session is terminal. As with a Worker that jumps the threshold
-            # between polls, there is no live call left to interrupt or rerun.
+        if (
+            final_lines > settings["hard_lines"]
+            and marker.get("hard_crossed_lines") is None
+        ):
+            # A completion may still jump over the threshold between the last
+            # live poll and terminal publication. Preserve the existing Worker
+            # completion-between-polls posture for only that observation gap.
             st.append_event(
                 self.state,
                 "implementation_size_overflow",
@@ -2827,8 +2841,8 @@ class Driver(object):
             unit["implementation_stabilization"] = removed
             raise
 
-    def _ensure_implementation_stabilization_events(self, unit, marker):
-        """Repair a crash gap between an accepted stop and runner return."""
+    def _ensure_implementation_size_events(self, unit, marker):
+        """Record live meter evidence once, including after restart gaps."""
         unit_key = st.unit_key(unit)
         episode_id = marker.get("episode_id")
 
@@ -2901,12 +2915,13 @@ class Driver(object):
                 "implementation_size_interrupted",
                 unit=unit_key,
                 episode_id=episode_id,
-                duration_s=None,
-                token_usage_partial=True,
-                # Without this the mere existence of this synthesized event
-                # stops state.py force-marking the unit, and the killed
-                # implementer's spend disappears with no floor marker.
-                cost_partial=True,
+                duration_s=marker.get("duration_s"),
+                token_usage=copy.deepcopy(marker.get("token_usage")),
+                token_usage_partial=bool(
+                    marker.get("token_usage_partial", True)
+                ),
+                cost=copy.deepcopy(marker.get("cost")),
+                cost_partial=bool(marker.get("cost_partial", True)),
                 raw_path=None,
                 **call_fields,
                 **interrupt_fields,
@@ -4057,6 +4072,7 @@ class Driver(object):
         project_safeguards=None,
         validate_opts=None,
         author_coordinates=None,
+        force_agent_call=False,
     ):
         """Durably freeze one Worker scheduling decision before dispatch."""
         active = self._active_worker_task(unit, kind)
@@ -4117,7 +4133,9 @@ class Driver(object):
             "configuration": {},
             "request": request,
         }
-        reviewed_producer = self.reviewed_work.producer(unit, kind)
+        reviewed_producer = (
+            None if force_agent_call else self.reviewed_work.producer(unit, kind)
+        )
         if reviewed_producer is not None:
             order = tasks.producer_order_from_selection(
                 reviewed_producer, request
@@ -4126,7 +4144,7 @@ class Driver(object):
                 raise st.IllegalTransition(
                     "selected production task is not an agent-call task"
                 )
-        elif kind in tasks.PRODUCER_TASK_KINDS:
+        elif kind in tasks.PRODUCER_TASK_KINDS and not force_agent_call:
             order = tasks.producer_order(
                 self._slice_info(unit["slice_id"]), kind, request
             )
@@ -7716,6 +7734,29 @@ class Driver(object):
                 ),
             },
         }
+        if (
+            kind == contracts.KIND_IMPLEMENT
+            and gitops.enabled(self.config)
+            and unit.get("reviewed_policy") is not None
+        ):
+            settings = self._implementation_size_settings(unit)
+            baseline = unit.get("implementation_attempt_snapshot") or {}
+            if settings is None or not baseline.get("tree"):
+                st.fail_run(
+                    self.state,
+                    "implementation size control is unavailable: the fixed Git "
+                    "baseline is missing or implementation_size_control is invalid",
+                    unit=unit,
+                    type_="orchestrator",
+                )
+                self._save()
+                raise StopStep("implementation size control unavailable")
+            _control, marker = self._implementation_size_control(
+                baseline["tree"], task_id=record["id"], unit=unit
+            )
+            marker["task_id"] = record["id"]
+            marker["base_tree"] = baseline["tree"]
+            unit["brainstorming_wait"]["implementation_size"] = marker
         st.append_event(
             self.state,
             "brainstorming_wait_started",
@@ -7725,6 +7766,193 @@ class Driver(object):
             task_id=record["id"],
         )
         return "waiting for Brainstorming producer %s" % session_id
+
+    @staticmethod
+    def _brainstorming_size_confirmed(marker, projection):
+        boundary = marker.get("steer_after_completed_turns")
+        if type(boundary) is not int or boundary < 0:
+            return False
+        turns = (projection.get("state") or {}).get("completed_turns") or []
+        return any(
+            isinstance(turn, dict)
+            and str(turn.get("markdown") or "").strip()
+            == IMPLEMENTATION_SIZE_ACK
+            for turn in turns[boundary:]
+        )
+
+    @staticmethod
+    def _brainstorming_size_intervention(home, session_id, text):
+        return brainstorming_lifecycle.submit_floor_intervention(
+            home,
+            session_id,
+            {"text": text, "author_name": "Implementation size controller"},
+            lambda _record: None,
+            "implementation-size-controller@orchestrator.invalid",
+        )
+
+    @staticmethod
+    def _brainstorming_size_steer_text():
+        return (
+            "CONTROLLED SIZE CUTOFF: the next participant turn must use "
+            "Markdown exactly %s. Then stop expanding the slice and bring the "
+            "current repository changes to one coherent, functional cut. If "
+            "the hard grace expires, the standard cutoff stabilizer will take "
+            "over those repository bytes."
+            % IMPLEMENTATION_SIZE_ACK
+        )
+
+    def _handoff_brainstorming_size_interruption(
+        self, unit, wait, marker, projection
+    ):
+        """Terminalize the stopped producer and queue the existing stabilizer."""
+        task_id = (wait.get("origin") or {}).get("task_id")
+        accounting = {
+            "duration_s": projection.get("work_duration_s") or 0.0,
+            "token_usage": copy.deepcopy(projection.get("work_token_usage")),
+            "token_usage_partial": bool(
+                projection.get("work_token_usage_partial", True)
+            ),
+            "cost": copy.deepcopy(projection.get("work_cost")),
+            "cost_partial": bool(projection.get("work_cost_partial", True)),
+        }
+        marker.update(accounting)
+        tasks.record_task_result(self.state, task_id, {
+            "status": "failure",
+            "reason": marker["interrupt_reason"],
+            **accounting,
+            "native_result": copy.deepcopy(
+                (projection.get("state") or {}).get("result")
+            ),
+        })
+        unit.pop("brainstorming_wait", None)
+        unit.pop("active_task", None)
+        self._ensure_implementation_size_events(unit, marker)
+        return "Brainstorming size cutoff accepted; stabilization queued"
+
+    def _monitor_brainstorming_implementation_size(
+        self, unit, wait, home, projection
+    ):
+        """Apply the existing live cutoff outcomes to one async producer."""
+        marker = copy.deepcopy(wait.get("implementation_size") or {})
+        if not marker:
+            return None
+        task_id = (wait.get("origin") or {}).get("task_id")
+        session_id = wait["session_id"]
+        if unit.get("implementation_stabilization") is not None:
+            stopped = projection
+            if projection.get("process") == "running":
+                stopped = brainstorming_lifecycle.stop_session(
+                    home, session_id, lambda _record: None
+                )
+            if (
+                (stopped.get("state") or {}).get("status")
+                in brainstorming.TERMINAL_STATUSES
+            ):
+                self._clear_rejected_implementation_stabilization(
+                    marker, unit=unit
+                )
+                return "Brainstorming producer completed during cutoff stop"
+            return self._handoff_brainstorming_size_interruption(
+                unit, wait, marker, stopped
+            )
+
+        lines = self._implementation_line_count(marker.get("base_tree"))
+        if lines is None:
+            self._fail_implementation_size(
+                None,
+                marker["hard_lines"],
+                "the live Brainstorming implementation size could not be measured",
+                unit=unit,
+            )
+        marker["last_lines"] = lines
+        now = time.time()
+        if not marker.get("steer_attempted") and lines >= marker["soft_lines"]:
+            marker["steer_attempted"] = True
+            marker["steer_lines"] = lines
+            try:
+                delivered = self._brainstorming_size_intervention(
+                    home, session_id, self._brainstorming_size_steer_text()
+                )
+            except brainstorming_lifecycle.PublicLifecycleError:
+                delivered = None
+            if delivered is not None:
+                marker["steer_delivered"] = True
+                marker["steer_after_completed_turns"] = delivered[
+                    "intervention"
+                ]["after_completed_turns"]
+
+        if (
+            marker.get("steer_attempted")
+            and not marker.get("steer_confirmed")
+            and self._brainstorming_size_confirmed(marker, projection)
+        ):
+            marker["steer_delivered"] = True
+            marker["steer_confirmed"] = True
+            marker["confirmed_at"] = now
+
+        hard_crossed_at = marker.get("hard_crossed_at")
+        if (
+            marker.get("steer_attempted")
+            and hard_crossed_at is None
+            and lines > marker["hard_lines"]
+        ):
+            hard_crossed_at = now
+            marker["hard_crossed_at"] = now
+            marker["hard_crossed_lines"] = lines
+
+        if hard_crossed_at is not None:
+            if marker.get("steer_confirmed"):
+                marker["grace_kind"] = "confirmed"
+                confirmed_at = marker.get("confirmed_at") or now
+                marker["grace_deadline_at"] = (
+                    hard_crossed_at + marker["confirmed_grace_s"]
+                    if confirmed_at <= hard_crossed_at
+                    else confirmed_at + marker["confirmed_grace_s"]
+                )
+            elif marker.get("grace_kind") is None:
+                marker["grace_kind"] = "unconfirmed"
+                marker["grace_deadline_at"] = (
+                    hard_crossed_at + marker["unconfirmed_grace_s"]
+                )
+
+        unit["brainstorming_wait"]["implementation_size"] = marker
+        deadline = marker.get("grace_deadline_at")
+        if not isinstance(deadline, (int, float)) or now < deadline:
+            self._save()
+            return "waiting for Brainstorming producer %s" % session_id
+
+        marker["interrupt_lines"] = lines
+        marker["interrupt_reason"] = (
+            "implementation exceeded the controlled size cutoff and did not "
+            "close within %g seconds (%s model confirmation)"
+            % (
+                marker[
+                    "confirmed_grace_s"
+                    if marker["grace_kind"] == "confirmed"
+                    else "unconfirmed_grace_s"
+                ],
+                "with" if marker["grace_kind"] == "confirmed" else "without",
+            )
+        )
+        unit["brainstorming_wait"]["implementation_size"] = marker
+        self._persist_implementation_stabilization(
+            marker,
+            interrupt_reason=marker["interrupt_reason"],
+            task_id=task_id,
+            unit=unit,
+        )
+        stopped = brainstorming_lifecycle.stop_session(
+            home, session_id, lambda _record: None
+        )
+        if (
+            (stopped.get("state") or {}).get("status")
+            in brainstorming.TERMINAL_STATUSES
+        ):
+            self._clear_rejected_implementation_stabilization(marker, unit=unit)
+            return "Brainstorming producer completed during cutoff stop"
+        return self._handoff_brainstorming_size_interruption(
+            unit, wait, marker, stopped
+        )
 
     def _do_brainstorming_production_wait(self, unit, wait):
         from orchestrator import brainstorming_tasks
@@ -7761,6 +7989,32 @@ class Driver(object):
             self._save()
             raise StopStep("Brainstorming producer inspection failed")
         if terminal is None:
+            if isinstance(wait.get("implementation_size"), dict):
+                try:
+                    projection = self._with_inspection_retry(
+                        lambda: brainstorming_milestone.inspect_session(
+                            self.state,
+                            wait["session_id"],
+                            active_home=self.model_profiles_home,
+                        )
+                    )
+                    return self._monitor_brainstorming_implementation_size(
+                        unit, wait, home, projection
+                    )
+                except StopStep:
+                    raise
+                except Exception as exc:
+                    st.fail_run(
+                        self.state,
+                        "Brainstorming implementation size control failed: %s"
+                        % exc,
+                        unit=unit,
+                        type_="orchestrator",
+                    )
+                    self._save()
+                    raise StopStep(
+                        "Brainstorming implementation size control failed"
+                    )
             return "waiting for Brainstorming producer %s" % wait["session_id"]
         if terminal["result"]["status"] != "success":
             return self._fail_brainstorming_production(unit, terminal)
@@ -8253,12 +8507,12 @@ class Driver(object):
         """Classify one wait poll before taking the state lock.
 
         A repository-backed Brainstorming seat publishes its canonical-plan
-        result under the same ``<state>.lock`` used by driver steps.  While
-        the child is non-terminal there is no milestone mutation for this
-        driver to make, so contending for that lock can only turn a harmless
-        poll into a false concurrent-run refusal.  The child cannot become
-        terminal until its repository completion callback has returned (and
-        therefore released the state lock).
+        result under the same ``<state>.lock`` used by driver steps. Ordinary
+        non-terminal polls have no milestone mutation to make. A live
+        implementation-size monitor does, so it takes the locked path but
+        keeps this poll as its safe contention fallback. The child cannot
+        become terminal until its repository completion callback has returned
+        (and therefore released the state lock).
 
         Bypass the locked step only while fresh disk state still has the same
         event history and attached wait, and the public child state is still
@@ -8315,7 +8569,12 @@ class Driver(object):
             action,
             "waiting for Brainstorming %s %s" % (noun, session_id),
         )
-        return (None, poll) if inspection_failed else (poll, None)
+        size_monitoring = isinstance(wait.get("implementation_size"), dict)
+        return (
+            (None, poll)
+            if inspection_failed or size_monitoring
+            else (poll, None)
+        )
 
     def step(self):
         """Execute exactly one action. Returns (action, note).
@@ -8665,6 +8924,7 @@ class Driver(object):
             return "canonical plan established; work order refreshed"
         if (
             kind in tasks.PRODUCER_TASK_KINDS
+            and unit.get("implementation_stabilization") is None
             and self._brainstorming_producer_selected(unit, kind)
         ):
             return self._start_brainstorming_production(unit, kind)
@@ -8798,7 +9058,7 @@ class Driver(object):
             self._save()
             raise StopStep("implementation stabilization metadata incomplete")
         if stabilization_size is not None:
-            self._ensure_implementation_stabilization_events(
+            self._ensure_implementation_size_events(
                 unit, stabilization_size
             )
             raw_name += "-stabilize"
@@ -8849,6 +9109,7 @@ class Driver(object):
                 project_context=project_context,
                 validate_opts=validate_opts,
                 author_coordinates=author_coordinates,
+                force_agent_call=stabilization_size is not None,
             )
             self._activate_worker_episode_authority(authority)
             validate_opts = self._worker_task_validate_opts(
