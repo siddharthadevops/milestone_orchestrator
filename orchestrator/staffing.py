@@ -1987,6 +1987,31 @@ def _unsatisfiable(effective, role):
            ", ".join(effective.selection.families) or "none"))
 
 
+def _review_cycle_for_breadth(effective, breadth):
+    """Select the first one or two distinct assigned review families."""
+    if breadth not in (1, 2):
+        raise StaffingError("%s: review breadth must be 1 or 2" % _REQUEST_CTX)
+    if not effective.available:
+        raise _unavailable(effective)
+    assigned = _assigned_seats(effective.layers, "review")
+    families = _seat_families(effective, "review", assigned)
+    seats, selected, seen = [], [], set()
+    for seat, family in zip(assigned, families):
+        if family in seen:
+            continue
+        seats.append(seat)
+        selected.append(family)
+        seen.add(family)
+        if len(seats) == breadth:
+            return seats, selected
+    raise StaffingConditionError(
+        DISTINCT_FAMILIES_UNSATISFIABLE,
+        "staffing document %r supplies %d distinct assigned review family "
+        "or families, but this order requires exactly %d"
+        % (effective.document["name"], len(selected), breadth),
+    )
+
+
 # ---------------------------------------------------------------------------
 # One read of a session, shared by the resolver and the three readers
 
@@ -2018,7 +2043,7 @@ def _effective(home, session, material, families):
 
 
 def resolve(home, session, role, index=1, round=1, material=None, brief=None,
-            families=()):
+            families=(), review_breadth=None):
     """Staff one call: who runs it, on which model, at which effort.
 
     *session* is a stored session id, *role* one of :data:`ROLES`, *index*
@@ -2048,7 +2073,22 @@ def resolve(home, session, role, index=1, round=1, material=None, brief=None,
     effective = _effective(home, session, material, families)
     if not effective.available:
         raise _unavailable(effective)
-    if not _honours_distinct_families(effective, role):
+    if review_breadth is not None:
+        if role != "review":
+            raise StaffingError(
+                "%s: review breadth applies only to the review role"
+                % _REQUEST_CTX
+            )
+        selected_seats, _selected_families = _review_cycle_for_breadth(
+            effective, review_breadth
+        )
+        if index not in selected_seats:
+            raise StaffingConditionError(
+                DISTINCT_FAMILIES_UNSATISFIABLE,
+                "the selected review cycle changed before seat %d dispatched"
+                % index,
+            )
+    elif not _honours_distinct_families(effective, role):
         raise _unsatisfiable(effective, role)
     slot = _running_slot(
         _slot_for(effective.layers, role, index), effective.available)
@@ -2123,6 +2163,15 @@ def session_seat_families(home, session, role, material=None, families=()):
         raise _unavailable(effective)
     return _seat_families(
         effective, role, _assigned_seats(effective.layers, role))
+
+
+def review_cycle(home, session, breadth, material=None, families=()):
+    """Return the exact order-selected review seats and families."""
+    effective = _effective(
+        home, session, _request_material(material), families
+    )
+    seats, selected = _review_cycle_for_breadth(effective, breadth)
+    return list(seats), list(selected)
 
 
 def distinct_families_projection(home, session, material=None, families=()):

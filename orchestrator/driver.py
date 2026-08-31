@@ -514,21 +514,30 @@ class ReviewedWorkLifecycle(object):
             )
         task_kind = self._production_kind(selected)
         existing = selected.get("reviewed_policy")
+        defaults = self.host._reviewed_policy_defaults(selected)
         if existing is not None:
+            if not policy:
+                return copy.deepcopy(existing)
             checked = tasks.resolve_reviewed_policy(
                 task_kind,
                 policy,
                 default_producer=existing["producer"],
+                defaults=dict(defaults, **existing),
             )
         elif task_kind in tasks.PRODUCER_TASK_KINDS:
             default_producer = tasks.effective_slice_producers(
                 self.host._slice_info(selected["slice_id"])
             )[task_kind]
             checked = tasks.resolve_reviewed_policy(
-                task_kind, policy, default_producer=default_producer
+                task_kind,
+                policy,
+                default_producer=default_producer,
+                defaults=defaults,
             )
         else:
-            checked = tasks.resolve_reviewed_policy(task_kind, policy)
+            checked = tasks.resolve_reviewed_policy(
+                task_kind, policy, defaults=defaults
+            )
         if existing is not None:
             if existing != checked:
                 raise tasks.TaskRequestError(
@@ -2445,18 +2454,76 @@ class Driver(object):
             raise StopStep(str(exc))
         return st.current_unit(self.state) is not unit
 
-    def _implementation_size_settings(self):
-        configured = self.config.get("implementation_size_control")
+    @staticmethod
+    def _reviewed_setting(unit, name, default=None):
+        return (unit.get("reviewed_policy") or {}).get(name, default)
+
+    def _reviewed_limit(self, unit, name):
+        return self._reviewed_setting(
+            unit, name, self.config.get(name, DEFAULT_CONFIG[name])
+        )
+
+    def _reviewed_policy_defaults(self, unit):
+        floor = (
+            "impl_reclassify_from"
+            if unit["kind"] == st.UNIT_SLICE_IMPL
+            else "doc_reclassify_from"
+        )
+        defaults = {
+            "review_breadth": "double",
+            "same_family_second_look": False,
+            floor: self.config.get(floor, DEFAULT_CONFIG[floor]),
+            "p3_reclassify_debt": bool(
+                self.config.get("p3_reclassify_debt")
+            ),
+            "p3_defer_max_risk": self.config.get(
+                "p3_defer_max_risk",
+                DEFAULT_CONFIG["p3_defer_max_risk"],
+            ),
+        }
+        for name in (
+            "max_rounds_per_family", "max_fix_loops",
+            "delta_full_review_after_fixes",
+        ):
+            defaults[name] = self.config.get(name, DEFAULT_CONFIG[name])
+        if unit["kind"] == st.UNIT_SLICE_IMPL:
+            settings = self._implementation_size_settings()
+            defaults["implementation_size_control"] = (
+                None if settings is None else {
+                    name: settings[name]
+                    for name in (
+                        "soft_lines", "hard_lines", "unconfirmed_grace_s",
+                        "confirmed_grace_s",
+                    )
+                }
+            )
+        return defaults
+
+    def _implementation_size_settings(self, unit=None):
+        if unit is not None and unit.get("kind") != st.UNIT_SLICE_IMPL:
+            return None
+        policy_control = (
+            (unit.get("reviewed_policy") or {}).get(
+                "implementation_size_control"
+            )
+            if unit is not None else None
+        )
+        configured = policy_control or self.config.get(
+            "implementation_size_control"
+        )
         if configured is None:
             configured = DEFAULT_CONFIG["implementation_size_control"]
         if not isinstance(configured, dict):
             return None
+        poll_source = self.config.get("implementation_size_control")
+        if not isinstance(poll_source, dict):
+            poll_source = DEFAULT_CONFIG["implementation_size_control"]
         try:
             settings = {
                 "soft_lines": int(configured.get("soft_lines", 500)),
                 "hard_lines": int(configured.get("hard_lines", 750)),
                 "poll_interval_s": float(
-                    configured.get("poll_interval_s", 2)
+                    poll_source.get("poll_interval_s", 2)
                 ),
                 "unconfirmed_grace_s": float(
                     configured.get("unconfirmed_grace_s", 180)
@@ -2494,7 +2561,7 @@ class Driver(object):
         if not base_tree or not gitops.enabled(self.config):
             return None, None
         unit = unit if unit is not None else st.current_unit(self.state)
-        settings = self._implementation_size_settings()
+        settings = self._implementation_size_settings(unit)
         if settings is None:
             return None, None
         soft = settings["soft_lines"]
@@ -4016,18 +4083,50 @@ class Driver(object):
 
     def _worker_result_policy(self, unit):
         """Project the current strategy decisions owned by one Worker task."""
-        threshold = str(self.config.get("p3_defer_max_risk") or "low")
+        reviewed = unit.get("reviewed_policy") or {}
+        threshold = str(
+            reviewed.get(
+                "p3_defer_max_risk",
+                self.config.get("p3_defer_max_risk") or "low",
+            )
+        )
         if threshold not in contracts.DRIFT_RISK_LEVELS:
             threshold = "low"
-        return {
-            "defer_scope": list(
+        floor_name = (
+            "impl_reclassify_from"
+            if unit["kind"] == st.UNIT_SLICE_IMPL
+            else "doc_reclassify_from"
+        )
+        floor = reviewed.get(floor_name)
+        if floor is None:
+            defer_scope = list(
                 interpreter.defer_scope_for(self.state, unit["kind"])
-            ),
-            "p3_reclassify_debt": bool(
-                self.config.get("p3_reclassify_debt")
-            ),
+            )
+        elif floor == "disabled":
+            defer_scope = []
+        else:
+            defer_scope = list(
+                contracts.SEVERITIES[contracts.SEVERITIES.index(floor):]
+            )
+        same_family_second_look = bool(
+            reviewed.get("review_breadth") == "single"
+            and reviewed.get("same_family_second_look")
+        )
+        reclassify = bool(
+            reviewed.get(
+                "p3_reclassify_debt",
+                self.config.get("p3_reclassify_debt"),
+            )
+        )
+        if reviewed.get("review_breadth") == "single" \
+                and not same_family_second_look:
+            reclassify = False
+        return {
+            "defer_scope": defer_scope,
+            "p3_reclassify_debt": reclassify,
             "p3_defer_max_risk": threshold,
             "gap_backstop": bool(interpreter.gap_semantics(self.state)),
+            "same_family_second_look": same_family_second_look,
         }
 
     def _worker_task_result_policy(self, record, unit):
@@ -4050,11 +4149,16 @@ class Driver(object):
             or threshold not in contracts.DRIFT_RISK_LEVELS
             or not isinstance(frozen.get("p3_reclassify_debt"), bool)
             or not isinstance(frozen.get("gap_backstop"), bool)
+            or not isinstance(
+                frozen.get("same_family_second_look", False), bool
+            )
         ):
             raise st.IllegalTransition(
                 "Worker task has malformed frozen result policy"
             )
-        return copy.deepcopy(frozen)
+        checked = copy.deepcopy(frozen)
+        checked.setdefault("same_family_second_look", False)
+        return checked
 
     def _worker_task_project_inputs(
         self, record, project_context=None, extensions=None, roots=None
@@ -6932,7 +7036,9 @@ class Driver(object):
                 "origin_type", old_source.get("type", "delta")
             )
             try:
-                max_fix_loops = int(self.config.get("max_fix_loops", 6))
+                max_fix_loops = int(
+                    self._reviewed_limit(unit, "max_fix_loops")
+                )
             except (TypeError, ValueError):
                 max_fix_loops = 6
             preserved_rounds = max(old_fix_loop_rounds, 1)
@@ -8515,7 +8621,7 @@ class Driver(object):
                 and gitops.enabled(self.config)
                 and unit.get("implementation_stabilization") is None
             ):
-                preview_meter = self._implementation_size_settings()
+                preview_meter = self._implementation_size_settings(unit)
             prompt = self._prepare_author_package(
                 unit,
                 kind,
@@ -9856,6 +9962,20 @@ class Driver(object):
     ):
         """One router answer, read live from the run's session."""
         try:
+            breadth = (
+                self._review_breadth(episode_unit)
+                if role == "review" and episode_unit is not None
+                else None
+            )
+            selected_breadth = breadth == 1
+            if breadth == 2:
+                selected_breadth = len(staffing.session_seats(
+                    self.model_profiles_home,
+                    st.staffing_session(self.state),
+                    "review",
+                    material=self._milestone_material(),
+                    families=list(self.config["families_order"]),
+                )) != 2
             return staffing.resolve(
                 self.model_profiles_home,
                 st.staffing_session(self.state),
@@ -9864,6 +9984,10 @@ class Driver(object):
                 round=round,
                 material=self._milestone_material(),
                 families=list(self.config["families_order"]),
+                **(
+                    {"review_breadth": breadth}
+                    if selected_breadth else {}
+                ),
             )
         except staffing.StaffingConditionError as exc:
             self._fail_staffing(exc, episode_unit=episode_unit)
@@ -9894,7 +10018,30 @@ class Driver(object):
     # A `Driver` with no catalogue home has no document to read and keeps
     # reviewing in the configured order.
 
-    def _review_seats(self):
+    def _review_breadth(self, unit):
+        if unit is None:
+            return None
+        breadth = self._reviewed_setting(unit, "review_breadth")
+        return {"single": 1, "double": 2}.get(breadth)
+
+    def _profileless_review_cycle(self, unit):
+        breadth = self._review_breadth(unit)
+        families = list(self.config["families_order"])
+        if breadth is None:
+            return families
+        selected = []
+        for family in families:
+            if family not in selected:
+                selected.append(family)
+            if len(selected) == breadth:
+                return selected
+        raise staffing.StaffingConditionError(
+            staffing.DISTINCT_FAMILIES_UNSATISFIABLE,
+            "this order requires exactly %d distinct review families, but "
+            "the run supplies %d" % (breadth, len(selected)),
+        )
+
+    def _review_seats(self, unit=None):
         """The `review` seat indices this run's document assigns, live.
 
         Never empty: every stored document assigns index 1 to every role
@@ -9904,6 +10051,16 @@ class Driver(object):
         assigns to no `review` seat adds no seat, because this reads the
         assignment and not the family table.
         """
+        breadth = self._review_breadth(unit) if unit is not None else None
+        if breadth is not None:
+            seats, _families = staffing.review_cycle(
+                self.model_profiles_home,
+                st.staffing_session(self.state),
+                breadth,
+                material=self._milestone_material(),
+                families=list(self.config["families_order"]),
+            )
+            return seats
         return staffing.session_seats(
             self.model_profiles_home,
             st.staffing_session(self.state),
@@ -9912,7 +10069,7 @@ class Driver(object):
             families=list(self.config["families_order"]),
         )
 
-    def _review_families(self):
+    def _review_families(self, unit=None):
         """The family each assigned `review` seat runs on, in seat order.
 
         The run's review cycle, as the rotation, the cap and the seal
@@ -9932,7 +10089,17 @@ class Driver(object):
         seat left to review and would open a seal on no reviews at all.
         """
         if self.model_profiles_home is None:
-            return list(self.config["families_order"])
+            return self._profileless_review_cycle(unit)
+        breadth = self._review_breadth(unit) if unit is not None else None
+        if breadth is not None:
+            _seats, families = staffing.review_cycle(
+                self.model_profiles_home,
+                st.staffing_session(self.state),
+                breadth,
+                material=self._milestone_material(),
+                families=list(self.config["families_order"]),
+            )
+            return families
         return staffing.session_seat_families(
             self.model_profiles_home,
             st.staffing_session(self.state),
@@ -9953,9 +10120,9 @@ class Driver(object):
         own declared route through ordinary recovery naming its token.
         """
         try:
-            families = self._review_families()
+            families = self._review_families(unit)
         except staffing.StaffingConditionError as exc:
-            self._fail_staffing(exc)
+            self._fail_staffing(exc, episode_unit=unit)
         return st.seal_predicate_reviews(
             unit, families, current_fingerprint=current_fingerprint
         )
@@ -9969,7 +10136,7 @@ class Driver(object):
         no other record of having done so.
         """
         try:
-            families = self._review_families()
+            families = self._review_families(unit)
         except staffing.StaffingConditionError:
             return None
         return st.current_family(self.state, unit, families=families)
@@ -9993,9 +10160,11 @@ class Driver(object):
         """
         stopping = None
         try:
-            families = self._review_families()
+            families = self._review_families(unit)
         except staffing.StaffingConditionError as exc:
-            families = [None] * len(self._review_seats())
+            if self._review_breadth(unit) is not None:
+                self._fail_staffing(exc, episode_unit=unit)
+            families = [None] * len(self._review_seats(unit))
             stopping = exc
         if deferred:
             st.advance_family_deferred(self.state, unit, families=families)
@@ -10036,14 +10205,16 @@ class Driver(object):
         """
         round_number = 1
         for _ in range(_REVIEW_SEAT_SETTLE_READS):
-            resolution = self._staffing_resolution("review", seat,
-                                                   round_number)
+            resolution = self._staffing_resolution(
+                "review", seat, round_number, episode_unit=unit
+            )
             wanted = 1 + _review_rounds_done(unit, resolution.answer["agent"])
             if wanted == round_number:
                 return round_number, resolution
             round_number = wanted
         return round_number, self._staffing_resolution(
-            "review", seat, round_number)
+            "review", seat, round_number, episode_unit=unit
+        )
 
     def _review_seat_staffing(self, unit, seat):
         """(family, model, effort) a review at *seat* is prepared under.
@@ -10064,7 +10235,7 @@ class Driver(object):
         bind is finally known — a dispatch resolves live and may land on a
         different family than the preparing read named.
         """
-        cap = self.config["max_rounds_per_family"]
+        cap = self._reviewed_limit(unit, "max_rounds_per_family")
         if _review_rounds_done(unit, family) < cap:
             return
         st.fail_run(
@@ -10090,8 +10261,10 @@ class Driver(object):
         is this dispatch's split-family check as well.
         """
         chosen = None
-        for seat in self._review_seats():
-            family, _model, _effort = self._staff("review", index=seat)
+        for seat in self._review_seats(unit):
+            family, _model, _effort = self._staff(
+                "review", index=seat, episode_unit=unit
+            )
             if chosen is None:
                 chosen = seat
             if fixer_family and family == fixer_family:
@@ -10572,7 +10745,7 @@ class Driver(object):
             and isinstance(source.get("suite_repair"), dict)
             else None
         )
-        max_loops = self.config.get("max_fix_loops", 6)
+        max_loops = self._reviewed_limit(unit, "max_fix_loops")
         cap_agreement = (source.get("brainstorming_agreement") or {})
         mandatory_application_retry = bool(
             cap_agreement.get("application_retry_issued")
@@ -11545,16 +11718,9 @@ class Driver(object):
                 self.state, unit, return_to, reason="no delta (fix episode green)"
             )
             return "no pending delta; episode closed"
-        try:
-            checkpoint_after = int(self.config.get(
-                "delta_full_review_after_fixes",
-                DEFAULT_CONFIG["delta_full_review_after_fixes"],
-            ))
-        except (TypeError, ValueError):
-            checkpoint_after = DEFAULT_CONFIG[
-                "delta_full_review_after_fixes"
-            ]
-        checkpoint_after = max(0, checkpoint_after)
+        checkpoint_after = self._reviewed_limit(
+            unit, "delta_full_review_after_fixes"
+        )
         dirty_deltas = st.active_fix_dirty_deltas(self.state, unit)
         # One fix is currently pending plus one already-applied fix for every
         # accepted dirty delta in this episode.  Deriving this from immutable
@@ -11774,6 +11940,9 @@ class Driver(object):
                     ),
                     defer_threshold=result_policy["p3_defer_max_risk"],
                     gap_backstop=result_policy["gap_backstop"],
+                    same_family_second_look=result_policy[
+                        "same_family_second_look"
+                    ],
                     call_preparation=call_preparation,
                 )
                 retained_ids = {
@@ -12293,6 +12462,7 @@ class Driver(object):
         parent_call=None,
         defer_threshold=None,
         gap_backstop=None,
+        same_family_second_look=False,
         call_preparation=None,
     ):
         """Rate candidates independently and split debt from fix work.
@@ -12327,20 +12497,29 @@ class Driver(object):
                         # BEFORE the router is asked, because a withheld
                         # rating makes no call — and a call nobody makes must
                         # not be stopped by a surfaced condition.
-                        explicit = (
-                            self._opposite(raising_family) != raising_family
-                        )
-                        if explicit:
+                        explicit = self._opposite(raising_family) != raising_family
+                        if explicit or same_family_second_look:
                             # The rater is the `classify` seat the run's
                             # document assigns — the EXPLICIT rater today's
                             # rule already admits as a second look, whichever
                             # family it names.
-                            rater_dispatch = self._dispatch_for_role(
-                                "classify"
-                            )
                             opp, rater_model, rater_effort = self._staff(
-                                "classify"
+                                "classify", episode_unit=unit
                             )
+                            base_dispatch = self._dispatch_for_role(
+                                "classify", episode_unit=unit
+                            )
+
+                            def rater_dispatch():
+                                resolved = base_dispatch()
+                                if (
+                                    same_family_second_look
+                                    and resolved[0] != raising_family
+                                ):
+                                    raise _NoIndependentReclassifier(
+                                        "same-family reclassifier unavailable"
+                                    )
+                                return resolved
                         else:
                             # The single family the run supplies is the only
                             # one collapse could ever answer with, so the
@@ -12374,7 +12553,11 @@ class Driver(object):
                 call_cost_partial = False
                 effective_model = None
                 effective_effort = None
-                if opp == raising_family and not explicit:
+                if same_family_second_look and opp != raising_family:
+                    reason = "same-family reclassifier unavailable"
+                elif opp == raising_family and not (
+                    explicit or same_family_second_look
+                ):
                     # No independent opposite family (single-family config):
                     # cross-family verification is impossible, so the finding
                     # is never deferred — it takes the normal fix path. An
@@ -12442,7 +12625,16 @@ class Driver(object):
                                     include_explicit=True,
                                 )
                             )
-                            if current_opp == raising_family and not current_explicit:
+                            if (
+                                same_family_second_look
+                                and current_opp != raising_family
+                            ):
+                                raise _NoIndependentReclassifier(
+                                    "same-family reclassifier unavailable"
+                                )
+                            if current_opp == raising_family and not (
+                                current_explicit or same_family_second_look
+                            ):
                                 raise _NoIndependentReclassifier(
                                     "no independent reclassifier"
                                 )
@@ -12533,11 +12725,9 @@ class Driver(object):
                             )
                         else:
                             reason = "reclassifier blocked"
-                    except _NoIndependentReclassifier:
+                    except _NoIndependentReclassifier as exc:
                         self._clear_busy()
-                        reason = (
-                            "no independent reclassifier (single family)"
-                        )
+                        reason = str(exc)
                 st.append_event(
                     self.state, "reclassify_recorded",
                     unit=st.unit_key(unit),
@@ -12644,7 +12834,7 @@ class Driver(object):
         }
         seat = None
         if self.model_profiles_home is not None:
-            seats = self._review_seats()
+            seats = self._review_seats(unit)
             index = int(unit.get("family_index") or 0)
             if index >= len(seats):
                 # Seats are read live, so the list can SHRINK below the seat
@@ -12694,7 +12884,11 @@ class Driver(object):
                 self._review_seat_staffing(unit, seat)
             )
         else:
-            family = st.current_family(self.state, unit)
+            try:
+                families = self._review_families(unit)
+            except staffing.StaffingConditionError as exc:
+                self._fail_staffing(exc, episode_unit=unit)
+            family = st.current_family(self.state, unit, families=families)
             if family is None:
                 raise st.IllegalTransition("rounds status with no family left")
         self._enforce_review_round_cap(unit, family)
@@ -12833,6 +13027,9 @@ class Driver(object):
                     ),
                     defer_threshold=result_policy["p3_defer_max_risk"],
                     gap_backstop=result_policy["gap_backstop"],
+                    same_family_second_look=result_policy[
+                        "same_family_second_look"
+                    ],
                     call_preparation=call_preparation,
                 )
                 retained_ids = {f.get("id") for f, _family in retained}

@@ -97,6 +97,9 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             implementation = _unit(subject, st.UNIT_SLICE_IMPL)
 
             selected = subject.reviewed_work.configure(document, {
+                "review_breadth": "single",
+                "max_rounds_per_family": 3,
+                "p3_reclassify_debt": True,
                 "producer": {
                     "task_executor": "brainstorming",
                     "configuration": {
@@ -107,26 +110,24 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             })
             defaulted = subject.reviewed_work.configure(implementation, {})
 
+            self.assertEqual(selected["producer"]["task_executor"], "brainstorming")
+            self.assertEqual(selected["review_breadth"], "single")
+            self.assertEqual(selected["max_rounds_per_family"], 3)
             self.assertEqual(
-                selected,
-                {
-                    "producer": {
-                        "task_executor": "brainstorming",
-                        "configuration": {
-                            "max_rounds": 99,
-                            "closure_policy": "majority",
-                        },
-                    },
-                },
+                defaulted["producer"], {
+                    "task_executor": "agent_call",
+                    "configuration": {"role": "implement"},
+                }
             )
+            self.assertEqual(defaulted["review_breadth"], "double")
+            self.assertEqual(defaulted["max_rounds_per_family"], 6)
+            self.assertIn("implementation_size_control", defaulted)
+            self.assertEqual(subject._review_families(document), ["codex"])
             self.assertEqual(
-                defaulted,
-                {
-                    "producer": {
-                        "task_executor": "agent_call",
-                        "configuration": {"role": "implement"},
-                    },
-                },
+                subject._review_families(implementation), ["codex", "claude"]
+            )
+            self.assertFalse(
+                subject._worker_result_policy(document)["p3_reclassify_debt"]
             )
             frozen = st.load(path)
             by_kind = {unit["kind"]: unit for unit in frozen["units"]}
@@ -162,7 +163,18 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             subject = drv.Driver(path, runner=runners.MockRunner([]))
             implementation = _unit(subject, st.UNIT_SLICE_IMPL)
 
-            frozen = subject.reviewed_work.configure(implementation, {})
+            frozen = subject.reviewed_work.configure(implementation, {
+                "review_breadth": "single",
+                "same_family_second_look": True,
+                "p3_reclassify_debt": True,
+                "max_fix_loops": 2,
+                "implementation_size_control": {
+                    "soft_lines": 40,
+                    "hard_lines": 60,
+                    "unconfirmed_grace_s": 3,
+                    "confirmed_grace_s": 7,
+                },
+            })
 
             self.assertEqual(
                 frozen["producer"],
@@ -192,6 +204,19 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             self.assertTrue(recovered._brainstorming_producer_selected(
                 implementation, contracts.KIND_IMPLEMENT
             ))
+            self.assertEqual(recovered._review_families(implementation), ["codex"])
+            self.assertEqual(recovered._reviewed_limit(
+                implementation, "max_fix_loops"
+            ), 2)
+            result_policy = recovered._worker_result_policy(implementation)
+            self.assertTrue(result_policy["p3_reclassify_debt"])
+            self.assertTrue(result_policy["same_family_second_look"])
+            self.assertEqual(
+                recovered._implementation_size_settings(implementation)[
+                    "hard_lines"
+                ],
+                60,
+            )
 
     def test_restart_uses_the_frozen_producer_not_the_slice_plan(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-restart-") as ws:
@@ -361,7 +386,7 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
             )
             self.assertEqual(subject.runner.calls, [])
 
-    def test_invalid_or_ineligible_producer_has_no_effect(self):
+    def test_invalid_policy_fails_before_any_physical_call(self):
         cases = (
             (
                 st.UNIT_SLICE_DOC,
@@ -381,6 +406,23 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                         "configuration": {"role": "review"},
                     },
                 },
+                tasks.INVALID_TASK_REQUEST,
+            ),
+            (
+                st.UNIT_SLICE_DOC,
+                {"review_breadth": "double", "same_family_second_look": True},
+                tasks.INVALID_TASK_REQUEST,
+            ),
+            (
+                st.UNIT_SLICE_DOC,
+                {"max_fix_loops": -1},
+                tasks.INVALID_TASK_REQUEST,
+            ),
+            (
+                st.UNIT_SLICE_IMPL,
+                {"implementation_size_control": {
+                    "soft_lines": 10, "hard_lines": 10,
+                }},
                 tasks.INVALID_TASK_REQUEST,
             ),
         )

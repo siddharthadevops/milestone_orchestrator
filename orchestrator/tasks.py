@@ -30,6 +30,25 @@ _REVIEWED_PRODUCTION_ROLES = {
     contracts.KIND_IMPLEMENT: "implement",
 }
 
+_REVIEW_BREADTHS = ("single", "double")
+_REVIEWED_POLICY_DEFAULTS = {
+    "review_breadth": "double",
+    "same_family_second_look": False,
+    "max_rounds_per_family": 12,
+    "max_fix_loops": 20,
+    "delta_full_review_after_fixes": 5,
+    "doc_reclassify_from": "P2",
+    "impl_reclassify_from": "P1",
+    "p3_reclassify_debt": True,
+    "p3_defer_max_risk": "low",
+    "implementation_size_control": {
+        "soft_lines": 500,
+        "hard_lines": 750,
+        "unconfirmed_grace_s": 180,
+        "confirmed_grace_s": 600,
+    },
+}
+
 _MISSING = object()
 _RESULT_STATUSES = ("success", "failure")
 _COST_FIELDS = ("api_usd", "real_usd")
@@ -384,17 +403,137 @@ def resolve_reviewed_producer(task_kind, value=_MISSING):
         _request_error(exc)
 
 
-def resolve_reviewed_policy(task_kind, value=None, default_producer=_MISSING):
-    """Resolve the durable choices implemented by the current slice cut."""
+def _reviewed_non_negative_int(value, context):
+    if type(value) is not int or value < 0:
+        raise ContractError("%s must be a non-negative integer" % context)
+    return value
+
+
+def _reviewed_size_control(value, defaults):
+    context = "reviewed policy.implementation_size_control"
+    if value is None:
+        value = {}
+    _exact_keys(
+        value,
+        (),
+        (
+            "soft_lines", "hard_lines", "unconfirmed_grace_s",
+            "confirmed_grace_s",
+        ),
+        context,
+    )
+    source = dict(defaults or {})
+    source.update(value)
+    soft = source.get("soft_lines")
+    hard = source.get("hard_lines")
+    if type(soft) is not int or soft <= 0:
+        raise ContractError("%s.soft_lines must be a positive integer" % context)
+    if type(hard) is not int or hard <= soft:
+        raise ContractError(
+            "%s.hard_lines must be an integer greater than soft_lines"
+            % context
+        )
+    checked = {"soft_lines": soft, "hard_lines": hard}
+    for name in ("unconfirmed_grace_s", "confirmed_grace_s"):
+        grace = source.get(name)
+        if (
+            isinstance(grace, bool)
+            or not isinstance(grace, (int, float))
+            or not math.isfinite(grace)
+            or grace <= 0
+        ):
+            raise ContractError("%s.%s must be positive and finite" % (context, name))
+        checked[name] = grace
+    return checked
+
+
+def resolve_reviewed_policy(
+    task_kind, value=None, default_producer=_MISSING, defaults=None
+):
+    """Resolve every order-local reviewed-work choice to durable values."""
     try:
         if value is None:
             value = {}
-        _exact_keys(value, (), ("producer",), "reviewed policy")
-        return {
+        phase_floor = (
+            "impl_reclassify_from"
+            if task_kind == contracts.KIND_IMPLEMENT
+            else "doc_reclassify_from"
+        )
+        allowed = (
+            "producer", "review_breadth", "same_family_second_look",
+            phase_floor, "p3_reclassify_debt", "p3_defer_max_risk",
+            "max_rounds_per_family", "max_fix_loops",
+            "delta_full_review_after_fixes",
+        )
+        if task_kind == contracts.KIND_IMPLEMENT:
+            allowed += ("implementation_size_control",)
+        _exact_keys(value, (), allowed, "reviewed policy")
+        size_defaults = dict(
+            _REVIEWED_POLICY_DEFAULTS["implementation_size_control"]
+        )
+        supplied_defaults = defaults or {}
+        if isinstance(supplied_defaults.get("implementation_size_control"), dict):
+            size_defaults.update(
+                supplied_defaults["implementation_size_control"]
+            )
+        effective = dict(_REVIEWED_POLICY_DEFAULTS)
+        effective.update(supplied_defaults)
+        effective.update(value)
+        breadth = effective["review_breadth"]
+        if breadth not in _REVIEW_BREADTHS:
+            raise ContractError(
+                "reviewed policy.review_breadth must be one of %s"
+                % (list(_REVIEW_BREADTHS),)
+            )
+        second_look = effective["same_family_second_look"]
+        if type(second_look) is not bool:
+            raise ContractError(
+                "reviewed policy.same_family_second_look must be a boolean"
+            )
+        if second_look and breadth != "single":
+            raise ContractError(
+                "same_family_second_look requires single review breadth"
+            )
+        floor = effective[phase_floor]
+        if floor not in contracts.RECLASSIFY_FROM_LEVELS:
+            raise ContractError(
+                "reviewed policy.%s must be one of %s"
+                % (phase_floor, list(contracts.RECLASSIFY_FROM_LEVELS))
+            )
+        reclassify = effective["p3_reclassify_debt"]
+        if type(reclassify) is not bool:
+            raise ContractError(
+                "reviewed policy.p3_reclassify_debt must be a boolean"
+            )
+        risk = effective["p3_defer_max_risk"]
+        if risk not in contracts.DRIFT_RISK_LEVELS:
+            raise ContractError(
+                "reviewed policy.p3_defer_max_risk must be one of %s"
+                % (list(contracts.DRIFT_RISK_LEVELS),)
+            )
+        checked = {
             "producer": resolve_reviewed_producer(
                 task_kind, value.get("producer", default_producer)
-            )
+            ),
+            "review_breadth": breadth,
+            "same_family_second_look": second_look,
+            phase_floor: floor,
+            "p3_reclassify_debt": reclassify,
+            "p3_defer_max_risk": risk,
         }
+        for name in (
+            "max_rounds_per_family", "max_fix_loops",
+            "delta_full_review_after_fixes",
+        ):
+            checked[name] = _reviewed_non_negative_int(
+                effective[name], "reviewed policy.%s" % name
+            )
+        if task_kind == contracts.KIND_IMPLEMENT:
+            checked["implementation_size_control"] = _reviewed_size_control(
+                value.get("implementation_size_control"),
+                size_defaults,
+            )
+        return _json_copy(checked, "reviewed policy")
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
 

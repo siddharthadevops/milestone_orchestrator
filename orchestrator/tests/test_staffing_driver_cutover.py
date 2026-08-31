@@ -1850,6 +1850,27 @@ class StoppingConditions(StaffingCutoverTestCase):
             [contracts.KIND_DRAFT_SKELETON],
         )
 
+        # An explicit one-family reviewed order selects one router seat; the
+        # document's wider split no longer weakens or blocks that order.
+        path = self.run_state(
+            "ws-explicit-single", families_order=["codex"],
+            fix_family="codex", commands={"codex": ["fake-codex"]},
+        )
+        subject = self.driver_for(path, [
+            routed_skeleton_step("codex"),
+            step("review_round", report("review_round"), family="codex"),
+        ])
+        subject.reviewed_work.configure(subject.state["units"][0], {
+            "review_breadth": "single",
+        })
+        self.step_until(
+            subject,
+            lambda state: state["units"][0]["status"] == st.U_SEALED,
+            max_steps=30,
+        )
+        self.assertIsNone(st.load(path)["failure"])
+        self.assertEqual(subject.runner.script, [])
+
         # The same single-family run, under a `review` role with one seat.
         path = self.bound_to(
             one_review_seat(stf.default_document_seed()),
