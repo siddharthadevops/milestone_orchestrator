@@ -97,3 +97,47 @@
 - `claude-slice_doc-02-claude-r1/FULL-001` (raised claude, cleared codex): The note pins `distinct_families_unsatisfiable` — a document-scoped Staffing Router condition — as the enforcement for an order-scoped breadth contract, but that condition is provably not raised when the run's staffing document assigns `review` a single seat, so the new strict default ("never seals on one") has no mechanism that can refuse. — The hard register falsely presents the existing Staffing Router refusal as enforcing the strict two-family default even though one supported review seat bypasses it and seals, making wrong-contract implementation likely while correction remains bounded to Slice 2 breadth enforcement and focused test
 - `claude-slice_doc-02-claude-r1/FULL-002` (raised claude, cleared codex): The note never states what happens when the explicitly cheaper one-family order runs on a machine whose staffing document declares `review` split across two seats — the exact configuration where the cheap option is wanted — and today that combination fails the run rather than reviewing once. — The slice expressly requires one-family completion independent of the staffing document's arbitrary seat count, so a strong builder is unlikely to preserve the refusal, while any miss requires bounded Slice 2 routing and test rework.
 
+## slice_impl-02-a (Producer, review breadth, debt, and caps)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r1.txt` |
+| slice_impl-02-claude-r1 | review_round | claude | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r1.txt` |
+| slice_impl-02-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix1.txt` |
+| slice_impl-02-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta1.txt` |
+| slice_impl-02-codex-r4 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r2.txt` |
+| slice_impl-02-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix2.txt` |
+| slice_impl-02-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta2.txt` |
+| slice_impl-02-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r3.txt` |
+| slice_impl-02-claude-r2 | review_round | claude | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r2.txt` |
+| slice_impl-02-codex-r8 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix3.txt` |
+| slice_impl-02-codex-r9 | delta_review | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta3.txt` |
+| slice_impl-02-codex-r10 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix4.txt` |
+| slice_impl-02-codex-r11 | delta_review | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta4.txt` |
+| slice_impl-02-codex-r12 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix5.txt` |
+| slice_impl-02-codex-r13 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta5.txt` |
+| slice_impl-02-codex-r14 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r4.txt` |
+| slice_impl-02-claude-r3 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r3.txt` |
+| slice_impl-02-codex-r15 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix6.txt` |
+| slice_impl-02-codex-r16 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta6.txt` |
+| slice_impl-02-codex-r17 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r5.txt` |
+| slice_impl-02-claude-r4 | review_round | claude | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r4.txt` |
+| slice_impl-02-codex-r18 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix7.txt` |
+| slice_impl-02-codex-r19 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta7.txt` |
+| slice_impl-02-codex-r20 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r6.txt` |
+| slice_impl-02-claude-r5 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r5.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-codex-r20`, `slice_impl-02-claude-r5`
+
+**Deferred debt (independently classified):**
+- `claude-slice_impl-02-a-claude-r1/DRT-S02A-012` (raised claude, cleared codex): The cut adds a third copy of the unit-kind-to-task-kind table and a second copy of the production role table instead of reusing the existing ones — The tiny tables currently agree and tests separately pin both policy and admitted-order roles, so only a hasty future change could leave one stale, while correction would be a small local consolidation or value update caught within the unit.
+- `claude-claude-slice_impl-02-a-r1/S02A-003` (raised claude, cleared codex): The pre-production freeze guard omits the parked rethink-continuation carrier, so a policy can be frozen after a production call has already completed and paid — The strict pre-first-call invariant is falsely presented as enforced despite a persisted paid-output state that later builders could trust without re-auditing, but correction is a local guard-and-regression-test change requiring no contract redesign or cross-slice rework.
+- `claude-claude-slice_impl-02-a-r2/S02A-102` (raised claude, cleared codex): A refused producer resolution inside the automatic freeze escapes `Driver.step` as an unhandled `TaskRequestError`, bypassing the run's own failure discipline and recording nothing in state — The defect is real but limited to noncanonical hand-seeded or legacy state, becomes immediately visible as a repeatable exception, and needs only a local failure-recording correction once encountered.
+- `codex-S02A-201` (raised codex, cleared codex): The pinned producer-policy verification test is missing — Slice 2 explicitly requires one combined named producer regression that is absent, so a builder could overlook the proof gap despite passing component tests, but discovery is straightforward and correction is a small local test addition with no demonstrated runtime defect.
+- `claude-claude-slice_impl-02-a-r3/S02A-301` (raised claude, cleared codex): The slice-02 Verification Contract's focused command omits orchestrator/tests/test_brainstorming_slice_production.py, the only module holding two of the producer row's own named retained checks — exactly the Brainstorming production adapter this part rerouted through the frozen selection. — The pinned command can plausibly give the next builder false green proof while skipping the changed Brainstorming adapter, but correction is a local command amendment and rerun because the omitted 12-test module already passes.
+

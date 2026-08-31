@@ -36,22 +36,26 @@ def _unit(subject, kind):
 
 
 class ReviewedProducerPolicyTest(unittest.TestCase):
-    def test_runtime_execution_freezes_plan_producer_before_dispatch(self):
+    def test_runtime_establishes_plan_before_freezing_producer(self):
         with tempfile.TemporaryDirectory(prefix="orch-reviewed-runtime-") as ws:
             path = init_state(ws, make_config())
-            _units(path, {
-                "draft_slice_note": {
-                    "task_executor": "brainstorming",
-                    "configuration": {"closure_policy": "majority"},
-                },
-                "implement": {"task_executor": "agent_call"},
-            })
+            _units(path)
             state = st.load(path)
             state["units"][0]["status"] = st.U_SEALED
             st.save(path, state)
             subject = drv.Driver(path, runner=runners.MockRunner([]))
 
             observed = {}
+
+            def establish_plan(unit, kind):
+                observed["policy_before_plan"] = unit.get("reviewed_policy")
+                subject.state["milestone"]["slices"][0][
+                    "producer_task_executor"
+                ]["draft_slice_note"] = {
+                    "task_executor": "brainstorming",
+                    "configuration": {"closure_policy": "majority"},
+                }
+                return False
 
             def dispatch(unit, call_preparation):
                 observed["policy"] = st.load(path)["units"][1][
@@ -60,12 +64,17 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 return "selected producer dispatched"
 
             with mock.patch.object(
+                subject.milestone_reviewed_calls,
+                "ensure_author_plan",
+                side_effect=establish_plan,
+            ) as plan_preparation, mock.patch.object(
                 subject, "_do_draft", side_effect=dispatch
             ) as production:
                 action, note = subject.step()
 
             self.assertEqual(action.type, drv.A_DRAFT)
             self.assertEqual(note, "selected producer dispatched")
+            self.assertIsNone(observed["policy_before_plan"])
             self.assertEqual(
                 observed["policy"]["producer"],
                 {
@@ -76,6 +85,7 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                     },
                 },
             )
+            plan_preparation.assert_called_once()
             production.assert_called_once()
 
     def test_default_and_non_default_producers_are_frozen_per_order(self):
@@ -272,6 +282,10 @@ class ReviewedProducerPolicyTest(unittest.TestCase):
                 return "repaired producer dispatched"
 
             with mock.patch.object(
+                rebuilt.milestone_reviewed_calls,
+                "ensure_author_plan",
+                return_value=False,
+            ), mock.patch.object(
                 rebuilt, "_do_draft", side_effect=dispatch
             ) as production:
                 action, note = rebuilt.step()

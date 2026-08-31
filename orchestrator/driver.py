@@ -585,6 +585,7 @@ class ReviewedWorkLifecycle(object):
                 "reviewed-work action names an unknown unit %r"
                 % action.params["unit"]
             )
+        calls = call_preparation or ReviewedWorkCallPreparation(self.host)
         if (
             action.type == A_DRAFT
             and self._production_kind(unit) in tasks.PRODUCER_TASK_KINDS
@@ -600,11 +601,18 @@ class ReviewedWorkLifecycle(object):
             and unit.get("pending_wip") is None
         ):
             # ``Driver.step`` holds the state lock around execute. Persist the
-            # resolved producer before canonical-plan preparation or either
-            # production adapter can make the first physical call.
+            # resolved producer after milestone-owned plan establishment has
+            # refreshed the selected unit, but before either production adapter
+            # can make the first physical call.
+            kind = self._production_kind(unit)
+            if calls.ensure_author_plan(unit, kind):
+                return (
+                    "canonical plan established; work order refreshed",
+                    None,
+                    None,
+                )
             self._configure_locked(unit)
         was_sealed = unit.get("status") == st.U_SEALED
-        calls = call_preparation or ReviewedWorkCallPreparation(self.host)
         note = getattr(self.host, self._HANDLERS[action.type])(
             unit=unit, call_preparation=calls
         )
