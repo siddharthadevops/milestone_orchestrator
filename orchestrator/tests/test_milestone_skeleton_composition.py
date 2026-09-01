@@ -376,6 +376,65 @@ class MilestoneSkeletonCompositionTest(base.DriverTestCase):
                 st.summary(resumed.state)["work_duration_s"], 0.06
             )
 
+    def test_repeated_phantom_fix_resume_uses_disjoint_successor(self):
+        with tempfile.TemporaryDirectory(
+            prefix="skeleton-phantom-fix-"
+        ) as workspace:
+            path = self._activated(workspace)
+            claimed_fix = base.step(
+                contracts.KIND_FIX_FINDINGS,
+                base.fix_ok(
+                    [base.triaged(
+                        "F1", "fixed", "first attempt finding", severity="P1"
+                    )],
+                    files_changed=["docs/skeleton.md"],
+                ),
+                family="codex",
+            )
+            runner = runners.MockRunner([
+                base.skeleton_script()[0],
+                base.step(
+                    contracts.KIND_REVIEW_ROUND,
+                    base.report(contracts.KIND_REVIEW_ROUND, [base.finding(
+                        "F1", "first attempt finding", severity="P1"
+                    )]),
+                    family="codex",
+                ),
+                claimed_fix,
+                copy.deepcopy(claimed_fix),
+                base.skeleton_script()[0],
+            ])
+            subject = drv.Driver(path, runner=runner)
+            self.step_until(
+                subject, lambda state: state["failure"] is not None,
+                max_steps=12,
+            )
+
+            unit = subject._find_unit(st.UNIT_SKELETON, None)
+            failed_id = unit["reviewed_task_id"]
+            failed = copy.deepcopy(tasks.task_record(subject.state, failed_id))
+            self.assertEqual(subject.state["failure"]["type"], "phantom_fix")
+            self.assertEqual(failed["result"]["status"], "failure")
+            self.assertEqual(failed["result"]["duration_s"], 0.04)
+
+            st.resume_run(subject.state)
+            st.save(path, subject.state)
+            resumed = drv.Driver(path, runner=runner)
+            resumed.step()
+
+            successor_unit = resumed._find_unit(st.UNIT_SKELETON, None)
+            successor_id = successor_unit["reviewed_task_id"]
+            self.assertNotEqual(successor_id, failed_id)
+            self.assertEqual(tasks.task_record(resumed.state, failed_id), failed)
+            self.assertEqual(
+                tasks.task_accounting(resumed.state, failed_id)["duration_s"],
+                0.04,
+            )
+            self.assertEqual(
+                tasks.task_accounting(resumed.state, successor_id)["duration_s"],
+                0.01,
+            )
+
     def test_recoverable_stop_resume_reuses_the_open_task(self):
         with tempfile.TemporaryDirectory(
             prefix="skeleton-resume-"

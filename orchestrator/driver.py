@@ -4108,6 +4108,7 @@ class Driver(object):
             "worker_protocol",
             "canonical_plan_boundary",
             "brainstorming_no_agreement",
+            "phantom_fix",
         ):
             return True
         reason = failure.get("reason") or ""
