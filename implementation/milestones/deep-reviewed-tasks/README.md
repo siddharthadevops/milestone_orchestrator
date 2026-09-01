@@ -292,4 +292,5 @@ The goal is achieved when:
 | slice_impl-03-a (Routed calls and rethink continuity) | reviewed | 2 | satisfied | 0aa22b0 |
 | slice_impl-03-b (Routed calls and rethink continuity) | reviewed | 2 | satisfied | 3b415df |
 | slice_doc-04 (Reviewed seal, gate, result, and recovery) | reviewed | 2 | satisfied | cecc592 |
-| slice_impl-04 (Reviewed seal, gate, result, and recovery) | reviewed | 9 | satisfied | - |
+| slice_impl-04 (Reviewed seal, gate, result, and recovery) | reviewed | 9 | satisfied | 8123b16 |
+| slice_doc-05 (Standalone reviewed-task ordering) | reviewed | 16 | satisfied | - |

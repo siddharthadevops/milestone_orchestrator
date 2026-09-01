@@ -21,3 +21,11 @@ genuinely new evidence (`contests`).
 - rationale: None beyond the permitted baseline; no Brainstorming size-controller guarantee exists to lose.
 - prevention: implementation/milestones/deep-reviewed-tasks/skeleton.md (Clarified producer-gated size ownership and prohibited Brainstorming-specific size machinery.)
 
+## [slice_doc-05-claude-r1/DRT-S05-R1-003]
+
+- unit: slice_doc-05
+- severity: P2
+- finding: Slice 5 requires a new current-byte precondition inside shared pending-gate recovery, which is Slice 4's sealed territory and changes milestone-caller behavior the same note promises is unchanged
+- rationale: None. Closing the shared gap once preserves parity and adds no milestone phase, task, call, or outcome law.
+- prevention: implementation/milestones/deep-reviewed-tasks/slices/slice-05.md (Clarified that current-byte recovery is one shared Slice 4 invariant applied equally to standalone and milestone callers, not a standalone fork or composition change.)
+

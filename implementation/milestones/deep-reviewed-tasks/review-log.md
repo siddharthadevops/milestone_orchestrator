@@ -298,3 +298,38 @@
 - `codex-DRT-S04-FULL-001` (raised codex, cleared codex): Reconciliation-paused calls disappear from reviewed-result accounting — The artifact falsely presents retained-call accounting as strictly complete while excluding a reconciliation-pause event, so later builders will trust incorrect totals, but correction is a small local aggregation and regression-test fix.
 - `codex-DRT-S04-FULL-002` (raised codex, cleared codex): Suite-repair fixer duration is counted twice — The hard once-only accounting claim and its named test falsely certify suite-repair duration, so later builders can silently consume a doubled terminal total, while correction remains bounded to accounting ownership and focused regression coverage.
 
+## slice_doc-05 (Standalone reviewed-task ordering)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-05.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-05-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r1.txt` |
+| slice_doc-05-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-fix1.txt` |
+| slice_doc-05-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-delta1.txt` |
+| slice_doc-05-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r2.txt` |
+| slice_doc-05-claude-r1 | review_round | claude | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-claude-r1.txt` |
+| slice_doc-05-codex-r5 | fix_findings | codex | 3 | 2 fixed, 1 rejected | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-fix2.txt` |
+| slice_doc-05-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-delta2.txt` |
+| slice_doc-05-codex-r7 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r3.txt` |
+| slice_doc-05-codex-r8 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-fix3.txt` |
+| slice_doc-05-codex-r9 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-delta3.txt` |
+| slice_doc-05-codex-r10 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r4.txt` |
+| slice_doc-05-claude-r2 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-claude-r2.txt` |
+| slice_doc-05-codex-r11 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-fix4.txt` |
+| slice_doc-05-codex-r12 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-delta4.txt` |
+| slice_doc-05-codex-r13 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r5.txt` |
+| slice_doc-05-claude-r3 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-claude-r3.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-05-codex-r13`, `slice_doc-05-claude-r3`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S05-FULL-001` (raised codex, cleared codex): The standard’s hard-register code citations are stale — The unrelated ranges could misdirect a hasty builder, but the clear prose and obvious citation mismatch should alert a careful max-effort agent; any resulting wrong-seam implementation or missed test would be bounded Slice 5 rework caught at its review.
+- `codex-codex-DRT-S05-FULL-002` (raised codex, cleared codex): Standalone ordering omits mutable operator-amendment continuity — The slice promises lifecycle reuse but neither pins nor tests amendment refresh, so a careful builder should identify the omission while a mistaken order-time freeze could cause incorrect behavior and bounded Slice 5 implementation-and-test rework.
+- `claude-claude-DRT-S05-FULL-002` (raised claude, cleared codex): The note's Stop contract closes only the outer task record; it pins nothing about the reviewed task's own live internal Brainstorming session, so an operator Stop during a rethink leaves that session's process running on the work area — contradicting the note's own pass condition that Stop releases the work area. — The slice strictly requires Stop to fail the task and release its work area but leaves rethink-session termination implicit, so a careful builder should derive the missing behavior while a hasty one could miss it, with correction requiring bounded Stop/lifecycle plumbing and coverage within Slice 5.
+- `codex-codex-DRT-S05-FULL-003` (raised codex, cleared codex): Standalone ordering does not pin live standing-project-law refresh — The slice ambiguously pairs admission-frozen configuration with resolved safeguards for every phase, so a careful builder can preserve the existing per-episode refresh while a hasty one may freeze it; correction would be bounded to this unit's handoff and tests rather than alter the public contract.
+- `claude-claude-DRT-S05-FULL-004` (raised claude, cleared codex): Slice 5 pins single-count accounting only for the success envelope; nothing in its contract, acceptance criteria, or verification rows requires a stopped or failed standalone reviewed task to report the physical spend it already made, so its immutable terminal record can show no cost or token usage after dozens of real provider calls. — The artifact strongly implies task-scoped exact accounting and compatibility with generic terminal behavior but never explicitly binds stopped or failed results to lifecycle totals, so a strong builder would likely resolve or flag the gap, while a miss would require bounded Slice 5 projection and te
+
