@@ -2126,6 +2126,42 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertEqual(st.unit_key(continuation), "slice_impl-01-b")
             self.assertEqual(continuation["status"], st.U_PENDING)
 
+    def test_pending_gate_rewind_preserves_design_update(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-design-rewind-") as ws:
+            path, driver, first = self._ready_driver(
+                ws, runners.MockRunner([])
+            )
+            first["status"] = st.U_SEALED
+            design_update = {
+                "editable_paths": ["docs/skeleton.md"],
+                "changed_paths": ["docs/skeleton.md"],
+                "amendment": "Use the agreed boundary.",
+            }
+            first["design_update"] = design_update
+            gitops.commit_wip(ws, "wip: slice_impl-01")
+            driver.state["pending_gate_unit"] = st.unit_key(first)
+            driver.state["pending_gate_fingerprint"] = (
+                driver._gate_candidate_fingerprint(first)
+            )
+            driver._save()
+
+            with open(os.path.join(ws, "implementation.py"), "w",
+                      encoding="utf-8") as handle:
+                handle.write("downtime_edit = True\n")
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+
+            recovered_first = next(
+                unit for unit in recovered.state["units"]
+                if unit["kind"] == st.UNIT_SLICE_IMPL
+                and unit.get("part") is None
+            )
+            self.assertEqual(recovered_first["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertEqual(recovered_first["design_update"], design_update)
+            self.assertFalse(recovered_first.get("gate_commit"))
+            self.assertNotIn("pending_gate_unit", recovered.state)
+            self.assertNotIn("pending_gate_fingerprint", recovered.state)
+
     def test_failed_last_gate_recovery_closes_with_a_final_commit(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-last-gate-") as ws:
             path, driver, last = self._ready_driver(

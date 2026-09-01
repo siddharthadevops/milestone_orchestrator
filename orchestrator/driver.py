@@ -13375,7 +13375,12 @@ class Driver(object):
         if recovered is None:
             return False
         unit, _result = recovered
-        unit.pop("design_update", None)
+        # A byte-mismatch recovery returns the same unit rewound for fresh
+        # review without landing its gate.  Its accepted design-edit authority
+        # remains part of that candidate cycle and is retired only once gate
+        # recovery actually leaves the unit sealed.
+        if unit.get("status") == st.U_SEALED:
+            unit.pop("design_update", None)
         return True
 
     def _gate_commit(self, unit):

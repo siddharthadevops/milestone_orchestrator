@@ -409,3 +409,24 @@
 - `claude-claude-S05C-R1-001` (raised claude, cleared codex): The plan-free read-only repository turn is written a second time in session_repository instead of reusing the identical completion added in 05-b — The two identical plan-free completions could diverge if a later semantic change reaches only one caller, but careful search should expose both copies, and correction is a small local consolidation or matching edit before shipment.
 - `claude-claude-S05C-R1-002` (raised claude, cleared codex): The standalone crash-window tests delete the in-flight call marker a real crash leaves, so stale-marker recovery is never exercised on the reviewed path — The strict named crash test falsely presents marker-backed spent-call accounting and clean-tree recovery as proved while its helper removes the marker before adoption, so later work can plausibly trust a correctness-critical false green, whereas repair remains bounded to the standalone crash harness
 
+## slice_impl-05-d (Standalone reviewed-task ordering)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-d-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-codex-r1.txt` |
+| slice_impl-05-d-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-claude-r1.txt` |
+| slice_impl-05-d-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-fix1.txt` |
+| slice_impl-05-d-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-delta1.txt` |
+| slice_impl-05-d-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-codex-r2.txt` |
+| slice_impl-05-d-claude-r2 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-d-codex-r4`, `slice_impl-05-d-claude-r2`
+
+**Deferred debt (independently classified):**
+- `claude-DRT-S05D-002` (raised claude, cleared codex): Retained restart golden backing Slice 5's adoption compatibility passes vacuously and asserts a law the code contradicts — The swallowed AttributeError makes a named compatibility golden affirm the opposite of actual startup adoption and leaves make_server’s reviewed resolver unpinned, so later work can trust the wrong restart behavior, while correction remains bounded to the service-level adoption harness and any local
+
