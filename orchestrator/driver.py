@@ -650,6 +650,29 @@ class ReviewedWorkLifecycle(object):
             )
             self.host._save()
             raise StopStep("pending gate unit is unavailable")
+        expected = self.host.state.get("pending_gate_fingerprint")
+        if (
+            expected is not None
+            and expected != self.host._gate_candidate_fingerprint(unit)
+        ):
+            self.host.state.pop("pending_gate_unit", None)
+            self.host.state.pop("pending_gate_fingerprint", None)
+            st.restart_reviews_after_candidate_change(
+                self.host.state,
+                unit,
+                "candidate bytes changed while the reviewed gate was pending",
+            )
+            unit["status"] = st.U_PRE_REVIEW_VERIFY
+            st.append_event(
+                self.host.state,
+                "unit_transition",
+                unit=st.unit_key(unit),
+                from_status=st.U_SEALED,
+                to_status=st.U_PRE_REVIEW_VERIFY,
+                reason="pending gate candidate changed; reviews invalidated",
+            )
+            self.host._save()
+            return unit, None
         self.host._gate_commit(unit)
         return unit, self.result(unit)
 
@@ -1298,7 +1321,8 @@ class Driver(object):
             # dispatch can ask for one, and whether or not the conversion
             # above ran or completed: the session names a document, it does
             # not need one to exist.
-            self._derive_staffing_session()
+            if not self.state.get("reviewed_task"):
+                self._derive_staffing_session()
         startup_reconciliation = self.state["milestone"].get(
             canonical_plan.RECONCILIATION_KEY
         )
@@ -1340,7 +1364,10 @@ class Driver(object):
         # mid-step; mutating beside it would surface as HistoryRewriteError
         # instead of a clean refusal). On contention, skip: the lock holder
         # materializes it.
-        if self.state.get("failure") is None:
+        if (
+            self.state.get("failure") is None
+            and not self.state.get("reviewed_task")
+        ):
             try:
                 with self._exclusive():
                     self.state = st.load(self.state_path)
@@ -1848,6 +1875,19 @@ class Driver(object):
             payload
         ).hexdigest()
 
+    def _gate_candidate_fingerprint(self, unit):
+        """Bind pending-gate recovery to product bytes, not ledgers."""
+        payload = json.dumps(
+            {
+                "candidate": self._verification_candidate_fingerprint(),
+                "implementation_scope": self._implementation_scope(unit),
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return "gate-candidate-sha256:%s" % hashlib.sha256(payload).hexdigest()
+
     @staticmethod
     def _snapshot_diff(before, after):
         """Changed paths between two _snapshot() results; a mode mismatch
@@ -2046,7 +2086,7 @@ class Driver(object):
         values = {
             "kind": kind,
             "workspace": self.workspace,
-            "goal_path": ledgers.goal_path(self.state),
+            "goal_path": self._goal_authority_path(),
             "skeleton_path": skeleton_path,
         }
         if kind == contracts.KIND_DRAFT_SKELETON:
@@ -2317,7 +2357,7 @@ class Driver(object):
         values = {
             "kind": kind,
             "workspace": self.workspace,
-            "goal_path": ledgers.goal_path(self.state),
+            "goal_path": self._goal_authority_path(),
             "skeleton_path": skeleton,
         }
         if (
@@ -2533,40 +2573,9 @@ class Driver(object):
         )
 
     def _reviewed_policy_defaults(self, unit):
-        floor = (
-            "impl_reclassify_from"
-            if unit["kind"] == st.UNIT_SLICE_IMPL
-            else "doc_reclassify_from"
+        return tasks.reviewed_policy_defaults(
+            self.reviewed_work._production_kind(unit), self.config
         )
-        defaults = {
-            "review_breadth": "double",
-            "same_family_second_look": False,
-            floor: self.config.get(floor, DEFAULT_CONFIG[floor]),
-            "p3_reclassify_debt": bool(
-                self.config.get("p3_reclassify_debt")
-            ),
-            "p3_defer_max_risk": self.config.get(
-                "p3_defer_max_risk",
-                DEFAULT_CONFIG["p3_defer_max_risk"],
-            ),
-        }
-        for name in (
-            "max_rounds_per_family", "max_fix_loops",
-            "delta_full_review_after_fixes",
-        ):
-            defaults[name] = self.config.get(name, DEFAULT_CONFIG[name])
-        if unit["kind"] == st.UNIT_SLICE_IMPL:
-            settings = self._implementation_size_settings()
-            defaults["implementation_size_control"] = (
-                None if settings is None else {
-                    name: settings[name]
-                    for name in (
-                        "soft_lines", "hard_lines", "unconfirmed_grace_s",
-                        "confirmed_grace_s",
-                    )
-                }
-            )
-        return defaults
 
     def _implementation_size_settings(self, unit=None):
         if unit is not None and unit.get("kind") != st.UNIT_SLICE_IMPL:
@@ -8061,15 +8070,16 @@ class Driver(object):
             "source_base_revision" in handoff
             and "accepted_revision" in handoff
         ):
-            if self._observe_accepted_plan_range(
-                handoff["source_base_revision"],
-                handoff["accepted_revision"],
-                copy.deepcopy(origin.get("plan_source") or {}),
-            ):
-                self._save()
-                raise PlanReconciliationOpened(
-                    "accepted rethink plan range requires reconciliation"
-                )
+            if not self.state.get("reviewed_task"):
+                if self._observe_accepted_plan_range(
+                    handoff["source_base_revision"],
+                    handoff["accepted_revision"],
+                    copy.deepcopy(origin.get("plan_source") or {}),
+                ):
+                    self._save()
+                    raise PlanReconciliationOpened(
+                        "accepted rethink plan range requires reconciliation"
+                    )
             unit.pop("brainstorming_wait", None)
             unit.pop("brainstorming_resume", None)
             if kind == contracts.KIND_IMPLEMENT:
@@ -8521,6 +8531,8 @@ class Driver(object):
         called on the main thread during prompt assembly — before any
         report-call tamper snapshot, so the write is never attributed to
         a reviewer."""
+        if self.state.get("reviewed_task"):
+            return
         rel = ledgers.goal_path(self.state)
         path = os.path.join(self.workspace, rel)
         content = ledgers.render_goal(self.state)
@@ -9939,6 +9951,10 @@ class Driver(object):
             if u["kind"] == st.UNIT_SKELETON:
                 return u["artifact"] or ledgers.skeleton_path(self.state)
         return ledgers.skeleton_path(self.state)
+
+    def _goal_authority_path(self):
+        reviewed = self.state.get("reviewed_task") or {}
+        return reviewed.get("authority_path") or ledgers.goal_path(self.state)
 
     def _slice_note_artifact(self, slice_id):
         for u in self.state["units"]:
@@ -13295,6 +13311,9 @@ class Driver(object):
         self._advance_milestone_after_gate(unit, gate_context=gate_context)
 
     def _gate_message(self, unit):
+        reviewed = self.state.get("reviewed_task") or {}
+        if reviewed:
+            return "Complete reviewed task %s" % reviewed["task_id"]
         if unit["kind"] == st.UNIT_SKELETON:
             return "Complete review of milestone skeleton"
         if unit["kind"] == st.UNIT_SLICE_DOC:
@@ -13324,13 +13343,18 @@ class Driver(object):
         is finalized under the canonical gate message."""
         if not gitops.enabled(self.config):
             return
-        self.state["pending_gate_unit"] = st.unit_key(unit)
+        if self.state.get("pending_gate_unit") != st.unit_key(unit):
+            self.state["pending_gate_unit"] = st.unit_key(unit)
+            self.state["pending_gate_fingerprint"] = (
+                self._gate_candidate_fingerprint(unit)
+            )
         self._save()
         try:
             message = self._gate_message(unit)
             sha = gitops.landed_gate_sha(self.workspace, message)
             if sha is None:
-                ledgers.generate(self.state, self.workspace)
+                if not self.state.get("reviewed_task"):
+                    ledgers.generate(self.state, self.workspace)
                 if any(
                     event.get("type") == "fixer_commits_preserved"
                     and event.get("unit") == st.unit_key(unit)
@@ -13358,6 +13382,7 @@ class Driver(object):
             raise StopStep(str(exc))
         unit["gate_commit"] = sha
         self.state.pop("pending_gate_unit", None)
+        self.state.pop("pending_gate_fingerprint", None)
         design_paths = set(self._design_review_paths(unit))
         if design_paths:
             for candidate in self.state.get("units") or []:

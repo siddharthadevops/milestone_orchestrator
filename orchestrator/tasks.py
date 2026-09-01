@@ -31,6 +31,7 @@ _REVIEWED_PRODUCTION_ROLES = {
 }
 
 _REVIEW_BREADTHS = ("single", "double")
+REVIEWED_TASK_KINDS = tuple(_REVIEWED_PRODUCTION_ROLES)
 _REVIEWED_POLICY_DEFAULTS = {
     "review_breadth": "double",
     "same_family_second_look": False,
@@ -119,6 +120,73 @@ _TASK_EXECUTORS = (
                 "type": "choice",
                 "choices": list(brainstorming.CLOSURE_POLICIES),
                 "default": "unanimity",
+            },
+        },
+    },
+    {
+        "id": "reviewed_task",
+        "name": "Reviewed task",
+        "description": (
+            "Produces, reviews, corrects, seals, and gate-commits one result."
+        ),
+        "operating_mode": "One production through its complete review cycle.",
+        "usage_examples": [
+            "reviewing a planning document",
+            "implementing one bounded change with review",
+        ],
+        "available_agent_configurations": (
+            "The producer and review seats resolve from the staffing session "
+            "that owns the order."
+        ),
+        "configuration_schema": {
+            "task_kind": {
+                "type": "choice",
+                "choices": list(REVIEWED_TASK_KINDS),
+                "default": contracts.KIND_DRAFT_SKELETON,
+            },
+            "producer": {
+                "type": "json", "optional": True, "default": "",
+                "description": "TaskExecutor selection object",
+            },
+            "review_breadth": {
+                "type": "choice", "choices": list(_REVIEW_BREADTHS),
+                "optional": True, "default": "",
+            },
+            "same_family_second_look": {
+                "type": "boolean", "optional": True, "default": "",
+            },
+            "doc_reclassify_from": {
+                "type": "choice",
+                "choices": list(contracts.RECLASSIFY_FROM_LEVELS),
+                "optional": True, "default": "",
+            },
+            "impl_reclassify_from": {
+                "type": "choice",
+                "choices": list(contracts.RECLASSIFY_FROM_LEVELS),
+                "optional": True, "default": "",
+            },
+            "p3_reclassify_debt": {
+                "type": "boolean", "optional": True, "default": "",
+            },
+            "p3_defer_max_risk": {
+                "type": "choice", "choices": list(contracts.DRIFT_RISK_LEVELS),
+                "optional": True, "default": "",
+            },
+            "max_rounds_per_family": {
+                "type": "integer", "minimum": 0,
+                "optional": True, "default": "",
+            },
+            "max_fix_loops": {
+                "type": "integer", "minimum": 0,
+                "optional": True, "default": "",
+            },
+            "delta_full_review_after_fixes": {
+                "type": "integer", "minimum": 0,
+                "optional": True, "default": "",
+            },
+            "implementation_size_control": {
+                "type": "json", "optional": True, "default": "",
+                "description": "Implementation line and grace thresholds",
             },
         },
     },
@@ -275,7 +343,9 @@ def validate_request(request):
         _request_error(exc)
 
 
-def _resolve_configuration(task_executor, configuration):
+def _resolve_configuration(
+    task_executor, configuration, reviewed_defaults=None
+):
     if not isinstance(task_executor, str):
         raise ContractError("task_executor must be a string")
     entry = _TASK_EXECUTOR_BY_ID.get(task_executor)
@@ -288,6 +358,10 @@ def _resolve_configuration(task_executor, configuration):
         configuration = {}
     if not isinstance(configuration, dict):
         raise ContractError("configuration must be an object")
+    if task_executor == "reviewed_task":
+        return resolve_reviewed_task_configuration(
+            configuration, defaults=reviewed_defaults
+        )
 
     schema = entry["configuration_schema"]
     _exact_keys(configuration, (), schema, "configuration")
@@ -316,19 +390,34 @@ def _resolve_configuration(task_executor, configuration):
     return _json_copy(checked, "configuration")
 
 
-def resolve_configuration(task_executor, configuration=_MISSING):
+def resolve_configuration(
+    task_executor, configuration=_MISSING, reviewed_defaults=None
+):
     """Validate one executor configuration and apply catalogue defaults."""
     try:
-        return _resolve_configuration(task_executor, configuration)
+        return _resolve_configuration(
+            task_executor, configuration, reviewed_defaults=reviewed_defaults
+        )
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
 
 
-def _validate_producer_selection(value, context, stored=False):
+def _validate_producer_selection(
+    value, context, stored=False, allowed_executors=None
+):
     _exact_keys(value, ("task_executor",), ("configuration",), context)
     task_executor = value["task_executor"]
     if stored:
         task_executor = stored_task_executor(task_executor)
+    if (
+        allowed_executors is not None
+        and task_executor not in allowed_executors
+        and task_executor in _TASK_EXECUTOR_BY_ID
+    ):
+        raise ContractError(
+            "TaskExecutor %r is not offered for reviewed production"
+            % task_executor
+        )
     configuration = value.get("configuration", _MISSING)
     # Resolve only as a validation probe.  Prospective state preserves an
     # omitted configuration; catalogue defaults freeze when a task is admitted.
@@ -365,18 +454,14 @@ def resolve_reviewed_producer(task_kind, value=_MISSING):
             )
         if value is _MISSING:
             value = {"task_executor": "agent_call"}
+        allowed = (
+            ("agent_call", "brainstorming")
+            if task_kind in PRODUCER_TASK_KINDS else ("agent_call",)
+        )
         checked = _validate_producer_selection(
-            value, "reviewed policy.producer"
+            value, "reviewed policy.producer", allowed_executors=allowed
         )
         task_executor = checked["task_executor"]
-        if (
-            task_kind not in PRODUCER_TASK_KINDS
-            and task_executor != "agent_call"
-        ):
-            raise ContractError(
-                "TaskExecutor %r is not offered for %s"
-                % (task_executor, task_kind)
-            )
         supplied = checked.get("configuration") or {}
         if (
             task_executor == "agent_call"
@@ -551,6 +636,76 @@ def resolve_reviewed_policy(
         _request_error(exc)
 
 
+def reviewed_policy_defaults(task_kind, config):
+    """Project one work area's effective reviewed defaults."""
+    config = config if isinstance(config, dict) else {}
+    floor = (
+        "impl_reclassify_from"
+        if task_kind == contracts.KIND_IMPLEMENT
+        else "doc_reclassify_from"
+    )
+    defaults = {
+        "review_breadth": "double",
+        "same_family_second_look": False,
+        floor: config.get(floor, _REVIEWED_POLICY_DEFAULTS[floor]),
+        "p3_reclassify_debt": config.get(
+            "p3_reclassify_debt", _REVIEWED_POLICY_DEFAULTS["p3_reclassify_debt"]
+        ),
+        "p3_defer_max_risk": config.get(
+            "p3_defer_max_risk", _REVIEWED_POLICY_DEFAULTS["p3_defer_max_risk"]
+        ),
+    }
+    for name in (
+        "max_rounds_per_family", "max_fix_loops",
+        "delta_full_review_after_fixes",
+    ):
+        defaults[name] = config.get(name, _REVIEWED_POLICY_DEFAULTS[name])
+    if task_kind == contracts.KIND_IMPLEMENT:
+        control = config.get("implementation_size_control")
+        defaults["implementation_size_control"] = (
+            dict(control) if isinstance(control, dict) else None
+        )
+    return defaults
+
+
+def resolve_reviewed_task_configuration(value, defaults=None):
+    """Resolve a public reviewed-task configuration before admission."""
+    try:
+        _exact_keys(
+            value,
+            ("task_kind",),
+            (
+                "producer", "review_breadth", "same_family_second_look",
+                "doc_reclassify_from", "impl_reclassify_from",
+                "p3_reclassify_debt", "p3_defer_max_risk",
+                "max_rounds_per_family", "max_fix_loops",
+                "delta_full_review_after_fixes",
+                "implementation_size_control",
+            ),
+            "configuration",
+        )
+        task_kind = value["task_kind"]
+        if task_kind not in REVIEWED_TASK_KINDS:
+            raise ContractError(
+                "configuration.task_kind must be one of %s"
+                % (list(REVIEWED_TASK_KINDS),)
+            )
+        policy = dict(value)
+        policy.pop("task_kind")
+        resolved = resolve_reviewed_policy(
+            task_kind, policy, defaults=(
+                reviewed_policy_defaults(task_kind, defaults)
+                if defaults is not None else None
+            )
+        )
+        return _json_copy(
+            {"task_kind": task_kind, **resolved},
+            "reviewed-task configuration",
+        )
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
 def producer_order_from_selection(selection, request):
     """Build an order from the trusted producer frozen on reviewed work."""
     return {
@@ -646,7 +801,7 @@ def _order_staffing_session(value):
     return _text(value, "task order.staffing_session")
 
 
-def validate_order(order):
+def validate_order(order, reviewed_defaults=None):
     """Validate a closed order and return its resolved, detached value."""
     try:
         _exact_keys(
@@ -669,6 +824,7 @@ def validate_order(order):
             "configuration": _resolve_configuration(
                 task_executor,
                 order.get("configuration", _MISSING),
+                reviewed_defaults=reviewed_defaults,
             ),
             "staffing_session": _order_staffing_session(
                 order.get("staffing_session")

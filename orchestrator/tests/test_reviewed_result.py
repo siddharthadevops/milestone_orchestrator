@@ -374,10 +374,10 @@ class ReviewedResultContractTest(unittest.TestCase):
                 subjects.count("Complete review of milestone skeleton"), 1
             )
 
-    def test_slice_four_does_not_publish_an_executor(self):
+    def test_slice_five_publishes_reviewed_task(self):
         self.assertEqual(
             [entry["id"] for entry in tasks.task_executor_catalogue()],
-            ["agent_call", "brainstorming"],
+            ["agent_call", "brainstorming", "reviewed_task"],
         )
 
 

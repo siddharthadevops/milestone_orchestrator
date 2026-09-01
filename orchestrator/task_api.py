@@ -13,13 +13,14 @@ import threading
 import time
 import uuid
 
-from orchestrator import brainstorming, brainstorming_tasks, driver, gitsync
+from orchestrator import brainstorming, brainstorming_tasks, contracts, driver, gitsync
 from orchestrator import kvstore, pricing
 from orchestrator import registry, runners, staffing, tasks
 from orchestrator import state as st
 
 
 TASKS_DIRNAME = "tasks"
+REVIEWED_DIRNAME = "reviewed"
 _TASK_KEY_PREFIX = "tasks/task:"
 _DOCUMENT_SCHEMA_VERSION = 1
 
@@ -32,6 +33,15 @@ def state_directory(home):
 def records_path(home):
     """The KV file that holds every standalone task document."""
     return os.path.join(state_directory(home), kvstore.STORE_FILENAME)
+
+
+def reviewed_state_directory(home, task_id):
+    fragment = kvstore.validate_fragment(task_id, "task_id")
+    return os.path.join(os.path.abspath(home), TASKS_DIRNAME, REVIEWED_DIRNAME, fragment)
+
+
+def reviewed_state_path(home, task_id):
+    return os.path.join(reviewed_state_directory(home, task_id), "state.json")
 
 
 def task_key(task_id):
@@ -195,6 +205,10 @@ def forget_task_evidence(home, record):
         pass
     except Exception:
         pass
+    if (record.get("order") or {}).get("task_executor") == "reviewed_task":
+        shutil.rmtree(
+            reviewed_state_directory(home, task_id), ignore_errors=True
+        )
     if (record.get("order") or {}).get("task_executor") == "brainstorming":
         try:
             work_area, _parent, _target = (
@@ -213,7 +227,21 @@ def task_session_id(home, record, host=None):
     Running: the host knows it. Otherwise: the session recorded on the
     task's private target (the adapter's own retained-authority lookup).
     Worker tasks own no session."""
-    if (record.get("order") or {}).get("task_executor") != "brainstorming":
+    executor = (record.get("order") or {}).get("task_executor")
+    if executor == "reviewed_task":
+        try:
+            lifecycle = st.load(reviewed_state_path(home, record["id"]))
+            selected = next(
+                unit for unit in lifecycle["units"]
+                if st.unit_key(unit) == lifecycle["reviewed_task"]["unit"]
+            )
+            session_id = (selected.get("brainstorming_wait") or {}).get(
+                "session_id"
+            )
+            return session_id if isinstance(session_id, str) else None
+        except Exception:
+            return None
+    if executor != "brainstorming":
         return None
     lookup = getattr(host, "running_session_id", None)
     if callable(lookup):
@@ -423,6 +451,108 @@ def _native_failure(exc):
     return getattr(exc, "raw_text", None)
 
 
+def _reviewed_authority(record):
+    request = record["order"]["request"]
+    return (
+        "# Standalone reviewed task authority\n\n"
+        "## Request\n\n%s\n\n## Context\n\n```json\n%s\n```\n\n"
+        "## Reference documents\n\n%s\n"
+        % (
+            request["request"],
+            json.dumps(
+                request["context"], ensure_ascii=False, sort_keys=True, indent=2
+            ),
+            "\n".join(
+                "- %s" % path for path in request["reference_documents"]
+            ) or "- none",
+        )
+    )
+
+
+def ensure_reviewed_state(home, record, config):
+    """Create the task-id-owned lifecycle state before its first call."""
+    path = reviewed_state_path(home, record["id"])
+    if os.path.exists(path):
+        return path
+    request = record["order"]["request"]
+    workspace = _workspace(record)
+    effective = copy.deepcopy(config)
+    output = request.get("output_directory")
+    if output is not None:
+        relative = os.path.relpath(output, workspace)
+        effective["docs_dir"] = relative if relative != "." else "."
+    task_kind = record["order"]["configuration"]["task_kind"]
+    project = request["work_area"]
+    project = (
+        copy.deepcopy(project)
+        if set(("directory", "project", "work_area", "primary", "additional"))
+        <= set(project)
+        else None
+    )
+    state = st.new_state(
+        request["request"],
+        workspace,
+        effective,
+        name="reviewed task %s" % record["id"],
+        slug="reviewed-task-%s" % record["id"][:8],
+        project=project,
+    )
+    references = request["reference_documents"]
+    authority_path = os.path.join(
+        reviewed_state_directory(home, record["id"]), "authority.md"
+    )
+    slice_info = {
+        "id": 1,
+        "title": request["request"].splitlines()[0][:120],
+        "intent": request["request"],
+    }
+    if task_kind == contracts.KIND_DRAFT_SKELETON:
+        target = state["units"][0]
+    else:
+        skeleton = state["units"][0]
+        skeleton["status"] = st.U_SEALED
+        skeleton["artifact"] = (
+            references[1]
+            if task_kind == contracts.KIND_IMPLEMENT and len(references) > 1
+            else references[0] if references else authority_path
+        )
+        state["milestone"]["slices"] = [slice_info]
+        note = st._new_unit(st.UNIT_SLICE_DOC, 1)
+        if task_kind == contracts.KIND_DRAFT_SLICE_NOTE:
+            target = note
+            state["units"].append(note)
+        else:
+            note["status"] = st.U_SEALED
+            note["artifact"] = references[0] if references else authority_path
+            target = st._new_unit(st.UNIT_SLICE_IMPL, 1)
+            state["units"].extend((note, target))
+    policy = copy.deepcopy(record["order"]["configuration"])
+    policy.pop("task_kind")
+    target["reviewed_policy"] = policy
+    state["reviewed_task"] = {
+        "task_id": record["id"],
+        "unit": st.unit_key(target),
+        "authority_path": authority_path,
+    }
+    session = record["order"].get("staffing_session")
+    if session:
+        st.bind_staffing_session(state, session)
+    st.append_event(state, "initialized", goal=request["request"])
+    st.append_event(
+        state,
+        "reviewed_policy_frozen",
+        unit=st.unit_key(target),
+        task_kind=task_kind,
+        task_executor=policy["producer"]["task_executor"],
+    )
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(authority_path, "w", encoding="utf-8") as handle:
+        handle.write(_reviewed_authority(record))
+    driver._write_initial_amendments(path)
+    st.save_new(path, state)
+    return path
+
+
 class DirectTaskHost:
     """Start one daemon execution per admitted order; retain no queue policy."""
 
@@ -504,6 +634,12 @@ class DirectTaskHost:
     def start(self, record, config_resolver):
         task_id = record["id"]
         workspace = _workspace(record)
+        if tasks.stored_task_executor(
+            record["order"]["task_executor"]
+        ) == "reviewed_task":
+            path = reviewed_state_path(self.home, task_id)
+            if not os.path.exists(path):
+                ensure_reviewed_state(self.home, record, config_resolver())
         with self._lock:
             if task_id in self._active:
                 return None
@@ -544,7 +680,7 @@ class DirectTaskHost:
                 continue
             task_id = record["id"]
             executor = (record.get("order") or {}).get("task_executor")
-            if executor == "brainstorming":
+            if executor in ("brainstorming", "reviewed_task"):
                 try:
                     if self.start(record, config_resolver_for(record)) is not None:
                         adopted.append(task_id)
@@ -586,14 +722,105 @@ class DirectTaskHost:
                 record["order"]["task_executor"]
             ) == "agent_call":
                 self._run_worker(record, config_resolver)
-            else:
+            elif record["order"]["task_executor"] == "brainstorming":
                 self._run_brainstorming(record, config_resolver)
+            else:
+                self._run_reviewed(record)
         finally:
             with self._lock:
                 self._active.pop(task_id, None)
                 self._controls.pop(task_id, None)
                 self._sessions.pop(task_id, None)
                 self._stops.pop(task_id, None)
+
+    def _reviewed_failure(self, subject, unit, reason):
+        return {
+            "status": "failure",
+            "reason": str(reason or "Reviewed task failed"),
+            **st.reviewed_work_accounting(subject.state, unit),
+            "native_result": None,
+        }
+
+    def _run_reviewed(self, record):
+        task_id = record["id"]
+        path = reviewed_state_path(self.home, task_id)
+        lifecycle_state = st.load(path)
+        runner = self.runner_factory(lifecycle_state["config"], _workspace(record))
+        subject = driver.Driver(
+            path, runner=runner, model_profiles_home=self.home
+        )
+        unit_key = subject.state["reviewed_task"]["unit"]
+        try:
+            for _ in range(10000):
+                unit = subject._unit_by_key(unit_key)
+                stop_reason = self._stop_reason(task_id)
+                if stop_reason is not None:
+                    self.store.record_result(
+                        task_id,
+                        self._reviewed_failure(subject, unit, stop_reason),
+                    )
+                    return
+                if subject.state.get("failure") is not None:
+                    failure = subject.state["failure"]
+                    self.store.record_result(
+                        task_id,
+                        self._reviewed_failure(
+                            subject, unit, failure.get("reason")
+                        ),
+                    )
+                    return
+                with subject._exclusive():
+                    subject._assert_not_stale()
+                    recovered = subject.reviewed_work.recover_pending_gate()
+                    if recovered is None:
+                        action = subject.reviewed_work.next_action(unit)
+                        subject.reviewed_work.execute(
+                            action,
+                            call_preparation=driver.ReviewedWorkCallPreparation(
+                                subject
+                            ),
+                        )
+                    subject._save()
+                    subject._clear_busy()
+                unit = subject._unit_by_key(unit_key)
+                wait = unit.get("brainstorming_wait") or {}
+                session_id = wait.get("session_id")
+                with self._lock:
+                    if isinstance(session_id, str):
+                        self._sessions[task_id] = session_id
+                    else:
+                        self._sessions.pop(task_id, None)
+                result = subject.reviewed_work.result(unit)
+                if result is not None:
+                    stop_reason = self._stop_reason(task_id)
+                    self.store.record_result(
+                        task_id,
+                        self._reviewed_failure(subject, unit, stop_reason)
+                        if stop_reason is not None else result,
+                    )
+                    return
+                if session_id:
+                    time.sleep(self.poll_interval)
+            raise RuntimeError("reviewed task exceeded its lifecycle step bound")
+        except driver.StopStep as exc:
+            unit = subject._unit_by_key(unit_key)
+            reason = (
+                (subject.state.get("failure") or {}).get("reason") or str(exc)
+            )
+            self.store.record_result(
+                task_id, self._reviewed_failure(subject, unit, reason)
+            )
+        except Exception as exc:
+            unit = subject._unit_by_key(unit_key)
+            self.store.record_result(
+                task_id,
+                self._reviewed_failure(
+                    subject,
+                    unit,
+                    "Reviewed task execution failed: %s"
+                    % (str(exc).strip() or type(exc).__name__),
+                ),
+            )
 
     def _run_worker(self, record, config_resolver):
         task_id = record["id"]

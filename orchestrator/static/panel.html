@@ -5741,12 +5741,27 @@ function renderTaskExecutorEditor() {
     if (definition.type === "integer")
       return `<label>${esc(name)}</label><input type="number" step="1"
         min="${esc(definition.minimum)}" value="${esc(value)}"
-        data-task-config="${esc(name)}" data-task-config-type="integer">`;
+        data-task-config="${esc(name)}" data-task-config-type="integer"
+        ${definition.optional ? 'data-task-config-optional="true"' : ""}>`;
     if (definition.type === "choice")
       return `<label>${esc(name)}</label><select data-task-config="${esc(name)}"
-        data-task-config-type="choice">${(definition.choices || []).map(choice =>
+        data-task-config-type="choice"
+        ${definition.optional ? 'data-task-config-optional="true"' : ""}>
+        ${definition.optional ? '<option value="">— inherit —</option>' : ""}
+        ${(definition.choices || []).map(choice =>
           `<option value="${esc(choice)}"${choice === value ? " selected" : ""}>${esc(choice)}</option>`
         ).join("")}</select>`;
+    if (definition.type === "boolean")
+      return `<label>${esc(name)}</label><select data-task-config="${esc(name)}"
+        data-task-config-type="boolean" data-task-config-optional="true">
+        <option value="">— inherit —</option>
+        <option value="true"${value === "true" ? " selected" : ""}>true</option>
+        <option value="false"${value === "false" ? " selected" : ""}>false</option></select>`;
+    if (definition.type === "json")
+      return `<label>${esc(name)}</label><textarea rows="2"
+        placeholder="${esc(definition.description || "JSON object")}"
+        data-task-config="${esc(name)}" data-task-config-type="json"
+        data-task-config-optional="true">${esc(value)}</textarea>`;
     return "";
   }).join("");
   controls.innerHTML = rows
@@ -5762,9 +5777,17 @@ function currentTaskConfiguration() {
     "#task_configuration [data-task-config]")) {
     if (!control.checkValidity())
       throw new Error("executor configuration is incomplete");
-    configuration[control.dataset.taskConfig] =
-      control.dataset.taskConfigType === "integer"
-        ? Number(control.value) : control.value;
+    const value = control.value.trim();
+    if (control.dataset.taskConfigOptional === "true" && value === "")
+      continue;
+    if (control.dataset.taskConfigType === "json") {
+      try { configuration[control.dataset.taskConfig] = JSON.parse(value); }
+      catch (_) { throw new Error(`${control.dataset.taskConfig} must be valid JSON`); }
+    } else if (control.dataset.taskConfigType === "integer")
+      configuration[control.dataset.taskConfig] = Number(value);
+    else if (control.dataset.taskConfigType === "boolean")
+      configuration[control.dataset.taskConfig] = value === "true";
+    else configuration[control.dataset.taskConfig] = value;
   }
   return {configuration, present: Object.keys(schema).length > 0};
 }

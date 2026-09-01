@@ -87,7 +87,7 @@ class TaskContractsTest(unittest.TestCase):
         self.assertIsInstance(catalogue, list)
         self.assertEqual(
             [entry["id"] for entry in catalogue],
-            ["agent_call", "brainstorming"],
+            ["agent_call", "brainstorming", "reviewed_task"],
         )
         fields = {
             "id",
@@ -228,6 +228,56 @@ class TaskContractsTest(unittest.TestCase):
             tasks.resolve_configuration,
             1,
         )
+
+        reviewed = tasks.resolve_configuration(
+            "reviewed_task", {"task_kind": "implement"}
+        )
+        self.assertEqual(reviewed["task_kind"], "implement")
+        self.assertEqual(
+            reviewed["producer"]["task_executor"], "agent_call"
+        )
+        self.assertEqual(reviewed["review_breadth"], "double")
+        self.assertIn("implementation_size_control", reviewed)
+        inherited = tasks.resolve_configuration(
+            "reviewed_task",
+            {"task_kind": "implement"},
+            reviewed_defaults={
+                "max_fix_loops": 7,
+                "implementation_size_control": {
+                    "soft_lines": 40,
+                    "hard_lines": 60,
+                    "unconfirmed_grace_s": 9,
+                    "confirmed_grace_s": 15,
+                },
+            },
+        )
+        self.assertEqual(inherited["max_fix_loops"], 7)
+        self.assertEqual(
+            inherited["implementation_size_control"]["soft_lines"], 40
+        )
+        for configuration, code in (
+            ({}, tasks.INVALID_TASK_REQUEST),
+            ({"task_kind": "complete_verification"}, tasks.INVALID_TASK_REQUEST),
+            ({"task_kind": "draft_skeleton", "producer": {
+                "task_executor": "brainstorming",
+            }}, tasks.INVALID_TASK_REQUEST),
+            ({"task_kind": "implement", "producer": {
+                "task_executor": "reviewed_task",
+            }}, tasks.INVALID_TASK_REQUEST),
+            ({"task_kind": "implement", "producer": {
+                "task_executor": "missing",
+            }}, tasks.UNKNOWN_TASK_EXECUTOR),
+            ({"task_kind": "implement", "producer": {
+                "task_executor": "brainstorming",
+            }, "implementation_size_control": {}}, tasks.INVALID_TASK_REQUEST),
+        ):
+            with self.subTest(configuration=configuration):
+                self.assert_request_error(
+                    code,
+                    tasks.resolve_configuration,
+                    "reviewed_task",
+                    configuration,
+                )
 
         definition = tasks._TASK_EXECUTOR_BY_ID["brainstorming"][
             "configuration_schema"
