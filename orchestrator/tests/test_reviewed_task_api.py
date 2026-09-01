@@ -19,6 +19,7 @@ from orchestrator.tests.test_brainstorming_slice_production import (
 )
 from orchestrator.tests.test_driver_mock import (
     canonical_skeleton_document,
+    init_state,
     make_config,
     ok,
     report,
@@ -788,6 +789,136 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
             terminal["result"]["native_result"]["gate_commit"],
             self._git(workspace, "rev-parse", "--short", "HEAD"),
         )
+
+    def test_shared_pending_gate_recovery_rejects_downtime_edits_for_both_callers(self):
+        for standalone in (False, True):
+            caller = "standalone" if standalone else "milestone"
+            with self.subTest(caller=caller):
+                workspace = self._repo("pending-gate-%s" % caller)
+                if standalone:
+                    record = self._admit_open_reviewed(
+                        workspace, "draft_skeleton"
+                    )
+                    path = task_api.reviewed_state_path(
+                        self.home, record["id"]
+                    )
+                else:
+                    record = None
+                    path = init_state(workspace, self._config())
+
+                first_runner = runners.MockRunner(
+                    self._script("draft_skeleton")
+                )
+                subject = drv.Driver(
+                    path, runner=first_runner, model_profiles_home=self.home
+                )
+                unit_key = (
+                    subject.state["reviewed_task"]["unit"]
+                    if standalone else "skeleton"
+                )
+
+                def advance(current):
+                    if standalone:
+                        return self._standalone_step(current)
+                    return current.step()[0]
+
+                while subject._unit_by_key(unit_key)["status"] \
+                        != st.U_PRE_SEAL_VERIFY:
+                    advance(subject)
+                old_reviews = [
+                    round_["id"]
+                    for round_ in subject._unit_by_key(unit_key)["rounds"]
+                    if round_["kind"] == contracts.KIND_REVIEW_ROUND
+                ]
+                self.assertEqual(len(old_reviews), 2)
+
+                with mock.patch.object(
+                    gitops,
+                    "finalize_gate",
+                    side_effect=RuntimeError("gate unavailable"),
+                ), self.assertRaisesRegex(RuntimeError, "gate unavailable"):
+                    advance(subject)
+
+                pending = st.load(path)
+                pending_unit = next(
+                    unit for unit in pending["units"]
+                    if st.unit_key(unit) == unit_key
+                )
+                self.assertEqual(pending["pending_gate_unit"], unit_key)
+                self.assertTrue(pending["pending_gate_fingerprint"])
+                self.assertEqual(pending_unit["status"], st.U_SEALED)
+                self.assertFalse(pending_unit.get("gate_commit"))
+                if standalone:
+                    self.assertIsNone(
+                        task_api.StandaloneTaskStore(self.home).record(
+                            record["id"]
+                        )["result"]
+                    )
+
+                marker = "Downtime edit for %s caller." % caller
+                write_file(
+                    "docs/skeleton.md",
+                    canonical_skeleton_document() + "\n" + marker + "\n",
+                )(workspace)
+                recovery_runner = runners.MockRunner(
+                    self._script("draft_skeleton")[1:]
+                )
+
+                if standalone:
+                    terminal = self._adopt_reviewed(record, recovery_runner)
+                    lifecycle = st.load(path)
+                    self.assertEqual(
+                        terminal["result"]["native_result"]["gate_commit"],
+                        next(
+                            unit["gate_commit"]
+                            for unit in lifecycle["units"]
+                            if st.unit_key(unit) == unit_key
+                        ),
+                    )
+                else:
+                    recovered = drv.Driver(
+                        path,
+                        runner=recovery_runner,
+                        model_profiles_home=self.home,
+                    )
+                    rewound = recovered._unit_by_key(unit_key)
+                    self.assertEqual(rewound["status"], st.U_PRE_REVIEW_VERIFY)
+                    self.assertFalse(rewound.get("gate_commit"))
+                    self.assertNotIn("pending_gate_unit", recovered.state)
+                    for _ in range(20):
+                        unit = recovered._unit_by_key(unit_key)
+                        if unit["status"] == st.U_SEALED \
+                                and unit.get("gate_commit"):
+                            break
+                        recovered.step()
+                    else:
+                        self.fail("milestone caller did not regain its gate")
+                    lifecycle = st.load(path)
+
+                unit = next(
+                    candidate for candidate in lifecycle["units"]
+                    if st.unit_key(candidate) == unit_key
+                )
+                fresh_reviews = [
+                    round_["id"]
+                    for round_ in unit["rounds"]
+                    if round_["kind"] == contracts.KIND_REVIEW_ROUND
+                    and round_["id"] not in old_reviews
+                ]
+                self.assertEqual(len(fresh_reviews), 2)
+                self.assertEqual(unit["seals"][-1]["reviews"], fresh_reviews)
+                self.assertEqual(unit["review_cycle_start"], len(old_reviews))
+                self.assertTrue(any(
+                    event["type"] == "review_cycle_restarted"
+                    and "pending" in event["reason"]
+                    for event in lifecycle["events"]
+                ))
+                self.assertEqual(recovery_runner.script, [])
+                self.assertIn(
+                    marker,
+                    self._git(workspace, "show", "HEAD:docs/skeleton.md"),
+                )
+                self.assertEqual(self._git(workspace, "status", "--short"), "")
 
     def test_existing_direct_tasks_and_old_records_keep_their_recovery_law(self):
         workspace = self.directory("legacy-worker")
