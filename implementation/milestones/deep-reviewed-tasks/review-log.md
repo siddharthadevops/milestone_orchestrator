@@ -363,3 +363,29 @@
 - `claude-claude-DRT-S05A-R4-003` (raised claude, cleared codex): Pending-gate recovery discards a milestone unit's Brainstorming-granted design-update authority even when no gate was completed — The mismatch-recovery branch falsely retires durable design authority before any gate, plausibly misleading later work that trusts shared recovery, while correction remains bounded to distinguishing rewind from completed closure and adding focused regression coverage.
 - `claude-claude-DRT-S05A-R4-004` (raised claude, cleared codex): A reviewed task ordered with an output_directory fails immediately after admission when the work area's primary path contains a symlink — The realpath-versus-registered-path mismatch affects only symlink-aliased primaries, fails synchronously before work begins rather than silently corrupting later work, and is corrected locally by using a consistent canonical base plus one regression test.
 
+## slice_impl-05-b (Standalone reviewed-task ordering)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-b-codex-r1 | review_round | codex | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-codex-r1.txt` |
+| slice_impl-05-b-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-claude-r1.txt` |
+| slice_impl-05-b-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-fix1.txt` |
+| slice_impl-05-b-codex-r3 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-delta1.txt` |
+| slice_impl-05-b-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-codex-r2.txt` |
+| slice_impl-05-b-claude-r2 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-b-codex-r4`, `slice_impl-05-b-claude-r2`
+
+**Deferred debt (independently classified):**
+- `codex-slice_impl-05-b-codex-r1/DRT-S05B-001` (raised codex, cleared codex): A project-default update can turn a required refusal into an admitted failure — The strict contract freezes effective configuration before acknowledgement, but handoff silently re-resolves it, so later reviewed/deep-task builders can trust a false admission invariant, while correction remains bounded to carrying the resolved configuration through handoff and adding a focused ra
+- `codex-slice_impl-05-b-codex-r1/DRT-S05B-002` (raised codex, cleared codex): The pinned defaults check never exercises an untouched panel order — The strict named test falsely signals full API/panel and all-default coverage while exercising only the API and five defaults, so later panel/default work can silently trust a regression-safe contract that is not actually pinned, but correction remains bounded to this slice’s missing assertions, pan
+- `codex-slice_impl-05-b-codex-r1/DRT-S05B-003` (raised codex, cleared codex): Successive-order isolation is not pinned after a stopped predecessor — The strict slice contract requires successor isolation after both success and Stop, but the named test covers only success, so a builder can plausibly trust false coverage while correction remains bounded to one stopped-predecessor test and any revealed reviewed-task lifecycle fix.
+- `claude-slice_impl-05-b-claude-r1/DRT-S05B-R1-002` (raised claude, cleared codex): The slice's pinned standalone-versus-milestone parity test is absent from the workspace and is not part of the delegated remainder, so no named test proves the standalone adapter hands its admitted objective, context, references, safeguards and staffing session to the routed phases or counts their calls once — The named parity obligation is visibly absent from both the tests and delegated remainder, so a careful builder should detect it while a hasty builder could trust the cut summary, and correction is bounded to this unit’s handoff/accounting assertions and any local defects they expose.
+- `codex-DRT-S05B-D2-001` (raised codex, cleared codex): The new synthetic authority path prevents agent-call rethink attachment — This is a real runtime-correctness and coverage defect: the absolute synthetic artifact conflicts with the strict workspace-relative rethink boundary and could survive mocked tests, but the next part’s mandated real rethink/restart scenario should expose it and correction stays within the standalone
+- `claude-claude-slice_impl-05-b-claude-r2/DRT-S05B-R2-001` (raised claude, cleared codex): The standalone read-only suite-checkpoint boundary returns a result shaped for a different consumer, so every standalone reviewed implementation records its verification evidence with null `candidate_before`/`candidate_after` where the milestone caller records the certified repository revision — The strict standalone/milestone evidence-parity claim is false on the normal success path and could silently propagate into later verification work, but no gate or consumer depends on the blank fields and correction is a small local boundary-shape fix plus regression assertion.
+

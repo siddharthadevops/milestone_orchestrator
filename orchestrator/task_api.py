@@ -456,7 +456,7 @@ def _reviewed_authority(record):
     return (
         "# Standalone reviewed task authority\n\n"
         "## Request\n\n%s\n\n## Context\n\n```json\n%s\n```\n\n"
-        "## Reference documents\n\n%s\n"
+        "## Reference documents (caller order; no positional roles)\n\n%s\n"
         % (
             request["request"],
             json.dumps(
@@ -497,7 +497,6 @@ def ensure_reviewed_state(home, record, config):
         slug="reviewed-task-%s" % record["id"][:8],
         project=project,
     )
-    references = request["reference_documents"]
     authority_path = os.path.join(
         reviewed_state_directory(home, record["id"]), "authority.md"
     )
@@ -511,11 +510,7 @@ def ensure_reviewed_state(home, record, config):
     else:
         skeleton = state["units"][0]
         skeleton["status"] = st.U_SEALED
-        skeleton["artifact"] = (
-            references[1]
-            if task_kind == contracts.KIND_IMPLEMENT and len(references) > 1
-            else references[0] if references else authority_path
-        )
+        skeleton["artifact"] = authority_path
         state["milestone"]["slices"] = [slice_info]
         note = st._new_unit(st.UNIT_SLICE_DOC, 1)
         if task_kind == contracts.KIND_DRAFT_SLICE_NOTE:
@@ -523,7 +518,7 @@ def ensure_reviewed_state(home, record, config):
             state["units"].append(note)
         else:
             note["status"] = st.U_SEALED
-            note["artifact"] = references[0] if references else authority_path
+            note["artifact"] = authority_path
             target = st._new_unit(st.UNIT_SLICE_IMPL, 1)
             state["units"].extend((note, target))
     policy = copy.deepcopy(record["order"]["configuration"])

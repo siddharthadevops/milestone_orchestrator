@@ -127,7 +127,8 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         return script
 
     def _run_reviewed(
-        self, workspace, kind, marker="", cut=None, script=None
+        self, workspace, kind, marker="", cut=None, script=None,
+        references=None,
     ):
         runner = runners.MockRunner(
             script or self._script(kind, marker=marker, cut=cut)
@@ -141,8 +142,11 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         with mock.patch.object(
             service, "_direct_task_config", return_value=self._config()
         ):
+            order = self._reviewed_order(workspace, kind)
+            if references is not None:
+                order["request"]["reference_documents"] = list(references)
             status, body = self.request(
-                "POST", "/api/tasks", self._reviewed_order(workspace, kind)
+                "POST", "/api/tasks", order
             )
             self.assertEqual(status, 201, body)
             terminal = self.wait_record(body["task"]["id"])
@@ -284,6 +288,30 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
             record["order"]["task_executor"] == "reviewed_task"
             for record in records[before:]
         ))
+
+    def test_reference_documents_remain_ordered_untyped_material(self):
+        workspace = self._repo("references")
+        references = ["docs/skeleton.md", "docs/slice-01.md", "docs/extra.md"]
+        terminal, _runner, _host = self._run_reviewed(
+            workspace, "implement", references=references
+        )
+
+        self.assertEqual(
+            terminal["order"]["request"]["reference_documents"], references
+        )
+        path = task_api.reviewed_state_path(self.home, terminal["id"])
+        lifecycle = st.load(path)
+        authority = lifecycle["reviewed_task"]["authority_path"]
+        sealed = lifecycle["units"][:2]
+        self.assertEqual([unit["artifact"] for unit in sealed],
+                         [authority, authority])
+        with open(authority, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("no positional roles", text)
+        self.assertEqual(
+            [text.index("- %s" % reference) for reference in references],
+            sorted(text.index("- %s" % reference) for reference in references),
+        )
 
     def test_successive_orders_on_one_work_area_have_disjoint_evidence_and_accounting(self):
         workspace = self._repo("successive")
