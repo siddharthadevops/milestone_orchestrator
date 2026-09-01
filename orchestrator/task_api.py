@@ -829,6 +829,21 @@ class DirectTaskHost:
             "native_result": None,
         }
 
+    def _record_deep_terminal(self, task_id, reason, child_result=None):
+        """Fence a deep terminal choice against concurrent operator Stop."""
+        with registry.locked(self.home):
+            with self._lock:
+                stop_reason = self._stops.get(task_id)
+                result = self._deep_failure(
+                    stop_reason or reason, child_result
+                )
+                self.store.record_result_locked(task_id, result)
+                # A Stop arriving after this point was not accepted: the
+                # terminal record and work-area release become visible as one
+                # host decision under the same control lock.
+                self._active.pop(task_id, None)
+        return result
+
     def _run_deep(self, record, config_resolver):
         """Deliver only Slice 6's documentation child, then keep parent open."""
         task_id = record["id"]
@@ -848,9 +863,7 @@ class DirectTaskHost:
                 else:
                     child = None
         if child is None:
-            self.store.record_result(
-                task_id, self._deep_failure(stop_reason)
-            )
+            self._record_deep_terminal(task_id, stop_reason)
             return
         if child["result"] is None:
             self.start(child, config_resolver, parent_task_id=task_id)
@@ -872,9 +885,7 @@ class DirectTaskHost:
                 stop_reason is not None or result["status"] == "failure"
             ):
                 reason = stop_reason or result.get("reason")
-                self.store.record_result(
-                    task_id, self._deep_failure(reason, result)
-                )
+                self._record_deep_terminal(task_id, reason, result)
                 return
             time.sleep(self.poll_interval)
 

@@ -478,3 +478,21 @@
 - `claude-claude-r1/DRT-S06A-R-002` (raised claude, cleared codex): No named test exercises deep-task restart adoption, so the pinned 'restart still finds the same terminal child' guarantee has no executable enforcement — Risk is high because the strict verification table falsely presents restart reuse as exercised while the two-test module proves only deletion refusal for this row, so Slice 7 can regress the same relation/admission seams under a green focused command; damage is medium because correction is bounded t
 - `claude-claude-s06a-r2/DRT-S06A-STOP-001` (raised claude, cleared codex): The deep parent's own terminal write is not fenced against Stop the way this same commit fences the child's, so `POST /api/tasks/<deep-id>/stop` can answer `stopping` for a parent that has already closed with a non-operator reason — This P3 is a strict behavioural-correctness defect: the accepted implementation and reassuring adjacent race test can plausibly teach later deep-task work that parent terminalization is safely fenced, while correction remains bounded to terminal-write synchronization and focused concurrency coverage
 
+## slice_impl-06-b (Deep documentation and child authority)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-b-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-b-codex-r1.txt` |
+| slice_impl-06-b-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-b-codex-r1`, `slice_impl-06-b-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-slice_impl-06-b-codex-r1/DRT-S06B-001` (raised codex, cleared codex): Parent Stop propagation permits post-acceptance child lifecycle calls — The implementation and reassuring Stop test silently violate the pinned post-acceptance lifecycle boundary, so later deep-child work could reuse polling-based propagation and start paid calls, while correction remains bounded to this unit’s Stop synchronization and focused race coverage.
+- `claude-claude-slice_impl-06-b-r1/DRT-S06B-SIZE-001` (raised claude, cleared codex): The bound partial size-control repair is gated on `deep_task`, so the sibling public `reviewed_task` order still refuses partial overrides that are valid against the bound project's defaults — The executor-specific preflight encodes a false asymmetry that rejects a schema-promised, project-valid reviewed_task payload and can plausibly propagate the wrong admission contract, while correction remains bounded to this unit’s resolver and focused parity coverage before shipment.
+

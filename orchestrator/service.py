@@ -4192,7 +4192,14 @@ def _validate_task_references(order):
 
 def _resolve_direct_task_order(home, who, body):
     try:
-        order = tasks.validate_order(body)
+        # A deep order's implementation thresholds can be a partial override
+        # of the bound project's values. Validate the common envelope first,
+        # then freeze the actual two policies once that project is known.
+        preflight = body
+        if isinstance(body, dict) and body.get("task_executor") == "deep_task":
+            preflight = copy.deepcopy(body)
+            preflight["configuration"] = {}
+        order = tasks.validate_order(preflight)
         selector = order["request"]["work_area"]
         if set(selector) == {"project", "work_area"}:
             project = require_project_access(home, who, selector["project"])

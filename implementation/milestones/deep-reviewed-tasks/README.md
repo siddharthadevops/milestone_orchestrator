@@ -299,4 +299,5 @@ The goal is achieved when:
 | slice_impl-05-c (Standalone reviewed-task ordering) | reviewed | 2 | satisfied | 3c8932a |
 | slice_impl-05-d (Standalone reviewed-task ordering) | reviewed | 6 | satisfied | 32c0100 |
 | slice_doc-06 (Deep documentation and child authority) | reviewed | 7 | satisfied | e50f57b |
-| slice_impl-06-a (Deep documentation and child authority) | reviewed | 6 | satisfied | - |
+| slice_impl-06-a (Deep documentation and child authority) | reviewed | 6 | satisfied | 9489f35 |
+| slice_impl-06-b (Deep documentation and child authority) | reviewed | 2 | satisfied | - |

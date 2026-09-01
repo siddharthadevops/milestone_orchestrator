@@ -346,7 +346,7 @@ class ProducerSelectionTest(unittest.TestCase):
         }
         self.assertEqual(
             public_catalogue,
-            {"agent_call", "brainstorming", "reviewed_task"},
+            {"agent_call", "brainstorming", "reviewed_task", "deep_task"},
         )
         self.assertEqual(
             producer_catalogue, {"agent_call", "brainstorming"}
@@ -394,6 +394,10 @@ class ProducerSelectionTest(unittest.TestCase):
             {
                 "draft_slice_note": "agent_call",
                 "implement": "reviewed_task",
+            },
+            {
+                "draft_slice_note": "agent_call",
+                "implement": "deep_task",
             },
             {
                 "draft_slice_note": {"task_executor": "agent_call"},
