@@ -178,6 +178,61 @@ class TaskContractsTest(unittest.TestCase):
             20,
         )
 
+        reviewed = catalogue[2]["configuration_schema"]
+        producer = reviewed["producer"]
+        self.assertEqual(producer["type"], "task_executor")
+        self.assertEqual(
+            [choice["value"] for choice in producer["choices"]],
+            ["agent_call", "brainstorming"],
+        )
+        self.assertEqual(
+            producer["choices"][0]["configuration_schema_by"]["schemas"],
+            {
+                kind: {
+                    "role": {
+                        "type": "choice",
+                        "choices": [role],
+                        "optional": True,
+                        "default": "",
+                    },
+                }
+                for kind, role in (
+                    ("draft_skeleton", "plan"),
+                    ("draft_slice_note", "draft"),
+                    ("implement", "implement"),
+                )
+            },
+        )
+        self.assertEqual(
+            producer["choices"][1]["configuration_schema"],
+            tasks.task_executor_catalogue()[1]["configuration_schema"],
+        )
+        self.assertEqual(
+            reviewed["doc_reclassify_from"]["applicable_when"],
+            {"task_kind": ["draft_skeleton", "draft_slice_note"]},
+        )
+        self.assertEqual(
+            reviewed["impl_reclassify_from"]["applicable_when"],
+            {"task_kind": ["implement"]},
+        )
+        size = reviewed["implementation_size_control"]
+        self.assertEqual(size["type"], "object")
+        self.assertEqual(
+            size["applicable_when"],
+            {
+                "task_kind": ["implement"],
+                "producer.task_executor": [None, "agent_call"],
+            },
+        )
+        self.assertEqual(
+            set(size["properties"]),
+            {
+                "soft_lines", "hard_lines", "unconfirmed_grace_s",
+                "confirmed_grace_s",
+            },
+        )
+        self.assertNotIn('"type": "json"', json.dumps(reviewed))
+
     def test_configuration_schema_and_resolution(self):
         self.assertEqual(
             tasks.resolve_configuration("agent_call"), {"role": "implement"}

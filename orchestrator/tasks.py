@@ -51,6 +51,43 @@ _REVIEWED_POLICY_DEFAULTS = {
     },
 }
 
+_AGENT_CALL_CONFIGURATION_SCHEMA = {
+    "role": {
+        "type": "choice",
+        "choices": list(staffing.ROLES),
+        "default": "implement",
+    },
+}
+
+_BRAINSTORMING_CONFIGURATION_SCHEMA = {
+    "max_rounds": {
+        "type": "integer",
+        # The floor every Brainstorming runs with, whatever a planner
+        # or caller wrote: a lower value is raised to it at resolution
+        # (operator, 2026-08-19 — a six-round slice discussion failed a
+        # run at "irreducible gap").
+        "minimum": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
+        "default": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
+    },
+    "closure_policy": {
+        "type": "choice",
+        "choices": list(brainstorming.CLOSURE_POLICIES),
+        "default": "unanimity",
+    },
+}
+
+_REVIEWED_AGENT_CONFIGURATION_BY_KIND = {
+    task_kind: {
+        "role": {
+            "type": "choice",
+            "choices": [role],
+            "optional": True,
+            "default": "",
+        },
+    }
+    for task_kind, role in _REVIEWED_PRODUCTION_ROLES.items()
+}
+
 _MISSING = object()
 _RESULT_STATUSES = ("success", "failure")
 _COST_FIELDS = ("api_usd", "real_usd")
@@ -83,13 +120,7 @@ _TASK_EXECUTORS = (
         # orderer chooses about its staffing: the seat is always the role's
         # first and the round always its first, so no caller can reach into
         # a cycle the router keeps no history of.
-        "configuration_schema": {
-            "role": {
-                "type": "choice",
-                "choices": list(staffing.ROLES),
-                "default": "implement",
-            },
-        },
+        "configuration_schema": _AGENT_CALL_CONFIGURATION_SCHEMA,
     },
     {
         "id": "brainstorming",
@@ -107,22 +138,7 @@ _TASK_EXECUTORS = (
             "model, and effort resolve from the staffing session that owns "
             "the order, at each seat's roster position."
         ),
-        "configuration_schema": {
-            "max_rounds": {
-                "type": "integer",
-                # The floor every Brainstorming runs with, whatever a planner
-                # or caller wrote: a lower value is raised to it at
-                # resolution (operator, 2026-08-19 — a six-round slice
-                # discussion failed a run at "irreducible gap").
-                "minimum": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
-                "default": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
-            },
-            "closure_policy": {
-                "type": "choice",
-                "choices": list(brainstorming.CLOSURE_POLICIES),
-                "default": "unanimity",
-            },
-        },
+        "configuration_schema": _BRAINSTORMING_CONFIGURATION_SCHEMA,
     },
     {
         "id": "reviewed_task",
@@ -146,8 +162,32 @@ _TASK_EXECUTORS = (
                 "default": contracts.KIND_DRAFT_SKELETON,
             },
             "producer": {
-                "type": "json", "optional": True, "default": "",
-                "description": "TaskExecutor selection object",
+                "type": "task_executor",
+                "optional": True,
+                "default": "",
+                "choices": [
+                    {
+                        "value": "agent_call",
+                        "label": "Agent call",
+                        "applicable_when": {
+                            "task_kind": list(REVIEWED_TASK_KINDS),
+                        },
+                        "configuration_schema_by": {
+                            "path": "task_kind",
+                            "schemas": _REVIEWED_AGENT_CONFIGURATION_BY_KIND,
+                        },
+                    },
+                    {
+                        "value": "brainstorming",
+                        "label": "Brainstorming",
+                        "applicable_when": {
+                            "task_kind": list(PRODUCER_TASK_KINDS),
+                        },
+                        "configuration_schema": (
+                            _BRAINSTORMING_CONFIGURATION_SCHEMA
+                        ),
+                    },
+                ],
             },
             "review_breadth": {
                 "type": "choice", "choices": list(_REVIEW_BREADTHS),
@@ -155,16 +195,26 @@ _TASK_EXECUTORS = (
             },
             "same_family_second_look": {
                 "type": "boolean", "optional": True, "default": "",
+                "applicable_when": {"review_breadth": ["single"]},
             },
             "doc_reclassify_from": {
                 "type": "choice",
                 "choices": list(contracts.RECLASSIFY_FROM_LEVELS),
                 "optional": True, "default": "",
+                "applicable_when": {
+                    "task_kind": [
+                        contracts.KIND_DRAFT_SKELETON,
+                        contracts.KIND_DRAFT_SLICE_NOTE,
+                    ],
+                },
             },
             "impl_reclassify_from": {
                 "type": "choice",
                 "choices": list(contracts.RECLASSIFY_FROM_LEVELS),
                 "optional": True, "default": "",
+                "applicable_when": {
+                    "task_kind": [contracts.KIND_IMPLEMENT],
+                },
             },
             "p3_reclassify_debt": {
                 "type": "boolean", "optional": True, "default": "",
@@ -186,8 +236,38 @@ _TASK_EXECUTORS = (
                 "optional": True, "default": "",
             },
             "implementation_size_control": {
-                "type": "json", "optional": True, "default": "",
-                "description": "Implementation line and grace thresholds",
+                "type": "object",
+                "optional": True,
+                "applicable_when": {
+                    "task_kind": [contracts.KIND_IMPLEMENT],
+                    "producer.task_executor": [None, "agent_call"],
+                },
+                "description": (
+                    "Optional thresholds for an agent-call implementation; "
+                    "blank values inherit the effective work-area defaults."
+                ),
+                "properties": {
+                    "soft_lines": {
+                        "type": "integer", "minimum": 1,
+                        "optional": True, "default": "",
+                    },
+                    "hard_lines": {
+                        "type": "integer", "minimum": 1,
+                        "greater_than": "soft_lines",
+                        "optional": True, "default": "",
+                    },
+                    "unconfirmed_grace_s": {
+                        "type": "number", "exclusive_minimum": 0,
+                        "optional": True, "default": "",
+                    },
+                    "confirmed_grace_s": {
+                        "type": "number", "exclusive_minimum": 0,
+                        "optional": True, "default": "",
+                    },
+                },
+                "constraints": [
+                    "hard_lines must exceed the effective soft_lines value",
+                ],
             },
         },
     },

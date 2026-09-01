@@ -372,6 +372,11 @@
   .executor-config input, .executor-config select { min-width: 0; width: 100%;
     border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
     font: inherit; background: #fff; }
+  .executor-config-group { grid-column: 1 / -1; border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px; }
+  .executor-config-group > .executor-config { margin-top: 7px; }
+  .executor-config-note { grid-column: 1 / -1; color: var(--dim);
+    font-size: 11px; }
   .task-accepted { color: var(--ok); font-size: 12px; margin-bottom: 10px; }
   .plan-values { display: inline-flex; flex-wrap: wrap; gap: 5px;
     margin-left: 10px; vertical-align: middle; }
@@ -5718,6 +5723,108 @@ function onTaskExecutorChange() {
   taskExecutorSelected = document.getElementById("t_executor").value;
   renderTaskExecutorEditor();
 }
+function onTaskConfigurationChange() {
+  snapshotTaskExecutorConfiguration(taskExecutorSelected);
+  renderTaskExecutorEditor();
+}
+function taskConfigurationApplicable(condition, draft) {
+  return Object.entries(condition || {}).every(([path, choices]) => {
+    const raw = Object.prototype.hasOwnProperty.call(draft, path)
+      ? draft[path] : null;
+    const value = raw === "" ? null : raw;
+    return (choices || []).some(choice => choice === value);
+  });
+}
+function taskConfigurationValue(draft, path, definition) {
+  return Object.prototype.hasOwnProperty.call(draft, path)
+    ? draft[path] : definition.default ?? "";
+}
+function taskConfigurationOption(choice) {
+  return typeof choice === "object"
+    ? {value: choice.value, label: choice.label ?? choice.value}
+    : {value: choice, label: choice};
+}
+function renderTaskConfigurationSchema(schema, draft, prefix = "") {
+  return Object.entries(schema || {}).map(([name, definition]) => {
+    const path = prefix ? `${prefix}.${name}` : name;
+    if (!taskConfigurationApplicable(definition.applicable_when, draft))
+      return "";
+    const value = taskConfigurationValue(draft, path, definition);
+    const optional = definition.optional
+      ? 'data-task-config-optional="true"' : "";
+    const change = 'onchange="onTaskConfigurationChange()"';
+    if (definition.type === "integer" || definition.type === "number") {
+      const minimum = definition.minimum === undefined
+        ? "" : `min="${esc(definition.minimum)}"`;
+      const exclusive = definition.exclusive_minimum === undefined
+        ? "" : `data-task-config-exclusive-minimum="${esc(definition.exclusive_minimum)}"`;
+      const parent = path.split(".").slice(0, -1);
+      const greaterThan = definition.greater_than
+        ? `data-task-config-greater-than="${esc(parent.concat(definition.greater_than).join("."))}"`
+        : "";
+      return `<label>${esc(name)}</label><input type="number"
+        step="${definition.type === "integer" ? "1" : "any"}" ${minimum}
+        value="${esc(value)}" data-task-config="${esc(path)}"
+        data-task-config-type="${esc(definition.type)}" ${optional}
+        ${exclusive} ${greaterThan} ${change}>`;
+    }
+    if (definition.type === "choice") {
+      const choices = (definition.choices || []).map(taskConfigurationOption);
+      return `<label>${esc(name)}</label><select data-task-config="${esc(path)}"
+        data-task-config-type="choice" ${optional} ${change}>
+        ${definition.optional ? '<option value="">— inherit —</option>' : ""}
+        ${choices.map(choice =>
+          `<option value="${esc(choice.value)}"${choice.value === value ? " selected" : ""}>${esc(choice.label)}</option>`
+        ).join("")}</select>`;
+    }
+    if (definition.type === "boolean")
+      return `<label>${esc(name)}</label><select data-task-config="${esc(path)}"
+        data-task-config-type="boolean" ${optional} ${change}>
+        <option value="">— inherit —</option>
+        <option value="true"${value === "true" ? " selected" : ""}>true</option>
+        <option value="false"${value === "false" ? " selected" : ""}>false</option></select>`;
+    if (definition.type === "object") {
+      const nested = renderTaskConfigurationSchema(
+        definition.properties, draft, path
+      );
+      const constraints = (definition.constraints || []).map(item =>
+        `<div class="executor-config-note">${esc(item)}</div>`
+      ).join("");
+      return `<div class="executor-config-group"><label>${esc(name)}</label>
+        ${definition.description
+          ? `<div class="executor-config-note">${esc(definition.description)}</div>` : ""}
+        <div class="executor-config">${nested}${constraints}</div></div>`;
+    }
+    if (definition.type === "task_executor") {
+      const selectionPath = `${path}.task_executor`;
+      const selectionValue = taskConfigurationValue(
+        draft, selectionPath, definition
+      );
+      const choices = (definition.choices || []).filter(choice =>
+        taskConfigurationApplicable(choice.applicable_when, draft)
+      );
+      const selected = choices.find(
+        choice => choice.value === selectionValue
+      );
+      let nestedSchema = selected ? selected.configuration_schema : null;
+      if (selected && selected.configuration_schema_by) {
+        const by = selected.configuration_schema_by;
+        nestedSchema = (by.schemas || {})[draft[by.path]] || {};
+      }
+      const nested = selected ? renderTaskConfigurationSchema(
+        nestedSchema, draft, `${path}.configuration`
+      ) : "";
+      return `<div class="executor-config-group"><div class="executor-config">
+        <label>${esc(name)}</label><select data-task-config="${esc(selectionPath)}"
+          data-task-config-type="choice" ${optional} ${change}>
+          <option value="">— inherit —</option>
+          ${choices.map(choice =>
+            `<option value="${esc(choice.value)}"${choice.value === selectionValue ? " selected" : ""}>${esc(choice.label)}</option>`
+          ).join("")}</select>${nested}</div></div>`;
+    }
+    return "";
+  }).join("");
+}
 function renderTaskExecutorEditor() {
   const entry = taskExecutorEntry(taskExecutorSelected);
   const details = document.getElementById("task_executor_details");
@@ -5735,59 +5842,54 @@ function renderTaskExecutorEditor() {
   </div>`;
   const schema = entry.configuration_schema || {};
   const draft = taskExecutorDrafts[entry.id] || {};
-  const rows = Object.entries(schema).map(([name, definition]) => {
-    const value = Object.prototype.hasOwnProperty.call(draft, name)
-      ? draft[name] : definition.default;
-    if (definition.type === "integer")
-      return `<label>${esc(name)}</label><input type="number" step="1"
-        min="${esc(definition.minimum)}" value="${esc(value)}"
-        data-task-config="${esc(name)}" data-task-config-type="integer"
-        ${definition.optional ? 'data-task-config-optional="true"' : ""}>`;
-    if (definition.type === "choice")
-      return `<label>${esc(name)}</label><select data-task-config="${esc(name)}"
-        data-task-config-type="choice"
-        ${definition.optional ? 'data-task-config-optional="true"' : ""}>
-        ${definition.optional ? '<option value="">— inherit —</option>' : ""}
-        ${(definition.choices || []).map(choice =>
-          `<option value="${esc(choice)}"${choice === value ? " selected" : ""}>${esc(choice)}</option>`
-        ).join("")}</select>`;
-    if (definition.type === "boolean")
-      return `<label>${esc(name)}</label><select data-task-config="${esc(name)}"
-        data-task-config-type="boolean" data-task-config-optional="true">
-        <option value="">— inherit —</option>
-        <option value="true"${value === "true" ? " selected" : ""}>true</option>
-        <option value="false"${value === "false" ? " selected" : ""}>false</option></select>`;
-    if (definition.type === "json")
-      return `<label>${esc(name)}</label><textarea rows="2"
-        placeholder="${esc(definition.description || "JSON object")}"
-        data-task-config="${esc(name)}" data-task-config-type="json"
-        data-task-config-optional="true">${esc(value)}</textarea>`;
-    return "";
-  }).join("");
+  for (const [name, definition] of Object.entries(schema))
+    if (!Object.prototype.hasOwnProperty.call(draft, name)
+        && definition.default !== undefined)
+      draft[name] = String(definition.default);
+  taskExecutorDrafts[entry.id] = draft;
+  const rows = renderTaskConfigurationSchema(schema, draft);
   controls.innerHTML = rows
     ? `<div class="field"><label>Executor configuration</label><div class="executor-config">${rows}</div></div>`
     : "";
+}
+function setTaskConfigurationValue(target, path, value) {
+  const parts = path.split(".");
+  let parent = target;
+  for (const part of parts.slice(0, -1)) {
+    if (!Object.prototype.hasOwnProperty.call(parent, part)) parent[part] = {};
+    parent = parent[part];
+  }
+  parent[parts[parts.length - 1]] = value;
 }
 function currentTaskConfiguration() {
   const entry = taskExecutorEntry(taskExecutorSelected);
   if (!entry) throw new Error("task executor catalogue is unavailable");
   const schema = entry.configuration_schema || {};
   const configuration = {};
-  for (const control of document.querySelectorAll(
-    "#task_configuration [data-task-config]")) {
+  const controls = Array.from(document.querySelectorAll(
+    "#task_configuration [data-task-config]"));
+  const raw = Object.fromEntries(controls.map(control =>
+    [control.dataset.taskConfig, control.value.trim()]));
+  for (const control of controls) {
     if (!control.checkValidity())
       throw new Error("executor configuration is incomplete");
     const value = control.value.trim();
     if (control.dataset.taskConfigOptional === "true" && value === "")
       continue;
-    if (control.dataset.taskConfigType === "json") {
-      try { configuration[control.dataset.taskConfig] = JSON.parse(value); }
-      catch (_) { throw new Error(`${control.dataset.taskConfig} must be valid JSON`); }
-    } else if (control.dataset.taskConfigType === "integer")
-      configuration[control.dataset.taskConfig] = Number(value);
-    else if (control.dataset.taskConfigType === "boolean")
-      configuration[control.dataset.taskConfig] = value === "true";
-    else configuration[control.dataset.taskConfig] = value;
+    const exclusive = control.dataset.taskConfigExclusiveMinimum;
+    if (exclusive !== undefined && Number(value) <= Number(exclusive))
+      throw new Error(`${control.dataset.taskConfig} must be greater than ${exclusive}`);
+    const greaterPath = control.dataset.taskConfigGreaterThan;
+    if (greaterPath && raw[greaterPath] !== ""
+        && Number(value) <= Number(raw[greaterPath]))
+      throw new Error(`${control.dataset.taskConfig} must exceed ${greaterPath}`);
+    const typed = control.dataset.taskConfigType === "integer"
+        || control.dataset.taskConfigType === "number" ? Number(value)
+      : control.dataset.taskConfigType === "boolean" ? value === "true"
+      : value;
+    setTaskConfigurationValue(
+      configuration, control.dataset.taskConfig, typed
+    );
   }
   return {configuration, present: Object.keys(schema).length > 0};
 }

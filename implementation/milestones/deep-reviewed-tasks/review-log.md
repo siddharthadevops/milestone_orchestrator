@@ -333,3 +333,33 @@
 - `codex-codex-DRT-S05-FULL-003` (raised codex, cleared codex): Standalone ordering does not pin live standing-project-law refresh — The slice ambiguously pairs admission-frozen configuration with resolved safeguards for every phase, so a careful builder can preserve the existing per-episode refresh while a hasty one may freeze it; correction would be bounded to this unit's handoff and tests rather than alter the public contract.
 - `claude-claude-DRT-S05-FULL-004` (raised claude, cleared codex): Slice 5 pins single-count accounting only for the success envelope; nothing in its contract, acceptance criteria, or verification rows requires a stopped or failed standalone reviewed task to report the physical spend it already made, so its immutable terminal record can show no cost or token usage after dozens of real provider calls. — The artifact strongly implies task-scoped exact accounting and compatibility with generic terminal behavior but never explicitly binds stopped or failed results to lifecycle totals, so a strong builder would likely resolve or flag the gap, while a miss would require bounded Slice 5 projection and te
 
+## slice_impl-05-a (Standalone reviewed-task ordering)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-codex-r1.txt` |
+| slice_impl-05-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-fix1.txt` |
+| slice_impl-05-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-delta1.txt` |
+| slice_impl-05-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-codex-r2.txt` |
+| slice_impl-05-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-fix2.txt` |
+| slice_impl-05-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-delta2.txt` |
+| slice_impl-05-codex-r7 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-codex-r3.txt` |
+| slice_impl-05-claude-r1 | review_round | claude | 4 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-codex-r7`, `slice_impl-05-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S05A-R1-002` (raised codex, cleared codex): Project-valid partial size settings are rejected against unrelated built-in defaults — The admission path silently contradicts the pinned project-default inheritance contract, plausibly misleading dependent builders, while correction remains bounded to Slice 5 validation ordering and focused regression coverage.
+- `codex-DRT-S05A-R1-003` (raised codex, cleared codex): The current part lacks its contract-pinned reviewed-task tests — The absent named module is self-revealing when the focused command runs, so a careful builder should catch it, but trusting the narrower happy-path test could carry unpinned current-part defects forward; correction remains bounded to this part’s contract tests and resulting local fixes.
+- `codex-codex-DRT-S05A-R2-002` (raised codex, cleared codex): Falsey project Git disablements are silently overridden instead of refused — The accepted slice pins refusal for every explicitly resolved Git disablement, but the central guard recognizes only literal false while runtime gating treats 0, null, and an empty string as disabled, so later composition can silently inherit the wrong admission contract although correction is a loc
+- `codex-codex-DRT-S05A-R3-001` (raised codex, cleared codex): The panel misrepresents reviewed tasks and obscures their resolved configuration — The false executor label can mislead a hasty builder, but the conspicuous object text and intact canonical record should trigger a strong builder to verify it, while correction is confined to task-detail rendering and focused regression coverage.
+- `codex-codex-DRT-S05A-R3-002` (raised codex, cleared codex): An explicitly null size-control object is accepted instead of refused — The resolver explicitly converts a forbidden null into valid defaults, which could plausibly teach later callers or tests the wrong admission contract, while correction is a local presence/type check plus a regression test.
+- `claude-claude-DRT-S05A-R4-002` (raised claude, cleared codex): The new candidate-change gate rewind leaves the milestone unit's already-written slice closure in place, so a slice back in review is still counted as completed — The recovery branch records an authoritative closure for an unsealed, ungated unit and bypasses the legal state transition, so later ledger or cadence work could plausibly trust a false fact, while correction remains bounded to recovery-state accounting and focused regression tests before shipment.
+- `claude-claude-DRT-S05A-R4-003` (raised claude, cleared codex): Pending-gate recovery discards a milestone unit's Brainstorming-granted design-update authority even when no gate was completed — The mismatch-recovery branch falsely retires durable design authority before any gate, plausibly misleading later work that trusts shared recovery, while correction remains bounded to distinguishing rewind from completed closure and adding focused regression coverage.
+- `claude-claude-DRT-S05A-R4-004` (raised claude, cleared codex): A reviewed task ordered with an output_directory fails immediately after admission when the work area's primary path contains a symlink — The realpath-versus-registered-path mismatch affects only symlink-aliased primaries, fails synchronously before work begins rather than silently corrupting later work, and is corrected locally by using a consistent canonical base plus one regression test.
+

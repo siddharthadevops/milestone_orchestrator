@@ -30,9 +30,14 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn('definition.type === "choice"', self.task_ui)
         self.assertIn("definition.choices || []", self.task_ui)
         self.assertIn('definition.type === "boolean"', self.task_ui)
-        self.assertIn('definition.type === "json"', self.task_ui)
+        self.assertIn('definition.type === "number"', self.task_ui)
+        self.assertIn('definition.type === "object"', self.task_ui)
+        self.assertIn('definition.type === "task_executor"', self.task_ui)
         self.assertIn("data-task-config-optional", self.task_ui)
-        self.assertIn("JSON.parse(value)", self.task_ui)
+        self.assertIn("taskConfigurationApplicable", self.task_ui)
+        self.assertIn("renderTaskConfigurationSchema", self.task_ui)
+        self.assertIn("setTaskConfigurationValue", self.task_ui)
+        self.assertNotIn("JSON.parse(value)", self.task_ui)
         self.assertIn('value === ""', self.task_ui)
         for copied_constant in (
             '"agent_call"', '"brainstorming"', "max_rounds", "closure_policy",
