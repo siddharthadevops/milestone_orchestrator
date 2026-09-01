@@ -4219,13 +4219,20 @@ def _resolve_direct_task_order(home, who, body):
                 tasks.INVALID_TASK_REQUEST, "invalid task work area selector"
             )
         order["request"]["work_area"] = work_area
-        if order["task_executor"] == "reviewed_task":
+        if order["task_executor"] in ("reviewed_task", "deep_task"):
             config = _reviewed_task_config(home, project_slug)
-            order["configuration"] = (
-                tasks.resolve_reviewed_task_configuration(
-                    body["configuration"], defaults=config
+            if order["task_executor"] == "reviewed_task":
+                order["configuration"] = (
+                    tasks.resolve_reviewed_task_configuration(
+                        body["configuration"], defaults=config
+                    )
                 )
-            )
+            else:
+                order["configuration"] = (
+                    tasks.resolve_deep_task_configuration(
+                        body.get("configuration", {}), defaults=config
+                    )
+                )
         if order["staffing_session"] is not None:
             # A named session must be one this caller could already read:
             # the same authorization its own route applies, so an order
@@ -4239,7 +4246,7 @@ def _resolve_direct_task_order(home, who, body):
         primary = _validate_task_references(order)
         order = tasks._canonical_output_directory(order, primary)
         if (
-            order["task_executor"] == "reviewed_task"
+            order["task_executor"] in ("reviewed_task", "deep_task")
             and not gitops.is_repo_root(primary)
         ):
             raise ApiError(400, PRIMARY_NOT_REPO_ROOT)
@@ -4303,6 +4310,14 @@ def delete_task(home, who, task_id, host):
         raise ApiError(403, FORBIDDEN)
     if record["result"] is None:
         raise ApiError(409, "stop the task before deleting it")
+    relation = record.get("parent")
+    if relation is not None:
+        try:
+            parent = direct.record(relation["task_id"])
+        except tasks.TaskRecordError:
+            parent = None
+        if parent is not None and parent["result"] is None:
+            raise ApiError(409, "the task is retained by its open parent")
     session_id = task_api.task_session_id(home, record, host)
     if session_id:
         try:
@@ -4330,7 +4345,7 @@ def create_task(home, who, body, host):
     store = task_api.StandaloneTaskStore(home)
     resolver = (
         (lambda: _reviewed_task_config(home, project))
-        if order["task_executor"] == "reviewed_task"
+        if order["task_executor"] in ("reviewed_task", "deep_task")
         else (lambda: _direct_task_config(home, project))
     )
     # Reap outside the lock: reaping takes the registry lock itself.
@@ -5491,7 +5506,7 @@ def make_server(home, port, task_host=None):
                 lambda: (
                     _reviewed_task_config(home, _task_project(record))
                     if (record.get("order") or {}).get("task_executor")
-                    == "reviewed_task"
+                    in ("reviewed_task", "deep_task")
                     else _direct_task_config(home, _task_project(record))
                 )
             )

@@ -155,6 +155,68 @@ class StandaloneTaskStore:
             )
         return record
 
+    @staticmethod
+    def _related(records, parent_task_id, phase, part):
+        relation = {
+            "task_id": parent_task_id,
+            "phase": phase,
+            "part": part,
+        }
+        found = [record for record in records if record.get("parent") == relation]
+        if len(found) > 1:
+            raise tasks.TaskRecordError(
+                "duplicate related task for %s/%s/%s"
+                % (parent_task_id, phase, part)
+            )
+        return found[0] if found else None
+
+    def related(self, parent_task_id, phase, part):
+        """Return the child durably admitted for one parent phase and part."""
+        return self._related(self._load(), parent_task_id, phase, part)
+
+    def admit_related_locked(
+        self,
+        parent_task_id,
+        phase,
+        part,
+        order,
+        resolved_staffing,
+        primary_workspace,
+    ):
+        """Admit or reuse one child while the registry lock serializes identity."""
+        records = self._load()
+        existing = self._related(records, parent_task_id, phase, part)
+        if existing is not None:
+            return existing
+        parent = tasks.task_record({"tasks": records}, parent_task_id)
+        if parent["result"] is not None:
+            raise tasks.TaskRecordError(
+                "terminal task %s cannot admit a child" % parent_task_id
+            )
+        relation = {
+            "task_id": parent_task_id,
+            "phase": phase,
+            "part": part,
+        }
+        state = {"tasks": records}
+        record = tasks.admit_task(
+            state,
+            order,
+            resolved_staffing,
+            primary_workspace=primary_workspace,
+            parent=relation,
+        )
+        outcome = self._store.cas(
+            task_key(record["id"]),
+            None,
+            self._document(record, _admission_stamp()),
+        )
+        if not outcome.ok:
+            raise tasks.TaskRecordError(
+                "standalone task %s already exists" % record["id"]
+            )
+        return record
+
     def delete(self, task_id):
         """Forget one terminal task document. Returns the record removed, or
         None when no such document exists. Callers refuse running tasks
@@ -626,31 +688,35 @@ class DirectTaskHost:
             stall_min_cpu_s=config.get("worker_stall_min_cpu_s"),
         )
 
-    def start(self, record, config_resolver):
+    def start(self, record, config_resolver, parent_task_id=None):
         task_id = record["id"]
         workspace = _workspace(record)
-        if tasks.stored_task_executor(
-            record["order"]["task_executor"]
-        ) == "reviewed_task":
-            path = reviewed_state_path(self.home, task_id)
-            if not os.path.exists(path):
-                ensure_reviewed_state(self.home, record, config_resolver())
         with self._lock:
+            if (
+                parent_task_id is not None
+                and parent_task_id in self._stops
+            ):
+                return None
             if task_id in self._active:
                 return None
+            if tasks.stored_task_executor(
+                record["order"]["task_executor"]
+            ) == "reviewed_task":
+                path = reviewed_state_path(self.home, task_id)
+                if not os.path.exists(path):
+                    ensure_reviewed_state(self.home, record, config_resolver())
             self._active[task_id] = workspace
-        thread = threading.Thread(
-            target=self._run,
-            args=(task_id, config_resolver),
-            name="task-%s" % task_id,
-            daemon=True,
-        )
-        try:
-            thread.start()
-        except Exception:
-            with self._lock:
+            thread = threading.Thread(
+                target=self._run,
+                args=(task_id, config_resolver),
+                name="task-%s" % task_id,
+                daemon=True,
+            )
+            try:
+                thread.start()
+            except Exception:
                 self._active.pop(task_id, None)
-            raise
+                raise
         return thread
 
     def adopt_open_tasks(self, config_resolver_for):
@@ -675,7 +741,7 @@ class DirectTaskHost:
                 continue
             task_id = record["id"]
             executor = (record.get("order") or {}).get("task_executor")
-            if executor in ("brainstorming", "reviewed_task"):
+            if executor in ("brainstorming", "reviewed_task", "deep_task"):
                 try:
                     if self.start(record, config_resolver_for(record)) is not None:
                         adopted.append(task_id)
@@ -713,12 +779,15 @@ class DirectTaskHost:
             record = self.store.record(task_id)
             if record["result"] is not None:
                 return
-            if tasks.stored_task_executor(
+            executor = tasks.stored_task_executor(
                 record["order"]["task_executor"]
-            ) == "agent_call":
+            )
+            if executor == "agent_call":
                 self._run_worker(record, config_resolver)
-            elif record["order"]["task_executor"] == "brainstorming":
+            elif executor == "brainstorming":
                 self._run_brainstorming(record, config_resolver)
+            elif executor == "deep_task":
+                self._run_deep(record, config_resolver)
             else:
                 self._run_reviewed(record)
         finally:
@@ -727,6 +796,87 @@ class DirectTaskHost:
                 self._controls.pop(task_id, None)
                 self._sessions.pop(task_id, None)
                 self._stops.pop(task_id, None)
+
+    @staticmethod
+    def _deep_child_order(record):
+        configuration = copy.deepcopy(
+            record["order"]["configuration"]["documentation"]
+        )
+        configuration["task_kind"] = contracts.KIND_DRAFT_SLICE_NOTE
+        return {
+            "task_executor": "reviewed_task",
+            "configuration": configuration,
+            "request": copy.deepcopy(record["order"]["request"]),
+            "staffing_session": record["order"].get("staffing_session"),
+        }
+
+    @staticmethod
+    def _deep_failure(reason, child_result=None):
+        accounting = {
+            "duration_s": 0.0,
+            "token_usage": None,
+            "token_usage_partial": True,
+            "cost": None,
+            "cost_partial": True,
+        }
+        if child_result is not None:
+            for name in accounting:
+                accounting[name] = copy.deepcopy(child_result[name])
+        return {
+            "status": "failure",
+            "reason": str(reason or "Deep task failed"),
+            **accounting,
+            "native_result": None,
+        }
+
+    def _run_deep(self, record, config_resolver):
+        """Deliver only Slice 6's documentation child, then keep parent open."""
+        task_id = record["id"]
+        workspace = _workspace(record)
+        with registry.locked(self.home):
+            with self._lock:
+                stop_reason = self._stops.get(task_id)
+                if stop_reason is None:
+                    child = self.store.admit_related_locked(
+                        task_id,
+                        "documentation",
+                        None,
+                        self._deep_child_order(record),
+                        {},
+                        workspace,
+                    )
+                else:
+                    child = None
+        if child is None:
+            self.store.record_result(
+                task_id, self._deep_failure(stop_reason)
+            )
+            return
+        if child["result"] is None:
+            self.start(child, config_resolver, parent_task_id=task_id)
+
+        while True:
+            child = self.store.record(child["id"])
+            stop_reason = self._stop_reason(task_id)
+            if stop_reason is not None and child["result"] is None:
+                delivered = self.stop(child["id"], stop_reason)
+                if not delivered:
+                    try:
+                        child = self.store.record_result(
+                            child["id"], self._deep_failure(stop_reason)
+                        )
+                    except tasks.TaskRecordError:
+                        child = self.store.record(child["id"])
+            result = child["result"]
+            if result is not None and (
+                stop_reason is not None or result["status"] == "failure"
+            ):
+                reason = stop_reason or result.get("reason")
+                self.store.record_result(
+                    task_id, self._deep_failure(reason, result)
+                )
+                return
+            time.sleep(self.poll_interval)
 
     def _reviewed_failure(self, subject, unit, reason):
         return {

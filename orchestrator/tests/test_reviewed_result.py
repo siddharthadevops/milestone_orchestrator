@@ -377,7 +377,7 @@ class ReviewedResultContractTest(unittest.TestCase):
     def test_slice_five_publishes_reviewed_task(self):
         self.assertEqual(
             [entry["id"] for entry in tasks.task_executor_catalogue()],
-            ["agent_call", "brainstorming", "reviewed_task"],
+            ["agent_call", "brainstorming", "reviewed_task", "deep_task"],
         )
 
 

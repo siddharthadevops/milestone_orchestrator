@@ -299,7 +299,7 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(
             [entry["id"] for entry in body["task_executors"]],
-            ["agent_call", "brainstorming", "reviewed_task"],
+            ["agent_call", "brainstorming", "reviewed_task", "deep_task"],
         )
         reviewed = body["task_executors"][2]
         self.assertEqual(

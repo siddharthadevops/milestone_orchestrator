@@ -5,6 +5,7 @@ Dispatch and executor lifecycle remain in their integration layers.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -272,6 +273,81 @@ _TASK_EXECUTORS = (
         },
     },
 )
+
+
+def _deep_policy_configuration_schema(task_kind, prefix):
+    """Reuse the reviewed-task policy form for one fixed deep child job."""
+    schema = copy.deepcopy(_TASK_EXECUTORS[-1]["configuration_schema"])
+    schema.pop("task_kind")
+    floor = (
+        "impl_reclassify_from"
+        if task_kind == contracts.KIND_IMPLEMENT
+        else "doc_reclassify_from"
+    )
+    schema.pop(
+        "doc_reclassify_from"
+        if floor == "impl_reclassify_from"
+        else "impl_reclassify_from"
+    )
+    schema[floor].pop("applicable_when", None)
+    if task_kind != contracts.KIND_IMPLEMENT:
+        schema.pop("implementation_size_control")
+
+    producer = schema["producer"]
+    for choice in producer["choices"]:
+        choice.pop("applicable_when", None)
+        if choice["value"] == "agent_call":
+            choice.pop("configuration_schema_by", None)
+            choice["configuration_schema"] = copy.deepcopy(
+                _REVIEWED_AGENT_CONFIGURATION_BY_KIND[task_kind]
+            )
+    schema["same_family_second_look"]["applicable_when"] = {
+        prefix + "review_breadth": ["single"]
+    }
+    if task_kind == contracts.KIND_IMPLEMENT:
+        schema["implementation_size_control"]["applicable_when"] = {
+            prefix + "producer.task_executor": [None, "agent_call"]
+        }
+    return schema
+
+
+_TASK_EXECUTORS += (
+    {
+        "id": "deep_task",
+        "name": "Deep task",
+        "description": (
+            "Delivers one reviewed documentation child before reviewed "
+            "implementation parts."
+        ),
+        "operating_mode": "A documentation-first sequence of reviewed tasks.",
+        "usage_examples": [
+            "delivering one coherent slice",
+            "reviewing documentation before implementation",
+        ],
+        "available_agent_configurations": (
+            "Documentation and implementation producers and reviewers resolve "
+            "from the staffing session that owns the order."
+        ),
+        "configuration_schema": {
+            "documentation": {
+                "type": "object",
+                "optional": True,
+                "description": "Reviewed policy for the slice note.",
+                "properties": _deep_policy_configuration_schema(
+                    contracts.KIND_DRAFT_SLICE_NOTE, "documentation."
+                ),
+            },
+            "implementation": {
+                "type": "object",
+                "optional": True,
+                "description": "Reviewed policy frozen for implementation.",
+                "properties": _deep_policy_configuration_schema(
+                    contracts.KIND_IMPLEMENT, "implementation."
+                ),
+            },
+        },
+    },
+)
 _TASK_EXECUTOR_BY_ID = {
     entry["id"]: entry for entry in _TASK_EXECUTORS
 }
@@ -452,6 +528,10 @@ def _resolve_configuration(
         raise ContractError("configuration must be an object")
     if task_executor == "reviewed_task":
         return resolve_reviewed_task_configuration(
+            configuration, defaults=reviewed_defaults
+        )
+    if task_executor == "deep_task":
+        return resolve_deep_task_configuration(
             configuration, defaults=reviewed_defaults
         )
 
@@ -798,6 +878,33 @@ def resolve_reviewed_task_configuration(value, defaults=None):
         _request_error(exc)
 
 
+def resolve_deep_task_configuration(value, defaults=None):
+    """Freeze both fixed-job reviewed policies on one deep order."""
+    try:
+        _exact_keys(
+            value, (), ("documentation", "implementation"), "configuration"
+        )
+        resolved = {}
+        for name, task_kind in (
+            ("documentation", contracts.KIND_DRAFT_SLICE_NOTE),
+            ("implementation", contracts.KIND_IMPLEMENT),
+        ):
+            supplied = value.get(name, {})
+            if not isinstance(supplied, dict):
+                raise ContractError("configuration.%s must be an object" % name)
+            resolved[name] = resolve_reviewed_policy(
+                task_kind,
+                supplied,
+                defaults=(
+                    reviewed_policy_defaults(task_kind, defaults)
+                    if defaults is not None else None
+                ),
+            )
+        return _json_copy(resolved, "deep-task configuration")
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
 def producer_order_from_selection(selection, request):
     """Build an order from the trusted producer frozen on reviewed work."""
     return {
@@ -1044,7 +1151,9 @@ def execute_worker(record, dispatch):
     return dispatch(request)
 
 
-def admit_task(state, order, resolved_staffing, primary_workspace=None):
+def admit_task(
+    state, order, resolved_staffing, primary_workspace=None, parent=None
+):
     """Validate and append one frozen scheduling decision to loaded state."""
     checked_order = _canonical_output_directory(
         validate_order(order), primary_workspace
@@ -1064,6 +1173,8 @@ def admit_task(state, order, resolved_staffing, primary_workspace=None):
         "resolved_staffing": staffing,
         "result": None,
     }
+    if parent is not None:
+        record["parent"] = _json_copy(parent, "task parent relation")
     state.setdefault("tasks", []).append(_json_copy(record, "task record"))
     return _json_copy(record, "task record")
 

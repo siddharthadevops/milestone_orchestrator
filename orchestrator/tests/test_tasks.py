@@ -87,7 +87,7 @@ class TaskContractsTest(unittest.TestCase):
         self.assertIsInstance(catalogue, list)
         self.assertEqual(
             [entry["id"] for entry in catalogue],
-            ["agent_call", "brainstorming", "reviewed_task"],
+            ["agent_call", "brainstorming", "reviewed_task", "deep_task"],
         )
         producer_catalogue = tasks.producer_task_executor_catalogue()
         self.assertEqual(
