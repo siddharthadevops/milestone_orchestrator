@@ -1,6 +1,7 @@
 """Slice 6 focused proof for deep documentation and child authority."""
 
 from pathlib import Path
+import threading
 import time
 import unittest
 from unittest import mock
@@ -8,6 +9,58 @@ from unittest import mock
 from orchestrator import contracts, runners, service, task_api, tasks
 from orchestrator.tests import test_reviewed_task_api as reviewed_tests
 from orchestrator.tests import test_task_api as api_tests
+
+
+class _PausingResultStore(task_api.StandaloneTaskStore):
+    """Expose the first host-thread terminal write before it reaches storage."""
+
+    def __init__(self, home):
+        super().__init__(home)
+        self.write_entered = threading.Event()
+        self.allow_write = threading.Event()
+        self.competing_write = threading.Event()
+        self.competing_write_finished = threading.Event()
+        self.paused_task_id = None
+        self._paused_thread = None
+        self._pause_lock = threading.Lock()
+
+    def _before_result(self, task_id):
+        current = threading.get_ident()
+        pause = False
+        compete = False
+        with self._pause_lock:
+            if (
+                self.paused_task_id is None
+                and threading.current_thread().name.startswith("task-")
+            ):
+                self.paused_task_id = task_id
+                self._paused_thread = current
+                pause = True
+            elif (
+                task_id == self.paused_task_id
+                and current != self._paused_thread
+                and not self.allow_write.is_set()
+            ):
+                compete = True
+        if pause:
+            self.write_entered.set()
+            if not self.allow_write.wait(5):
+                raise AssertionError("timed out holding terminal task write")
+        if compete:
+            self.competing_write.set()
+        return compete
+
+    def record_result(self, task_id, result):
+        compete = self._before_result(task_id)
+        try:
+            return super().record_result(task_id, result)
+        finally:
+            if compete:
+                self.competing_write_finished.set()
+
+    def record_result_locked(self, task_id, result):
+        self._before_result(task_id)
+        return super().record_result_locked(task_id, result)
 
 
 class DeepTaskDocumentationTest(unittest.TestCase):
@@ -141,6 +194,64 @@ class DeepTaskDocumentationTest(unittest.TestCase):
             "cost", "cost_partial",
         ):
             self.assertEqual(terminal["result"][field], child["result"][field])
+
+    def test_parent_stop_cannot_replace_a_settling_child_result(self):
+        workspace = self._repo("deep-stop-settlement")
+        runner = runners.MockRunner(
+            reviewed_tests.ReviewedTaskOrderingTest._script(
+                contracts.KIND_DRAFT_SLICE_NOTE
+            )
+        )
+        store = _PausingResultStore(self.home)
+        host = task_api.DirectTaskHost(
+            self.home,
+            store=store,
+            runner_factory=lambda _config, _workspace: runner,
+            poll_interval=0.001,
+        )
+        self.start_server(host)
+        with mock.patch.object(
+            service,
+            "_direct_task_config",
+            return_value=reviewed_tests.ReviewedTaskOrderingTest._config(),
+        ):
+            status, body = self.request(
+                "POST", "/api/tasks", self._deep_order(workspace)
+            )
+            self.assertEqual(status, 201, body)
+            parent_id = body["task"]["id"]
+            self.assertTrue(store.write_entered.wait(5))
+
+            stopped = []
+            stop_thread = threading.Thread(
+                target=lambda: stopped.append(
+                    host.stop(parent_id, "stop during child settlement")
+                ),
+                daemon=True,
+            )
+            stop_thread.start()
+            competing = store.competing_write.wait(0.1)
+            if competing:
+                self.assertTrue(store.competing_write_finished.wait(5))
+            store.allow_write.set()
+            stop_thread.join(5)
+            self.assertFalse(stop_thread.is_alive())
+
+            parent = self.wait_record(parent_id)
+            child = store.record(store.paused_task_id)
+
+        self.assertEqual(stopped, [True])
+        self.assertFalse(competing)
+        self.assertEqual(parent["result"]["status"], "failure")
+        self.assertEqual(
+            parent["result"]["reason"], "stop during child settlement"
+        )
+        self.assertGreater(child["result"]["duration_s"], 0.0)
+        for field in (
+            "duration_s", "token_usage", "token_usage_partial",
+            "cost", "cost_partial",
+        ):
+            self.assertEqual(parent["result"][field], child["result"][field])
 
 
 if __name__ == "__main__":

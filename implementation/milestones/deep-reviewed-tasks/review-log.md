@@ -454,3 +454,27 @@
 - `codex-DRT-S06-FULL-001` (raised codex, cleared codex): Normal documentation-child failure has no parent outcome — The artifact omits rather than misstates normal documentation-child failure, so a strong builder should flag it but could implement the specified paths literally; correction requires bounded parent failure/recovery behavior and tests within this unit.
 - `claude-claude-DRT-S06-R1-001` (raised claude, cleared codex): The hard-register route row says `deep_task` uses only three routes, while the same note mandates a fourth (`POST /api/tasks/<id>/stop`) — The exclusive route wording could mislead a hasty builder, but the repeated Stop requirements and mandatory focused test should expose and contain the mistake within Slice 6, requiring bounded rework.
 
+## slice_impl-06-a (Deep documentation and child authority)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-codex-r1.txt` |
+| slice_impl-06-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-claude-r1.txt` |
+| slice_impl-06-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-fix1.txt` |
+| slice_impl-06-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-delta1.txt` |
+| slice_impl-06-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-codex-r2.txt` |
+| slice_impl-06-claude-r2 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-codex-r4`, `slice_impl-06-claude-r2`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S06A-001` (raised codex, cleared codex): Deep preflight rejects valid partial size overrides before loading project defaults — The pre-binding validation contradicts the explicit inheritance contract and can silently become the next slice’s accepted admission baseline, while correction remains bounded to the admission-resolution seam and focused regression coverage.
+- `codex-DRT-S06A-002` (raised codex, cleared codex): Repository verification still asserts the obsolete three-executor catalogue — The obsolete executable assertion could misdirect a hasty builder, but Slice 6 and several current catalogue tests immediately expose the contradiction, making correction a small local test repair before propagation.
+- `claude-claude-r1/DRT-S06A-R-002` (raised claude, cleared codex): No named test exercises deep-task restart adoption, so the pinned 'restart still finds the same terminal child' guarantee has no executable enforcement — Risk is high because the strict verification table falsely presents restart reuse as exercised while the two-test module proves only deletion refusal for this row, so Slice 7 can regress the same relation/admission seams under a green focused command; damage is medium because correction is bounded t
+- `claude-claude-s06a-r2/DRT-S06A-STOP-001` (raised claude, cleared codex): The deep parent's own terminal write is not fenced against Stop the way this same commit fences the child's, so `POST /api/tasks/<deep-id>/stop` can answer `stopping` for a parent that has already closed with a non-operator reason — This P3 is a strict behavioural-correctness defect: the accepted implementation and reassuring adjacent race test can plausibly teach later deep-task work that parent terminalization is safely fenced, while correction remains bounded to terminal-write synchronization and focused concurrency coverage
+

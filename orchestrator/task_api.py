@@ -888,20 +888,22 @@ class DirectTaskHost:
 
     def _record_reviewed_terminal(self, task_id, result):
         """Choose the terminal result at the Stop-delivery boundary."""
-        with self._lock:
-            stop_reason = self._stops.get(task_id)
-            # A later Stop must answer not-running rather than claim delivery
-            # after success was already chosen. The Git gate is complete here,
-            # so releasing the work-area lease before the store write is safe.
-            self._active.pop(task_id, None)
-        if stop_reason is not None:
-            result = dict(
-                result,
-                status="failure",
-                reason=stop_reason,
-                native_result=None,
-            )
-        self.store.record_result(task_id, result)
+        with registry.locked(self.home):
+            with self._lock:
+                stop_reason = self._stops.get(task_id)
+                if stop_reason is not None:
+                    result = dict(
+                        result,
+                        status="failure",
+                        reason=stop_reason,
+                        native_result=None,
+                    )
+                # Keep the task active until its chosen result is durable.
+                # A concurrent parent then either delivers Stop before this
+                # write or observes the already-terminal child; it can never
+                # mistake an in-progress settlement for abandoned work.
+                self.store.record_result_locked(task_id, result)
+                self._active.pop(task_id, None)
 
     def _run_reviewed(self, record):
         task_id = record["id"]
