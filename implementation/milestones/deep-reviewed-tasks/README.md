@@ -297,4 +297,5 @@ The goal is achieved when:
 | slice_impl-05-a (Standalone reviewed-task ordering) | reviewed | 8 | satisfied | 045a77b |
 | slice_impl-05-b (Standalone reviewed-task ordering) | reviewed | 6 | satisfied | e64cf00 |
 | slice_impl-05-c (Standalone reviewed-task ordering) | reviewed | 2 | satisfied | 3c8932a |
-| slice_impl-05-d (Standalone reviewed-task ordering) | reviewed | 6 | satisfied | - |
+| slice_impl-05-d (Standalone reviewed-task ordering) | reviewed | 6 | satisfied | 32c0100 |
+| slice_doc-06 (Deep documentation and child authority) | reviewed | 7 | satisfied | - |

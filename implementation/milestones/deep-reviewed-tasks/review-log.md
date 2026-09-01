@@ -430,3 +430,27 @@
 **Deferred debt (independently classified):**
 - `claude-DRT-S05D-002` (raised claude, cleared codex): Retained restart golden backing Slice 5's adoption compatibility passes vacuously and asserts a law the code contradicts — The swallowed AttributeError makes a named compatibility golden affirm the opposite of actual startup adoption and leaves make_server’s reviewed resolver unpinned, so later work can trust the wrong restart behavior, while correction remains bounded to the service-level adoption harness and any local
 
+## slice_doc-06 (Deep documentation and child authority)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-06.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-06-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-codex-r1.txt` |
+| slice_doc-06-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-fix1.txt` |
+| slice_doc-06-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-delta1.txt` |
+| slice_doc-06-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-fix2.txt` |
+| slice_doc-06-codex-r5 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-delta2.txt` |
+| slice_doc-06-codex-r6 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-codex-r2.txt` |
+| slice_doc-06-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-06-codex-r6`, `slice_doc-06-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S06-DELTA-001` (raised codex, cleared codex): Stop accounting is contradictory before child admission — Risk is high because the hard Stop invariant requires accounting from a child that may not exist while the named Stop test covers only an active child, plausibly causing deadlock or forbidden admission; damage is medium because correcting the contract, branch, and focused recovery test is bounded to
+- `codex-DRT-S06-FULL-001` (raised codex, cleared codex): Normal documentation-child failure has no parent outcome — The artifact omits rather than misstates normal documentation-child failure, so a strong builder should flag it but could implement the specified paths literally; correction requires bounded parent failure/recovery behavior and tests within this unit.
+- `claude-claude-DRT-S06-R1-001` (raised claude, cleared codex): The hard-register route row says `deep_task` uses only three routes, while the same note mandates a fourth (`POST /api/tasks/<id>/stop`) — The exclusive route wording could mislead a hasty builder, but the repeated Stop requirements and mandatory focused test should expose and contain the mistake within Slice 6, requiring bounded rework.
+
