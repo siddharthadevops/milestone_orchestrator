@@ -536,3 +536,24 @@
 - `claude-claude-S07-R2-002` (raised claude, cleared codex): The note pins that the parent succeeds 'only when the last implementation child has no cut' while also forbidding any continuation from a Brainstorming-produced child, and gives no outcome for the reachable case of a successful Brainstorming implementation child that returns `implementation_cut`. — The hard register incorrectly treats a valid Brainstorming cut as unreachable while pinning mutually exclusive continuation and success rules, so implementation as written likely mishandles that terminal branch, but correction is bounded to Slice 7 behavior and its focused test coverage.
 - `claude-claude-S07-R2-003` (raised claude, cleared codex): The note pins every field of the terminal parent result except `native_result`: it forbids copying child native results but never says what a successful deep parent's own `native_result` is. — This is an omission rather than a false pin: a max-effort builder should surface the native_result choice, and any silent drift requires only a small parent-field and test correction because child authority and execution behavior remain unchanged.
 
+## slice_impl-07-a (Deep implementation-part delivery)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-codex-r1.txt` |
+| slice_impl-07-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-07-codex-r1`, `slice_impl-07-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S07A-001` (raised codex, cleared codex): The cut-chain test never proves a successor waits for its predecessor's gate — The artifact falsely presents a strict temporal gate as proved although the test observes only the completed chain, creating a plausible silent false-green, while correction remains bounded to a pausing assertion and potentially the local successor-admission seam.
+- `codex-DRT-S07A-002` (raised codex, cleared codex): The named final-accounting test covers only one implementation child — The strict verification row claims multi-part single-count accounting, but its named test proves only documentation plus part a while another test merely proves a/b/c sequencing, so a careful builder can detect the mismatch whereas trusting the advertised coverage could permit bounded deep-task acco
+- `claude-claude-S07A-001` (raised claude, cleared codex): The open-parent child-retention refusal lost its only test and is now unproven anywhere in the repository — The pinned rule and live guard guide a careful builder, but removing its sole direct regression assertion could let a related edit escape a hasty review; correction would be a small local guard-and-test restoration.
+- `claude-claude-S07A-002` (raised claude, cleared codex): Documentation-artifact containment is narrowed to output_directory, so a readable in-workspace note outside it fails the whole paid parent — The strict Slice 7 contract accepts any readable workspace-contained documentation artifact, but the implementation and passing focused test silently narrow that boundary to output_directory, so later work can inherit the wrong behavior and test contract, while correction remains a bounded helper-an
+- `claude-claude-S07A-003` (raised claude, cleared codex): Part `a` of an uncut deep task is told it is a runtime size cut, diverging from the identical directly ordered reviewed task — The false size-cut label conflicts with the exact full scope and explicit no-remainder instruction, so a careful max-effort builder should resolve it, but mis-scoping remains plausible and would require bounded part-a rework within its own review cycle.
+

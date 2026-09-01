@@ -622,7 +622,10 @@ def record_implementation_cut(state, unit, cut_scope, remaining_scope,
     ):
         if not isinstance(value, str) or not value.strip():
             raise ValueError("%s must be a non-empty string" % name)
-    current_part = unit.get("part") or "a"
+    assigned_part = (
+        (state.get("reviewed_task") or {}).get("implementation_scope") or {}
+    ).get("part")
+    current_part = unit.get("part") or assigned_part or "a"
     cut = {
         "part": current_part,
         "next_part": _next_part(current_part),
@@ -675,6 +678,11 @@ def implementation_scope(state, unit):
             "delegated_remaining": own["remaining_scope"],
             "source_unit": unit_key(unit),
         }
+    reviewed = state.get("reviewed_task") or {}
+    if reviewed.get("unit") == unit_key(unit):
+        assigned = reviewed.get("implementation_scope")
+        if assigned is not None:
+            return copy.deepcopy(assigned)
     part = unit.get("part")
     if not part:
         return None

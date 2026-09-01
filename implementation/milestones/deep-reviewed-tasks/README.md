@@ -302,4 +302,5 @@ The goal is achieved when:
 | slice_impl-06-a (Deep documentation and child authority) | reviewed | 6 | satisfied | 9489f35 |
 | slice_impl-06-b (Deep documentation and child authority) | reviewed | 2 | satisfied | 8ec0c01 |
 | slice_impl-06-c (Deep documentation and child authority) | reviewed | 2 | satisfied | f4285ff |
-| slice_doc-07 (Deep implementation-part delivery) | reviewed | 2 | satisfied | - |
+| slice_doc-07 (Deep implementation-part delivery) | reviewed | 2 | satisfied | 9097b1e |
+| slice_impl-07-a (Deep implementation-part delivery) | reviewed | 2 | satisfied | - |

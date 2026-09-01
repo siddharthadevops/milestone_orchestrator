@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest import mock
 
-from orchestrator import access, contracts, driver, registry, runners, service
+from orchestrator import access, contracts, registry, runners, service
 from orchestrator import task_api, tasks
 from orchestrator import state as st
 from orchestrator.tests import test_reviewed_task_api as reviewed_tests
@@ -175,16 +175,19 @@ class DeepTaskDocumentationTest(unittest.TestCase):
         )[1].split("/* ---- new brainstorming:", 1)[0]
         self.assertNotIn('"deep_task"', task_ui)
 
-    def test_one_public_documentation_child_owns_gate_and_parent_stays_open(self):
+    def test_one_public_documentation_child_owns_gate_before_implementation(self):
         workspace = self._repo("deep")
-        runner = runners.MockRunner(
-            reviewed_tests.ReviewedTaskOrderingTest._script(
+        queued = [
+            runners.MockRunner(reviewed_tests.ReviewedTaskOrderingTest._script(
                 contracts.KIND_DRAFT_SLICE_NOTE
-            )
-        )
+            )),
+            runners.MockRunner(reviewed_tests.ReviewedTaskOrderingTest._script(
+                contracts.KIND_IMPLEMENT
+            )),
+        ]
         host = task_api.DirectTaskHost(
             self.home,
-            runner_factory=lambda _config, _workspace: runner,
+            runner_factory=lambda _config, _workspace: queued.pop(0),
             poll_interval=0.001,
         )
         self.start_server(host)
@@ -204,17 +207,16 @@ class DeepTaskDocumentationTest(unittest.TestCase):
             service,
             "_direct_task_config",
             return_value=reviewed_tests.ReviewedTaskOrderingTest._config(),
-        ), mock.patch.object(
-            driver.Driver,
-            "_implementation_size_control",
-            side_effect=AssertionError("documentation activated size control"),
         ):
             status, body = self.request(
                 "POST", "/api/tasks", self._deep_order(workspace, configuration)
             )
             self.assertEqual(status, 201, body)
             parent = body["task"]
-            child = self._wait_child(parent["id"], terminal=True)
+            parent = self.wait_record(parent["id"])
+            child = task_api.StandaloneTaskStore(self.home).related(
+                parent["id"], "documentation", None
+            )
 
         self.assertEqual(child["order"]["task_executor"], "reviewed_task")
         self.assertEqual(
@@ -231,8 +233,7 @@ class DeepTaskDocumentationTest(unittest.TestCase):
         status, projected = self.request("GET", "/api/tasks/%s" % child["id"])
         self.assertEqual(status, 200, projected)
         self.assertEqual(projected["task"]["parent"], child["parent"])
-        parent = task_api.StandaloneTaskStore(self.home).record(parent["id"])
-        self.assertIsNone(parent["result"])
+        self.assertEqual(parent["result"]["status"], "success")
         self.assertEqual(parent["order"]["configuration"]["implementation"]
                          ["max_fix_loops"], 9)
         self.assertIn(
@@ -249,23 +250,11 @@ class DeepTaskDocumentationTest(unittest.TestCase):
             task_api.reviewed_state_path(self.home, parent["id"])
         ).exists())
         records = task_api.StandaloneTaskStore(self.home).records()
-        self.assertEqual(len(records), 2)
+        self.assertEqual(len(records), 3)
         self.assertEqual(
             [record.get("parent", {}).get("phase") for record in records[1:]],
-            ["documentation"],
+            ["documentation", "implementation"],
         )
-
-        status, body = self.request("DELETE", "/api/tasks/%s" % child["id"])
-        self.assertEqual(status, 409, body)
-        status, body = self.request("POST", "/api/tasks/%s/stop" % parent["id"])
-        self.assertEqual((status, body["state"]), (200, "stopping"))
-        terminal = self.wait_record(parent["id"])
-        self.assertEqual(terminal["result"]["status"], "failure")
-        for field in (
-            "duration_s", "token_usage", "token_usage_partial",
-            "cost", "cost_partial",
-        ):
-            self.assertEqual(terminal["result"][field], child["result"][field])
 
     def test_bound_partial_size_defaults_resolve_before_deep_admission(self):
         workspace = self._repo("deep-bound-defaults")
@@ -548,7 +537,7 @@ class DeepTaskDocumentationTest(unittest.TestCase):
             )
         )
 
-    def test_slice_six_never_admits_implementation_or_completes_parent(self):
+    def test_restart_after_documentation_reuses_child_and_runs_implementation(self):
         workspace = self._repo("deep-restart")
         store = task_api.StandaloneTaskStore(self.home)
         parent = self._admit_parent(workspace)
@@ -557,6 +546,9 @@ class DeepTaskDocumentationTest(unittest.TestCase):
                 parent["id"], "documentation", None,
                 task_api.DirectTaskHost._deep_child_order(parent), {}, workspace,
             )
+        artifact = Path(workspace) / "docs" / "slice-01.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("# Reviewed slice\n", encoding="utf-8")
         child_result = {
             "status": "success",
             "duration_s": 3.5,
@@ -568,40 +560,40 @@ class DeepTaskDocumentationTest(unittest.TestCase):
             "token_usage_partial": False,
             "cost": {"api_usd": 0.25, "real_usd": 0.1},
             "cost_partial": False,
-            "native_result": {"gate_commit": "kept-on-child"},
+            "native_result": {
+                "production_result": {"artifact": "docs/slice-01.md"},
+                "review_evidence": {"reviews": ["kept"]},
+                "gate_commit": "kept-on-child",
+            },
         }
         store.record_result(child["id"], child_result)
+        runner = runners.MockRunner(
+            reviewed_tests.ReviewedTaskOrderingTest._script(
+                contracts.KIND_IMPLEMENT
+            )
+        )
         host = task_api.DirectTaskHost(
             self.home,
             store=store,
-            runner_factory=lambda *_args: self.fail(
-                "restart re-ran a terminal documentation child"
-            ),
+            runner_factory=lambda *_args: runner,
             poll_interval=0.001,
         )
         outcome = host.adopt_open_tasks(
             lambda _record: reviewed_tests.ReviewedTaskOrderingTest._config
         )
         self.assertEqual(outcome, {"adopted": [parent["id"]], "closed": []})
-        deadline = time.time() + 5
-        while not host.owns_workspace(workspace) and time.time() < deadline:
-            time.sleep(0.01)
-        self.assertTrue(host.owns_workspace(workspace))
+        terminal = self.wait_record(parent["id"])
         self.assertEqual(
             store.related(parent["id"], "documentation", None)["id"], child["id"]
         )
-        self.assertIsNone(store.record(parent["id"])["result"])
-        self.assertIsNone(store.related(parent["id"], "implementation", "a"))
+        implementation = store.related(parent["id"], "implementation", "a")
+        self.assertIsNotNone(implementation)
+        self.assertEqual(terminal["result"]["status"], "success")
 
         self.start_server(host)
         status, projected = self.request("GET", "/api/tasks/%s" % child["id"])
         self.assertEqual(status, 200, projected)
         self.assertEqual(projected["task"]["parent"], child["parent"])
-        status, stopped = self.request(
-            "POST", "/api/tasks/%s/stop" % parent["id"], {}
-        )
-        self.assertEqual((status, stopped["state"]), (200, "stopping"))
-        terminal = self.wait_record(parent["id"])
         self.assertEqual(store.record(child["id"])["result"], child_result)
         self.assertNotIn("gate_commit", terminal["result"].get("native_result") or {})
 

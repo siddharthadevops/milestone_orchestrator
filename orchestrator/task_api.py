@@ -531,7 +531,7 @@ def _reviewed_authority(record):
     )
 
 
-def ensure_reviewed_state(home, record, config):
+def ensure_reviewed_state(home, record, config, implementation_scope=None):
     """Create the task-id-owned lifecycle state before its first call."""
     path = reviewed_state_path(home, record["id"])
     if os.path.exists(path):
@@ -541,7 +541,7 @@ def ensure_reviewed_state(home, record, config):
     effective = copy.deepcopy(config)
     output = request.get("output_directory")
     if output is not None:
-        relative = os.path.relpath(output, workspace)
+        relative = os.path.relpath(output, os.path.realpath(workspace))
         effective["docs_dir"] = relative if relative != "." else "."
     task_kind = record["order"]["configuration"]["task_kind"]
     project = request["work_area"]
@@ -586,11 +586,16 @@ def ensure_reviewed_state(home, record, config):
     policy = copy.deepcopy(record["order"]["configuration"])
     policy.pop("task_kind")
     target["reviewed_policy"] = policy
-    state["reviewed_task"] = {
+    reviewed_task = {
         "task_id": record["id"],
         "unit": st.unit_key(target),
         "authority_path": authority_path,
     }
+    if implementation_scope is not None:
+        reviewed_task["implementation_scope"] = copy.deepcopy(
+            implementation_scope
+        )
+    state["reviewed_task"] = reviewed_task
     session = record["order"].get("staffing_session")
     if session:
         st.bind_staffing_session(state, session)
@@ -704,7 +709,14 @@ class DirectTaskHost:
             ) == "reviewed_task":
                 path = reviewed_state_path(self.home, task_id)
                 if not os.path.exists(path):
-                    ensure_reviewed_state(self.home, record, config_resolver())
+                    ensure_reviewed_state(
+                        self.home,
+                        record,
+                        config_resolver(),
+                        implementation_scope=(
+                            self._deep_implementation_scope(record)
+                        ),
+                    )
             self._active[task_id] = workspace
             thread = threading.Thread(
                 target=self._run,
@@ -811,31 +823,133 @@ class DirectTaskHost:
         }
 
     @staticmethod
-    def _deep_failure(reason, child_result=None):
-        accounting = {
-            "duration_s": 0.0,
-            "token_usage": None,
-            "token_usage_partial": True,
-            "cost": None,
-            "cost_partial": True,
-        }
-        if child_result is not None:
-            for name in accounting:
-                accounting[name] = copy.deepcopy(child_result[name])
+    def _deep_implementation_order(record, documentation_reference):
+        configuration = copy.deepcopy(
+            record["order"]["configuration"]["implementation"]
+        )
+        configuration["task_kind"] = contracts.KIND_IMPLEMENT
+        request = copy.deepcopy(record["order"]["request"])
+        request["reference_documents"].append(documentation_reference)
         return {
-            "status": "failure",
-            "reason": str(reason or "Deep task failed"),
-            **accounting,
-            "native_result": None,
+            "task_executor": "reviewed_task",
+            "configuration": configuration,
+            "request": request,
+            "staffing_session": record["order"].get("staffing_session"),
         }
 
-    def _record_deep_terminal(self, task_id, reason, child_result=None):
+    def _deep_implementation_scope(self, record):
+        relation = record.get("parent") or {}
+        if relation.get("phase") != "implementation":
+            return None
+        part = relation["part"]
+        parent = self.store.record(relation["task_id"])
+        if part == "a":
+            scope = parent["order"]["request"]["request"]
+            source = parent["id"]
+        else:
+            predecessor = next(
+                candidate for candidate in self.store.records()
+                if (candidate.get("parent") or {}).get("task_id") == parent["id"]
+                and (candidate.get("parent") or {}).get("phase")
+                == "implementation"
+                and st._next_part(candidate["parent"]["part"]) == part
+            )
+            scope = predecessor["result"]["native_result"][
+                "production_result"
+            ]["implementation_cut"]["remaining_scope"]
+            source = predecessor["id"]
+        return {
+            "part": part,
+            "scope": scope,
+            "delegated_remaining": None,
+            "source_unit": source,
+        }
+
+    @staticmethod
+    def _deep_documentation_reference(record, child):
+        request = record["order"]["request"]
+        workspace = os.path.realpath(_workspace(record))
+        destination = request.get("output_directory") or workspace
+        artifact = child["result"]["native_result"]["production_result"][
+            "artifact"
+        ]
+        reference = os.path.realpath(
+            artifact if os.path.isabs(artifact)
+            else os.path.join(workspace, artifact)
+        )
+        reference = tasks.resolve_derived_path(destination, reference)
+        if not kvstore.path_is_inside_roots(reference, [workspace]):
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "documentation artifact must stay inside the task workspace",
+            )
+        with open(reference, "rb") as handle:
+            handle.read(1)
+        return reference
+
+    @staticmethod
+    def _deep_implementation_cut(child):
+        configuration = child["order"]["configuration"]
+        if (
+            configuration["producer"]["task_executor"] != "agent_call"
+            or "implementation_size_control" not in configuration
+        ):
+            return None
+        return child["result"]["native_result"]["production_result"].get(
+            "implementation_cut"
+        )
+
+    @staticmethod
+    def _deep_result(status, child_results, reason=None):
+        duration = 0.0
+        usage = None
+        cost = None
+        usage_partial = not child_results
+        cost_partial = not child_results
+        for result in child_results:
+            duration += result["duration_s"]
+            usage = st._add_token_usage(usage, result["token_usage"])
+            cost = st._add_cost(cost, result["cost"])
+            usage_partial = bool(
+                usage_partial
+                or result["token_usage_partial"]
+                or result["token_usage"] is None
+            )
+            cost_partial = bool(
+                cost_partial
+                or result["cost_partial"]
+                or result["cost"] is None
+            )
+        terminal = {
+            "status": status,
+            "duration_s": duration,
+            "token_usage": usage,
+            "token_usage_partial": bool(usage_partial or usage is None),
+            "cost": cost,
+            "cost_partial": bool(cost_partial or cost is None),
+            "native_result": None,
+        }
+        if status == "failure":
+            terminal["reason"] = str(reason or "Deep task failed")
+        return terminal
+
+    @classmethod
+    def _deep_failure(cls, reason, child_result=None):
+        return cls._deep_result(
+            "failure", [] if child_result is None else [child_result], reason
+        )
+
+    def _record_deep_terminal(
+        self, task_id, status, child_results, reason=None
+    ):
         """Fence a deep terminal choice against concurrent operator Stop."""
         with registry.locked(self.home):
             with self._lock:
                 stop_reason = self._stops.get(task_id)
-                result = self._deep_failure(
-                    stop_reason or reason, child_result
+                result = self._deep_result(
+                    "failure" if stop_reason is not None else status,
+                    child_results,
+                    stop_reason or reason,
                 )
                 self.store.record_result_locked(task_id, result)
                 # A Stop arriving after this point was not accepted: the
@@ -844,30 +958,9 @@ class DirectTaskHost:
                 self._active.pop(task_id, None)
         return result
 
-    def _run_deep(self, record, config_resolver):
-        """Deliver only Slice 6's documentation child, then keep parent open."""
-        task_id = record["id"]
-        workspace = _workspace(record)
-        with registry.locked(self.home):
-            with self._lock:
-                stop_reason = self._stops.get(task_id)
-                if stop_reason is None:
-                    child = self.store.admit_related_locked(
-                        task_id,
-                        "documentation",
-                        None,
-                        self._deep_child_order(record),
-                        {},
-                        workspace,
-                    )
-                else:
-                    child = None
-        if child is None:
-            self._record_deep_terminal(task_id, stop_reason)
-            return
+    def _await_deep_child(self, task_id, child, config_resolver):
         if child["result"] is None:
             self.start(child, config_resolver, parent_task_id=task_id)
-
         while True:
             child = self.store.record(child["id"])
             stop_reason = self._stop_reason(task_id)
@@ -880,14 +973,94 @@ class DirectTaskHost:
                         )
                     except tasks.TaskRecordError:
                         child = self.store.record(child["id"])
-            result = child["result"]
-            if result is not None and (
-                stop_reason is not None or result["status"] == "failure"
-            ):
-                reason = stop_reason or result.get("reason")
-                self._record_deep_terminal(task_id, reason, result)
-                return
+            if child["result"] is not None:
+                return child, stop_reason
             time.sleep(self.poll_interval)
+
+    def _admit_deep_child(
+        self, task_id, phase, part, order, workspace
+    ):
+        with registry.locked(self.home):
+            with self._lock:
+                stop_reason = self._stops.get(task_id)
+                child = (
+                    self.store.admit_related_locked(
+                        task_id, phase, part, order, {}, workspace
+                    )
+                    if stop_reason is None else None
+                )
+        return child, stop_reason
+
+    def _run_deep(self, record, config_resolver):
+        """Deliver documentation, then sequential reviewed implementation."""
+        task_id = record["id"]
+        workspace = _workspace(record)
+        results = []
+        child, stop_reason = self._admit_deep_child(
+            task_id, "documentation", None,
+            self._deep_child_order(record), workspace,
+        )
+        if child is None:
+            self._record_deep_terminal(
+                task_id, "failure", results, stop_reason
+            )
+            return
+        child, stop_reason = self._await_deep_child(
+            task_id, child, config_resolver
+        )
+        result = child["result"]
+        results.append(result)
+        if stop_reason is not None or result["status"] == "failure":
+            self._record_deep_terminal(
+                task_id, "failure", results,
+                stop_reason or result.get("reason"),
+            )
+            return
+        try:
+            documentation_reference = self._deep_documentation_reference(
+                record, child
+            )
+        except (OSError, tasks.TaskRequestError) as exc:
+            self._record_deep_terminal(
+                task_id,
+                "failure",
+                results,
+                "Deep task documentation artifact is unavailable: %s" % exc,
+            )
+            return
+
+        part = "a"
+        implementation_order = self._deep_implementation_order(
+            record, documentation_reference
+        )
+        while True:
+            child, stop_reason = self._admit_deep_child(
+                task_id, "implementation", part,
+                implementation_order, workspace,
+            )
+            if child is None:
+                self._record_deep_terminal(
+                    task_id, "failure", results, stop_reason
+                )
+                return
+            child, stop_reason = self._await_deep_child(
+                task_id, child, config_resolver
+            )
+            result = child["result"]
+            results.append(result)
+            if stop_reason is not None or result["status"] == "failure":
+                self._record_deep_terminal(
+                    task_id, "failure", results,
+                    stop_reason or result.get("reason"),
+                )
+                return
+            cut = self._deep_implementation_cut(child)
+            if cut is None:
+                self._record_deep_terminal(
+                    task_id, "success", results
+                )
+                return
+            part = st._next_part(part)
 
     def _reviewed_failure(self, subject, unit, reason):
         return {
