@@ -215,7 +215,7 @@ class MilestoneSkeletonCompositionTest(base.DriverTestCase):
                 )
             )
 
-    def test_unrecovered_producer_failure_terminalizes_without_a_plan(self):
+    def test_terminal_producer_failure_resume_refuses_without_a_plan(self):
         with tempfile.TemporaryDirectory(prefix="skeleton-failure-") as workspace:
             path = self._activated(workspace)
             runner = runners.MockRunner([
@@ -237,12 +237,41 @@ class MilestoneSkeletonCompositionTest(base.DriverTestCase):
             record = tasks.task_record(
                 subject.state, unit["reviewed_task_id"]
             )
+            task_id = record["id"]
             self.assertEqual(record["result"]["status"], "failure")
             self.assertEqual(subject.state["milestone"]["status"], st.M_FAILED)
             self.assertNotIn(
                 canonical_plan.ANCHOR_KEY, subject.state["milestone"]
             )
             self.assertEqual(subject.state["milestone"]["slices"], [])
+
+            st.resume_run(subject.state)
+            st.save(path, subject.state)
+            resumed_runner = runners.MockRunner([])
+            resumed = drv.Driver(path, runner=resumed_runner)
+            action, note = resumed.step()
+
+            self.assertEqual(action.type, drv.A_FAILED)
+            self.assertIn("distinct retry attempt", note)
+            self.assertEqual(resumed_runner.calls, [])
+            self.assertEqual(
+                tasks.task_record(resumed.state, task_id), record
+            )
+            self.assertEqual(
+                resumed.state["milestone"]["status"], st.M_FAILED
+            )
+            self.assertEqual(
+                resumed._find_unit(st.UNIT_SKELETON, None)["status"],
+                st.U_FAILED,
+            )
+            self.assertNotIn(
+                canonical_plan.ANCHOR_KEY, resumed.state["milestone"]
+            )
+            self.assertEqual(resumed.state["milestone"]["slices"], [])
+            self.assertNotIn(
+                "Close milestone",
+                [message for _sha, message in base.git_subjects(workspace)],
+            )
 
     def test_missing_git_gate_fails_before_the_first_call(self):
         with tempfile.TemporaryDirectory(prefix="skeleton-no-git-") as workspace:

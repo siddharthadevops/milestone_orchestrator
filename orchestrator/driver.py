@@ -4131,7 +4131,19 @@ class Driver(object):
             self._save()
         result = record["result"]
         if result["status"] != "success":
-            return False
+            reason = (
+                "cannot continue milestone skeleton from terminal reviewed "
+                "task %s; a distinct retry attempt is required"
+                % record["id"]
+            )
+            st.fail_run(
+                self.state,
+                reason,
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            raise StopStep(reason)
 
         gate_commit = result["native_result"]["gate_commit"]
         try:
