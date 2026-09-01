@@ -11,6 +11,7 @@ from orchestrator import runners
 from orchestrator import state as st
 from orchestrator import tasks
 from orchestrator.tests.test_driver_mock import (
+    append_file,
     doc_script,
     git_subjects,
     init_state,
@@ -319,6 +320,58 @@ class ReviewedResultContractTest(unittest.TestCase):
                 sum(kind == contracts.KIND_IMPLEMENT
                     for _family, kind, _prompt in runner.calls),
                 1,
+            )
+
+    def test_preserved_fixer_gate_wip_is_adopted_after_crash(self):
+        with tempfile.TemporaryDirectory(
+            prefix="orch-result-preserved-gate-"
+        ) as ws:
+            script = skeleton_script()
+
+            def commit_fix(workspace):
+                append_file(
+                    "docs/skeleton.md",
+                    "\n## Non-goals\n\nNo scientific functions.\n",
+                )(workspace)
+                gitops.commit_wip(workspace, "fixer-owned repair")
+
+            next(
+                item for item in script
+                if item.get("expect_kind") == contracts.KIND_FIX_FINDINGS
+            )["side_effect"] = commit_fix
+            path = init_state(ws, make_config())
+            subject = drv.Driver(path, runner=runners.MockRunner(script))
+            unit = subject._unit_by_key("skeleton")
+            while unit["status"] != st.U_PRE_SEAL_VERIFY:
+                self._boundary_step(subject)
+
+            self.assertTrue(any(
+                event.get("type") == "fixer_commits_preserved"
+                and event.get("unit") == "skeleton"
+                for event in subject.state["events"]
+            ))
+            real_commit = gitops.commit_wip
+
+            def gate_wip_then_crash(workspace, message):
+                real_commit(workspace, message)
+                raise RuntimeError("crash after temporary gate WIP")
+
+            with mock.patch.object(
+                gitops, "commit_wip", side_effect=gate_wip_then_crash
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "crash after temporary gate WIP"
+                ):
+                    self._boundary_step(subject)
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            recovered_unit = recovered._unit_by_key("skeleton")
+            self.assertIsNotNone(recovered.reviewed_work.result(recovered_unit))
+            subjects = [message for _sha, message in git_subjects(ws)]
+            self.assertIn("fixer-owned repair", subjects)
+            self.assertNotIn("wip: gate skeleton", subjects)
+            self.assertEqual(
+                subjects.count("Complete review of milestone skeleton"), 1
             )
 
     def test_slice_four_does_not_publish_an_executor(self):

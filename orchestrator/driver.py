@@ -13339,10 +13339,15 @@ class Driver(object):
                     # A fixer may deliberately leave linear commits. Give the
                     # deterministic gate its own disposable child so amending the
                     # gate cannot erase the fixer's reviewed commit identity.
-                    gitops.commit_wip(
-                        self.workspace,
-                        "wip: gate %s" % st.display_unit_key(unit),
+                    gate_wip_message = (
+                        "wip: gate %s" % st.display_unit_key(unit)
                     )
+                    if gitops.landed_gate_sha(
+                        self.workspace, gate_wip_message
+                    ) is None:
+                        gitops.commit_wip(
+                            self.workspace, gate_wip_message
+                        )
                 sha = gitops.finalize_gate(self.workspace, message)
         except (gitops.GitError, ledgers.LedgerError, OSError) as exc:
             # A hostile/malformed index file must become a RECORDED run
