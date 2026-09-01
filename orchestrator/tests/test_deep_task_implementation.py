@@ -1,13 +1,16 @@
 """Slice 7 focused proof for sequential deep implementation delivery."""
 
 import copy
+from concurrent import futures
 import json
+import threading
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import contracts, runners, service, task_api, tasks
+from orchestrator import brainstorming_tasks, contracts, registry, runners
+from orchestrator import service, task_api, tasks
 from orchestrator import state as st
 from orchestrator.tests import test_deep_task_documentation as deep_tests
 from orchestrator.tests import test_reviewed_task_api as reviewed_tests
@@ -45,6 +48,30 @@ class DeepTaskImplementationTest(unittest.TestCase):
                 return record
             time.sleep(0.01)
         self.fail("deep task %s did not become terminal" % task_id)
+
+    def _wait_related(self, parent_id, phase, part, terminal=None):
+        deadline = time.time() + 5
+        store = task_api.StandaloneTaskStore(self.home)
+        while time.time() < deadline:
+            child = store.related(parent_id, phase, part)
+            if child is not None and (
+                terminal is None or (child["result"] is not None) == terminal
+            ):
+                return child
+            time.sleep(0.01)
+        self.fail("%s/%s child did not reach expected state" % (phase, part))
+
+    @staticmethod
+    def _stored_success(native_result, duration_s=1.0):
+        return {
+            "status": "success",
+            "duration_s": duration_s,
+            "token_usage": None,
+            "token_usage_partial": True,
+            "cost": None,
+            "cost_partial": True,
+            "native_result": native_result,
+        }
 
     def _deep_order(self, workspace, configuration=None, references=None):
         order = self.order("deep_task", work_area={
@@ -408,6 +435,440 @@ class DeepTaskImplementationTest(unittest.TestCase):
         self.assertTrue(aggregate["token_usage_partial"])
         self.assertAlmostEqual(aggregate["cost"]["api_usd"], 0.3)
         self.assertFalse(aggregate["cost_partial"])
+
+    def test_failure_and_stop_prevent_successors_and_settle_all_child_accounting(self):
+        cut = {"cut_scope": "part a", "remaining_scope": "part b"}
+        failed_parent, failed_store, _used = self._execute(
+            self._repo("deep-child-failure"), [
+                ("part-a", cut), runners.MockRunner([]),
+            ]
+        )
+        failed_children = [
+            failed_store.related(
+                failed_parent["id"], "documentation", None
+            ),
+            failed_store.related(
+                failed_parent["id"], "implementation", "a"
+            ),
+            failed_store.related(
+                failed_parent["id"], "implementation", "b"
+            ),
+        ]
+        self.assertEqual(failed_parent["result"]["status"], "failure")
+        self.assertEqual(failed_children[-1]["result"]["status"], "failure")
+        self.assertIsNone(
+            failed_store.related(
+                failed_parent["id"], "implementation", "c"
+            )
+        )
+        self.assertEqual(
+            failed_parent["result"],
+            task_api.DirectTaskHost._deep_result(
+                "failure",
+                [child["result"] for child in failed_children],
+                failed_children[-1]["result"]["reason"],
+            ),
+        )
+
+        workspace = self._repo("deep-implementation-stop")
+        late = deep_tests._LateResultRunner(
+            reviewed_tests.ReviewedTaskOrderingTest._script(
+                contracts.KIND_IMPLEMENT
+            )
+        )
+        pending = [
+            runners.MockRunner(
+                reviewed_tests.ReviewedTaskOrderingTest._script(
+                    contracts.KIND_DRAFT_SLICE_NOTE
+                )
+            ),
+            late,
+        ]
+        host = task_api.DirectTaskHost(
+            self.home,
+            runner_factory=lambda _config, _workspace: pending.pop(0),
+            poll_interval=0.001,
+        )
+        self.start_server(host)
+        with mock.patch.object(
+            service,
+            "_direct_task_config",
+            return_value=reviewed_tests.ReviewedTaskOrderingTest._config(),
+        ):
+            status, body = self.request(
+                "POST", "/api/tasks", self._deep_order(workspace)
+            )
+            self.assertEqual(status, 201, body)
+            parent_id = body["task"]["id"]
+            self.assertTrue(late.entered.wait(5))
+            active = self._wait_related(
+                parent_id, "implementation", "a", terminal=False
+            )
+            status, stopped = self.request(
+                "POST", "/api/tasks/%s/stop" % parent_id, {}
+            )
+            self.assertEqual((status, stopped["state"]), (200, "stopping"))
+            self.assertTrue(host.owns_workspace(workspace))
+            self.assertIsNone(
+                task_api.StandaloneTaskStore(self.home).record(parent_id)[
+                    "result"
+                ]
+            )
+            self.assertIsNone(
+                task_api.StandaloneTaskStore(self.home).record(active["id"])[
+                    "result"
+                ]
+            )
+            late.release.set()
+            stopped_parent = self._wait_terminal(parent_id)
+            stopped_child = self._wait_related(
+                parent_id, "implementation", "a", terminal=True
+            )
+
+        stopped_store = task_api.StandaloneTaskStore(self.home)
+        documentation = stopped_store.related(
+            parent_id, "documentation", None
+        )
+        self.assertEqual(stopped_child["result"]["status"], "failure")
+        self.assertEqual(stopped_parent["result"]["status"], "failure")
+        self.assertEqual(
+            stopped_parent["result"]["reason"],
+            stopped_child["result"]["reason"],
+        )
+        self.assertEqual(
+            stopped_parent["result"],
+            task_api.DirectTaskHost._deep_result(
+                "failure",
+                [documentation["result"], stopped_child["result"]],
+                stopped_child["result"]["reason"],
+            ),
+        )
+        self.assertIsNone(
+            stopped_store.related(parent_id, "implementation", "b")
+        )
+        self.assertEqual(len(late.calls), 1)
+        self.assertFalse(host.owns_workspace(workspace))
+
+    def test_part_admission_crash_windows_and_races_reuse_exact_child(self):
+        cut = {
+            "cut_scope": "gate-backed part a",
+            "remaining_scope": "recover exactly part b",
+        }
+        for window in ("before", "after"):
+            with self.subTest(window=window):
+                workspace = self._repo("deep-part-recovery-%s" % window)
+                store = task_api.StandaloneTaskStore(self.home)
+                parent = store.admit(
+                    tasks.validate_order(self._deep_order(workspace)),
+                    {},
+                    workspace,
+                )
+                artifact = Path(workspace) / "docs" / "slice-01.md"
+                artifact.parent.mkdir(parents=True)
+                artifact.write_text("# Reviewed slice\n", encoding="utf-8")
+                self._git(workspace, "add", "docs/slice-01.md")
+                self._git(workspace, "commit", "-q", "-m", "Documentation gate")
+                with registry.locked(self.home):
+                    documentation = store.admit_related_locked(
+                        parent["id"],
+                        "documentation",
+                        None,
+                        task_api.DirectTaskHost._deep_child_order(parent),
+                        {},
+                        workspace,
+                    )
+                store.record_result(documentation["id"], self._stored_success({
+                    "production_result": {"artifact": "docs/slice-01.md"},
+                    "review_evidence": {"reviews": ["documentation"]},
+                    "gate_commit": self._git(
+                        workspace, "rev-parse", "--short", "HEAD"
+                    ),
+                }))
+
+                part_a_path = Path(workspace) / "part-a.py"
+                part_a_path.write_text("PART = 'a'\n", encoding="utf-8")
+                self._git(workspace, "add", part_a_path.name)
+                self._git(workspace, "commit", "-q", "-m", "Part a gate")
+                implementation_order = (
+                    task_api.DirectTaskHost._deep_implementation_order(
+                        parent, str(artifact.resolve())
+                    )
+                )
+                with registry.locked(self.home):
+                    predecessor = store.admit_related_locked(
+                        parent["id"],
+                        "implementation",
+                        "a",
+                        implementation_order,
+                        {},
+                        workspace,
+                    )
+                store.record_result(predecessor["id"], self._stored_success({
+                    "production_result": {
+                        "files_changed": [part_a_path.name],
+                        "implementation_cut": cut,
+                    },
+                    "review_evidence": {"reviews": ["part-a"]},
+                    "gate_commit": self._git(
+                        workspace, "rev-parse", "--short", "HEAD"
+                    ),
+                }, duration_s=2.0))
+
+                with self.assertRaisesRegex(
+                    service.ApiError, "retained by its open parent"
+                ):
+                    service.delete_task(
+                        self.home,
+                        {"admin": True},
+                        predecessor["id"],
+                        api_tests.NoopHost(),
+                    )
+
+                real_cas = store._store.cas
+
+                def crash_cas(key, expected_revision, value):
+                    if window == "after":
+                        real_cas(key, expected_revision, value)
+                    raise RuntimeError("%s implementation admission" % window)
+
+                with mock.patch.object(
+                    store._store, "cas", side_effect=crash_cas
+                ), registry.locked(self.home), self.assertRaisesRegex(
+                    RuntimeError, "%s implementation admission" % window
+                ):
+                    store.admit_related_locked(
+                        parent["id"],
+                        "implementation",
+                        "b",
+                        implementation_order,
+                        {},
+                        workspace,
+                    )
+                first = store.related(
+                    parent["id"], "implementation", "b"
+                )
+                self.assertEqual(first is None, window == "before")
+
+                barrier = threading.Barrier(4)
+
+                def recover_relation():
+                    barrier.wait()
+                    with registry.locked(self.home):
+                        return store.admit_related_locked(
+                            parent["id"],
+                            "implementation",
+                            "b",
+                            implementation_order,
+                            {},
+                            workspace,
+                        )
+
+                with futures.ThreadPoolExecutor(4) as pool:
+                    recovered = [
+                        pool.submit(recover_relation) for _ in range(4)
+                    ]
+                    recovered = [future.result() for future in recovered]
+                child_id = recovered[0]["id"]
+                self.assertEqual(
+                    {record["id"] for record in recovered}, {child_id}
+                )
+
+                host = task_api.DirectTaskHost(self.home, store=store)
+                entered = threading.Event()
+                release = threading.Event()
+                starts = []
+
+                def hold_run(task_id, _resolver):
+                    try:
+                        starts.append(task_id)
+                        entered.set()
+                        release.wait(5)
+                    finally:
+                        with host._lock:
+                            host._active.pop(task_id, None)
+
+                start_barrier = threading.Barrier(4)
+
+                def recover_lifecycle():
+                    start_barrier.wait()
+                    return host.start(
+                        recovered[0],
+                        reviewed_tests.ReviewedTaskOrderingTest._config,
+                        parent_task_id=parent["id"],
+                    )
+
+                with mock.patch.object(host, "_run", side_effect=hold_run):
+                    with futures.ThreadPoolExecutor(4) as pool:
+                        attempts = [
+                            pool.submit(recover_lifecycle) for _ in range(4)
+                        ]
+                        attempts = [future.result() for future in attempts]
+                    self.assertTrue(entered.wait(5))
+                    self.assertEqual(
+                        sum(thread is not None for thread in attempts), 1
+                    )
+                    release.set()
+                    for thread in attempts:
+                        if thread is not None:
+                            thread.join(5)
+                self.assertEqual(starts, [child_id])
+                lifecycle = st.load(
+                    task_api.reviewed_state_path(self.home, child_id)
+                )
+                self.assertEqual(lifecycle["reviewed_task"]["implementation_scope"], {
+                    "part": "b",
+                    "scope": cut["remaining_scope"],
+                    "delegated_remaining": None,
+                    "source_unit": predecessor["id"],
+                })
+                self.assertEqual(
+                    sum(
+                        event["type"] == "reviewed_policy_frozen"
+                        for event in lifecycle["events"]
+                    ),
+                    1,
+                )
+
+                runner = runners.MockRunner(
+                    reviewed_tests.ReviewedTaskOrderingTest._script(
+                        contracts.KIND_IMPLEMENT, marker="recovered-part-b"
+                    )
+                )
+                recovered_host = task_api.DirectTaskHost(
+                    self.home,
+                    store=store,
+                    runner_factory=lambda _config, _workspace: runner,
+                    poll_interval=0.001,
+                )
+                outcome = recovered_host.adopt_open_tasks(
+                    lambda _record: (
+                        reviewed_tests.ReviewedTaskOrderingTest._config
+                    )
+                )
+                terminal = self._wait_terminal(parent["id"])
+                self.assertIn(parent["id"], outcome["adopted"])
+                self.assertEqual(terminal["result"]["status"], "success")
+                self.assertEqual(
+                    store.related(parent["id"], "implementation", "b")["id"],
+                    child_id,
+                )
+                self.assertIsNone(
+                    store.related(parent["id"], "implementation", "c")
+                )
+                self.assertEqual(runner.script, [])
+
+    def test_brainstorming_implementation_finishes_without_size_continuation(self):
+        workspace = self._repo("deep-brainstorming-implementation")
+        implementation_script = (
+            reviewed_tests.ReviewedTaskOrderingTest._script(
+                contracts.KIND_IMPLEMENT
+            )[1:]
+        )
+        implementation_script[-1]["response"]["authority"]["evidence"][0][
+            "path"
+        ] = "brainstorming-implementation.txt"
+        implementation_runner = runners.MockRunner(implementation_script)
+        pending = [
+            runners.MockRunner(
+                reviewed_tests.ReviewedTaskOrderingTest._script(
+                    contracts.KIND_DRAFT_SLICE_NOTE
+                )
+            ),
+            implementation_runner,
+        ]
+        host = task_api.DirectTaskHost(
+            self.home,
+            runner_factory=lambda _config, _workspace: pending.pop(0),
+            poll_interval=0.001,
+        )
+        self.start_server(host)
+        session_id = "deep-brainstorming-implementation"
+
+        def finish(state, task_id, *_args, **_kwargs):
+            record = tasks.task_record(state, task_id)
+            source = record["order"]["request"]["context"]["session_charge"][
+                "repository"
+            ]["pre_session_commit"]
+            relative = "brainstorming-implementation.txt"
+            reviewed_tests.write_file(
+                relative, "Brainstorming implementation\n"
+            )(workspace)
+            self._git(workspace, "add", relative)
+            self._git(
+                workspace, "commit", "-q", "-m", "Brainstorming delivery"
+            )
+            return tasks.record_task_result(state, task_id, {
+                "status": "success",
+                "duration_s": 2.0,
+                "token_usage": None,
+                "token_usage_partial": True,
+                "cost": None,
+                "cost_partial": True,
+                "native_result": {
+                    "outcome": "success",
+                    "rounds_used": 1,
+                    "source_base_revision": source,
+                    "accepted_revision": self._git(
+                        workspace, "rev-parse", "HEAD"
+                    ),
+                },
+            })
+
+        configuration = {
+            "implementation": {
+                "producer": {"task_executor": "brainstorming"}
+            }
+        }
+        with mock.patch.object(
+            service,
+            "_direct_task_config",
+            return_value=reviewed_tests.ReviewedTaskOrderingTest._config(),
+        ), mock.patch.object(
+            brainstorming_tasks, "resolve_staffing", return_value={
+                "dispatch_authority": "static", "participants": []
+            }
+        ), mock.patch.object(
+            brainstorming_tasks,
+            "start_task",
+            return_value={"id": session_id},
+        ), mock.patch.object(
+            brainstorming_tasks, "finish_task", side_effect=finish
+        ):
+            status, body = self.request(
+                "POST",
+                "/api/tasks",
+                self._deep_order(workspace, configuration=configuration),
+            )
+            self.assertEqual(status, 201, body)
+            parent = self._wait_terminal(body["task"]["id"])
+
+        store = task_api.StandaloneTaskStore(self.home)
+        child = store.related(parent["id"], "implementation", "a")
+        self.assertEqual(parent["result"]["status"], "success")
+        self.assertEqual(child["result"]["status"], "success")
+        self.assertEqual(
+            child["order"]["configuration"]["producer"]["task_executor"],
+            "brainstorming",
+        )
+        self.assertNotIn(
+            "implementation_size_control", child["order"]["configuration"]
+        )
+        self.assertNotIn(
+            "implementation_cut",
+            child["result"]["native_result"]["production_result"],
+        )
+        self.assertIsNone(
+            store.related(parent["id"], "implementation", "b")
+        )
+        lifecycle = st.load(
+            task_api.reviewed_state_path(self.home, child["id"])
+        )
+        self.assertFalse(any(
+            event["type"].startswith("implementation_size_")
+            for event in lifecycle["events"]
+        ))
+        self.assertEqual(len(implementation_runner.calls), 3)
+        self.assertEqual(pending, [])
 
 
 if __name__ == "__main__":
