@@ -4116,9 +4116,13 @@ def _reviewed_task_config(home, project=None):
             registry.load_projects_record(home), project
         )
         defaults = (declared or {}).get("defaults") or {}
+        declared_git = defaults.get("git")
         if "git" in defaults and (
-            not isinstance(defaults["git"], dict)
-            or defaults["git"].get("enabled") is False
+            not isinstance(declared_git, dict)
+            or (
+                "enabled" in declared_git
+                and not bool(declared_git["enabled"])
+            )
         ):
             raise tasks.TaskRequestError(
                 tasks.INVALID_TASK_REQUEST,

@@ -741,6 +741,23 @@ class DirectTaskHost:
             "native_result": None,
         }
 
+    def _record_reviewed_terminal(self, task_id, result):
+        """Choose the terminal result at the Stop-delivery boundary."""
+        with self._lock:
+            stop_reason = self._stops.get(task_id)
+            # A later Stop must answer not-running rather than claim delivery
+            # after success was already chosen. The Git gate is complete here,
+            # so releasing the work-area lease before the store write is safe.
+            self._active.pop(task_id, None)
+        if stop_reason is not None:
+            result = dict(
+                result,
+                status="failure",
+                reason=stop_reason,
+                native_result=None,
+            )
+        self.store.record_result(task_id, result)
+
     def _run_reviewed(self, record):
         task_id = record["id"]
         path = reviewed_state_path(self.home, task_id)
@@ -755,14 +772,13 @@ class DirectTaskHost:
                 unit = subject._unit_by_key(unit_key)
                 stop_reason = self._stop_reason(task_id)
                 if stop_reason is not None:
-                    self.store.record_result(
-                        task_id,
-                        self._reviewed_failure(subject, unit, stop_reason),
+                    self._record_reviewed_terminal(
+                        task_id, self._reviewed_failure(subject, unit, stop_reason)
                     )
                     return
                 if subject.state.get("failure") is not None:
                     failure = subject.state["failure"]
-                    self.store.record_result(
+                    self._record_reviewed_terminal(
                         task_id,
                         self._reviewed_failure(
                             subject, unit, failure.get("reason")
@@ -776,8 +792,10 @@ class DirectTaskHost:
                         action = subject.reviewed_work.next_action(unit)
                         subject.reviewed_work.execute(
                             action,
-                            call_preparation=driver.ReviewedWorkCallPreparation(
-                                subject
+                            call_preparation=(
+                                driver.StandaloneReviewedWorkCallPreparation(
+                                    subject
+                                )
                             ),
                         )
                     subject._save()
@@ -793,7 +811,7 @@ class DirectTaskHost:
                 result = subject.reviewed_work.result(unit)
                 if result is not None:
                     stop_reason = self._stop_reason(task_id)
-                    self.store.record_result(
+                    self._record_reviewed_terminal(
                         task_id,
                         self._reviewed_failure(subject, unit, stop_reason)
                         if stop_reason is not None else result,
@@ -807,12 +825,12 @@ class DirectTaskHost:
             reason = (
                 (subject.state.get("failure") or {}).get("reason") or str(exc)
             )
-            self.store.record_result(
+            self._record_reviewed_terminal(
                 task_id, self._reviewed_failure(subject, unit, reason)
             )
         except Exception as exc:
             unit = subject._unit_by_key(unit_key)
-            self.store.record_result(
+            self._record_reviewed_terminal(
                 task_id,
                 self._reviewed_failure(
                     subject,

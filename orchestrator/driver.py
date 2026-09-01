@@ -474,6 +474,41 @@ class MilestoneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
         )
 
 
+class StandaloneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
+    """Routed calls with a plan-free, read-only repository checkpoint."""
+
+    def suite_checkpoint(self, unit, cadence, configured_commands):
+        routed = self.host._routed_suite_checkpoint_prepare_call(
+            unit, cadence, configured_commands
+        )
+
+        def prepare(repair_error):
+            prepared = routed(repair_error)
+            repository = canonical_plan._repository_snapshot(
+                self.host.workspace
+            )
+
+            def complete():
+                unchanged = canonical_plan._repository_matches_snapshot(
+                    {"repository": repository}
+                )
+                if not unchanged:
+                    canonical_plan.restore_author_call(
+                        {"repository": repository}
+                    )
+                return {
+                    "accept_reply": unchanged,
+                    "committed": False,
+                    "plan_changed": False,
+                    "revision": repository["head"],
+                    "anchor": None,
+                }
+
+            return prepared._replace(complete=complete)
+
+        return prepare
+
+
 class ReviewedWorkLifecycle(object):
     """Execute the existing lifecycle for one selected production.
 

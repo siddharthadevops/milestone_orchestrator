@@ -588,8 +588,8 @@ def _reviewed_non_negative_int(value, context):
 
 def _reviewed_size_control(value, defaults):
     context = "reviewed policy.implementation_size_control"
-    if value is None:
-        value = {}
+    if not isinstance(value, dict):
+        raise ContractError("%s must be an object" % context)
     _exact_keys(
         value,
         (),
@@ -720,7 +720,7 @@ def resolve_reviewed_policy(
             )
         if size_control_applicable:
             checked["implementation_size_control"] = _reviewed_size_control(
-                value.get("implementation_size_control"),
+                value.get("implementation_size_control", {}),
                 size_defaults,
             )
         return _json_copy(checked, "reviewed policy")
