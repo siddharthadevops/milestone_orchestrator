@@ -23,6 +23,7 @@ PRODUCER_TASK_KINDS = (
     contracts.KIND_DRAFT_SLICE_NOTE,
     contracts.KIND_IMPLEMENT,
 )
+_PRODUCER_TASK_EXECUTOR_IDS = ("agent_call", "brainstorming")
 
 _REVIEWED_PRODUCTION_ROLES = {
     contracts.KIND_DRAFT_SKELETON: "plan",
@@ -297,6 +298,17 @@ def task_executor_catalogue():
     return _json_copy(list(_TASK_EXECUTORS), "TaskExecutor catalogue")
 
 
+def producer_task_executor_catalogue():
+    """Return only executors offered for slice production planning."""
+    return _json_copy(
+        [
+            entry for entry in _TASK_EXECUTORS
+            if entry["id"] in _PRODUCER_TASK_EXECUTOR_IDS
+        ],
+        "producer TaskExecutor catalogue",
+    )
+
+
 def _validate_request(request):
     _exact_keys(
         request,
@@ -455,7 +467,7 @@ def resolve_reviewed_producer(task_kind, value=_MISSING):
         if value is _MISSING:
             value = {"task_executor": "agent_call"}
         allowed = (
-            ("agent_call", "brainstorming")
+            _PRODUCER_TASK_EXECUTOR_IDS
             if task_kind in PRODUCER_TASK_KINDS else ("agent_call",)
         )
         checked = _validate_producer_selection(
@@ -728,6 +740,7 @@ def validate_producer_map(value, context="producer_task_executor"):
                     value[task_kind],
                     "%s.%s" % (context, task_kind),
                     stored=True,
+                    allowed_executors=_PRODUCER_TASK_EXECUTOR_IDS,
                 )
         return _json_copy(checked, context)
     except (ContractError, TypeError, ValueError) as exc:

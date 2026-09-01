@@ -238,7 +238,9 @@ def _shape(payload):
 
 
 def _project(slices, anchored_slices):
-    catalogue = {entry["id"] for entry in tasks.task_executor_catalogue()}
+    catalogue = {
+        entry["id"] for entry in tasks.producer_task_executor_catalogue()
+    }
     previous = {
         slice_plan["id"]: slice_plan["producer_task_executor"]
         for slice_plan in anchored_slices or []

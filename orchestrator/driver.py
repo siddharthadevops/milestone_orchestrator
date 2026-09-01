@@ -2092,7 +2092,7 @@ class Driver(object):
         if kind == contracts.KIND_DRAFT_SKELETON:
             catalogue = [
                 {"id": item["id"], "description": item["description"]}
-                for item in tasks.task_executor_catalogue()
+                for item in tasks.producer_task_executor_catalogue()
             ]
             values["task_executor_catalogue"] = json.dumps(
                 catalogue, ensure_ascii=False, sort_keys=True, indent=2

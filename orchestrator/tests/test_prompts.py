@@ -1462,6 +1462,14 @@ class TestPlannerMaterialChannel(unittest.TestCase):
         for name, prompt in self._plan_authoring_prompts().items():
             with self.subTest(surface=name):
                 self.assertIn("TASKEXECUTOR CATALOGUE", prompt)
+                catalogue_text = prompt.split(
+                    "TASKEXECUTOR CATALOGUE:\n", 1
+                )[1]
+                catalogue = json.JSONDecoder().raw_decode(catalogue_text)[0]
+                self.assertEqual(
+                    [entry["id"] for entry in catalogue],
+                    ["agent_call", "brainstorming"],
+                )
                 self.assertNotIn("SLICE MATERIAL PLANNING", prompt)
                 self.assertNotIn("MATERIAL CATALOGUE", prompt)
 

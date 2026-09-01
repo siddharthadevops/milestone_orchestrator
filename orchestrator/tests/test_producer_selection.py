@@ -124,6 +124,17 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
             return None
         return json.JSONDecoder().raw_decode(block[1])[0]
 
+    @staticmethod
+    def producer_catalogue_in(prompt):
+        """The slice-producer vocabulary one assembled prompt carries."""
+        for marker in (
+            "TASK EXECUTOR CATALOGUE:\n", "TASKEXECUTOR CATALOGUE:\n"
+        ):
+            block = prompt.split(marker, 1)
+            if len(block) == 2:
+                return json.JSONDecoder().raw_decode(block[1])[0]
+        return None
+
     def test_legacy_material_is_neither_solicited_nor_projected(self):
         path = self.bound_to(material_document("vocab", self.VOCABULARY))
         subject = self.driver_for(path, [canonical_skeleton_step()])
@@ -133,6 +144,13 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
         self.assertEqual(drafted[1], "draft_skeleton")
         self.assertIsNone(self.catalogue_in(drafted[2]))
         self.assertNotIn("reading unfamiliar code", drafted[2])
+        self.assertEqual(
+            [
+                entry["id"]
+                for entry in self.producer_catalogue_in(drafted[2])
+            ],
+            ["agent_call", "brainstorming"],
+        )
         self.assertNotIn("material", subject.state["milestone"]["slices"][0])
 
     def test_unknown_material_is_ignored_by_every_plan_reader(self):
@@ -320,11 +338,19 @@ class ProducerSelectionTest(unittest.TestCase):
             self.assertFalse(hasattr(owner, name), name)
 
     def test_canonical_plan_validates_complete_producer_map_from_catalogue(self):
-        catalogue = {
+        public_catalogue = {
             entry["id"] for entry in tasks.task_executor_catalogue()
         }
-        self.assertIn("agent_call", catalogue)
-        self.assertIn("brainstorming", catalogue)
+        producer_catalogue = {
+            entry["id"] for entry in tasks.producer_task_executor_catalogue()
+        }
+        self.assertEqual(
+            public_catalogue,
+            {"agent_call", "brainstorming", "reviewed_task"},
+        )
+        self.assertEqual(
+            producer_catalogue, {"agent_call", "brainstorming"}
+        )
 
         planned = {
             "id": 1,
@@ -364,6 +390,10 @@ class ProducerSelectionTest(unittest.TestCase):
             {
                 "draft_slice_note": "agent_call",
                 "implement": "no-such-executor",
+            },
+            {
+                "draft_slice_note": "agent_call",
+                "implement": "reviewed_task",
             },
             {
                 "draft_slice_note": {"task_executor": "agent_call"},
