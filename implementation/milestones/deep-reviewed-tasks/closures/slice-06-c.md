@@ -5,5 +5,5 @@
 - closed at: 2026-09-01T17:54:39+0200
 - rounds: 2
 - review completion records: 1
-- gate commit: (this commit)
+- gate commit: f4285ff
 - review state: effectively clean (every family clean or debt-clean on the same bytes; full verification was not due at this boundary)
