@@ -270,3 +270,31 @@
 - `codex-DRT-S04-FULL-001` (raised codex, cleared codex): Reviewed-success pin cites unrelated task lines — Slice 04 correctly pins success/failure at tasks.py:53-64 and validation at 1018-1092, so the skeleton’s bad supporting pin is unlikely to misdirect a max-effort builder, while correction is a one-line citation repair requiring no contract or implementation rework.
 - `claude-claude-DRT-S04-FULL-001` (raised claude, cleared codex): Gate recovery claim has no idempotence seam: a crash after the gate commit lands can stack a second identical gate commit when a fixer left linear commits — Although labeled P3, this is a real correctness and test-coverage gap: the strict post-Git-effect recovery promise can miss the fixer-preserved branch, but a careful builder can derive the missing identity seam and correction remains bounded to Slice 04 recovery and tests.
 
+## slice_impl-04 (Reviewed seal, gate, result, and recovery)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-04-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-codex-r1.txt` |
+| slice_impl-04-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-fix1.txt` |
+| slice_impl-04-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-delta1.txt` |
+| slice_impl-04-codex-r4 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-codex-r2.txt` |
+| slice_impl-04-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-claude-r1.txt` |
+| slice_impl-04-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-fix2.txt` |
+| slice_impl-04-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-delta2.txt` |
+| slice_impl-04-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-codex-r3.txt` |
+| slice_impl-04-claude-r2 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-04-codex-r7`, `slice_impl-04-claude-r2`
+- scheduled verification event: `490`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S04-001` (raised codex, cleared codex): Gate recovery can certify repository bytes changed after review — The slice pins strict current-byte gate recovery, but pending-gate state stores no reviewed repository identity and recovery amends whatever HEAD now exists, so the reusable boundary falsely certifies behavior a builder will trust, while correction remains a localized recovery check and regression t
+- `codex-DRT-S04-003` (raised codex, cleared codex): Reviewed results omit verification tokens and cost — The strict pinned accounting contract is falsely satisfied while verification tokens and cost are omitted, so later public and composite builders will likely propagate understated totals, but correction is a local accounting inclusion plus focused regression test.
+- `codex-DRT-S04-FULL-001` (raised codex, cleared codex): Reconciliation-paused calls disappear from reviewed-result accounting — The artifact falsely presents retained-call accounting as strictly complete while excluding a reconciliation-pause event, so later builders will trust incorrect totals, but correction is a small local aggregation and regression-test fix.
+- `codex-DRT-S04-FULL-002` (raised codex, cleared codex): Suite-repair fixer duration is counted twice — The hard once-only accounting claim and its named test falsely certify suite-repair duration, so later builders can silently consume a doubled terminal total, while correction remains bounded to accounting ownership and focused regression coverage.
+
