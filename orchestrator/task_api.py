@@ -842,34 +842,30 @@ class DirectTaskHost:
         if relation.get("phase") != "implementation":
             return None
         part = relation["part"]
-        parent = self.store.record(relation["task_id"])
         if part == "a":
-            scope = parent["order"]["request"]["request"]
-            source = parent["id"]
-        else:
-            predecessor = next(
-                candidate for candidate in self.store.records()
-                if (candidate.get("parent") or {}).get("task_id") == parent["id"]
-                and (candidate.get("parent") or {}).get("phase")
-                == "implementation"
-                and st._next_part(candidate["parent"]["part"]) == part
-            )
-            scope = predecessor["result"]["native_result"][
-                "production_result"
-            ]["implementation_cut"]["remaining_scope"]
-            source = predecessor["id"]
+            # Part a is the whole admitted implementation request. It becomes
+            # a size-cut scope only if its own eligible producer returns a cut.
+            return None
+        parent = self.store.record(relation["task_id"])
+        predecessor = next(
+            candidate for candidate in self.store.records()
+            if (candidate.get("parent") or {}).get("task_id") == parent["id"]
+            and (candidate.get("parent") or {}).get("phase") == "implementation"
+            and st._next_part(candidate["parent"]["part"]) == part
+        )
+        scope = predecessor["result"]["native_result"]["production_result"][
+            "implementation_cut"
+        ]["remaining_scope"]
         return {
             "part": part,
             "scope": scope,
             "delegated_remaining": None,
-            "source_unit": source,
+            "source_unit": predecessor["id"],
         }
 
     @staticmethod
     def _deep_documentation_reference(record, child):
-        request = record["order"]["request"]
         workspace = os.path.realpath(_workspace(record))
-        destination = request.get("output_directory") or workspace
         artifact = child["result"]["native_result"]["production_result"][
             "artifact"
         ]
@@ -877,12 +873,7 @@ class DirectTaskHost:
             artifact if os.path.isabs(artifact)
             else os.path.join(workspace, artifact)
         )
-        reference = tasks.resolve_derived_path(destination, reference)
-        if not kvstore.path_is_inside_roots(reference, [workspace]):
-            raise tasks.TaskRequestError(
-                tasks.INVALID_TASK_REQUEST,
-                "documentation artifact must stay inside the task workspace",
-            )
+        reference = tasks.resolve_derived_path(workspace, reference)
         with open(reference, "rb") as handle:
             handle.read(1)
         return reference

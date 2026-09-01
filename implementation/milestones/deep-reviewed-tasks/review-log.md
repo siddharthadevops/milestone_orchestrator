@@ -557,3 +557,17 @@
 - `claude-claude-S07A-002` (raised claude, cleared codex): Documentation-artifact containment is narrowed to output_directory, so a readable in-workspace note outside it fails the whole paid parent — The strict Slice 7 contract accepts any readable workspace-contained documentation artifact, but the implementation and passing focused test silently narrow that boundary to output_directory, so later work can inherit the wrong behavior and test contract, while correction remains a bounded helper-an
 - `claude-claude-S07A-003` (raised claude, cleared codex): Part `a` of an uncut deep task is told it is a runtime size cut, diverging from the identical directly ordered reviewed task — The false size-cut label conflicts with the exact full scope and explicit no-remainder instruction, so a careful max-effort builder should resolve it, but mis-scoping remains plausible and would require bounded part-a rework within its own review cycle.
 
+## slice_impl-07-b (Deep implementation-part delivery)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-b-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-b-codex-r1.txt` |
+| slice_impl-07-b-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-07-b-codex-r1`, `slice_impl-07-b-claude-r1`
+
