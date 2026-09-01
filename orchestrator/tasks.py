@@ -97,6 +97,7 @@ _WORKER_ACCOUNTING_EVENTS = frozenset({
     "error_classifier_call",
     "gap_reported",
     "implementation_size_interrupted",
+    "reclassify_recorded",
     "worker_interrupted",
     "worker_malformed",
     "worker_paused_for_plan_reconciliation",

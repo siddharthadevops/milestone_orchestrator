@@ -668,9 +668,15 @@ class ReviewedWorkLifecycle(object):
             },
             "gate_commit": unit["gate_commit"],
         }
+        task_id = unit.get("reviewed_task_id")
+        accounting = (
+            tasks.task_accounting(self.host.state, task_id)
+            if task_id is not None
+            else st.reviewed_work_accounting(self.host.state, unit)
+        )
         return tasks.validate_result({
             "status": "success",
-            **st.reviewed_work_accounting(self.host.state, unit),
+            **accounting,
             "native_result": native_result,
         })
 
@@ -4099,10 +4105,10 @@ class Driver(object):
         """Whether the recorded run stop also terminates its outer task."""
         failure = self.state.get("failure") or {}
         if failure.get("type") in (
-            "worker_protocol", "canonical_plan_boundary"
+            "worker_protocol",
+            "canonical_plan_boundary",
+            "brainstorming_no_agreement",
         ):
-            return True
-        if self.state.get("pending_gate_unit") == st.unit_key(unit):
             return True
         reason = failure.get("reason") or ""
         return bool(
@@ -4138,6 +4144,46 @@ class Driver(object):
         record = tasks.record_task_result(self.state, task_id, result)
         self._save()
         return record
+
+    def _retry_initial_skeleton_task(self, unit):
+        """Start a fresh reviewed attempt after deliberate run Resume."""
+        st.reset_for_redraft(
+            self.state, unit, "terminal skeleton task replaced on Resume"
+        )
+        unit.pop("reviewed_task_id", None)
+        unit.pop("reviewed_policy", None)
+        unit.pop("active_task", None)
+        unit.pop("brainstorming_wait", None)
+        unit.pop("brainstorming_resume", None)
+        unit.pop("deferred_fix_episode", None)
+        unit["gate_commit"] = None
+        if self.state.get("pending_gate_unit") == st.unit_key(unit):
+            self.state.pop("pending_gate_unit", None)
+            self.state.pop("pending_gate_fingerprint", None)
+        self._save()
+        return self._ensure_initial_skeleton_task(unit)
+
+    def _prepare_initial_skeleton_task(self, unit):
+        """Recover, retry, or admit the prospective skeleton task."""
+        if not self._initial_skeleton_task_pending(unit):
+            return False
+        if self.state.get("failure") is not None:
+            before = tasks.task_records(self.state)
+            self._record_initial_skeleton_task_failure(unit)
+            return before != tasks.task_records(self.state)
+
+        task_id = unit.get("reviewed_task_id")
+        if task_id is not None:
+            record = tasks.task_record(self.state, task_id)
+            if (record.get("result") or {}).get("status") == "failure":
+                self._retry_initial_skeleton_task(unit)
+                return True
+        admitted = unit.get("reviewed_task_id") is None
+        self._ensure_initial_skeleton_task(unit)
+        consumed = self._consume_initial_skeleton_result(
+            unit, self.reviewed_work.result(unit)
+        )
+        return bool(admitted or consumed)
 
     def _consume_initial_skeleton_result(self, unit, result=None):
         """Install first plan authority only from the outer task's gate."""
@@ -8230,6 +8276,7 @@ class Driver(object):
                 exc.work_token_usage_partial,
                 cost=getattr(exc, "work_cost", None),
                 cost_partial=getattr(exc, "work_cost_partial", False),
+                task_id=self._reviewed_call_task_id(unit),
             )
             unit.pop("brainstorming_wait", None)
             if (wait.get("origin") or {}).get("kind") \
@@ -8274,6 +8321,7 @@ class Driver(object):
             handoff.get("work_token_usage_partial", False),
             cost=handoff.get("work_cost"),
             cost_partial=handoff.get("work_cost_partial", False),
+            task_id=self._reviewed_call_task_id(unit),
         )
 
         if handoff["result"]["outcome"] == "failure":
@@ -8577,20 +8625,14 @@ class Driver(object):
             # before the wait handler itself runs.
             if self._brainstorming_wait_session() is not None:
                 self.state = st.load(self.state_path)
+            action, boundary_note = self._decide_at_strategy_boundary()
             skeleton = self._find_unit(st.UNIT_SKELETON, None)
             try:
-                if self._initial_skeleton_task_pending(skeleton):
-                    if self.state.get("failure") is not None:
-                        self._record_initial_skeleton_task_failure(skeleton)
-                    else:
-                        self._ensure_initial_skeleton_task(skeleton)
-                        self._consume_initial_skeleton_result(
-                            skeleton,
-                            self.reviewed_work.result(skeleton),
-                        )
+                prepared = self._prepare_initial_skeleton_task(skeleton)
             except StopStep as exc:
                 return Action(A_FAILED, reason=str(exc)), "run failed: %s" % exc
-            action, boundary_note = self._decide_at_strategy_boundary()
+            if prepared and self.state.get("failure") is None:
+                action, boundary_note = self._decide_at_strategy_boundary()
             if action.type in (A_DONE, A_FAILED):
                 return action, boundary_note
             waiting_session = (
@@ -10999,6 +11041,7 @@ class Driver(object):
                     % (kind, f.get("id"), contests.get("rejection_id"),
                        sorted(known) or "none"),
                     unit=unit,
+                    type_="worker_protocol",
                 )
                 raise StopStep("bad contests reference")
 
@@ -11014,6 +11057,7 @@ class Driver(object):
                         "registry ref %r (known: %s)"
                         % (f.get("id"), ref, sorted(known) or "none"),
                         unit=unit,
+                        type_="worker_protocol",
                     )
                     raise StopStep("bad adjudication reference")
 
@@ -11043,6 +11087,7 @@ class Driver(object):
                     % (f.get("id"), f.get("adjudication_ref"),
                        contested[f.get("id")]),
                     unit=unit,
+                    type_="worker_protocol",
                 )
                 raise StopStep("contested finding killed by pointer")
 
@@ -11612,7 +11657,9 @@ class Driver(object):
             self._fail_worker_task_if_open(
                 unit, output, result=result, reason=str(exc)
             )
-            st.fail_run(self.state, str(exc), unit=unit)
+            st.fail_run(
+                self.state, str(exc), unit=unit, type_="worker_protocol"
+            )
             self._save()
             raise StopStep(str(exc))
         try:
@@ -12902,6 +12949,7 @@ class Driver(object):
                 token_usage_partial = False
                 call_cost = None
                 call_cost_partial = False
+                result = None
                 effective_model = None
                 effective_effort = None
                 if same_family_second_look and opp != raising_family:
@@ -13095,6 +13143,9 @@ class Driver(object):
                     token_usage_partial=token_usage_partial,
                     cost=copy.deepcopy(call_cost),
                     cost_partial=bool(call_cost_partial),
+                    **self._task_id_fields(
+                        getattr(result, "task_id", None)
+                    ),
                 )
                 if defer_ok:
                     debt.append({

@@ -21,7 +21,7 @@ import urllib.request
 from unittest import mock
 
 from orchestrator import access, driver, interpreter, model_profiles, profiles, registry
-from orchestrator import service, state as st
+from orchestrator import service, state as st, tasks
 
 
 def load_tests(loader, tests, pattern):
@@ -1930,7 +1930,19 @@ class ProfilesApiTest(ServiceApiTest):
         )
         def observe_transition(**_kwargs):
             on_disk = st.load(entry["state_path"])
-            self.assertEqual(on_disk["events"][-1]["type"], "profile_changed")
+            self.assertEqual(
+                on_disk["events"][-1]["type"], "reviewed_policy_frozen"
+            )
+            event_types = [event["type"] for event in on_disk["events"]]
+            self.assertLess(
+                event_types.index("profile_changed"),
+                event_types.index("reviewed_policy_frozen"),
+            )
+            record = tasks.task_records(on_disk)[0]
+            self.assertEqual(
+                record["order"]["configuration"]["p3_defer_max_risk"],
+                "low",
+            )
             return "observed"
 
         with mock.patch.object(runtime, "_do_draft", side_effect=observe_transition):

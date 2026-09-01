@@ -1525,6 +1525,12 @@ def _reconciliation_barrier_revision(state, slice_id, barriers=None):
 def maybe_close_milestone(state):
     if state["milestone"]["status"] == M_CLOSED:
         return True  # idempotent: never records milestone_closed twice
+    if (
+        state["milestone"].get(SKELETON_COMPOSITION_KEY)
+        == SKELETON_COMPOSITION_VERSION
+        and state["milestone"].get("canonical_plan_anchor") is None
+    ):
+        return False
     plan = planned_execution_units(state)
     have = {unit_identity(u): u for u in state["units"]}
     for key in plan:
