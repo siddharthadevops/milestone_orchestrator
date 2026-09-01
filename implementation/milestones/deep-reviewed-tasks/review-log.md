@@ -389,3 +389,23 @@
 - `codex-DRT-S05B-D2-001` (raised codex, cleared codex): The new synthetic authority path prevents agent-call rethink attachment — This is a real runtime-correctness and coverage defect: the absolute synthetic artifact conflicts with the strict workspace-relative rethink boundary and could survive mocked tests, but the next part’s mandated real rethink/restart scenario should expose it and correction stays within the standalone
 - `claude-claude-slice_impl-05-b-claude-r2/DRT-S05B-R2-001` (raised claude, cleared codex): The standalone read-only suite-checkpoint boundary returns a result shaped for a different consumer, so every standalone reviewed implementation records its verification evidence with null `candidate_before`/`candidate_after` where the milestone caller records the certified repository revision — The strict standalone/milestone evidence-parity claim is false on the normal success path and could silently propagate into later verification work, but no gate or consumer depends on the blank fields and correction is a small local boundary-shape fix plus regression assertion.
 
+## slice_impl-05-c (Standalone reviewed-task ordering)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-c-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-c-codex-r1.txt` |
+| slice_impl-05-c-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-c-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-c-codex-r1`, `slice_impl-05-c-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S05C-001` (raised codex, cleared codex): Stop finalizes an attached rethink without settling its session evidence — The implementation and its reassuring attached-rethink Stop test violate the pinned exact-once evidence/accounting contract across a real attachment race, likely misleading downstream builders, while correction remains bounded to reviewed-task Stop/session settlement and focused tests.
+- `codex-DRT-S05C-002` (raised codex, cleared codex): Skeleton-review rethink loses the standalone task authority — The rethink session silently omits pinned caller authority that even a careful agent cannot reconstruct when resolving a reference-dependent conflict, creating a high risk of a wrong edit, but fresh reviewed phases regain that authority before sealing, keeping correction to bounded rethink and revie
+- `claude-claude-S05C-R1-001` (raised claude, cleared codex): The plan-free read-only repository turn is written a second time in session_repository instead of reusing the identical completion added in 05-b — The two identical plan-free completions could diverge if a later semantic change reaches only one caller, but careful search should expose both copies, and correction is a small local consolidation or matching edit before shipment.
+- `claude-claude-S05C-R1-002` (raised claude, cleared codex): The standalone crash-window tests delete the in-flight call marker a real crash leaves, so stale-marker recovery is never exercised on the reviewed path — The strict named crash test falsely presents marker-backed spent-call accounting and clean-tree recovery as proved while its helper removes the marker before adoption, so later work can plausibly trust a correctness-critical false green, whereas repair remains bounded to the standalone crash harness
+

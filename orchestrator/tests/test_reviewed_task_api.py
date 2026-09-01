@@ -4,10 +4,13 @@ import copy
 import os
 import subprocess
 import threading
+import time
 import unittest
 from unittest import mock
 
-from orchestrator import contracts
+from orchestrator import brainstorming_milestone, brainstorming_tasks
+from orchestrator import canonical_plan, contracts, gitops
+from orchestrator import driver as drv
 from orchestrator import runners, service, task_api, tasks
 from orchestrator import state as st
 from orchestrator.tests import test_task_api as _task_api_tests
@@ -153,6 +156,143 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         self.assertEqual(terminal["result"]["status"], "success", terminal)
         return terminal, runner, host
 
+    def _run_brainstorming_reviewed(self, workspace, kind):
+        script = self._script(kind)[1:]
+        if kind == contracts.KIND_IMPLEMENT:
+            script[-1]["response"]["authority"]["evidence"][0]["path"] = (
+                "brainstorming-implementation.txt"
+            )
+        runner = runners.MockRunner(script)
+        host = task_api.DirectTaskHost(
+            self.home,
+            runner_factory=lambda _config, _workspace: runner,
+            poll_interval=0.001,
+        )
+        self.start_server(host)
+        session_id = "reviewed-brainstorming-%s" % kind
+
+        def finish(state, task_id, *_args, **_kwargs):
+            record = tasks.task_record(state, task_id)
+            source = record["order"]["request"]["context"]["session_charge"][
+                "repository"
+            ]["pre_session_commit"]
+            relative = (
+                "docs/slice-01.md"
+                if kind == contracts.KIND_DRAFT_SLICE_NOTE
+                else "brainstorming-implementation.txt"
+            )
+            write_file(relative, "Brainstorming production\n")(workspace)
+            self._git(workspace, "add", relative)
+            self._git(workspace, "commit", "-q", "-m", "Brainstorming delivery")
+            accepted = self._git(workspace, "rev-parse", "HEAD")
+            return tasks.record_task_result(state, task_id, {
+                "status": "success",
+                "duration_s": 2.0,
+                "token_usage": None,
+                "token_usage_partial": True,
+                "cost": None,
+                "cost_partial": True,
+                "native_result": {
+                    "outcome": "success",
+                    "rounds_used": 1,
+                    "source_base_revision": source,
+                    "accepted_revision": accepted,
+                },
+            })
+
+        order = self._reviewed_order(workspace, kind)
+        order["configuration"]["producer"] = {
+            "task_executor": "brainstorming"
+        }
+        with mock.patch.object(
+            service, "_direct_task_config", return_value=self._config()
+        ), mock.patch.object(
+            brainstorming_tasks, "resolve_staffing", return_value={
+                "dispatch_authority": "static", "participants": []
+            }
+        ), mock.patch.object(
+            brainstorming_tasks, "start_task", return_value={"id": session_id}
+        ), mock.patch.object(
+            brainstorming_tasks, "finish_task", side_effect=finish
+        ):
+            status, body = self.request("POST", "/api/tasks", order)
+            self.assertEqual(status, 201, body)
+            terminal = self.wait_record(body["task"]["id"])
+        self.assertEqual(terminal["result"]["status"], "success", terminal)
+        return terminal, runner
+
+    @staticmethod
+    def _rethink_step(kind):
+        call = step(kind, {
+            "status": "need_rethink",
+            "problem": "Resolve the standalone governing contradiction.",
+        })
+        call.pop("expect_family", None)
+        return call
+
+    @staticmethod
+    def _rethink_session(session_id):
+        def create(_state, _config, _unit, _signal, _references, charge,
+                   **_kwargs):
+            return {
+                "id": session_id,
+                "state": {"request": {"context": {"source_payload": {
+                    "session_charge": copy.deepcopy(charge)
+                }}}},
+            }
+        return create
+
+    def _admit_open_reviewed(self, workspace, kind):
+        host = NoopHost()
+        self.start_server(host)
+        with mock.patch.object(
+            service, "_direct_task_config", return_value=self._config()
+        ):
+            status, body = self.request(
+                "POST", "/api/tasks", self._reviewed_order(workspace, kind)
+            )
+        self.assertEqual(status, 201, body)
+        record = body["task"]
+        self.assertEqual(host.started, [record["id"]])
+        task_api.ensure_reviewed_state(self.home, record, self._config())
+        return record
+
+    def _adopt_reviewed(self, record, runner):
+        host = task_api.DirectTaskHost(
+            self.home,
+            runner_factory=lambda _config, _workspace: runner,
+            poll_interval=0.001,
+        )
+        outcome = host.adopt_open_tasks(
+            lambda _record: lambda: (_ for _ in ()).throw(
+                AssertionError("durable reviewed state must be reused")
+            )
+        )
+        terminal = self.wait_record(record["id"])
+        self.assertEqual(outcome["adopted"], [record["id"]])
+        self.assertEqual(terminal["id"], record["id"])
+        self.assertEqual(terminal["result"]["status"], "success", terminal)
+        return terminal
+
+    @staticmethod
+    def _standalone_step(subject):
+        unit_key = subject.state["reviewed_task"]["unit"]
+        with subject._exclusive():
+            subject._assert_not_stale()
+            unit = subject._unit_by_key(unit_key)
+            action = subject.reviewed_work.next_action(unit)
+            try:
+                subject.reviewed_work.execute(
+                    action,
+                    call_preparation=drv.StandaloneReviewedWorkCallPreparation(
+                        subject
+                    ),
+                )
+                subject._save()
+            finally:
+                subject._clear_busy()
+        return action
+
     def test_catalogue_api_and_panel_publish_the_same_reviewed_configuration(self):
         status, body = self.request("GET", "/api/task-executors")
         self.assertEqual(status, 200)
@@ -288,6 +428,29 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
             record["order"]["task_executor"] == "reviewed_task"
             for record in records[before:]
         ))
+
+    def test_brainstorming_jobs_reach_the_same_result_without_size_control(self):
+        for index, kind in enumerate(("draft_slice_note", "implement")):
+            with self.subTest(kind=kind):
+                terminal, runner = self._run_brainstorming_reviewed(
+                    self._repo("brainstorming-%d" % index), kind
+                )
+                native = terminal["result"]["native_result"]
+                self.assertTrue(native["gate_commit"])
+                resolved = terminal["order"]["configuration"]
+                self.assertEqual(
+                    resolved["producer"]["task_executor"], "brainstorming"
+                )
+                self.assertNotIn("implementation_size_control", resolved)
+                lifecycle = st.load(task_api.reviewed_state_path(
+                    self.home, terminal["id"]
+                ))
+                self.assertFalse(any(
+                    event["type"].startswith("implementation_size_")
+                    for event in lifecycle["events"]
+                ))
+                expected_calls = 3 if kind == "implement" else 2
+                self.assertEqual(len(runner.calls), expected_calls)
 
     def test_reference_documents_remain_ordered_untyped_material(self):
         workspace = self._repo("references")
@@ -425,6 +588,206 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         self.assertEqual(terminal["result"]["status"], "failure")
         self.assertIsNone(terminal["result"]["native_result"])
         self.assertFalse(host.owns_workspace(workspace))
+
+    def test_stop_during_attached_rethink_stops_session_and_fails_outer_task(self):
+        workspace = self._repo("stop-rethink")
+        session_id = "standalone-rethink-stop"
+        runner = runners.MockRunner([self._rethink_step("implement")])
+        host = task_api.DirectTaskHost(
+            self.home,
+            runner_factory=lambda _config, _workspace: runner,
+            poll_interval=0.01,
+        )
+        self.start_server(host)
+        with mock.patch.object(
+            service, "_direct_task_config", return_value=self._config()
+        ), mock.patch.object(
+            brainstorming_milestone,
+            "create_session",
+            side_effect=self._rethink_session(session_id),
+        ), mock.patch.object(
+            drv.brainstorming,
+            "coordination_projection",
+            return_value={"recovery_baseline_revision": "baseline"},
+        ), mock.patch.object(
+            brainstorming_milestone, "terminal_handoff", return_value=None
+        ), mock.patch.object(
+            brainstorming_tasks.lifecycle, "stop_session", return_value={}
+        ) as stop_session:
+            status, body = self.request(
+                "POST", "/api/tasks",
+                self._reviewed_order(workspace, "implement"),
+            )
+            self.assertEqual(status, 201, body)
+            task_id = body["task"]["id"]
+            deadline = time.time() + 3
+            while time.time() < deadline \
+                    and host.running_session_id(task_id) != session_id:
+                time.sleep(0.01)
+            self.assertEqual(host.running_session_id(task_id), session_id)
+            status, stopped = self.request(
+                "POST", "/api/tasks/%s/stop" % task_id, {}
+            )
+            self.assertEqual((status, stopped["state"]), (200, "stopping"))
+            terminal = self.wait_record(task_id)
+        self.assertEqual(terminal["result"]["status"], "failure")
+        self.assertGreater(terminal["result"]["duration_s"], 0)
+        stop_session.assert_called_once()
+        self.assertFalse(host.owns_workspace(workspace))
+
+    def test_rethink_crash_adopts_same_id_and_resumes_without_reconciliation(self):
+        workspace = self._repo("rethink-restart")
+        record = self._admit_open_reviewed(workspace, "implement")
+        path = task_api.reviewed_state_path(self.home, record["id"])
+        first_runner = runners.MockRunner([self._rethink_step("implement")])
+        subject = drv.Driver(path, runner=first_runner,
+                             model_profiles_home=self.home)
+        session_id = "standalone-rethink-restart"
+        with mock.patch.object(
+            brainstorming_milestone,
+            "create_session",
+            side_effect=self._rethink_session(session_id),
+        ), mock.patch.object(
+            drv.brainstorming,
+            "coordination_projection",
+            return_value={"recovery_baseline_revision": "baseline"},
+        ):
+            self._standalone_step(subject)
+
+        lifecycle = st.load(path)
+        unit = next(
+            item for item in lifecycle["units"]
+            if st.unit_key(item) == lifecycle["reviewed_task"]["unit"]
+        )
+        self.assertEqual(unit["brainstorming_wait"]["session_id"], session_id)
+        self.assertIsNone(
+            task_api.StandaloneTaskStore(self.home).record(record["id"])[
+                "result"
+            ]
+        )
+
+        runner = runners.MockRunner(self._script("implement"))
+        revision = self._git(workspace, "rev-parse", "HEAD")
+        handoff = {
+            "session_id": session_id,
+            "result": {"outcome": "success"},
+            "source_base_revision": revision,
+            "accepted_revision": revision,
+            "work_duration_s": None,
+        }
+        with mock.patch.object(
+            brainstorming_milestone, "terminal_handoff", return_value=handoff
+        ):
+            terminal = self._adopt_reviewed(record, runner)
+        recovered = st.load(path)
+        self.assertNotIn(
+            canonical_plan.RECONCILIATION_KEY, recovered["milestone"]
+        )
+        self.assertTrue(any(
+            event["type"] == "brainstorming_rethink_sealed"
+            for event in recovered["events"]
+        ))
+        self.assertAlmostEqual(
+            terminal["result"]["duration_s"],
+            (len(first_runner.calls) + len(runner.calls)) * 0.01,
+        )
+
+    def test_same_id_recovers_production_wip_review_and_gate_crashes(self):
+        # A provider result lost before its draft record may repeat; the outer
+        # identity and the pre-call implementation baseline must not.
+        workspace = self._repo("crash-production")
+        record = self._admit_open_reviewed(workspace, "implement")
+        path = task_api.reviewed_state_path(self.home, record["id"])
+        first = runners.MockRunner([self._script("implement")[0]])
+        subject = drv.Driver(path, runner=first, model_profiles_home=self.home)
+        with mock.patch.object(
+            st, "record_draft", side_effect=RuntimeError("production crash")
+        ), self.assertRaisesRegex(RuntimeError, "production crash"):
+            self._standalone_step(subject)
+        second = runners.MockRunner(self._script("implement"))
+        self._adopt_reviewed(record, second)
+        self.assertEqual(
+            sum(kind == "implement" for _family, kind, _prompt
+                in first.calls + second.calls),
+            2,
+        )
+
+        # A landed WIP is adopted from its durable parent/tree/message intent.
+        workspace = self._repo("crash-wip")
+        record = self._admit_open_reviewed(workspace, "implement")
+        path = task_api.reviewed_state_path(self.home, record["id"])
+        runner = runners.MockRunner(self._script("implement"))
+        subject = drv.Driver(path, runner=runner, model_profiles_home=self.home)
+        real_wip = gitops.commit_wip
+
+        def wip_then_crash(workspace_path, message):
+            real_wip(workspace_path, message)
+            raise RuntimeError("WIP crash")
+
+        with mock.patch.object(
+            gitops, "commit_wip", side_effect=wip_then_crash
+        ), self.assertRaisesRegex(RuntimeError, "WIP crash"):
+            self._standalone_step(subject)
+        self._adopt_reviewed(record, runner)
+        self.assertEqual(
+            sum(kind == "implement" for _family, kind, _prompt in runner.calls),
+            1,
+        )
+
+        # A review response lost before its round record may repeat in place.
+        workspace = self._repo("crash-review")
+        record = self._admit_open_reviewed(workspace, "draft_skeleton")
+        path = task_api.reviewed_state_path(self.home, record["id"])
+        script = self._script("draft_skeleton")
+        script.insert(3, copy.deepcopy(script[2]))
+        runner = runners.MockRunner(script)
+        subject = drv.Driver(path, runner=runner, model_profiles_home=self.home)
+        self._standalone_step(subject)
+        unit_key = subject.state["reviewed_task"]["unit"]
+        while subject.reviewed_work.next_action(
+            subject._unit_by_key(unit_key)
+        ).type != drv.A_REVIEW_ROUND:
+            self._standalone_step(subject)
+        with mock.patch.object(
+            st, "record_round", side_effect=RuntimeError("review crash")
+        ), self.assertRaisesRegex(RuntimeError, "review crash"):
+            self._standalone_step(subject)
+        self._adopt_reviewed(record, runner)
+        self.assertEqual(
+            sum(kind == "review_round" for _family, kind, _prompt
+                in runner.calls),
+            3,
+        )
+
+        # A landed gate is adopted before the outer task exposes success.
+        workspace = self._repo("crash-gate")
+        record = self._admit_open_reviewed(workspace, "draft_skeleton")
+        path = task_api.reviewed_state_path(self.home, record["id"])
+        runner = runners.MockRunner(self._script("draft_skeleton"))
+        subject = drv.Driver(path, runner=runner, model_profiles_home=self.home)
+        unit_key = subject.state["reviewed_task"]["unit"]
+        while subject._unit_by_key(unit_key)["status"] != st.U_PRE_SEAL_VERIFY:
+            self._standalone_step(subject)
+        real_gate = gitops.finalize_gate
+
+        def gate_then_crash(workspace_path, message):
+            real_gate(workspace_path, message)
+            raise RuntimeError("gate crash")
+
+        with mock.patch.object(
+            gitops, "finalize_gate", side_effect=gate_then_crash
+        ), self.assertRaisesRegex(RuntimeError, "gate crash"):
+            self._standalone_step(subject)
+        self.assertIsNone(
+            task_api.StandaloneTaskStore(self.home).record(record["id"])[
+                "result"
+            ]
+        )
+        terminal = self._adopt_reviewed(record, runners.MockRunner([]))
+        self.assertEqual(
+            terminal["result"]["native_result"]["gate_commit"],
+            self._git(workspace, "rev-parse", "--short", "HEAD"),
+        )
 
     def test_existing_direct_tasks_and_old_records_keep_their_recovery_law(self):
         workspace = self.directory("legacy-worker")

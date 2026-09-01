@@ -189,6 +189,53 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         self.assertFalse(empty["committed"])
         self.assertEqual(gitops.head_full_sha(self.workspace), after)
 
+    def test_standalone_reviewed_turns_commit_without_plan_authority(self):
+        document = state.load(self.state_path)
+        document["reviewed_task"] = {
+            "task_id": "standalone", "unit": "slice_impl-01"
+        }
+        document["milestone"].pop(canonical_plan.ANCHOR_KEY, None)
+        state.save(self.state_path, document)
+        repository = session_repository.checkpoint_context(
+            self.workspace,
+            self.state_path,
+            None,
+            "Prepare standalone reviewed session",
+            standalone_reviewed=True,
+        )
+        charge = self.charge("implement@slice_impl")
+        charge["repository"] = repository
+        session = self.session_state(charge)
+
+        attempt = session_repository.begin_attempt(
+            session, charge, "initial_position"
+        )
+        Path(self.workspace, self.target_path).write_text(
+            "standalone implementation\n", encoding="utf-8"
+        )
+        outcome = session_repository.complete_attempt(attempt, "lead", 1)
+        self.assertTrue(outcome["accept_reply"])
+        self.assertTrue(outcome["committed"])
+        self.assertFalse(outcome["plan_changed"])
+        self.assertIsNone(outcome["anchor"])
+
+        attempt = session_repository.begin_attempt(
+            session, charge, "contrary_position"
+        )
+        Path(self.workspace, self.target_path).write_text(
+            "forbidden contrary edit\n", encoding="utf-8"
+        )
+        outcome = session_repository.complete_attempt(attempt, "contrary", 1)
+        self.assertFalse(outcome["accept_reply"])
+        self.assertEqual(
+            Path(self.workspace, self.target_path).read_text(encoding="utf-8"),
+            "standalone implementation\n",
+        )
+        self.assertNotIn(
+            canonical_plan.ANCHOR_KEY,
+            state.load(self.state_path)["milestone"],
+        )
+
     def test_editor_turn_ignores_unknown_plan_fields(self):
         attempt = self.begin("initial_position")
         updated = copy.deepcopy(PLAN)

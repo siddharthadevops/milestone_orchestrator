@@ -2198,8 +2198,13 @@ class Driver(object):
             return session_repository.checkpoint_context(
                 self.workspace,
                 self.state_path,
-                self._skeleton_artifact(),
+                (
+                    None
+                    if self.state.get("reviewed_task")
+                    else self._skeleton_artifact()
+                ),
                 "Prepare Brainstorming session for %s" % st.unit_key(unit),
+                standalone_reviewed=bool(self.state.get("reviewed_task")),
             )
         except (session_repository.SessionRepositoryError, gitops.GitError) as exc:
             st.fail_run(
@@ -7818,6 +7823,7 @@ class Driver(object):
         if (
             "source_base_revision" in native
             and "accepted_revision" in native
+            and not self.state.get("reviewed_task")
             and self._observe_accepted_plan_range(
                 native["source_base_revision"],
                 native["accepted_revision"],
