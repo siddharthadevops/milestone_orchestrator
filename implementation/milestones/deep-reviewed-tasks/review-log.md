@@ -593,3 +593,22 @@
 - `codex-codex-DRT-S07C-003` (raised codex, cleared codex): Recovered Stop discards durable reviewed-child accounting — Risk is high because passing recovery coverage can silently legitimize behavior that contradicts strict durable single-count accounting, while damage is medium because correction is bounded to the reviewed-child Stop/recovery settlement path and its focused test.
 - `codex-DRT-S07C-004` (raised codex, cleared codex): Durable Stop recovery can abandon a live Brainstorming session — The durable-Stop recovery path falsely treats a failed child record as settlement while its attached Brainstorming session can remain live, making later composition likely to trust a wrong pinned Stop/workspace-release invariant, while correction is bounded to recovered-session pausing and focused c
 
+## slice_doc-08 (Milestone skeleton composition)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-08.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-08-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-08-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-08-codex-r1.txt` |
+| slice_doc-08-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-08-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-08-codex-r1`, `slice_doc-08-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S08-FULL-001` (raised codex, cleared codex): The governing skeleton’s hard-register citations have drifted from their claims — Two hard-register code ranges plainly substantiate unrelated behavior, so a hasty builder could skip the intended API/result verification, but the claims, goal citations, and Slice 08’s correct local seams make the mismatch self-revealing and correction is only bounded citation repair.
+- `claude-DRT-S08-R1-001` (raised claude, cleared codex): Slice 08 pins the pre-gate plan-authority change at the driver seam only, but the anchor and slice projection are installed by the shared canonical-plan author-call acceptance on every skeleton draft and fix, so the note's own touch boundary and "no new machinery" claim cannot deliver its acceptance criteria. — The pinned seam understates that shared call completion writes the anchor and projection, but the explicit pre-gate invariant and named failing test should lead a careful max-effort builder to that path, while any miss causes bounded Slice 08 rework caught at its own test or review.
+- `claude-DRT-S08-R1-002` (raised claude, cleared codex): The note requires the skeleton to stay unanchored through its whole review cycle but never states what governs plan-block guarding while unanchored; `begin_author_call` refuses an unanchored plan for every review/fix/delta call, and its anchored drift guard silently disappears. — A careful builder should discover or stop on the unanchored-call precondition, but a hasty implementation could enable unanchored calls and silently remove drift protection, with correction remaining bounded to Slice 08 and likely caught at its review.
+

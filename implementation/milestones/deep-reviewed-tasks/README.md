@@ -305,4 +305,5 @@ The goal is achieved when:
 | slice_doc-07 (Deep implementation-part delivery) | reviewed | 2 | satisfied | 9097b1e |
 | slice_impl-07-a (Deep implementation-part delivery) | reviewed | 2 | satisfied | be77942 |
 | slice_impl-07-b (Deep implementation-part delivery) | reviewed | 2 | satisfied | b4b2741 |
-| slice_impl-07-c (Deep implementation-part delivery) | reviewed | 5 | satisfied | - |
+| slice_impl-07-c (Deep implementation-part delivery) | reviewed | 5 | satisfied | ad99775 |
+| slice_doc-08 (Milestone skeleton composition) | reviewed | 2 | satisfied | - |
