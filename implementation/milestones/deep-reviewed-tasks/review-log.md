@@ -612,3 +612,33 @@
 - `claude-DRT-S08-R1-001` (raised claude, cleared codex): Slice 08 pins the pre-gate plan-authority change at the driver seam only, but the anchor and slice projection are installed by the shared canonical-plan author-call acceptance on every skeleton draft and fix, so the note's own touch boundary and "no new machinery" claim cannot deliver its acceptance criteria. — The pinned seam understates that shared call completion writes the anchor and projection, but the explicit pre-gate invariant and named failing test should lead a careful max-effort builder to that path, while any miss causes bounded Slice 08 rework caught at its own test or review.
 - `claude-DRT-S08-R1-002` (raised claude, cleared codex): The note requires the skeleton to stay unanchored through its whole review cycle but never states what governs plan-block guarding while unanchored; `begin_author_call` refuses an unanchored plan for every review/fix/delta call, and its anchored drift guard silently disappears. — A careful builder should discover or stop on the unanchored-call precondition, but a hasty implementation could enable unanchored calls and silently remove drift protection, with correction remaining bounded to Slice 08 and likely caught at its review.
 
+## slice_impl-08-a (Milestone skeleton composition)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-08-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-codex-r1.txt` |
+| slice_impl-08-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-claude-r1.txt` |
+| slice_impl-08-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-fix1.txt` |
+| slice_impl-08-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-delta1.txt` |
+| slice_impl-08-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-codex-r2.txt` |
+| slice_impl-08-claude-r2 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-claude-r2.txt` |
+| slice_impl-08-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-fix2.txt` |
+| slice_impl-08-codex-r6 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-delta2.txt` |
+| slice_impl-08-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-codex-r3.txt` |
+| slice_impl-08-claude-r3 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-claude-r3.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-08-codex-r7`, `slice_impl-08-claude-r3`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S08A-R1-001` (raised codex, cleared codex): Pending profile authority is applied after skeleton policy admission — Risk is high because the task freezes a stale weaker policy before applying the valid pending profile and the named test falsely omits that transition; damage is medium because correction is bounded to Slice 8 ordering and regression-test work without changing the cross-slice contract.
+- `codex-DRT-S08A-R1-002` (raised codex, cleared codex): Reclassification calls lose outer-task evidence and accounting attribution — The accepted artifact promises strict outer-task attribution and equal once-only task/run accounting for classification, yet the retained classifier evidence lacks that link and the named test misses the path, plausibly misleading downstream composition while requiring only bounded attribution and r
+- `claude-claude-S08A-R1-002` (raised claude, cleared codex): A crash in the skeleton's pending-gate window makes Driver startup recovery close the milestone as complete with zero slices and leave the reviewed task's result permanently null. — Startup recovery directly contradicts the strict gate/result/anchor convergence contract and presents later composition with a false completed baseline, but correction is bounded to the startup handoff ordering and focused crash regression within Slice 8.
+- `claude-claude-S08A-R2-002` (raised claude, cleared codex): The checkpoint-suite module test_author_call_cutover is left broken by this unit: one stale pre-slice-8 assertion and one uncaught TaskRequestError escaping Driver.step. — The red retained module could briefly misdirect a hasty builder because one executable assertion states the retired eager-anchor law, but the explicit gated-plan contract exposes both failures as stale fixture carry-forward—including an inconsistent hand-seeded activated state—so correction is local
+- `codex-codex-DRT-S08A-R3-001` (raised codex, cleared codex): Semantic protocol failures can reuse an open skeleton task after Resume — Risk is xhigh because the reviewed slice explicitly promises terminal immutability for semantic protocol failures while the reproduced unknown-reference path resumes the same open task, but damage is medium because correcting terminal classification and adding the missing focused pin is bounded rewo
+- `claude-claude-S08A-R4-001` (raised claude, cleared codex): `_initial_skeleton_failure_is_terminal` classifies a run failure recorded while `pending_gate_unit` names the skeleton as a TERMINAL outer-task failure, so a recoverable Git error at the single gate commit permanently kills the milestone run and discards the whole sealed, twice-reviewed skeleton and its paid calls, instead of being retried by the existing `recover_pending_gate` / `_consume_pending_closure` seam that this slice pins as the recovery mechanism. — The implementation silently contradicts the slice’s strict pending-gate recovery guarantee and its claimed crash-window coverage, making later reliance plausibly wrong, while correction and any replay remain bounded to this skeleton unit.
+

@@ -273,6 +273,61 @@ class MilestoneSkeletonCompositionTest(base.DriverTestCase):
                 [message for _sha, message in base.git_subjects(workspace)],
             )
 
+    def test_recoverable_stop_resume_reuses_the_open_task(self):
+        with tempfile.TemporaryDirectory(
+            prefix="skeleton-resume-"
+        ) as workspace:
+            path = self._activated(workspace)
+            subject = drv.Driver(
+                path,
+                runner=runners.MockRunner([
+                    base.skeleton_script()[0],
+                    base.step(
+                        contracts.KIND_REVIEW_ROUND,
+                        {
+                            "status": "blocked",
+                            "kind": contracts.KIND_REVIEW_ROUND,
+                            "blocked_reason": "operator input needed",
+                        },
+                        family="codex",
+                    ),
+                ]),
+            )
+            subject.step()
+            subject.step()
+            subject.step()
+
+            unit = subject._find_unit(st.UNIT_SKELETON, None)
+            task_id = unit["reviewed_task_id"]
+            self.assertEqual(
+                subject.state["failure"]["type"], "worker_blocked"
+            )
+            self.assertIsNone(
+                tasks.task_record(subject.state, task_id)["result"]
+            )
+
+            st.resume_run(subject.state)
+            st.save(path, subject.state)
+            resumed = drv.Driver(
+                path,
+                runner=runners.MockRunner([
+                    base.step(
+                        contracts.KIND_REVIEW_ROUND,
+                        base.report(contracts.KIND_REVIEW_ROUND),
+                        family="codex",
+                    )
+                ]),
+            )
+            resumed.step()
+
+            unit = resumed._find_unit(st.UNIT_SKELETON, None)
+            self.assertIsNone(resumed.state["failure"])
+            self.assertEqual(unit["reviewed_task_id"], task_id)
+            self.assertIsNone(
+                tasks.task_record(resumed.state, task_id)["result"]
+            )
+            self.assertEqual(len(tasks.task_records(resumed.state)), 1)
+
     def test_missing_git_gate_fails_before_the_first_call(self):
         with tempfile.TemporaryDirectory(prefix="skeleton-no-git-") as workspace:
             base.git_init_workspace(workspace)

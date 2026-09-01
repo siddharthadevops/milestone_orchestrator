@@ -4081,7 +4081,7 @@ class Driver(object):
                 unit=unit,
                 type_="orchestrator",
             )
-            self._record_initial_skeleton_task_failure(unit)
+            self._record_initial_skeleton_task_failure(unit, terminal=True)
             raise StopStep("reviewed skeleton task requires its Git gate")
         return record
 
@@ -4095,9 +4095,32 @@ class Driver(object):
         record = tasks.task_record(self.state, task_id)
         return task_id if record.get("result") is None else None
 
-    def _record_initial_skeleton_task_failure(self, unit):
-        """Settle an admitted skeleton task when its milestone work fails."""
+    def _initial_skeleton_failure_is_terminal(self, unit):
+        """Whether the recorded run stop also terminates its outer task."""
+        failure = self.state.get("failure") or {}
+        if failure.get("type") in (
+            "worker_protocol", "canonical_plan_boundary"
+        ):
+            return True
+        if self.state.get("pending_gate_unit") == st.unit_key(unit):
+            return True
+        reason = failure.get("reason") or ""
+        return bool(
+            "reached max_rounds_per_family=" in reason
+            or (
+                "did not converge after" in reason
+                and "fixer+delta loops" in reason
+            )
+        )
+
+    def _record_initial_skeleton_task_failure(self, unit, terminal=False):
+        """Settle the outer task only for a terminal reviewed-work failure."""
         if not self._initial_skeleton_task_pending(unit):
+            return None
+        if (
+            not terminal
+            and not self._initial_skeleton_failure_is_terminal(unit)
+        ):
             return None
         task_id = unit.get("reviewed_task_id")
         if task_id is None:
