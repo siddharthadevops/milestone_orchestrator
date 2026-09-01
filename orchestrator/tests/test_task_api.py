@@ -752,7 +752,7 @@ class TaskApiTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=5)
 
-    def test_service_restart_does_not_auto_start_open_brainstorming_task(self):
+    def test_service_restart_adopts_open_brainstorming_and_reviewed_tasks(self):
         pins = {
             "dispatch_authority": "static",
             "participants": [{"id": "lead"}],
@@ -764,16 +764,52 @@ class TaskApiTest(unittest.TestCase):
                 "POST", "/api/tasks", self.order("brainstorming")
             )[1]["task"]
 
-        restarted_host = NoopHost()
+        reviewed_primary = self.directory("restart-reviewed-primary")
+        subprocess.run(["git", "init", "-q", reviewed_primary], check=True)
+        reviewed_order = self.order("reviewed_task", work_area={
+            "workspace_path": reviewed_primary,
+            "primary": reviewed_primary,
+            "additional": [],
+        })
+        reviewed_order["configuration"] = {"task_kind": "draft_skeleton"}
+        reviewed = self.request(
+            "POST", "/api/tasks", reviewed_order
+        )[1]["task"]
+
+        restarted_host = task_api.DirectTaskHost(self.home)
+        resolved = {}
+        direct_config = {"restart_config": "direct"}
+        reviewed_config = {"restart_config": "reviewed"}
+
+        def capture_start(current, config_resolver):
+            resolved[current["id"]] = config_resolver()
+            return object()
+
         with mock.patch.object(
+            restarted_host, "start", side_effect=capture_start
+        ), mock.patch.object(
+            restarted_host,
+            "adopt_open_tasks",
+            wraps=restarted_host.adopt_open_tasks,
+        ) as adoption, mock.patch.object(
             service.task_api, "DirectTaskHost", return_value=restarted_host
-        ):
+        ), mock.patch.object(
+            service, "_direct_task_config", return_value=direct_config
+        ) as direct_resolver, mock.patch.object(
+            service, "_reviewed_task_config", return_value=reviewed_config
+        ) as reviewed_resolver:
             server = service.make_server(self.home, 0)
         try:
-            self.assertIsNone(
-                task_api.StandaloneTaskStore(self.home).record(record["id"])["result"]
-            )
-            self.assertEqual(restarted_host.started, [])
+            adoption.assert_called_once()
+            self.assertEqual(resolved, {
+                record["id"]: direct_config,
+                reviewed["id"]: reviewed_config,
+            })
+            direct_resolver.assert_called_once_with(self.home, None)
+            reviewed_resolver.assert_called_once_with(self.home, None)
+            store = task_api.StandaloneTaskStore(self.home)
+            self.assertIsNone(store.record(record["id"])["result"])
+            self.assertIsNone(store.record(reviewed["id"])["result"])
         finally:
             server.server_close()
 

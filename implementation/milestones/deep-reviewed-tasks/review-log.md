@@ -496,3 +496,21 @@
 - `codex-slice_impl-06-b-codex-r1/DRT-S06B-001` (raised codex, cleared codex): Parent Stop propagation permits post-acceptance child lifecycle calls — The implementation and reassuring Stop test silently violate the pinned post-acceptance lifecycle boundary, so later deep-child work could reuse polling-based propagation and start paid calls, while correction remains bounded to this unit’s Stop synchronization and focused race coverage.
 - `claude-claude-slice_impl-06-b-r1/DRT-S06B-SIZE-001` (raised claude, cleared codex): The bound partial size-control repair is gated on `deep_task`, so the sibling public `reviewed_task` order still refuses partial overrides that are valid against the bound project's defaults — The executor-specific preflight encodes a false asymmetry that rejects a schema-promised, project-valid reviewed_task payload and can plausibly propagate the wrong admission contract, while correction remains bounded to this unit’s resolver and focused parity coverage before shipment.
 
+## slice_impl-06-c (Deep documentation and child authority)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-c-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-c-codex-r1.txt` |
+| slice_impl-06-c-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-c-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-c-codex-r1`, `slice_impl-06-c-claude-r1`
+
+**Deferred debt (independently classified):**
+- `claude-DRT-S06C-R1-001` (raised claude, cleared codex): The note's named check for open-parent retention of a terminal documentation child does not exist anywhere in the repository — Risk is high because the exact named check is absent and restart/evidence preservation remain unproven, but an existing focused test does attempt deletion and assert refusal, making the finding's zero-coverage and mutation-survives claims false; damage is low because correction only requires narrowi
+- `claude-DRT-S06C-R1-002` (raised claude, cleared codex): The repaired restart-adoption test pins the brainstorming and reviewed_task config branches exhaustively but omits deep_task, leaving the deep restart Git gate unenforced — The production mapping is currently correct and the strict child-gate contract is explicit elsewhere, but the exhaustive-looking restart assertion omits the only deep service path, so a hasty builder could regress it silently while correction would remain bounded to this unit’s mapping, test, and an
+
