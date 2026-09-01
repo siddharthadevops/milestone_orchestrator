@@ -549,6 +549,81 @@ class DeepTaskImplementationTest(unittest.TestCase):
         self.assertEqual(len(late.calls), 1)
         self.assertFalse(host.owns_workspace(workspace))
 
+    def test_accepted_stop_survives_host_recovery_and_settles_active_part(self):
+        workspace = self._repo("deep-durable-stop")
+        store = task_api.StandaloneTaskStore(self.home)
+        parent = store.admit(
+            tasks.validate_order(self._deep_order(workspace)), {}, workspace
+        )
+        artifact = Path(workspace) / "docs" / "slice-01.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("# Reviewed slice\n", encoding="utf-8")
+        self._git(workspace, "add", "docs/slice-01.md")
+        self._git(workspace, "commit", "-q", "-m", "Documentation gate")
+        with registry.locked(self.home):
+            documentation = store.admit_related_locked(
+                parent["id"], "documentation", None,
+                task_api.DirectTaskHost._deep_child_order(parent), {}, workspace,
+            )
+        documentation = store.record_result(
+            documentation["id"], self._stored_success({
+                "production_result": {"artifact": "docs/slice-01.md"},
+                "review_evidence": {"reviews": ["documentation"]},
+                "gate_commit": self._git(workspace, "rev-parse", "HEAD"),
+            })
+        )
+        with registry.locked(self.home):
+            implementation = store.admit_related_locked(
+                parent["id"], "implementation", "a",
+                task_api.DirectTaskHost._deep_implementation_order(
+                    parent, str(artifact.resolve())
+                ),
+                {}, workspace,
+            )
+
+        previous_host = task_api.DirectTaskHost(self.home, store=store)
+        with previous_host._lock:
+            previous_host._active[parent["id"]] = workspace
+        reason = "stopped before host recovery"
+        self.assertTrue(previous_host.stop(parent["id"], reason))
+        self.assertEqual(
+            task_api.StandaloneTaskStore(self.home).stop_reason(parent["id"]),
+            reason,
+        )
+
+        recovered_host = task_api.DirectTaskHost(
+            self.home,
+            store=task_api.StandaloneTaskStore(self.home),
+            runner_factory=lambda *_args: self.fail(
+                "accepted Stop recovery launched a provider lifecycle"
+            ),
+            poll_interval=0.001,
+        )
+        outcome = recovered_host.adopt_open_tasks(
+            lambda _record: reviewed_tests.ReviewedTaskOrderingTest._config
+        )
+        stopped_parent = self._wait_terminal(parent["id"])
+        stopped_child = store.record(implementation["id"])
+
+        self.assertIn(parent["id"], outcome["adopted"])
+        self.assertEqual(stopped_child["result"]["status"], "failure")
+        self.assertEqual(stopped_child["result"]["reason"], reason)
+        self.assertEqual(stopped_parent["result"]["status"], "failure")
+        self.assertEqual(stopped_parent["result"]["reason"], reason)
+        self.assertEqual(
+            stopped_parent["result"],
+            task_api.DirectTaskHost._deep_result(
+                "failure",
+                [documentation["result"], stopped_child["result"]],
+                reason,
+            ),
+        )
+        self.assertIsNone(
+            store.related(parent["id"], "implementation", "b")
+        )
+        self.assertEqual(store.stop_reason(parent["id"]), reason)
+        self.assertNotIn("stop_reason", store.record(parent["id"]))
+
     def test_part_admission_crash_windows_and_races_reuse_exact_child(self):
         cut = {
             "cut_scope": "gate-backed part a",

@@ -76,21 +76,34 @@ class StandaloneTaskStore:
         )
 
     @staticmethod
-    def _document(record, admitted_at):
-        return {
+    def _document(record, admitted_at, stop_reason=None):
+        document = {
             "schema_version": _DOCUMENT_SCHEMA_VERSION,
             "admitted_at": admitted_at,
             "record": record,
         }
+        if stop_reason is not None:
+            document["stop_reason"] = stop_reason
+        return document
 
     @staticmethod
     def _validate_document(value, key):
         if (
             not isinstance(value, dict)
-            or set(value) != {"schema_version", "admitted_at", "record"}
+            or set(value) not in (
+                {"schema_version", "admitted_at", "record"},
+                {"schema_version", "admitted_at", "record", "stop_reason"},
+            )
             or value["schema_version"] != _DOCUMENT_SCHEMA_VERSION
             or not isinstance(value["admitted_at"], str)
             or not isinstance(value["record"], dict)
+            or (
+                "stop_reason" in value
+                and (
+                    not isinstance(value["stop_reason"], str)
+                    or not value["stop_reason"].strip()
+                )
+            )
         ):
             raise tasks.TaskRecordError(
                 "standalone task document %s is malformed" % key
@@ -246,7 +259,11 @@ class StandaloneTaskStore:
         outcome = self._store.cas(
             key,
             current["revision"],
-            self._document(state["tasks"][0], document["admitted_at"]),
+            self._document(
+                state["tasks"][0],
+                document["admitted_at"],
+                document.get("stop_reason"),
+            ),
         )
         if not outcome.ok:
             raise tasks.TaskRecordError(
@@ -254,6 +271,41 @@ class StandaloneTaskStore:
                 % task_id
             )
         return record
+
+    def stop_reason(self, task_id):
+        """Return one accepted internal Stop intent, if it was recorded."""
+        key = task_key(task_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise tasks.TaskRecordError("unknown task %r" % task_id)
+        document = self._validate_document(current["value"], key)
+        return document.get("stop_reason")
+
+    def record_stop_locked(self, task_id, reason):
+        """Durably accept a deep parent Stop under the registry lock."""
+        if not isinstance(reason, str) or not reason.strip():
+            raise tasks.TaskRecordError("task Stop reason must be non-empty")
+        key = task_key(task_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise tasks.TaskRecordError("unknown task %r" % task_id)
+        document = self._validate_document(current["value"], key)
+        record = document["record"]
+        if record.get("result") is not None:
+            raise tasks.TaskRecordError("task %s is already terminal" % task_id)
+        existing = document.get("stop_reason")
+        if existing is not None:
+            return existing
+        outcome = self._store.cas(
+            key,
+            current["revision"],
+            self._document(record, document["admitted_at"], reason.strip()),
+        )
+        if not outcome.ok:
+            raise tasks.TaskRecordError(
+                "standalone task %s changed while recording its Stop" % task_id
+            )
+        return reason.strip()
 
 
 def forget_task_evidence(home, record):
@@ -641,12 +693,18 @@ class DirectTaskHost:
         this reason: a stop is an operator outcome, never a guessed
         success from whatever the interrupted worker last printed."""
         reason = str(reason or "stopped by operator").strip()
-        with self._lock:
-            if task_id not in self._active:
-                return False
-            self._stops[task_id] = reason
-            control = self._controls.get(task_id)
-            session_id = self._sessions.get(task_id)
+        with registry.locked(self.home):
+            with self._lock:
+                if task_id not in self._active:
+                    return False
+                record = self.store.record(task_id)
+                if tasks.stored_task_executor(
+                    record["order"]["task_executor"]
+                ) == "deep_task":
+                    reason = self.store.record_stop_locked(task_id, reason)
+                self._stops[task_id] = reason
+                control = self._controls.get(task_id)
+                session_id = self._sessions.get(task_id)
         if control is not None:
             # The transport binds interrupt only once the worker is spawned;
             # a stop landing in that window would otherwise be dropped.
@@ -677,7 +735,10 @@ class DirectTaskHost:
 
     def _stop_reason(self, task_id):
         with self._lock:
-            return self._stops.get(task_id)
+            reason = self._stops.get(task_id)
+        if reason is not None:
+            return reason
+        return self.store.stop_reason(task_id)
 
     def running_session_id(self, task_id):
         """The Brainstorming session a running task owns, if known here."""
@@ -699,7 +760,10 @@ class DirectTaskHost:
         with self._lock:
             if (
                 parent_task_id is not None
-                and parent_task_id in self._stops
+                and (
+                    parent_task_id in self._stops
+                    or self.store.stop_reason(parent_task_id) is not None
+                )
             ):
                 return None
             if task_id in self._active:
@@ -755,7 +819,17 @@ class DirectTaskHost:
             executor = (record.get("order") or {}).get("task_executor")
             if executor in ("brainstorming", "reviewed_task", "deep_task"):
                 try:
-                    if self.start(record, config_resolver_for(record)) is not None:
+                    relation = record.get("parent") or {}
+                    parent_task_id = relation.get("task_id")
+                    parent_argument = (
+                        {"parent_task_id": parent_task_id}
+                        if parent_task_id is not None else {}
+                    )
+                    if self.start(
+                        record,
+                        config_resolver_for(record),
+                        **parent_argument,
+                    ) is not None:
                         adopted.append(task_id)
                 except Exception:
                     pass
@@ -936,7 +1010,10 @@ class DirectTaskHost:
         """Fence a deep terminal choice against concurrent operator Stop."""
         with registry.locked(self.home):
             with self._lock:
-                stop_reason = self._stops.get(task_id)
+                stop_reason = (
+                    self._stops.get(task_id)
+                    or self.store.stop_reason(task_id)
+                )
                 result = self._deep_result(
                     "failure" if stop_reason is not None else status,
                     child_results,
@@ -973,7 +1050,10 @@ class DirectTaskHost:
     ):
         with registry.locked(self.home):
             with self._lock:
-                stop_reason = self._stops.get(task_id)
+                stop_reason = (
+                    self._stops.get(task_id)
+                    or self.store.stop_reason(task_id)
+                )
                 child = (
                     self.store.admit_related_locked(
                         task_id, phase, part, order, {}, workspace
@@ -982,9 +1062,39 @@ class DirectTaskHost:
                 )
         return child, stop_reason
 
+    def _settle_stopped_deep(self, record, config_resolver, stop_reason):
+        """Settle every already-admitted child before a stopped parent."""
+        task_id = record["id"]
+        children = []
+        documentation = self.store.related(task_id, "documentation", None)
+        if documentation is not None:
+            children.append(documentation)
+        part = "a"
+        while True:
+            child = self.store.related(task_id, "implementation", part)
+            if child is None:
+                break
+            children.append(child)
+            part = st._next_part(part)
+
+        results = []
+        for child in children:
+            if child["result"] is None:
+                child, _current_reason = self._await_deep_child(
+                    task_id, child, config_resolver
+                )
+            results.append(child["result"])
+        self._record_deep_terminal(
+            task_id, "failure", results, stop_reason
+        )
+
     def _run_deep(self, record, config_resolver):
         """Deliver documentation, then sequential reviewed implementation."""
         task_id = record["id"]
+        stop_reason = self._stop_reason(task_id)
+        if stop_reason is not None:
+            self._settle_stopped_deep(record, config_resolver, stop_reason)
+            return
         workspace = _workspace(record)
         results = []
         child, stop_reason = self._admit_deep_child(

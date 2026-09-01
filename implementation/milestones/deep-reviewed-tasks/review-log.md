@@ -571,3 +571,25 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-07-b-codex-r1`, `slice_impl-07-b-claude-r1`
 
+## slice_impl-07-c (Deep implementation-part delivery)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-c-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-codex-r1.txt` |
+| slice_impl-07-c-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-fix1.txt` |
+| slice_impl-07-c-codex-r3 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-delta1.txt` |
+| slice_impl-07-c-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-codex-r2.txt` |
+| slice_impl-07-c-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-07-c-codex-r4`, `slice_impl-07-c-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S07C-002` (raised codex, cleared codex): Recovery does not anchor successors to the predecessor gate — Risk is high because the strict predecessor-gate contract is contradicted by recovery behavior and a reassuring crash test that keeps HEAD at that gate, while damage is medium because correction is bounded to successor anchoring or refusal plus Slice 7 recovery tests.
+- `codex-codex-DRT-S07C-003` (raised codex, cleared codex): Recovered Stop discards durable reviewed-child accounting — Risk is high because passing recovery coverage can silently legitimize behavior that contradicts strict durable single-count accounting, while damage is medium because correction is bounded to the reviewed-child Stop/recovery settlement path and its focused test.
+- `codex-DRT-S07C-004` (raised codex, cleared codex): Durable Stop recovery can abandon a live Brainstorming session — The durable-Stop recovery path falsely treats a failed child record as settlement while its attached Brainstorming session can remain live, making later composition likely to trust a wrong pinned Stop/workspace-release invariant, while correction is bounded to recovered-session pausing and focused c
+
