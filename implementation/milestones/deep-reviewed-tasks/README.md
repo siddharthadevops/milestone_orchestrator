@@ -290,4 +290,5 @@ The goal is achieved when:
 | slice_impl-02-c (Producer, review breadth, debt, and caps) | reviewed | 2 | satisfied | e04a32c |
 | slice_doc-03 (Routed calls and rethink continuity) | reviewed | 5 | satisfied | f8fab03 |
 | slice_impl-03-a (Routed calls and rethink continuity) | reviewed | 2 | satisfied | 0aa22b0 |
-| slice_impl-03-b (Routed calls and rethink continuity) | reviewed | 2 | satisfied | - |
+| slice_impl-03-b (Routed calls and rethink continuity) | reviewed | 2 | satisfied | 3b415df |
+| slice_doc-04 (Reviewed seal, gate, result, and recovery) | reviewed | 2 | satisfied | - |

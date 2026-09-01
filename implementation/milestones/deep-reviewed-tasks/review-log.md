@@ -252,3 +252,21 @@
 - `codex-DRT-S03B-001` (raised codex, cleared codex): Blocked calls lose their durable structured result evidence — The focused test and runtime falsely imply the strict blocked-call evidence guarantee is met, so later result or recovery work could trust a missing structured/raw link, while correction remains bounded to the central blocked-event path and its assertions within this unit.
 - `codex-DRT-S03B-002` (raised codex, cleared codex): The every-origin rethink golden still covers only implementation — The strict contract claims five-origin continuity while the golden executes only implement, so a builder could trust a green gate and miss four phase regressions, but correction remains bounded to origin-specific tests and any local defects they expose.
 
+## slice_doc-04 (Reviewed seal, gate, result, and recovery)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-04.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-04-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-04-codex-r1.txt` |
+| slice_doc-04-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-04-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-04-codex-r1`, `slice_doc-04-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S04-FULL-001` (raised codex, cleared codex): Reviewed-success pin cites unrelated task lines — Slice 04 correctly pins success/failure at tasks.py:53-64 and validation at 1018-1092, so the skeleton’s bad supporting pin is unlikely to misdirect a max-effort builder, while correction is a one-line citation repair requiring no contract or implementation rework.
+- `claude-claude-DRT-S04-FULL-001` (raised claude, cleared codex): Gate recovery claim has no idempotence seam: a crash after the gate commit lands can stack a second identical gate commit when a fixer left linear commits — Although labeled P3, this is a real correctness and test-coverage gap: the strict post-Git-effect recovery promise can miss the fixer-preserved branch, but a careful builder can derive the missing identity seam and correction remains bounded to Slice 04 recovery and tests.
+
