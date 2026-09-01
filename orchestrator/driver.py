@@ -587,6 +587,72 @@ class ReviewedWorkLifecycle(object):
     def next_action(self, unit):
         return decide_reviewed_work(self.host.state, unit)
 
+    def result(self, unit):
+        """Project success only from the current seal's completed Git gate."""
+        key = st.unit_key(unit)
+        if (
+            not gitops.enabled(self.host.config)
+            or unit.get("status") != st.U_SEALED
+            or self.host.state.get("pending_gate_unit") == key
+            or not unit.get("gate_commit")
+        ):
+            return None
+        seal_event = next((
+            event for event in reversed(self.host.state.get("events") or [])
+            if event.get("type") == "seal_satisfied"
+            and event.get("unit") == key
+        ), None)
+        if seal_event is None:
+            return None
+        gate_event = next((
+            event for event in reversed(self.host.state.get("events") or [])
+            if event.get("type") == "gate_commit"
+            and event.get("unit") == key
+            and event.get("seq") > seal_event.get("seq")
+        ), None)
+        if (
+            gate_event is None
+            or gate_event.get("sha") != unit.get("gate_commit")
+        ):
+            return None
+        seal = unit["seals"][-1]
+        native_result = {
+            "production_result": copy.deepcopy(unit["draft"]["result"]),
+            "review_evidence": {
+                "seal_attempt": seal["attempt"],
+                "reviews": list(seal["reviews"]),
+                "verification_event_seq": seal.get(
+                    "verification_event_seq"
+                ),
+            },
+            "gate_commit": unit["gate_commit"],
+        }
+        return tasks.validate_result({
+            "status": "success",
+            **st.reviewed_work_accounting(self.host.state, unit),
+            "native_result": native_result,
+        })
+
+    def recover_pending_gate(self):
+        """Complete the one durable reviewed gate intent, if present."""
+        if not gitops.enabled(self.host.config):
+            return None
+        pending = self.host.state.get("pending_gate_unit")
+        if not pending:
+            return None
+        unit = self.host._unit_by_key(pending)
+        if unit is None or unit.get("status") != st.U_SEALED:
+            st.fail_run(
+                self.host.state,
+                "cannot recover the pending gate for %s" % pending,
+                unit=unit,
+                type_="gate_recovery",
+            )
+            self.host._save()
+            raise StopStep("pending gate unit is unavailable")
+        self.host._gate_commit(unit)
+        return unit, self.result(unit)
+
     def execute(self, action, before_gate=None, call_preparation=None):
         unit = self.host._unit_by_key(action.params["unit"])
         if unit is None:
@@ -619,6 +685,7 @@ class ReviewedWorkLifecycle(object):
                     "canonical plan established; work order refreshed",
                     None,
                     None,
+                    None,
                 )
             self._configure_locked(unit)
         was_sealed = unit.get("status") == st.U_SEALED
@@ -631,9 +698,11 @@ class ReviewedWorkLifecycle(object):
             else None
         )
         gate_context = None
+        result = None
         if sealed_unit is not None:
             gate_context = self.gate(sealed_unit, before_gate=before_gate)
-        return note, sealed_unit, gate_context
+            result = self.result(sealed_unit)
+        return note, sealed_unit, gate_context, result
 
     def gate(self, unit, before_gate=None):
         gate_context = before_gate(unit) if before_gate is not None else None
@@ -8281,7 +8350,12 @@ class Driver(object):
                     note = self._do_reconciliation()
                     sealed_unit = None
                 else:
-                    note, sealed_unit, gate_context = self.reviewed_work.execute(
+                    (
+                        note,
+                        sealed_unit,
+                        gate_context,
+                        _reviewed_result,
+                    ) = self.reviewed_work.execute(
                         action,
                         before_gate=self._prepare_milestone_gate,
                         call_preparation=self.milestone_reviewed_calls,
@@ -13237,22 +13311,10 @@ class Driver(object):
         gate metadata, while ensuring a failed gate is retried before the
         next implementation part can be materialized.
         """
-        if not gitops.enabled(self.config):
+        recovered = self.reviewed_work.recover_pending_gate()
+        if recovered is None:
             return False
-        pending = self.state.get("pending_gate_unit")
-        if not pending:
-            return False
-        unit = self._unit_by_key(pending)
-        if unit is None or unit.get("status") != st.U_SEALED:
-            st.fail_run(
-                self.state,
-                "cannot recover the pending gate for %s" % pending,
-                unit=unit,
-                type_="gate_recovery",
-            )
-            self._save()
-            raise StopStep("pending gate unit is unavailable")
-        self._gate_commit(unit)
+        unit, _result = recovered
         unit.pop("design_update", None)
         return True
 
@@ -13265,20 +13327,23 @@ class Driver(object):
         self.state["pending_gate_unit"] = st.unit_key(unit)
         self._save()
         try:
-            ledgers.generate(self.state, self.workspace)
-            if any(
-                event.get("type") == "fixer_commits_preserved"
-                and event.get("unit") == st.unit_key(unit)
-                for event in self.state.get("events") or []
-            ):
-                # A fixer may deliberately leave linear commits. Give the
-                # deterministic gate its own disposable child so amending the
-                # gate cannot erase the fixer's reviewed commit identity.
-                gitops.commit_wip(
-                    self.workspace,
-                    "wip: gate %s" % st.display_unit_key(unit),
-                )
-            sha = gitops.finalize_gate(self.workspace, self._gate_message(unit))
+            message = self._gate_message(unit)
+            sha = gitops.landed_gate_sha(self.workspace, message)
+            if sha is None:
+                ledgers.generate(self.state, self.workspace)
+                if any(
+                    event.get("type") == "fixer_commits_preserved"
+                    and event.get("unit") == st.unit_key(unit)
+                    for event in self.state.get("events") or []
+                ):
+                    # A fixer may deliberately leave linear commits. Give the
+                    # deterministic gate its own disposable child so amending the
+                    # gate cannot erase the fixer's reviewed commit identity.
+                    gitops.commit_wip(
+                        self.workspace,
+                        "wip: gate %s" % st.display_unit_key(unit),
+                    )
+                sha = gitops.finalize_gate(self.workspace, message)
         except (gitops.GitError, ledgers.LedgerError, OSError) as exc:
             # A hostile/malformed index file must become a RECORDED run
             # failure — an unhandled crash here would discard the sealed
@@ -13310,7 +13375,7 @@ class Driver(object):
             "gate_commit",
             unit=st.unit_key(unit),
             sha=sha,
-            message=self._gate_message(unit),
+            message=message,
         )
 
     def _final_commit(self):

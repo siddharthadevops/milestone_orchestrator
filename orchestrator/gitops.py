@@ -749,6 +749,17 @@ def finalize_gate(workspace, message):
     return _run(workspace, "rev-parse", "--short", "HEAD").stdout.strip()
 
 
+def landed_gate_sha(workspace, message):
+    """Return HEAD when a pending gate's Git effect already completed."""
+    _assert_workspace_root(workspace)
+    if _run(workspace, "status", "--porcelain").stdout.strip():
+        return None
+    actual = _run(workspace, "log", "-1", "--format=%B", "HEAD").stdout
+    if actual.rstrip("\n") != message:
+        return None
+    return _run(workspace, "rev-parse", "--short", "HEAD").stdout.strip()
+
+
 def commit_plain(workspace, message):
     """A plain commit (milestone close). Returns short sha, or None when
     there is nothing to commit."""

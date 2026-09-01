@@ -2492,6 +2492,28 @@ def _work_token_usage(state):
     )
 
 
+def reviewed_work_accounting(state, unit):
+    """Return one reviewed unit's physical-call totals exactly once."""
+    key = unit_key(unit)
+    work_by_unit, _unassigned_work = _work_durations(state)
+    token_by_unit, token_partial_by_unit, _unassigned_tokens, \
+        _unassigned_tokens_partial, cost_by_unit, cost_partial_by_unit, \
+        _unassigned_cost, _unassigned_cost_partial = _work_token_usage(state)
+    token_usage = copy.deepcopy(token_by_unit.get(key))
+    cost = copy.deepcopy(cost_by_unit.get(key))
+    return {
+        "duration_s": work_by_unit.get(key, 0.0),
+        "token_usage": token_usage,
+        "token_usage_partial": bool(
+            token_partial_by_unit.get(key, False) or token_usage is None
+        ),
+        "cost": cost,
+        "cost_partial": bool(
+            cost_partial_by_unit.get(key, False) or cost is None
+        ),
+    }
+
+
 def _repair_episodes(state):
     """Compact downstream-gap repair history, grouped by target unit.
 

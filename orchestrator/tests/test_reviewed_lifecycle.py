@@ -89,7 +89,9 @@ class DefaultReviewedLifecycleParityTest(unittest.TestCase):
             with subject._exclusive():
                 subject._assert_not_stale()
                 try:
-                    _note, _sealed, _context = lifecycle.execute(action)
+                    _note, _sealed, _context, _result = lifecycle.execute(
+                        action
+                    )
                     subject._save()
                 finally:
                     subject._clear_busy()
