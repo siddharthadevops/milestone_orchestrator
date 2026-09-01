@@ -13,6 +13,7 @@ from orchestrator import canonical_plan
 from orchestrator import contracts
 from orchestrator import driver
 from orchestrator import plan_reconciliation
+from orchestrator import pricing
 from orchestrator import prompt_router
 from orchestrator import runners
 from orchestrator import session_calls
@@ -21,6 +22,7 @@ from orchestrator import tasks
 from orchestrator.tests.test_driver_mock import (
     init_state,
     make_config,
+    prompt_response,
     skeleton_script,
 )
 from orchestrator.tests.test_session_call_cutover import (
@@ -56,6 +58,60 @@ def _skeleton(plan):
         "# Skeleton\n\n## Canonical slice plan\n```json\n%s\n```\n"
         % json.dumps(plan, separators=(",", ":"))
     )
+
+
+def _usage(seed):
+    return {
+        "input_tokens": seed * 10,
+        "cached_input_tokens": seed,
+        "output_tokens": seed * 2,
+        "reasoning_output_tokens": seed,
+        "total_tokens": seed * 12,
+    }
+
+
+def _accounted(step, duration_s, seed):
+    value = dict(step)
+    value["accounting"] = {
+        "duration_s": duration_s,
+        "token_usage": _usage(seed),
+        "claude_cost_usd": seed / 100.0,
+    }
+    return value
+
+
+class _AccountingRunner(runners.MockRunner):
+    """MockRunner whose every physical call has distinct known accounting."""
+
+    def __init__(self, script):
+        self._accounting = [
+            copy.deepcopy(item["accounting"]) for item in script
+        ]
+        self.physical_calls = []
+        super().__init__(script)
+
+    def call(self, family, prompt, workspace, **kwargs):
+        result = super().call(family, prompt, workspace, **kwargs)
+        accounting = self._accounting.pop(0)
+        usage = accounting["token_usage"]
+        model = kwargs.get("model")
+        if family == "claude":
+            cost_payload = {
+                "total_cost_usd": accounting["claude_cost_usd"]
+            }
+        else:
+            cost_payload = dict(usage, cache_write_input_tokens=0)
+        result.duration_s = accounting["duration_s"]
+        result.token_usage = copy.deepcopy(usage)
+        result.cost_payloads = [copy.deepcopy(cost_payload)]
+        self.physical_calls.append({
+            "family": family,
+            "model": model,
+            "duration_s": accounting["duration_s"],
+            "token_usage": copy.deepcopy(usage),
+            "cost_payload": copy.deepcopy(cost_payload),
+        })
+        return result
 
 
 class ReviewedCallRoutingTest(unittest.TestCase):
@@ -147,6 +203,68 @@ class ReviewedCallRoutingTest(unittest.TestCase):
         canonical_plan.establish_current_plan(document, "docs/skeleton.md")
         state.save(path, document)
         return path
+
+    def _assert_physical_accounting(self, persisted, runner, unit_key):
+        unit_view = next(
+            item for item in state.summary(persisted)["units"]
+            if item["unit"] == unit_key
+        )
+        expected_usage = runners.add_token_usage(*[
+            item["token_usage"] for item in runner.physical_calls
+        ])
+        expected_cost = None
+        cost_partial = False
+        billing = persisted["config"].get("billing") or {}
+        for item in runner.physical_calls:
+            quote = pricing.quote(
+                item["family"],
+                item["model"],
+                item["cost_payload"],
+                billing=billing.get(item["family"]),
+            )
+            if quote.api_usd is None or quote.real_usd is None:
+                cost_partial = True
+            else:
+                if expected_cost is None:
+                    expected_cost = {"api_usd": 0.0, "real_usd": 0.0}
+                expected_cost["api_usd"] += quote.api_usd
+                expected_cost["real_usd"] += quote.real_usd
+
+        self.assertEqual(tasks.task_records(persisted), [])
+        self.assertEqual(unit_view["task_ids"], [])
+        self.assertAlmostEqual(
+            unit_view["work_duration_s"],
+            sum(item["duration_s"] for item in runner.physical_calls),
+        )
+        self.assertEqual(unit_view["work_token_usage"], expected_usage)
+        self.assertFalse(unit_view["work_token_usage_partial"])
+        if expected_cost is None:
+            self.assertIsNone(unit_view["work_cost"])
+        else:
+            self.assertAlmostEqual(
+                unit_view["work_cost"]["api_usd"],
+                expected_cost["api_usd"],
+            )
+            self.assertAlmostEqual(
+                unit_view["work_cost"]["real_usd"],
+                expected_cost["real_usd"],
+            )
+        self.assertEqual(unit_view["work_cost_partial"], cost_partial)
+        summary = state.summary(persisted)
+        self.assertAlmostEqual(
+            summary["work_duration_s"], unit_view["work_duration_s"]
+        )
+        self.assertEqual(
+            summary["work_token_usage"], unit_view["work_token_usage"]
+        )
+        self.assertEqual(summary["work_cost"], unit_view["work_cost"])
+
+    @staticmethod
+    def _event(persisted, event_type):
+        return next(
+            item for item in persisted["events"]
+            if item["type"] == event_type
+        )
 
     def test_offered_matrix_routes_every_reviewed_attempt(self):
         with tempfile.TemporaryDirectory(
@@ -289,6 +407,180 @@ class ReviewedCallRoutingTest(unittest.TestCase):
             self.assertTrue(view["units"][0]["work_token_usage_partial"])
             self.assertIsNone(view["units"][0]["work_cost"])
             self.assertTrue(view["units"][0]["work_cost_partial"])
+
+    def test_internal_call_evidence_and_totals_survive_without_child_task_ids(self):
+        accepted = skeleton_script()[0]
+        blocked = prompt_response({
+            "status": "blocked",
+            "kind": contracts.KIND_DRAFT_SKELETON,
+            "blocked_reason": "The operator must choose the public wording.",
+        })
+        with tempfile.TemporaryDirectory(
+            prefix="reviewed-call-blocked-"
+        ) as workspace:
+            path = init_state(workspace, make_config())
+            runner = _AccountingRunner([_accounted({
+                "expect_kind": contracts.KIND_DRAFT_SKELETON,
+                "response": blocked,
+                "side_effect": accepted["side_effect"],
+            }, 1.25, 1)])
+            driver.Driver(path, runner=runner).step()
+            persisted = state.load(path)
+            incident = self._event(persisted, "worker_unaccepted")
+            self.assertEqual(incident["kind"], contracts.KIND_DRAFT_SKELETON)
+            self.assertEqual(incident["unit"], "skeleton")
+            self.assertNotIn("task_id", incident)
+            self.assertEqual(persisted["failure"]["type"], "worker_blocked")
+            self._assert_physical_accounting(
+                persisted, runner, "skeleton"
+            )
+
+        with tempfile.TemporaryDirectory(
+            prefix="reviewed-call-malformed-"
+        ) as workspace:
+            path = init_state(workspace, make_config())
+            runner = _AccountingRunner([
+                _accounted({
+                    "expect_kind": contracts.KIND_DRAFT_SKELETON,
+                    "response": "not json",
+                    "side_effect": accepted["side_effect"],
+                }, 2.25, 2),
+                _accounted({
+                    "expect_kind": contracts.KIND_DRAFT_SKELETON,
+                    "response": "still not json",
+                }, 3.25, 3),
+            ])
+            driver.Driver(path, runner=runner).step()
+            persisted = state.load(path)
+            incident = self._event(persisted, "worker_malformed")
+            self.assertTrue(incident["fatal"])
+            self.assertEqual(incident["unit"], "skeleton")
+            self.assertNotIn("task_id", incident)
+            self.assertTrue(incident["raw_path"])
+            self.assertTrue(incident["raw_path2"])
+            self.assertEqual(persisted["failure"]["type"], "worker_protocol")
+            self._assert_physical_accounting(
+                persisted, runner, "skeleton"
+            )
+
+        with tempfile.TemporaryDirectory(
+            prefix="reviewed-call-corrected-"
+        ) as workspace:
+            path = init_state(workspace, make_config())
+            runner = _AccountingRunner([
+                _accounted({
+                    "expect_kind": contracts.KIND_DRAFT_SKELETON,
+                    "response": "not json",
+                    "side_effect": accepted["side_effect"],
+                }, 4.25, 4),
+                _accounted({
+                    "expect_kind": contracts.KIND_DRAFT_SKELETON,
+                    "response": accepted["response"],
+                }, 5.25, 5),
+            ])
+            driver.Driver(path, runner=runner).step()
+            persisted = state.load(path)
+            unit = persisted["units"][0]
+            incident = self._event(persisted, "worker_malformed")
+            self.assertFalse(incident.get("fatal", False))
+            self.assertTrue(incident["raw_path"])
+            self.assertNotIn("task_id", incident)
+            self.assertEqual(
+                unit["draft"]["result"]["status"], "ok"
+            )
+            self.assertNotIn("task_id", unit["draft"])
+            self._assert_physical_accounting(
+                persisted, runner, "skeleton"
+            )
+
+        with tempfile.TemporaryDirectory(
+            prefix="reviewed-call-reclassified-"
+        ) as workspace:
+            path = init_state(
+                workspace, make_config(p3_reclassify_debt=True)
+            )
+            finding = report_finding("minor-wording")
+            finding["severity"] = "P3"
+            runner = _AccountingRunner([
+                _accounted(accepted, 6.25, 6),
+                _accounted({
+                    "expect_kind": contracts.KIND_REVIEW_ROUND,
+                    "expect_family": "codex",
+                    "response": prompt_response({
+                        "status": "ok",
+                        "kind": contracts.KIND_REVIEW_ROUND,
+                        "findings": [finding],
+                    }),
+                }, 7.25, 7),
+                _accounted({
+                    "expect_kind": contracts.KIND_RECLASSIFY,
+                    "expect_family": "claude",
+                    "response": prompt_response({
+                        "status": "ok",
+                        "kind": contracts.KIND_RECLASSIFY,
+                        "drift_risk": "low",
+                        "drift_damage": "low",
+                        "reason": "The wording is local and self-revealing.",
+                    }),
+                }, 8.25, 8),
+            ])
+            subject = driver.Driver(path, runner=runner)
+            for _ in range(20):
+                subject.step()
+                if any(
+                    item["type"] == "reclassify_recorded"
+                    for item in subject.state["events"]
+                ):
+                    break
+            else:
+                self.fail("reviewed finding was not reclassified")
+            persisted = state.load(path)
+            incident = self._event(persisted, "reclassify_recorded")
+            self.assertEqual(incident["unit"], "skeleton")
+            self.assertEqual(incident["finding_id"], "codex-minor-wording")
+            self.assertTrue(incident["defer_ok"])
+            self.assertNotIn("task_id", incident)
+            self.assertNotIn("task_id", persisted["units"][0]["rounds"][0])
+            self._assert_physical_accounting(
+                persisted, runner, "skeleton"
+            )
+
+        with tempfile.TemporaryDirectory(
+            prefix="reviewed-call-rethink-origin-"
+        ) as workspace:
+            path = self._implementation_path(workspace)
+            runner = _AccountingRunner([_accounted({
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": _rethink(contracts.KIND_IMPLEMENT),
+            }, 9.25, 9)])
+            subject = driver.Driver(path, runner=runner)
+            created = _created("accounted-origin", path, workspace)
+            with mock.patch.object(
+                brainstorming_milestone,
+                "create_session",
+                return_value=created,
+            ):
+                subject.step()
+            persisted = state.load(path)
+            origin = self._event(
+                persisted, "brainstorming_origin_recorded"
+            )
+            self.assertEqual(origin["kind"], contracts.KIND_IMPLEMENT)
+            self.assertEqual(origin["unit"], "slice_impl-01")
+            self.assertTrue(origin["raw_path"])
+            self.assertNotIn("task_id", origin)
+            implementation = next(
+                item for item in persisted["units"]
+                if state.unit_key(item) == "slice_impl-01"
+            )
+            self.assertIsNone(implementation["draft"])
+            self.assertEqual(
+                implementation["brainstorming_wait"]["signal"]["problem"],
+                dict(_rethink(contracts.KIND_IMPLEMENT))["problem"],
+            )
+            self._assert_physical_accounting(
+                persisted, runner, "slice_impl-01"
+            )
 
     def test_rethink_success_reenters_surviving_origins_and_does_not_reenter_a_reconciled_out_origin(self):
         with tempfile.TemporaryDirectory(

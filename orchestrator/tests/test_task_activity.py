@@ -166,6 +166,115 @@ class TaskActivityProjectionTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.status, 404)
 
+    def test_internal_call_activity_has_evidence_without_task_chips(self):
+        state = self.state()
+        unit = state["units"][0]
+        st.record_draft(
+            state,
+            unit,
+            contracts.KIND_DRAFT_SKELETON,
+            self.draft_result(),
+            family="codex",
+            model="call-model",
+            effort="high",
+            duration=1.0,
+        )
+        unit["status"] = st.U_ROUNDS
+        st.record_round(
+            state,
+            unit,
+            "codex",
+            contracts.KIND_REVIEW_ROUND,
+            self.clean_review(),
+            duration=2.0,
+        )
+        st.append_event(
+            state,
+            "worker_malformed",
+            unit="skeleton",
+            kind=contracts.KIND_REVIEW_ROUND,
+            family="codex",
+            fatal=False,
+            raw_path=".orchestrator/raw/review-malformed.txt",
+        )
+        st.append_event(
+            state,
+            "reclassify_recorded",
+            unit="skeleton",
+            source_round="skeleton-codex-r1",
+            finding_id="codex-F1",
+            reclassifier="claude",
+            drift_risk="low",
+            drift_damage="low",
+            threshold="low",
+            defer_ok=True,
+            reason="bounded debt",
+            duration_s=3.0,
+        )
+        st.append_event(
+            state,
+            "brainstorming_origin_recorded",
+            unit="skeleton",
+            kind=contracts.KIND_REVIEW_ROUND,
+            family="codex",
+            raw_path=".orchestrator/raw/rethink-origin.txt",
+            duration_s=4.0,
+        )
+        st.append_event(
+            state,
+            "brainstorming_wait_started",
+            unit="skeleton",
+            session_id="rethink-session",
+            kind=contracts.KIND_REVIEW_ROUND,
+            family="codex",
+        )
+
+        state_path = os.path.join(self.tmp.name, "state.json")
+        st.save_new(state_path, state)
+        registry.add(
+            self.home,
+            registry.new_entry(
+                "reviewed-activity-run",
+                "reviewed activity",
+                self.workspace,
+                state_path,
+            ),
+        )
+        direct = task_api.StandaloneTaskStore(self.home).admit(
+            self.order(),
+            {"agent_call": {"agent": "codex"}},
+            self.workspace,
+        )
+
+        summary = st.summary(state)
+        view = summary["units"][0]
+        self.assertEqual(view["task_ids"], [])
+        self.assertEqual(len(view["drafts"]), 1)
+        self.assertEqual(len(view["rounds"]), 1)
+        self.assertEqual(len(view["reclassify"]), 1)
+        self.assertEqual(len(view["brainstormings"]), 1)
+        self.assertEqual(len(summary["malformed"]), 1)
+        for evidence in (
+            view["drafts"]
+            + view["rounds"]
+            + view["reclassify"]
+            + view["brainstormings"]
+            + summary["malformed"]
+        ):
+            self.assertNotIn("task_id", evidence)
+
+        who = {"admin": True}
+        self.assertEqual(
+            service.visible_run_tasks(
+                self.home, who, "reviewed-activity-run"
+            ),
+            [],
+        )
+        self.assertEqual(service.visible_tasks(self.home, who), [direct])
+        self.assertEqual(
+            service.read_task(self.home, who, direct["id"]), direct
+        )
+
     def test_failed_review_origin_and_later_review_have_distinct_chips(self):
         state = self.state()
         failed = self.admit(

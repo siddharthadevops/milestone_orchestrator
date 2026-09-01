@@ -378,13 +378,15 @@ class TestP3Debt(DriverTestCase):
             original_mark = driver._mark_busy
 
             def admit(label, kind, family, model=None, effort=None,
-                      nested=False, task_id=None, staffing_fallback=None):
+                      nested=False, task_id=None, staffing_fallback=None,
+                      unit=None):
                 if kind == contracts.KIND_RECLASSIFY:
                     return False
                 return original_mark(
                     label, kind, family, model=model, effort=effort,
                     nested=nested, task_id=task_id,
                     staffing_fallback=staffing_fallback,
+                    unit=unit,
                 )
 
             with mock.patch.object(driver, "_mark_busy", side_effect=admit):
@@ -524,7 +526,7 @@ class TestP3Debt(DriverTestCase):
             # gate reads the families the RUN supplies, not a profile.
             def remove_explicit_rater_after_admission(
                 label, kind, family, model=None, effort=None, nested=False,
-                task_id=None, staffing_fallback=None,
+                task_id=None, staffing_fallback=None, unit=None,
             ):
                 admitted = original_mark(
                     label,
@@ -535,6 +537,7 @@ class TestP3Debt(DriverTestCase):
                     nested=nested,
                     task_id=task_id,
                     staffing_fallback=staffing_fallback,
+                    unit=unit,
                 )
                 if admitted and kind == contracts.KIND_REVIEW_ROUND:
                     edited = model_profiles.load(home, "default")

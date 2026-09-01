@@ -234,3 +234,21 @@
 - `claude-DRT-S03A-001` (raised claude, cleared codex): Internal task-admission machinery is now unreachable but retained, and ~35 tests still pin it — The authoritative slice and live dispatch clearly establish direct reviewed calls, so a careful builder will recognize the callerless admission helper, stale comment, and roughly 35 test calls across nine modules as obsolete, while correction requires bounded cleanup and test refactoring within this
 - `claude-DRT-S03A-002` (raised claude, cleared codex): Rethink-continuity is proven for the implement origin only, not every eligible origin — Despite its P3 label, this is a real strict test-coverage gap: the artifact promises continuity for five origins while exercising only implementation, so a builder might trust the green suite, but correction remains bounded to rethink routing and its tests.
 
+## slice_impl-03-b (Routed calls and rethink continuity)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-b-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-b-codex-r1.txt` |
+| slice_impl-03-b-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-b-codex-r1`, `slice_impl-03-b-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S03B-001` (raised codex, cleared codex): Blocked calls lose their durable structured result evidence — The focused test and runtime falsely imply the strict blocked-call evidence guarantee is met, so later result or recovery work could trust a missing structured/raw link, while correction remains bounded to the central blocked-event path and its assertions within this unit.
+- `codex-DRT-S03B-002` (raised codex, cleared codex): The every-origin rethink golden still covers only implementation — The strict contract claims five-origin continuity while the golden executes only implement, so a builder could trust a green gate and miss four phase regressions, but correction remains bounded to origin-specific tests and any local defects they expose.
+

@@ -4930,7 +4930,12 @@ class Driver(object):
                 self._clear_busy()
                 raise StopStep(str(exc))
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
-                failed_duration_s = time.time() - physical_started
+                reported_duration_s = getattr(exc, "duration_s", None)
+                failed_duration_s = (
+                    reported_duration_s
+                    if reported_duration_s is not None
+                    else time.time() - physical_started
+                )
                 actual_family, actual_model, actual_effort = (
                     self._result_identity(
                         exc, call_family, call_model, call_effort
