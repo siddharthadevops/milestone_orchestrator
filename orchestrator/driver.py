@@ -461,14 +461,20 @@ class MilestoneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
     """Milestone-owned canonical-plan handling around reviewed calls."""
 
     def ensure_author_plan(self, unit, kind):
+        if self.host._initial_skeleton_task_pending(unit):
+            return False
         return self.host._ensure_author_plan(unit, kind)
 
     def author(self, unit, kind, raw_name, **kwargs):
+        if self.host._initial_skeleton_task_pending(unit):
+            return super().author(unit, kind, raw_name, **kwargs)
         return self.host._author_prepare_call(
             unit, kind, raw_name, **kwargs
         )
 
     def judgment(self, unit, kind, raw_name, **kwargs):
+        if self.host._initial_skeleton_task_pending(unit):
+            return super().judgment(unit, kind, raw_name, **kwargs)
         return self.host._judgment_prepare_call(
             unit, kind, raw_name, **kwargs
         )
@@ -4029,6 +4035,139 @@ class Driver(object):
             "additional": [],
         }
 
+    def _initial_skeleton_task_pending(self, unit):
+        """Whether first-plan authority belongs to the reviewed skeleton."""
+        return bool(
+            not self.state.get("reviewed_task")
+            and unit is not None
+            and unit.get("kind") == st.UNIT_SKELETON
+            and self.state["milestone"].get(st.SKELETON_COMPOSITION_KEY)
+            == st.SKELETON_COMPOSITION_VERSION
+            and self.state["milestone"].get(canonical_plan.ANCHOR_KEY) is None
+        )
+
+    def _ensure_initial_skeleton_task(self, unit):
+        """Admit and associate the outer task before skeleton dispatch."""
+        if not self._initial_skeleton_task_pending(unit):
+            return None
+        task_id = unit.get("reviewed_task_id")
+        if task_id is not None:
+            return tasks.task_record(self.state, task_id)
+
+        policy = self.reviewed_work._configure_locked(unit)
+        order = {
+            "task_executor": "reviewed_task",
+            "configuration": {
+                "task_kind": contracts.KIND_DRAFT_SKELETON,
+                **copy.deepcopy(policy),
+            },
+            "staffing_session": st.staffing_session(self.state),
+            "request": {
+                "work_area": self._task_work_area(),
+                "request": self.state["goal"],
+                "context": {"unit": st.unit_key(unit)},
+                "reference_documents": [ledgers.goal_path(self.state)],
+            },
+        }
+        record = tasks.admit_task(
+            self.state, order, {}, self.workspace
+        )
+        unit["reviewed_task_id"] = record["id"]
+        self._save()
+        if not gitops.enabled(self.config):
+            st.fail_run(
+                self.state,
+                "reviewed skeleton task requires its Git gate",
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._record_initial_skeleton_task_failure(unit)
+            raise StopStep("reviewed skeleton task requires its Git gate")
+        return record
+
+    def _reviewed_call_task_id(self, unit):
+        """Return the outer reviewed identity for evidence attribution."""
+        if not self._initial_skeleton_task_pending(unit):
+            return None
+        task_id = unit.get("reviewed_task_id")
+        if task_id is None:
+            return None
+        record = tasks.task_record(self.state, task_id)
+        return task_id if record.get("result") is None else None
+
+    def _record_initial_skeleton_task_failure(self, unit):
+        """Settle an admitted skeleton task when its milestone work fails."""
+        if not self._initial_skeleton_task_pending(unit):
+            return None
+        task_id = unit.get("reviewed_task_id")
+        if task_id is None:
+            return None
+        record = tasks.task_record(self.state, task_id)
+        if record.get("result") is not None:
+            return record
+        failure = self.state.get("failure") or {}
+        result = tasks.validate_result({
+            "status": "failure",
+            "reason": failure.get("reason") or "skeleton task failed",
+            **tasks.task_accounting(self.state, task_id),
+            "native_result": None,
+        })
+        record = tasks.record_task_result(self.state, task_id, result)
+        self._save()
+        return record
+
+    def _consume_initial_skeleton_result(self, unit, result=None):
+        """Install first plan authority only from the outer task's gate."""
+        if not self._initial_skeleton_task_pending(unit):
+            return False
+        record = self._ensure_initial_skeleton_task(unit)
+        if record["result"] is None:
+            if result is None:
+                return False
+            record = tasks.record_task_result(
+                self.state, record["id"], result
+            )
+            # Keep the task-result/plan-anchor crash boundary recoverable.
+            self._save()
+        result = record["result"]
+        if result["status"] != "success":
+            return False
+
+        gate_commit = result["native_result"]["gate_commit"]
+        try:
+            accepted_revision = gitops.commit_full_sha(
+                self.workspace, gate_commit
+            )
+            if gitops.head_full_sha(self.workspace) != accepted_revision:
+                raise canonical_plan.CanonicalPlanError(
+                    "the skeleton task gate is not the current revision"
+                )
+            anchor = canonical_plan.establish_current_plan(
+                self.state, self._skeleton_artifact()
+            )
+            if anchor["revision"] != accepted_revision:
+                raise canonical_plan.CanonicalPlanError(
+                    "the first plan anchor differs from the skeleton task gate"
+                )
+        except (canonical_plan.CanonicalPlanError, gitops.GitError) as exc:
+            st.fail_run(
+                self.state,
+                "canonical plan could not be established from the skeleton "
+                "task gate: %s" % exc,
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            raise StopStep(str(exc))
+        st.append_event(
+            self.state,
+            "canonical_plan_established",
+            accepted_revision=accepted_revision,
+        )
+        st.ensure_due_unit(self.state)
+        self._save()
+        return True
+
     def _active_worker_task(self, unit, kind):
         reference = unit.get("active_task")
         if reference is None:
@@ -4380,6 +4519,14 @@ class Driver(object):
             task_id = getattr(result, "task_id", None)
         if task_id is None:
             return None
+        reference = unit.get("active_task")
+        if not (
+            isinstance(reference, dict)
+            and reference.get("id") == task_id
+        ):
+            # Reviewed calls carry their outer task id as evidence. Only a
+            # legacy admitted Worker task is terminal at one physical call.
+            return None
         if status == "failure":
             origin_signal = getattr(result, "origin_rethink_signal", None)
             if origin_signal is not None:
@@ -4395,9 +4542,7 @@ class Driver(object):
             ),
         )
         record = tasks.record_task_result(self.state, task_id, envelope)
-        reference = unit.get("active_task")
-        if isinstance(reference, dict) and reference.get("id") == task_id:
-            unit.pop("active_task", None)
+        unit.pop("active_task", None)
         return record
 
     def _fail_waiting_worker_task(self, unit, wait, reason):
@@ -4415,6 +4560,12 @@ class Driver(object):
         if task_id is None:
             task_id = getattr(result, "task_id", None)
         if task_id is None:
+            return None
+        reference = unit.get("active_task")
+        if not (
+            isinstance(reference, dict)
+            and reference.get("id") == task_id
+        ):
             return None
         record = tasks.task_record(self.state, task_id)
         if record["result"] is not None:
@@ -4840,6 +4991,8 @@ class Driver(object):
             episode_unit
             if episode_unit is not None else st.current_unit(self.state)
         )
+        if task_id is None and call_unit is not None:
+            task_id = self._reviewed_call_task_id(call_unit)
         dm, de = self._family_defaults(family)
         model = model or dm
         effort = effort or de
@@ -8389,6 +8542,19 @@ class Driver(object):
             # before the wait handler itself runs.
             if self._brainstorming_wait_session() is not None:
                 self.state = st.load(self.state_path)
+            skeleton = self._find_unit(st.UNIT_SKELETON, None)
+            try:
+                if self._initial_skeleton_task_pending(skeleton):
+                    if self.state.get("failure") is not None:
+                        self._record_initial_skeleton_task_failure(skeleton)
+                    else:
+                        self._ensure_initial_skeleton_task(skeleton)
+                        self._consume_initial_skeleton_result(
+                            skeleton,
+                            self.reviewed_work.result(skeleton),
+                        )
+            except StopStep as exc:
+                return Action(A_FAILED, reason=str(exc)), "run failed: %s" % exc
             action, boundary_note = self._decide_at_strategy_boundary()
             if action.type in (A_DONE, A_FAILED):
                 return action, boundary_note
@@ -8405,19 +8571,25 @@ class Driver(object):
                         note,
                         sealed_unit,
                         gate_context,
-                        _reviewed_result,
+                        reviewed_result,
                     ) = self.reviewed_work.execute(
                         action,
                         before_gate=self._prepare_milestone_gate,
                         call_preparation=self.milestone_reviewed_calls,
                     )
                 if sealed_unit is not None:
+                    self._consume_initial_skeleton_result(
+                        sealed_unit, reviewed_result
+                    )
                     self._advance_milestone_after_gate(
                         sealed_unit, gate_context=gate_context
                     )
             except PlanReconciliationOpened as exc:
                 return Action(A_RECONCILIATION), str(exc)
             except StopStep as exc:
+                skeleton = self._find_unit(st.UNIT_SKELETON, None)
+                if self.state.get("failure") is not None:
+                    self._record_initial_skeleton_task_failure(skeleton)
                 return action, "run failed: %s" % exc
             if (
                 action.type == A_BRAINSTORM_WAIT
@@ -13884,6 +14056,11 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
             )
     state = st.new_state(goal, workspace, config, name=name, slug=slug,
                          project=project_block, prompt_set=prompt_set)
+    # Prospective composition law: an absent key is an already-started run
+    # that must finish under the historical direct-skeleton boundary.
+    state["milestone"][st.SKELETON_COMPOSITION_KEY] = (
+        st.SKELETON_COMPOSITION_VERSION
+    )
     st.append_event(state, "initialized", goal=goal)
     if project_block is not None:
         # Frozen ledger shape: payload exactly {project, work_area}, once

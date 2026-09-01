@@ -133,6 +133,8 @@ def _orchestrator_rev():
 
 
 PROMPT_SET_KEY = "prompt_set"
+SKELETON_COMPOSITION_KEY = "skeleton_composition_version"
+SKELETON_COMPOSITION_VERSION = 1
 
 
 def new_state(goal, workspace, config, name=None, slug=None, project=None,
