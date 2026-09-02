@@ -25,11 +25,13 @@ PRODUCER_TASK_KINDS = (
     contracts.KIND_IMPLEMENT,
 )
 _PRODUCER_TASK_EXECUTOR_IDS = ("agent_call", "brainstorming")
+REVIEWED_COMPLETE_VERIFICATION = "complete_verification"
 
 _REVIEWED_PRODUCTION_ROLES = {
     contracts.KIND_DRAFT_SKELETON: "plan",
     contracts.KIND_DRAFT_SLICE_NOTE: "draft",
     contracts.KIND_IMPLEMENT: "implement",
+    REVIEWED_COMPLETE_VERIFICATION: "implement",
 }
 
 _REVIEW_BREADTHS = ("single", "double")
@@ -216,7 +218,10 @@ _TASK_EXECUTORS = (
                 "choices": list(contracts.RECLASSIFY_FROM_LEVELS),
                 "optional": True, "default": "",
                 "applicable_when": {
-                    "task_kind": [contracts.KIND_IMPLEMENT],
+                    "task_kind": [
+                        contracts.KIND_IMPLEMENT,
+                        REVIEWED_COMPLETE_VERIFICATION,
+                    ],
                 },
             },
             "p3_reclassify_debt": {
@@ -715,7 +720,10 @@ def resolve_reviewed_policy(
             value = {}
         phase_floor = (
             "impl_reclassify_from"
-            if task_kind == contracts.KIND_IMPLEMENT
+            if task_kind in (
+                contracts.KIND_IMPLEMENT,
+                REVIEWED_COMPLETE_VERIFICATION,
+            )
             else "doc_reclassify_from"
         )
         allowed = (
@@ -815,7 +823,10 @@ def reviewed_policy_defaults(task_kind, config):
     config = config if isinstance(config, dict) else {}
     floor = (
         "impl_reclassify_from"
-        if task_kind == contracts.KIND_IMPLEMENT
+        if task_kind in (
+            contracts.KIND_IMPLEMENT,
+            REVIEWED_COMPLETE_VERIFICATION,
+        )
         else "doc_reclassify_from"
     )
     defaults = {

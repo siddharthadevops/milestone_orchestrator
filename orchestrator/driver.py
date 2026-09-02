@@ -538,11 +538,43 @@ class ReviewedWorkLifecycle(object):
 
     @staticmethod
     def _production_kind(unit):
+        if unit.get("reviewed_task_kind") == (
+            tasks.REVIEWED_COMPLETE_VERIFICATION
+        ):
+            return tasks.REVIEWED_COMPLETE_VERIFICATION
         return {
             st.UNIT_SKELETON: contracts.KIND_DRAFT_SKELETON,
             st.UNIT_SLICE_DOC: contracts.KIND_DRAFT_SLICE_NOTE,
             st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
         }[unit["kind"]]
+
+    @classmethod
+    def _is_complete_verification(cls, unit):
+        return cls._production_kind(unit) == (
+            tasks.REVIEWED_COMPLETE_VERIFICATION
+        )
+
+    @staticmethod
+    def _verification_event(state, seq):
+        return next((
+            event for event in state.get("events") or []
+            if event.get("type") == "verification"
+            and event.get("seq") == seq
+        ), None)
+
+    @staticmethod
+    def _verification_production_result(event):
+        checkpoint = event.get("checkpoint_result")
+        if isinstance(checkpoint, dict):
+            return copy.deepcopy(checkpoint)
+        return {
+            "status": event.get("status"),
+            "kind": contracts.KIND_SUITE_CHECKPOINT,
+            "commands": copy.deepcopy(event.get("commands") or []),
+            "results": copy.deepcopy(event.get("results") or []),
+            "fixer_certified": bool(event.get("fixer_certified")),
+            "verification_event_seq": event.get("seq"),
+        }
 
     def _configure_locked(self, unit, policy=None):
         """Freeze one policy while the host's state lock is held."""
@@ -657,8 +689,25 @@ class ReviewedWorkLifecycle(object):
         ):
             return None
         seal = unit["seals"][-1]
+        if self._is_complete_verification(unit):
+            verification_event = self._verification_event(
+                self.host.state, seal.get("verification_event_seq")
+            )
+            if (
+                verification_event is None
+                or verification_event.get("status") != "passed"
+                and verification_event.get("status") != "no_suite"
+                or verification_event.get("ok") is not True
+                or verification_event.get("stable") is not True
+            ):
+                return None
+            production_result = self._verification_production_result(
+                verification_event
+            )
+        else:
+            production_result = copy.deepcopy(unit["draft"]["result"])
         native_result = {
-            "production_result": copy.deepcopy(unit["draft"]["result"]),
+            "production_result": production_result,
             "review_evidence": {
                 "seal_attempt": seal["attempt"],
                 "reviews": list(seal["reviews"]),
@@ -709,14 +758,23 @@ class ReviewedWorkLifecycle(object):
                 unit,
                 "candidate bytes changed while the reviewed gate was pending",
             )
-            unit["status"] = st.U_PRE_REVIEW_VERIFY
+            restart_status = (
+                st.U_PRE_SEAL_VERIFY
+                if self._is_complete_verification(unit)
+                else st.U_PRE_REVIEW_VERIFY
+            )
+            unit["status"] = restart_status
             st.append_event(
                 self.host.state,
                 "unit_transition",
                 unit=st.unit_key(unit),
                 from_status=st.U_SEALED,
-                to_status=st.U_PRE_REVIEW_VERIFY,
-                reason="pending gate candidate changed; reviews invalidated",
+                to_status=restart_status,
+                reason=(
+                    "pending gate candidate changed; verification invalidated"
+                    if self._is_complete_verification(unit)
+                    else "pending gate candidate changed; reviews invalidated"
+                ),
             )
             self.host._save()
             return unit, None
@@ -1751,6 +1809,30 @@ class Driver(object):
                 and (
                     configured_commands is None
                     or event.get("commands") == configured_commands
+                )
+            ):
+                return event
+        return None
+
+    def _current_complete_verification_event(self, unit):
+        """Return the latest accepted complete-verification proof for now."""
+        if not self.reviewed_work._is_complete_verification(unit):
+            return None
+        fingerprint = self._verification_candidate_fingerprint()
+        configured = self._suite_checkpoint_configured_commands(unit)
+        for event in reversed(self.state.get("events") or []):
+            if (
+                event.get("type") == "verification"
+                and event.get("unit") == st.unit_key(unit)
+                and event.get("cadence")
+                == tasks.REVIEWED_COMPLETE_VERIFICATION
+                and event.get("status") in ("passed", "no_suite")
+                and event.get("ok") is True
+                and event.get("stable") is True
+                and event.get("candidate_after") == fingerprint
+                and (
+                    configured is None
+                    or event.get("commands") == configured
                 )
             ):
                 return event
@@ -8081,6 +8163,35 @@ class Driver(object):
             unit.pop("phantom_retried", None)
         return True
 
+    def _prepare_complete_verification(self, unit):
+        """Open the verification task's own empty WIP before its suite call."""
+        if not gitops.enabled(self.config):
+            reason = "complete verification requires its Git gate"
+            st.fail_run(
+                self.state, reason, unit=unit, type_="orchestrator"
+            )
+            self._save()
+            raise StopStep(reason)
+        try:
+            pending = unit.get("pending_wip")
+            if pending is None:
+                pending = {
+                    "parent": gitops.head_full_sha(self.workspace),
+                    "tree": gitops.snapshot_worktree_tree(self.workspace),
+                    "message": "wip: %s" % st.display_unit_key(unit),
+                    "reason": "complete verification ready",
+                    "target": st.U_PRE_SEAL_VERIFY,
+                }
+                unit["pending_wip"] = pending
+                self._save()
+            return self._complete_pending_wip(unit)
+        except gitops.GitError as exc:
+            st.fail_run(
+                self.state, "wip commit failed: %s" % exc, unit=unit
+            )
+            self._save()
+            raise StopStep(str(exc))
+
     def _finish_draft(self, unit, reason):
         if gitops.enabled(self.config):
             try:
@@ -8433,6 +8544,7 @@ class Driver(object):
         tree = pending.get("tree")
         message = pending.get("message")
         reason = pending.get("reason") or "drafted"
+        target = pending.get("target") or st.U_PRE_REVIEW_VERIFY
         try:
             head = gitops.head_full_sha(self.workspace)
             if head == parent:
@@ -8465,7 +8577,7 @@ class Driver(object):
         unit.pop("pending_wip", None)
         unit.pop("implementation_attempt_snapshot", None)
         st.transition_unit(
-            self.state, unit, st.U_PRE_REVIEW_VERIFY, reason=reason
+            self.state, unit, target, reason=reason
         )
         return "drafted %s" % (unit["artifact"] or "(implementation)")
 
@@ -9277,6 +9389,8 @@ class Driver(object):
         call_preparation = (
             call_preparation or self.milestone_reviewed_calls
         )
+        if self.reviewed_work._is_complete_verification(unit):
+            return self._prepare_complete_verification(unit)
         if unit.get("preserved_candidate"):
             prepared = self._resume_preserved_candidate(unit)
             if prepared is not None:
@@ -12181,6 +12295,11 @@ class Driver(object):
             )
             return "Brainstorming result applied; deferred fixer restored"
         if suite_repair:
+            if (
+                fix_workspace_changed
+                and self.reviewed_work._is_complete_verification(unit)
+            ):
+                unit["complete_verification_review_required"] = True
             certified_fingerprint = self._verification_candidate_fingerprint(
                 post_guard_snapshot
             )
@@ -12835,8 +12954,16 @@ class Driver(object):
     def _complete_seal_from_reviews(self, unit, verification_event=None):
         """Seal deterministically from current whole-artifact reviews."""
         current_fingerprint = self._review_evidence_fingerprint(unit)
-        cite = self._seal_reviews(
-            unit, current_fingerprint=current_fingerprint
+        verification_only = (
+            self.reviewed_work._is_complete_verification(unit)
+            and not unit.get("complete_verification_review_required")
+        )
+        cite = (
+            []
+            if verification_only
+            else self._seal_reviews(
+                unit, current_fingerprint=current_fingerprint
+            )
         )
         if cite is None:
             st.restart_reviews_after_candidate_change(
@@ -12923,7 +13050,11 @@ class Driver(object):
         # suite may now certify this boundary without another execution.
         unit.pop("skip_next_verify", None)
 
-        if stage == st.U_PRE_SEAL_VERIFY:
+        reviews_required = (
+            not self.reviewed_work._is_complete_verification(unit)
+            or bool(unit.get("complete_verification_review_required"))
+        )
+        if stage == st.U_PRE_SEAL_VERIFY and reviews_required:
             current_fingerprint = self._review_evidence_fingerprint(unit)
             if self._seal_reviews(
                 unit, current_fingerprint=current_fingerprint
@@ -12942,8 +13073,12 @@ class Driver(object):
                 return "pre-seal evidence stale; review cycle restarted"
 
         cadence = (
-            self._invalidated_suite_checkpoint_cadence(unit)
-            or self._full_verification_cadence(unit)
+            tasks.REVIEWED_COMPLETE_VERIFICATION
+            if self.reviewed_work._is_complete_verification(unit)
+            else (
+                self._invalidated_suite_checkpoint_cadence(unit)
+                or self._full_verification_cadence(unit)
+            )
         )
         if cadence is None:
             st.append_event(
@@ -13069,10 +13204,19 @@ class Driver(object):
                 copy.deepcopy(output.get("results") or [])
                 if accepted else []
             ),
-            "candidate_before": call_boundary.get(
-                "source_base_revision"
+            "candidate_before": (
+                candidate_fingerprint
+                if self.reviewed_work._is_complete_verification(unit)
+                else call_boundary.get("source_base_revision")
             ),
-            "candidate_after": call_boundary.get("accepted_revision"),
+            "candidate_after": (
+                candidate_fingerprint
+                if (
+                    accepted
+                    and self.reviewed_work._is_complete_verification(unit)
+                )
+                else call_boundary.get("accepted_revision")
+            ),
             "vacuous": (
                 True if accepted and returned_status == "no_suite" else None
             ),
@@ -13094,6 +13238,8 @@ class Driver(object):
         }
         if accepted and "authority" in output:
             event_fields["authority"] = copy.deepcopy(output["authority"])
+        if accepted and self.reviewed_work._is_complete_verification(unit):
+            event_fields["checkpoint_result"] = copy.deepcopy(output)
         if accepted and returned_status == "failed":
             event_fields["failure_account"] = copy.deepcopy(
                 output["failure_account"]
@@ -13845,6 +13991,26 @@ class Driver(object):
     def _do_seal_attempt(self, unit=None, call_preparation=None):
         """Close a recovered sealing state without launching seal reviewers."""
         unit = unit if unit is not None else st.current_unit(self.state)
+        if self.reviewed_work._is_complete_verification(unit):
+            verification_event = self._current_complete_verification_event(
+                unit
+            )
+            if verification_event is not None:
+                return self._complete_seal_from_reviews(
+                    unit, verification_event=verification_event
+                )
+            st.restart_reviews_after_candidate_change(
+                self.state,
+                unit,
+                "persisted sealing state lacked current suite evidence",
+            )
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_PRE_REVIEW_VERIFY,
+                reason="seal recovery invalidated complete verification",
+            )
+            return "seal recovery: complete verification restarted"
         current_fingerprint = self._review_evidence_fingerprint(unit)
         cite = self._seal_reviews(
             unit, current_fingerprint=current_fingerprint

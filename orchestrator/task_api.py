@@ -618,6 +618,8 @@ def ensure_reviewed_state(home, record, config, implementation_scope=None):
             note["artifact"] = authority_path
             target = st._new_unit(st.UNIT_SLICE_IMPL, 1)
             state["units"].extend((note, target))
+    if task_kind == tasks.REVIEWED_COMPLETE_VERIFICATION:
+        target["reviewed_task_kind"] = task_kind
     policy = copy.deepcopy(record["order"]["configuration"])
     policy.pop("task_kind")
     target["reviewed_policy"] = policy

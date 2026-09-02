@@ -840,7 +840,7 @@ def transition_unit(state, unit, new_status, reason=None):
         # is checked in U_DELTA_REVIEW (report-only); a dirty delta loops
         # back to U_FIXING; a green delta is amended and the unit returns
         # exactly where the dirty review would have gone.
-        U_PENDING: (U_PRE_REVIEW_VERIFY, U_FAILED),
+        U_PENDING: (U_PRE_REVIEW_VERIFY, U_PRE_SEAL_VERIFY, U_FAILED),
         U_PRE_REVIEW_VERIFY: (U_ROUNDS, U_FIXING, U_FAILED),
         U_ROUNDS: (U_ROUNDS, U_FIXING, U_PRE_REVIEW_VERIFY,
                    U_PRE_SEAL_VERIFY, U_FAILED),
@@ -2292,7 +2292,10 @@ def _work_durations(state):
             continue
         if etype == "verification":
             key = event.get("unit")
-            if key in totals:
+            # A fixer-owned verification event projects the suite certification
+            # already charged by its fix round; only a direct checkpoint is a
+            # separate physical call.
+            if key in totals and not event.get("fixer_certified"):
                 totals[key] += _completed_duration(event.get("duration_s"))
             continue
         if etype != "worker_malformed":
@@ -2518,6 +2521,17 @@ def _work_token_usage(state):
                 cost=event.get("cost"),
                 cost_known_partial=event.get("cost_partial", False),
             )
+            continue
+        if etype == "verification":
+            if not event.get("fixer_certified"):
+                account(
+                    event.get("unit"),
+                    event.get("duration_s"),
+                    event.get("token_usage"),
+                    event.get("token_usage_partial", False),
+                    cost=event.get("cost"),
+                    cost_known_partial=event.get("cost_partial", False),
+                )
             continue
         if etype != "worker_malformed":
             continue

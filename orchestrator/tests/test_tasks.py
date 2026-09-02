@@ -200,6 +200,7 @@ class TaskContractsTest(unittest.TestCase):
                     ("draft_skeleton", "plan"),
                     ("draft_slice_note", "draft"),
                     ("implement", "implement"),
+                    ("complete_verification", "implement"),
                 )
             },
         )
@@ -213,7 +214,7 @@ class TaskContractsTest(unittest.TestCase):
         )
         self.assertEqual(
             reviewed["impl_reclassify_from"]["applicable_when"],
-            {"task_kind": ["implement"]},
+            {"task_kind": ["implement", "complete_verification"]},
         )
         size = reviewed["implementation_size_control"]
         self.assertEqual(size["type"], "object")
@@ -322,7 +323,6 @@ class TaskContractsTest(unittest.TestCase):
         )
         for configuration, code in (
             ({}, tasks.INVALID_TASK_REQUEST),
-            ({"task_kind": "complete_verification"}, tasks.INVALID_TASK_REQUEST),
             ({"task_kind": "draft_skeleton", "producer": {
                 "task_executor": "brainstorming",
             }}, tasks.INVALID_TASK_REQUEST),
