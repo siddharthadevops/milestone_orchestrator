@@ -29,3 +29,11 @@ genuinely new evidence (`contests`).
 - rationale: None. Closing the shared gap once preserves parity and adds no milestone phase, task, call, or outcome law.
 - prevention: implementation/milestones/deep-reviewed-tasks/slices/slice-05.md (Clarified that current-byte recovery is one shared Slice 4 invariant applied equally to standalone and milestone callers, not a standalone fork or composition change.)
 
+## [slice_doc-09-claude-r1/claude-S09-R1-001]
+
+- unit: slice_doc-09
+- severity: P2
+- finding: The claim is stale: its quoted criteria are absent, and A3 explicitly requires documentation-first restart only after rollback supersession.
+- rationale: None beyond baseline; surviving origins add no documentation cycle, while superseded origins follow A3's required cycle.
+- prevention: implementation/milestones/deep-reviewed-tasks/slices/slice-09.md (Clarified the A3 active-execution versus rollback-supersession split and aligned the skeleton.)
+
