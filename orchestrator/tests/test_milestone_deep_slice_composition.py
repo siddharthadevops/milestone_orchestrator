@@ -3,14 +3,18 @@
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest import mock
 
-from orchestrator import canonical_plan, contracts, driver as drv, gitops
+from orchestrator import brainstorming_tasks, canonical_plan, contracts
+from orchestrator import driver as drv, gitops
 from orchestrator import runners, state as st, tasks
 from orchestrator.tests import test_driver_mock as base
 
 
 class MilestoneDeepSliceCompositionTest(base.DriverTestCase):
-    def _fixture(self, workspace, activated=True):
+    def _fixture(
+        self, workspace, activated=True, implementation_producer="agent_call"
+    ):
         config = base.make_config(verification=[base.VERIFY_CMD])
         path = base.init_state(workspace, config)
         gitops.ensure_repo(workspace)
@@ -25,9 +29,11 @@ class MilestoneDeepSliceCompositionTest(base.DriverTestCase):
             state["milestone"].pop(st.DEEP_SLICE_COMPOSITION_KEY)
         skeleton_path = Path(workspace, "docs/skeleton.md")
         skeleton_path.parent.mkdir(parents=True, exist_ok=True)
-        skeleton_path.write_text(
-            base.canonical_skeleton_document(), encoding="utf-8"
+        skeleton_document = base.canonical_skeleton_document().replace(
+            '"implement":"agent_call"',
+            '"implement":"%s"' % implementation_producer,
         )
+        skeleton_path.write_text(skeleton_document, encoding="utf-8")
         subprocess.run(
             ["git", "add", "-A"], cwd=workspace, check=True
         )
@@ -198,3 +204,112 @@ class MilestoneDeepSliceCompositionTest(base.DriverTestCase):
             self.assertNotIn(
                 "reviewed_task_id", st.current_unit(subject.state)
             )
+
+    def test_brainstorming_production_counts_in_child_and_parent(self):
+        with tempfile.TemporaryDirectory(
+            prefix="milestone-brainstorm-"
+        ) as workspace:
+            path = self._fixture(
+                workspace, implementation_producer="brainstorming"
+            )
+            usage = {
+                "input_tokens": 80,
+                "cached_input_tokens": 20,
+                "output_tokens": 30,
+                "reasoning_output_tokens": 10,
+                "total_tokens": 110,
+            }
+            cost = {"api_usd": 1.25, "real_usd": 0.75}
+            session_id = "milestone-brainstorming-implementation"
+
+            def finish(state, task_id, *_args, **_kwargs):
+                record = tasks.task_record(state, task_id)
+                source = record["order"]["request"]["context"][
+                    "session_charge"
+                ]["repository"]["pre_session_commit"]
+                base.write_file(
+                    "brainstorming.py", "DELIVERED = True\n"
+                )(workspace)
+                subprocess.run(
+                    ["git", "add", "brainstorming.py"],
+                    cwd=workspace,
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "commit", "-qm", "Brainstorming delivery"],
+                    cwd=workspace,
+                    check=True,
+                )
+                return tasks.record_task_result(state, task_id, {
+                    "status": "success",
+                    "duration_s": 2.0,
+                    "token_usage": usage,
+                    "token_usage_partial": False,
+                    "cost": cost,
+                    "cost_partial": False,
+                    "native_result": {
+                        "outcome": "success",
+                        "rounds_used": 1,
+                        "source_base_revision": source,
+                        "accepted_revision": gitops.head_full_sha(workspace),
+                    },
+                })
+
+            runner = runners.MockRunner([
+                base.step(
+                    contracts.KIND_DRAFT_SLICE_NOTE,
+                    base.ok(
+                        contracts.KIND_DRAFT_SLICE_NOTE,
+                        artifact="docs/slice-01.md",
+                    ),
+                    family="codex",
+                    side_effect=base.write_file(
+                        "docs/slice-01.md", "# Reviewed slice 01\n"
+                    ),
+                ),
+                *self._clean_reviews(),
+                *self._clean_reviews(),
+                base.suite_checkpoint_step(base.VERIFY_CMD),
+            ])
+            subject = drv.Driver(path, runner=runner)
+            with mock.patch.object(
+                brainstorming_tasks,
+                "resolve_staffing",
+                return_value={
+                    "dispatch_authority": "static", "participants": []
+                },
+            ), mock.patch.object(
+                brainstorming_tasks,
+                "start_task",
+                return_value={"id": session_id},
+            ), mock.patch.object(
+                brainstorming_tasks, "finish_task", side_effect=finish
+            ):
+                _actions, terminal = self.drive(subject)
+
+            self.assertEqual(terminal.type, drv.A_DONE)
+            parent = next(
+                record for record in tasks.task_records(subject.state)
+                if record["order"]["task_executor"] == "deep_task"
+            )
+            implementation = tasks.related_task(
+                subject.state, parent["id"], "implementation", "a"
+            )
+            self.assertAlmostEqual(
+                implementation["result"]["duration_s"], 2.02
+            )
+            self.assertEqual(implementation["result"]["token_usage"], usage)
+            self.assertEqual(implementation["result"]["cost"], cost)
+            children = [
+                record["result"] for record in tasks.task_records(subject.state)
+                if (record.get("parent") or {}).get("task_id") == parent["id"]
+            ]
+            self.assertEqual(
+                parent["result"], tasks.deep_task_result("success", children)
+            )
+            self.assertEqual(parent["result"]["token_usage"], usage)
+            self.assertEqual(parent["result"]["cost"], cost)
+            run = st.summary(subject.state)
+            self.assertEqual(run["work_token_usage"], usage)
+            self.assertEqual(run["work_cost"], cost)
+            self.assertEqual(runner.script, [])

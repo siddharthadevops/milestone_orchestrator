@@ -705,3 +705,25 @@
 - `claude-claude-S09-R2-002` (raised claude, cleared codex): The note declares no guarantee posture (and no dependencies or risks), which the slice-note contract at `orchestrator/prompts.py:472-488` requires and which every sibling note Slice 01–08 supplies, so the strictness of its central promises — one deep parent per slice before any effect, one child per phase/part, once-only call accounting — is left for later reviewers to invent. — The omission breaches the slice-note standard, but the hard register already makes canonical parent and child identity plus once-only accounting mandatory while explicitly rejecting physical exactly-once behavior, so a max-effort builder is unlikely to infer the wrong contract; if drift occurred, co
 - `claude-claude-S09-R2-003` (raised claude, cleared codex): Slice 09 states that a slice's `deep_task` record exists before any provider call or workspace edit, but gives no observable acceptance and no named check for what a crash or process Stop does to an open milestone deep task and its admitted child, even though this is the crash seam its predecessor slice pinned explicitly. — A careful builder can derive restart reuse from the strict durable-identity and recovery context, but the missing observable restart check could let a hasty implementation duplicate the open parent or child; correcting that would be bounded Slice 09 logic and test rework.
 
+## slice_impl-09-a (Milestone deep-slice composition)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-09-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-codex-r1.txt` |
+| slice_impl-09-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-fix1.txt` |
+| slice_impl-09-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-delta1.txt` |
+| slice_impl-09-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-codex-r2.txt` |
+| slice_impl-09-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-09-codex-r4`, `slice_impl-09-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S09A-001` (raised codex, cleared codex): Terminal reviewed-child failures remain open and are reused on Resume — The behavior directly contradicts the pinned immutable-terminal-identity and child-first-accounting contract, making silent reuse likely to mislead later work, while correction remains bounded to this unit’s failure settlement, retry identity, and focused tests.
+- `claude-claude-S09A-R1-001` (raised claude, cleared codex): The new deep-composition gate in `_do_draft` breaks 13 retained tests that passed at the reviewed baseline, including `test_brainstorming_implementation_never_activates_size_control` — the only named proof of operator amendment A1 — and the whole cross-surface `test_task_conformance` matrix. — The stale fixtures and task-count assertions could mislead a hasty builder, but the binding composition law and loud 13-test failure let a careful builder resolve the conflict, while correction is bounded to updating the two retained test modules and restoring the A1 assertion path.
+- `claude-claude-S09A-R1-002` (raised claude, cleared codex): This part's scope names "recovery of admitted identities", and the note pins the durable parent/phase/part as the sole admission authority, but no named test proves that re-entering an interrupted slice reuses the same deep parent and child instead of admitting a second one. — The contract and shared identity-reuse mechanism are correct, but the milestone-specific restart and result-consumption paths lack direct proof, so a hasty builder could miss a regression while correction would remain bounded to this integration and its tests.
+

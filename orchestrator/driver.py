@@ -8287,7 +8287,11 @@ class Driver(object):
             token_usage_partial=result.get("token_usage_partial", False),
             cost=result.get("cost"),
             cost_partial=result.get("cost_partial", False),
-            task_id=task_id,
+            # The Brainstorming task retains its own immutable result, while
+            # the production charge belongs to the enclosing reviewed work.
+            # Milestone-composed children therefore attribute the draft to
+            # their reviewed identity, just like direct routed production.
+            task_id=self._reviewed_call_task_id(unit) or task_id,
         )
         if kind == contracts.KIND_DRAFT_SLICE_NOTE:
             planned = origin.get("planned_slice_note_path")
