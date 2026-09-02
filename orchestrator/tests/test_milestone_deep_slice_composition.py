@@ -1,14 +1,18 @@
 """Focused prospective milestone deep-slice composition proof."""
 
+import copy
+import json
 import subprocess
 import tempfile
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import brainstorming_tasks, canonical_plan, contracts
+from orchestrator import brainstorming_milestone, brainstorming_tasks
+from orchestrator import canonical_plan, contracts
 from orchestrator import driver as drv, gitops
 from orchestrator import runners, state as st, tasks
 from orchestrator.tests import test_driver_mock as base
+from orchestrator.tests.test_worker_tasks import _created, _rethink
 
 
 class MilestoneDeepSliceCompositionTest(base.DriverTestCase):
@@ -71,6 +75,23 @@ class MilestoneDeepSliceCompositionTest(base.DriverTestCase):
                 base.report(contracts.KIND_REVIEW_ROUND),
                 family="claude",
             ),
+        ]
+
+    @classmethod
+    def _documentation_steps(cls):
+        return [
+            base.step(
+                contracts.KIND_DRAFT_SLICE_NOTE,
+                base.ok(
+                    contracts.KIND_DRAFT_SLICE_NOTE,
+                    artifact="docs/slice-01.md",
+                ),
+                family="codex",
+                side_effect=base.write_file(
+                    "docs/slice-01.md", "# Reviewed slice 01\n"
+                ),
+            ),
+            *cls._clean_reviews(),
         ]
 
     def test_slice_delivery_gates_documentation_and_parts(self):
@@ -312,4 +333,506 @@ class MilestoneDeepSliceCompositionTest(base.DriverTestCase):
             run = st.summary(subject.state)
             self.assertEqual(run["work_token_usage"], usage)
             self.assertEqual(run["work_cost"], cost)
+            self.assertEqual(runner.script, [])
+
+    def test_surviving_rethink_resumes_same_child_and_phase_without_redocumentation(self):
+        scenarios = (
+            ("production", st.U_PENDING, contracts.KIND_IMPLEMENT),
+            ("review", st.U_ROUNDS, contracts.KIND_REVIEW_ROUND),
+            ("fix", st.U_FIXING, contracts.KIND_FIX_FINDINGS),
+        )
+        for label, expected_status, phase_kind in scenarios:
+            with self.subTest(phase=label), tempfile.TemporaryDirectory(
+                prefix="milestone-rethink-%s-" % label
+            ) as workspace:
+                path = self._fixture(workspace)
+                script = self._documentation_steps()
+                if label == "production":
+                    script.extend([
+                        base.step(
+                            contracts.KIND_IMPLEMENT,
+                            _rethink(contracts.KIND_IMPLEMENT),
+                            family="codex",
+                        ),
+                        base.step(
+                            contracts.KIND_IMPLEMENT,
+                            base.ok(
+                                contracts.KIND_IMPLEMENT,
+                                files_changed=["implementation.py"],
+                            ),
+                            family="codex",
+                            side_effect=base.write_file(
+                                "implementation.py", "VALUE = 1\n"
+                            ),
+                        ),
+                    ])
+                elif label == "review":
+                    script.extend([
+                        base.step(
+                            contracts.KIND_IMPLEMENT,
+                            base.ok(
+                                contracts.KIND_IMPLEMENT,
+                                files_changed=["implementation.py"],
+                            ),
+                            family="codex",
+                            side_effect=base.write_file(
+                                "implementation.py", "VALUE = 1\n"
+                            ),
+                        ),
+                        base.step(
+                            contracts.KIND_REVIEW_ROUND,
+                            _rethink(contracts.KIND_REVIEW_ROUND),
+                            family="codex",
+                        ),
+                        base.step(
+                            contracts.KIND_REVIEW_ROUND,
+                            base.report(contracts.KIND_REVIEW_ROUND),
+                            family="codex",
+                        ),
+                    ])
+                else:
+                    finding = base.finding(
+                        "F1", "The implementation needs one correction.",
+                        severity="P0",
+                    )
+                    script.extend([
+                        base.step(
+                            contracts.KIND_IMPLEMENT,
+                            base.ok(
+                                contracts.KIND_IMPLEMENT,
+                                files_changed=["implementation.py"],
+                            ),
+                            family="codex",
+                            side_effect=base.write_file(
+                                "implementation.py", "VALUE = 1\n"
+                            ),
+                        ),
+                        base.step(
+                            contracts.KIND_REVIEW_ROUND,
+                            base.report(
+                                contracts.KIND_REVIEW_ROUND, [finding]
+                            ),
+                            family="codex",
+                        ),
+                        base.step(
+                            contracts.KIND_FIX_FINDINGS,
+                            _rethink(contracts.KIND_FIX_FINDINGS),
+                            family="codex",
+                        ),
+                        base.step(
+                            contracts.KIND_FIX_FINDINGS,
+                            base.fix_ok([
+                                base.triaged(
+                                    "F1", "fixed",
+                                    "The implementation needs one correction.",
+                                    severity="P0",
+                                )
+                            ], files_changed=["implementation.py"]),
+                            family="codex",
+                            side_effect=base.append_file(
+                                "implementation.py", "FIXED = True\n"
+                            ),
+                        ),
+                    ])
+                runner = runners.MockRunner(script)
+                subject = drv.Driver(path, runner=runner)
+                session_id = "surviving-%s" % label
+                with mock.patch.object(
+                    brainstorming_milestone,
+                    "create_session",
+                    side_effect=lambda *_args, **_kwargs: _created(
+                        session_id, path, workspace
+                    ),
+                ):
+                    self.step_until(
+                        subject,
+                        lambda state: any(
+                            unit.get("brainstorming_wait")
+                            for unit in state["units"]
+                        ),
+                    )
+
+                unit = st.current_unit(subject.state)
+                self.assertEqual(unit["status"], expected_status)
+                parent = self._open_parent(subject.state)
+                child = tasks.related_task(
+                    subject.state, parent["id"], "implementation", "a"
+                )
+                documentation = tasks.related_task(
+                    subject.state, parent["id"], "documentation", None
+                )
+                frozen_parent_order = copy.deepcopy(parent["order"])
+                frozen_child_order = copy.deepcopy(child["order"])
+                revision = gitops.head_full_sha(workspace)
+                with mock.patch.object(
+                    brainstorming_milestone,
+                    "terminal_handoff",
+                    return_value={
+                        "session_id": session_id,
+                        "result": {"outcome": "success"},
+                        "source_base_revision": revision,
+                        "accepted_revision": revision,
+                    },
+                ):
+                    subject.step()
+
+                continued = st.current_unit(subject.state)
+                self.assertEqual(continued["status"], expected_status)
+                self.assertEqual(continued["reviewed_task_id"], child["id"])
+                self.assertNotIn("brainstorming_wait", continued)
+                subject.step()
+
+                same_parent = tasks.task_record(subject.state, parent["id"])
+                same_child = tasks.task_record(subject.state, child["id"])
+                self.assertEqual(same_parent["order"], frozen_parent_order)
+                self.assertEqual(same_child["order"], frozen_child_order)
+                self.assertIsNone(same_parent["result"])
+                self.assertIsNone(same_child["result"])
+                self.assertEqual(
+                    tasks.related_task(
+                        subject.state, parent["id"], "documentation", None
+                    )["id"],
+                    documentation["id"],
+                )
+                self.assertEqual(
+                    sum(
+                        kind == contracts.KIND_DRAFT_SLICE_NOTE
+                        for _family, kind, _prompt in runner.calls
+                    ),
+                    1,
+                )
+                self.assertEqual(runner.calls[-1][1], phase_kind)
+                self.assertEqual(runner.script, [])
+
+    @staticmethod
+    def _open_parent(state):
+        return next(
+            record for record in tasks.task_records(state)
+            if record["order"]["task_executor"] == "deep_task"
+            and record["result"] is None
+        )
+
+    def test_rethink_continuation_preserves_order_and_counts_physical_calls_once(self):
+        with tempfile.TemporaryDirectory(
+            prefix="milestone-rethink-accounting-"
+        ) as workspace:
+            path = self._fixture(workspace)
+            runner = runners.MockRunner([
+                *self._documentation_steps(),
+                base.step(
+                    contracts.KIND_IMPLEMENT,
+                    _rethink(contracts.KIND_IMPLEMENT),
+                    family="codex",
+                ),
+                base.step(
+                    contracts.KIND_IMPLEMENT,
+                    base.ok(
+                        contracts.KIND_IMPLEMENT,
+                        files_changed=["implementation.py"],
+                    ),
+                    family="codex",
+                    side_effect=base.write_file(
+                        "implementation.py", "VALUE = 1\n"
+                    ),
+                ),
+                *self._clean_reviews(),
+                base.suite_checkpoint_step(base.VERIFY_CMD),
+            ])
+            subject = drv.Driver(path, runner=runner)
+            session_id = "accounted-survivor"
+            with mock.patch.object(
+                brainstorming_milestone,
+                "create_session",
+                side_effect=lambda *_args, **_kwargs: _created(
+                    session_id, path, workspace
+                ),
+            ):
+                self.step_until(
+                    subject,
+                    lambda state: any(
+                        unit.get("brainstorming_wait")
+                        for unit in state["units"]
+                    ),
+                )
+            parent = self._open_parent(subject.state)
+            implementation = tasks.related_task(
+                subject.state, parent["id"], "implementation", "a"
+            )
+            frozen_order = copy.deepcopy(implementation["order"])
+            source_base = gitops.head_full_sha(workspace)
+            Path(workspace, "accepted.txt").write_text(
+                "accepted rethink authority\n", encoding="utf-8"
+            )
+            subprocess.run(
+                ["git", "add", "accepted.txt"], cwd=workspace, check=True
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "accepted rethink state"],
+                cwd=workspace,
+                check=True,
+            )
+            accepted = gitops.head_full_sha(workspace)
+            with mock.patch.object(
+                brainstorming_milestone,
+                "terminal_handoff",
+                return_value={
+                    "session_id": session_id,
+                    "result": {"outcome": "success"},
+                    "source_base_revision": source_base,
+                    "accepted_revision": accepted,
+                    "work_duration_s": 2.0,
+                    "work_token_usage": None,
+                    "work_token_usage_partial": True,
+                    "work_cost": None,
+                    "work_cost_partial": True,
+                },
+            ):
+                subject.step()
+            _actions, terminal = self.drive(subject)
+
+            self.assertEqual(terminal.type, drv.A_DONE)
+            parent = tasks.task_record(subject.state, parent["id"])
+            implementation = tasks.task_record(
+                subject.state, implementation["id"]
+            )
+            documentation = tasks.related_task(
+                subject.state, parent["id"], "documentation", None
+            )
+            self.assertEqual(implementation["order"], frozen_order)
+            self.assertAlmostEqual(
+                implementation["result"]["duration_s"], 2.04
+            )
+            self.assertAlmostEqual(
+                parent["result"]["duration_s"],
+                documentation["result"]["duration_s"]
+                + implementation["result"]["duration_s"],
+            )
+            work = [
+                event for event in subject.state["events"]
+                if event.get("type") == "brainstorming_work_recorded"
+            ]
+            self.assertEqual(len(work), 1)
+            self.assertEqual(work[0]["task_id"], implementation["id"])
+            self.assertAlmostEqual(st.summary(subject.state)["work_duration_s"], 2.08)
+            self.assertEqual(
+                sum(
+                    kind == contracts.KIND_IMPLEMENT
+                    for _family, kind, _prompt in runner.calls
+                ),
+                2,
+            )
+            self.assertEqual(len(runner.calls), 8)
+            self.assertTrue(Path(workspace, "accepted.txt").is_file())
+            self.assertEqual(runner.script, [])
+
+    def test_rollback_supersession_fails_open_tree_and_starts_new_documentation_first_deep_task(self):
+        with tempfile.TemporaryDirectory(
+            prefix="milestone-rethink-rollback-"
+        ) as workspace:
+            path = self._fixture(workspace)
+            cut = {
+                "cut_scope": "Complete part a.",
+                "remaining_scope": "Complete part b.",
+            }
+            repair = {}
+
+            def repair_from_boundary(root):
+                subprocess.run(
+                    ["git", "reset", "--hard", repair["wipe_boundary"]],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                )
+                Path(root, "docs/skeleton.md").write_text(
+                    repair["accepted_document"], encoding="utf-8"
+                )
+                Path(root, "repair.txt").write_text(
+                    "reconciled ancestry\n", encoding="utf-8"
+                )
+                subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+                subprocess.run(
+                    ["git", "commit", "-qm", "reconciled slice ancestry"],
+                    cwd=root,
+                    check=True,
+                )
+
+            runner = runners.MockRunner([
+                *self._documentation_steps(),
+                base.step(
+                    contracts.KIND_IMPLEMENT,
+                    base.ok(
+                        contracts.KIND_IMPLEMENT,
+                        files_changed=["part_a.py"],
+                        implementation_cut=cut,
+                    ),
+                    family="codex",
+                    side_effect=base.write_file("part_a.py", "PART = 'a'\n"),
+                ),
+                *self._clean_reviews(),
+                base.step(
+                    contracts.KIND_IMPLEMENT,
+                    _rethink(contracts.KIND_IMPLEMENT),
+                    family="codex",
+                ),
+                base.step(
+                    contracts.KIND_MERGE_REPAIR,
+                    base.ok(
+                        contracts.KIND_MERGE_REPAIR,
+                        files_changed=["docs/skeleton.md", "repair.txt"],
+                    ),
+                    side_effect=repair_from_boundary,
+                ),
+                base.step(
+                    contracts.KIND_DRAFT_SLICE_NOTE,
+                    base.ok(
+                        contracts.KIND_DRAFT_SLICE_NOTE,
+                        artifact="docs/slice-02.md",
+                    ),
+                    family="codex",
+                    side_effect=base.write_file(
+                        "docs/slice-02.md", "# Reconciled slice 02\n"
+                    ),
+                ),
+            ])
+            subject = drv.Driver(path, runner=runner)
+            session_id = "rollback-origin"
+            with mock.patch.object(
+                brainstorming_milestone,
+                "create_session",
+                side_effect=lambda *_args, **_kwargs: _created(
+                    session_id, path, workspace
+                ),
+            ):
+                self.step_until(
+                    subject,
+                    lambda state: any(
+                        unit.get("brainstorming_wait")
+                        for unit in state["units"]
+                    ),
+                )
+
+            old_parent = self._open_parent(subject.state)
+            old_documentation = tasks.related_task(
+                subject.state, old_parent["id"], "documentation", None
+            )
+            old_part_a = tasks.related_task(
+                subject.state, old_parent["id"], "implementation", "a"
+            )
+            old_part_b = tasks.related_task(
+                subject.state, old_parent["id"], "implementation", "b"
+            )
+            source_base = gitops.head_full_sha(workspace)
+            skeleton_path = Path(workspace, "docs/skeleton.md")
+            accepted_intent = "Establish the reconciled prerequisite."
+            accepted_document = (
+                "# Calculator milestone\n\n"
+                "Goal: CLI calculator with tests.\n\n"
+                "## Canonical slice plan\n```json\n%s\n```\n"
+                % json.dumps({"slices": [
+                    {
+                        "id": 2,
+                        "title": "Reconciled prerequisite",
+                        "intent": accepted_intent,
+                        "producer_task_executor": {
+                            "draft_slice_note": "agent_call",
+                            "implement": "agent_call",
+                        },
+                    },
+                    {
+                        "id": 1,
+                        "title": "Calculator core",
+                        "intent": (
+                            "Build the bounded calculator CLI and its tests."
+                        ),
+                        "producer_task_executor": {
+                            "draft_slice_note": "agent_call",
+                            "implement": "agent_call",
+                        },
+                    },
+                ]}, separators=(",", ":"))
+            )
+            skeleton_path.write_text(accepted_document, encoding="utf-8")
+            subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
+            subprocess.run(
+                ["git", "commit", "-qm", "accepted reconciled design"],
+                cwd=workspace,
+                check=True,
+            )
+            accepted = gitops.head_full_sha(workspace)
+            canonical_plan.establish_current_plan(
+                subject.state, "docs/skeleton.md"
+            )
+            subject._save()
+            with mock.patch.object(
+                brainstorming_milestone,
+                "terminal_handoff",
+                return_value={
+                    "session_id": session_id,
+                    "result": {"outcome": "success"},
+                    "source_base_revision": source_base,
+                    "accepted_revision": accepted,
+                },
+            ):
+                action, _note = subject.step()
+            self.assertEqual(action.type, drv.A_RECONCILIATION)
+            record = subject.state["milestone"][
+                canonical_plan.RECONCILIATION_KEY
+            ]
+            repair.update({
+                "wipe_boundary": record["wipe_boundary"],
+                "accepted_document": accepted_document,
+            })
+
+            with mock.patch.object(
+                subject, "_staff", return_value=("codex", None, None)
+            ), mock.patch.object(
+                subject,
+                "_dispatch_for_role",
+                return_value=lambda: ("codex", None, None),
+            ):
+                action, _note = subject.step()
+            self.assertEqual(action.type, drv.A_RECONCILIATION)
+            old_results = {
+                record["id"]: copy.deepcopy(record["result"])
+                for record in tasks.task_records(subject.state)
+            }
+            self.assertEqual(
+                old_results[old_parent["id"]]["status"], "failure"
+            )
+            self.assertEqual(
+                old_results[old_part_b["id"]]["status"], "failure"
+            )
+            self.assertIn(
+                "superseded", old_results[old_part_b["id"]]["reason"]
+            )
+            self.assertEqual(
+                old_results[old_documentation["id"]]["status"], "success"
+            )
+            self.assertEqual(old_results[old_part_a["id"]]["status"], "success")
+            current = st.current_unit(subject.state)
+            self.assertEqual(st.unit_key(current), "slice_doc-02")
+            self.assertEqual(current["status"], st.U_PENDING)
+            self.assertNotIn("reviewed_task_id", current)
+
+            subject.step()
+            records = tasks.task_records(subject.state)
+            new_parent = next(
+                record for record in reversed(records)
+                if record["order"]["task_executor"] == "deep_task"
+            )
+            self.assertNotEqual(new_parent["id"], old_parent["id"])
+            self.assertEqual(
+                new_parent["order"]["request"]["request"], accepted_intent
+            )
+            new_documentation = tasks.related_task(
+                subject.state, new_parent["id"], "documentation", None
+            )
+            self.assertIsNotNone(new_documentation)
+            self.assertIsNone(tasks.related_task(
+                subject.state, new_parent["id"], "implementation", "a"
+            ))
+            for task_id, result in old_results.items():
+                self.assertEqual(
+                    tasks.task_record(subject.state, task_id)["result"], result
+                )
             self.assertEqual(runner.script, [])

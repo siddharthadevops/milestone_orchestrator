@@ -4289,6 +4289,92 @@ class Driver(object):
             )
         return parents[0] if parents else None
 
+    def _fail_open_milestone_deep_tasks(self, slice_ids, reason):
+        """Settle each affected open reviewed child before its deep parent."""
+        if not self._deep_slice_composition_active():
+            return False
+        slice_ids = set(slice_ids)
+        records = tasks.task_records(self.state)
+        parents = [
+            record for record in records
+            if record["order"]["task_executor"] == "deep_task"
+            and record["order"]["request"].get("context", {}).get(
+                "milestone_slice_id"
+            ) in slice_ids
+            and record.get("result") is None
+        ]
+        changed = False
+        for parent in parents:
+            children = [
+                record for record in records
+                if (record.get("parent") or {}).get("task_id") == parent["id"]
+            ]
+            child_results = []
+            for child in children:
+                if child["result"] is None:
+                    child = tasks.record_task_result(
+                        self.state,
+                        child["id"],
+                        tasks.validate_result({
+                            "status": "failure",
+                            "reason": reason,
+                            **tasks.task_accounting(self.state, child["id"]),
+                            "native_result": None,
+                        }),
+                    )
+                    changed = True
+                child_results.append(child["result"])
+            tasks.record_task_result(
+                self.state,
+                parent["id"],
+                tasks.deep_task_result("failure", child_results, reason),
+            )
+            changed = True
+        return changed
+
+    def _requeue_reconciled_deep_slices(self, account, accepted_revision):
+        """Make retained invalidated slices documentation-first again."""
+        if (
+            not self._deep_slice_composition_active()
+            or account.get("wipe_boundary") is None
+        ):
+            return
+        requeue_ids = set(account["requeue_slice_ids"])
+        reason = (
+            "accepted-range reconciliation %s superseded this slice execution"
+            % accepted_revision
+        )
+        for unit in self.state.get("units") or []:
+            if unit.get("slice_id") not in requeue_ids:
+                continue
+            if unit.get("kind") == st.UNIT_SLICE_DOC:
+                st.reset_for_redraft(self.state, unit, reason)
+                unit["closed_record"] = None
+                unit["gate_commit"] = None
+                unit["failed_from"] = None
+                for field in (
+                    "reviewed_policy",
+                    "preserved_candidate",
+                    "design_update",
+                    "deferred_fix_episode",
+                    "gap_repairs",
+                    "has_gap_remodel",
+                ):
+                    unit.pop(field, None)
+            elif unit.get("kind") == st.UNIT_SLICE_IMPL:
+                st.requeue_implementation_after_reconciliation(
+                    self.state, unit, accepted_revision
+                )
+            else:
+                continue
+            for field in (
+                "reviewed_task_id",
+                "active_task",
+                "brainstorming_wait",
+                "brainstorming_resume",
+            ):
+                unit.pop(field, None)
+
     def _admit_milestone_deep_parent(self, unit):
         slice_info = self._slice_info(unit["slice_id"])
         producers = tasks.effective_slice_producers(slice_info)
@@ -6027,14 +6113,26 @@ class Driver(object):
                     "reconciliation source task identity is invalid"
                 )
             task = tasks.task_record(self.state, task_id)
+            reviewed_owner = bool(
+                task["order"]["task_executor"] == "reviewed_task"
+                and unit.get("reviewed_task_id") == task_id
+            )
             if active is not None and (
-                not isinstance(active, dict) or active.get("id") != task_id
+                not reviewed_owner
+                and (
+                    not isinstance(active, dict)
+                    or active.get("id") != task_id
+                )
             ):
                 raise st.IllegalTransition(
                     "reconciliation source task no longer owns its unit"
                 )
             if task.get("result") is None and (
-                not isinstance(active, dict) or active.get("id") != task_id
+                not reviewed_owner
+                and (
+                    not isinstance(active, dict)
+                    or active.get("id") != task_id
+                )
             ):
                 raise st.IllegalTransition(
                     "open reconciliation source task is detached"
@@ -6088,6 +6186,12 @@ class Driver(object):
                     "accepted_revision": record["accepted_revision"],
                 }
             account = final["final_account"]
+            superseded_slice_ids = set(account["invalidated_slice_ids"])
+            source_is_reviewed = bool(
+                task_id is not None
+                and task["order"]["task_executor"] == "reviewed_task"
+                and unit.get("reviewed_task_id") == task_id
+            )
             by_key = {
                 st.unit_key(item): item
                 for item in self.state.get("units") or []
@@ -6101,7 +6205,11 @@ class Driver(object):
                     )
                 invalidated.append(target)
 
-            if task_id is not None and task.get("result") is None:
+            if (
+                task_id is not None
+                and task.get("result") is None
+                and not source_is_reviewed
+            ):
                 self._fail_worker_task_if_open(
                     unit,
                     {
@@ -6127,10 +6235,15 @@ class Driver(object):
                 session_id=session_id,
                 owner_survives=(
                     unit.get("slice_id") is None
-                    or unit.get("slice_id") in {
-                        item["id"] for item in final["final_plan"]
-                    }
+                    or unit.get("slice_id") not in superseded_slice_ids
                 ),
+            )
+            supersession_reason = (
+                "open slice execution superseded by accepted-range "
+                "reconciliation"
+            )
+            self._fail_open_milestone_deep_tasks(
+                superseded_slice_ids, supersession_reason
             )
             requeue_ids = set(account["requeue_slice_ids"])
             for target in invalidated:
@@ -6140,12 +6253,18 @@ class Driver(object):
                 # The final repair supersedes every parked pre-repair tree,
                 # including one whose slice is now only historical.
                 target.pop("preserved_candidate", None)
-                if target.get("slice_id") in requeue_ids:
+                if (
+                    target.get("slice_id") in requeue_ids
+                    and not self._deep_slice_composition_active()
+                ):
                     st.requeue_implementation_after_reconciliation(
                         self.state,
                         target,
                         record["accepted_revision"],
                     )
+            self._requeue_reconciled_deep_slices(
+                account, record["accepted_revision"]
+            )
 
             milestone = self.state["milestone"]
             milestone["slices"] = copy.deepcopy(final["projection"])
@@ -8357,11 +8476,7 @@ class Driver(object):
             return
         if any(
             event.get("type") == "brainstorming_work_recorded"
-            and (
-                event.get("task_id") == task_id
-                if task_id is not None
-                else event.get("session_id") == session_id
-            )
+            and event.get("session_id") == session_id
             for event in self.state.get("events", [])
         ):
             return
@@ -8545,12 +8660,16 @@ class Driver(object):
                 kind=kind,
                 session_id=session_id,
             )
-            st.fail_run(
-                self.state,
+            reason = (
                 "focused design discussion ended without agreement; "
-                "the original work and candidate are preserved",
-                unit=unit,
+                "the original work and candidate are preserved"
+            )
+            st.fail_run(
+                self.state, reason, unit=unit,
                 type_="brainstorming_no_agreement",
+            )
+            self._fail_open_milestone_deep_tasks(
+                {unit.get("slice_id")}, reason
             )
             self._save()
             raise StopStep("Brainstorming ended without agreement")

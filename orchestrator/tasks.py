@@ -94,6 +94,7 @@ _RESULT_STATUSES = ("success", "failure")
 _COST_FIELDS = ("api_usd", "real_usd")
 _WORKER_ACCOUNTING_EVENTS = frozenset({
     "brainstorming_origin_recorded",
+    "brainstorming_work_recorded",
     "error_classifier_call",
     "gap_reported",
     "implementation_size_interrupted",
