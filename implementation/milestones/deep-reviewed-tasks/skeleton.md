@@ -20,9 +20,8 @@ slice-sized delivery. It first completes reviewed documentation, then completes
 reviewed implementation. If implementation is cut into coherent parts, every
 part remains a visible reviewed task with its own evidence, accounting, seal,
 and gate commit. A milestone keeps that one deep task open for the slice. If a
-rethink changes accepted design while retaining the slice, the same open
-implementation child continues and the sealed documentation child is not run
-again.
+rethink leaves that open slice attempt active, the same implementation child
+continues and the sealed documentation child is not run again.
 
 Milestones and Agent99 are callers of the same catalogue and order contract.
 They receive no private executor variant. Existing agent-call and Brainstorming
@@ -52,10 +51,11 @@ Every physical production, review, fix, delta-review, or classification call is
 evidence inside the reviewed task. It is not another task unless a caller
 explicitly orders the public agent-call type. Prompt Router remains the only
 prompt authority. A rethink keeps the reviewed task and any enclosing deep task
-open while Brainstorming is pending. After success, a retained origin continues
-the same production, review, or fix phase from the accepted repository state in
-a fresh physical call. The accepted plan removes an origin rather than replacing
-it only when it removes that slice. Failed Brainstorming fails the open origin.
+open while Brainstorming is pending. After success, an origin that remains the
+active execution continues the same production, review, or fix phase from the
+accepted repository state in a fresh physical call. Reconciliation supersedes
+the origin when its slice is removed or the rollback boundary precedes that
+execution. Failed Brainstorming fails the open origin.
 
 ### Composition and ownership
 
@@ -70,14 +70,19 @@ choices never removes implementation review. Terminal children remain
 immutable, and a lawful retry is a distinct successor. `need_rethink` is not a
 retry or terminal result.
 
-Accepted-plan reconciliation may return the retained implementation unit to
-pending work, but it does not replace its still-open reviewed child or enclosing
-deep task. The child resumes its interrupted phase under its admitted order; its
-ordinary current-byte rules refresh any stale review evidence. The already
-successful documentation child stays sealed, so successful rethink creates no
-documentation task or gate. If the accepted plan removes the slice, the open
-origin does not resume. A genuinely new slice id starts with an ordinary deep
-task and its own reviewed documentation child. No terminal task is reopened.
+Accepted-plan reconciliation has two outcomes. If the open origin remains the
+active execution, its reviewed child and enclosing deep task remain open; the
+child resumes its interrupted phase under its admitted order, and ordinary
+current-byte rules refresh stale evidence. Its successful documentation child
+stays sealed. If the slice is removed or the rollback boundary precedes the
+origin, reconciliation restores active product ancestry to the last retained
+completed-slice gate, or to the milestone-start skeleton gate when none remains.
+The repaired final commit preserves the accepted design. Affected open tasks
+fail once as superseded history; completed work after the boundary remains
+immutable history but no longer drives active execution. The first open slice in
+the reconciled plan then starts a new deep task with ordinary reviewed
+documentation before implementation. Removed slices do not run, and no terminal
+task reopens or requeues.
 
 This milestone owns the reusable reviewed-work lifecycle, the two public task
 types, their generic ordering and presentation, and milestone composition over
@@ -93,7 +98,8 @@ call; merge repair and synchronization remain direct operations.
   two-family convergence; current-content evidence; one reviewed-task seal and
   gate commit before success; durable child identity; no duplicate admission
   for an already-recorded phase and part; same-identity rethink continuation for
-  a retained slice without reopening terminal history; child-first accounting;
+  a surviving origin; rollback-boundary supersession without reopening terminal
+  history; child-first accounting;
   milestone verification gating; and old-run compatibility.
 - **Best-effort:** chips, grouping, convenience projections, and display
   freshness. Losing them cannot change execution, acceptance, or accounting.
@@ -127,7 +133,7 @@ self-malformed emissions.
   {"id":6,"title":"Deep documentation and child authority","intent":"Publish deep_task and deliver its reviewed documentation child first, recording parent, phase, and admitted child as durable authority that recovery reuses without a private child entry point.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":7,"title":"Deep implementation-part delivery","intent":"Materialize every discovered implementation part sequentially as a reviewed-task child, preserve every child commit and native result, and aggregate child accounting without recounting physical charges or adding an aggregate commit.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":8,"title":"Milestone skeleton composition","intent":"Order the milestone skeleton as one reviewed task, establish the canonical plan only from its sealed result, and retain milestone-owned closure, reconciliation, stop, and deployment behavior.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
-  {"id":9,"title":"Milestone deep-slice composition","intent":"Order each logical slice as one deep task; when successful rethink retains the slice, resume the same open implementation child and deep parent in the interrupted phase without rerunning sealed documentation or reopening terminal history.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
+  {"id":9,"title":"Milestone deep-slice composition","intent":"Order each logical slice as one deep task; after successful rethink, continue a surviving open origin in place, or terminalize a rollback-superseded origin and start the reconciled plan's first open slice as a new documentation-first deep task, without reopening terminal history.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":10,"title":"Sibling complete-verification task","intent":"Run complete repository verification as an independently orderable reviewed task whose failures enter its fix and rerun discipline, whose changes are reviewed, and whose unchanged success still owns a seal and gate commit.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":11,"title":"Five-slice and final verification cadence","intent":"Replace new runs' in-slice checkpoint with a sibling verification task after every five completed logical slices and at final current-content closure, reusing an already-current checkpoint and blocking later work until success.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":12,"title":"Presentation, compatibility, and conformance","intent":"Show each milestone verification separately with its task evidence; preserve old runs and history under their original law; and prove public ordering, composition, commit ownership, recovery, prompt cardinality, cadence, and single-count accounting end to end.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}}
@@ -144,10 +150,10 @@ self-malformed emissions.
 | Review-cycle meaning | Authority and amendments, family restart/order, whole and delta reviews, fix and escalation, caps, debt and reclassification, evidence invalidation, eligible implementation size cuts, rethink, recovery, and WIP/amend/seal/gate behavior retain their existing meaning. | `implementation/milestones/deep-reviewed-tasks/goal.md:57-73`; `orchestrator/state.py:806-850,1110-1236` | touch ownership and reuse seams; do-not-simplify, fork, or replace the lifecycle while extracting it |
 | Implementation-size ownership | Size control is a capability only of an implementation `reviewed_task`, and only while its selected producer is `agent_call`. Direct `agent_call` and Brainstorming tasks never expose it. A Brainstorming-produced reviewed implementation has no size monitoring, intervention, grace timer, interruption, stabilizer, or size-driven cut/overflow claim. `deep_task` merely sequences any cut returned by an eligible child. | operator amendment A1; existing controller `orchestrator/driver.py:2502-3154`; producer selection `orchestrator/driver.py:3960-3972,7399-7695` | touch the reviewed-work activation gate and applicable policy presentation; do-not-move the controller into a TaskExecutor or add Brainstorming-specific size machinery |
 | Prompt and physical-call boundary | Every production, review, fix, delta-review, and classification call submits its semantic charge directly to Prompt Router. Every offered semantic-job/producer pair has an explicit route. These calls are evidence, not child `agent_call` task records; only an explicit public order creates a task. | `implementation/milestones/deep-reviewed-tasks/goal.md:87-99`; `orchestrator/prompt_router.py:28-49,77-127` | touch the route grid and call adapters; do-not-add prompt fragments, caller-built prompts, fallback routing, or an internal agent-call task layer |
-| Rethink terminality | `need_rethink` is internal control, not completion, retry, or replacement. It leaves the originating `reviewed_task` and any enclosing `deep_task` open. Successful Brainstorming makes the accepted repository state current authority and resumes a retained origin in its interrupted production, review, or fix phase with a fresh physical call. Existing current-byte rules decide evidence refresh. Failed Brainstorming fails the origin; no path reopens a terminal record. | operator amendment A2; `implementation/milestones/deep-reviewed-tasks/goal.md:101-105`; frozen task order `orchestrator/state.py:366-401` | touch the existing handoff, invalidation, and recovery seams; do-not-terminalize or replace a surviving origin, mutate its admitted order, create a task for the fresh call, or reuse a terminal id |
+| Rethink terminality | `need_rethink` is internal control, not completion, retry, or replacement. It leaves the originating `reviewed_task` and any enclosing `deep_task` open while Brainstorming is pending. Successful Brainstorming makes the accepted repository state current authority. A surviving origin resumes its interrupted production, review, or fix phase with a fresh physical call; a rollback-superseded origin fails once as immutable history. Failed Brainstorming fails the origin; no path reopens a terminal record. | operator amendment A3; `implementation/milestones/deep-reviewed-tasks/goal.md:101-105`; frozen task order `orchestrator/state.py:366-401` | touch the existing handoff, reconciliation settlement, invalidation, and recovery seams; do-not-terminalize or replace a surviving origin, mutate its admitted order, create a task for the fresh call, or reuse a terminal id |
 | Deep-task composition and commits | One documentation `reviewed_task` precedes one or more sequential implementation-part `reviewed_task` children in every deep task. Documentation and implementation expose separate breadth, debt, and cap choices; focused checks stay with the child that needs them. There is no bare leg inside a deep task, milestone-wide suite slot, or aggregate replacement commit. | `implementation/milestones/deep-reviewed-tasks/goal.md:107-130`; `orchestrator/state.py:606-747` | touch composition over public reviewed-task admission and the existing part cut; do-not-pre-plan parts, collapse gates, or add a verification child |
 | Composite authority and accounting | Within a deep task, the durable parent, semantic phase, discovered part, and admitted child id are the sole admission/recovery authority, and at most one child is admitted for a recorded phase/part. Children own results and accounting; the parent aggregates them without another physical charge. A terminal hierarchy is never reopened. | `implementation/milestones/deep-reviewed-tasks/goal.md:132-148`; `orchestrator/task_api.py:171-231`; this skeleton, `Register 1 — Guarantee posture` | touch the canonical task record/store and existing aggregation; do-not-add a relationship store, inferred linkage, duplicate ledger, or exactly-once delivery promise |
-| Rethink reconciliation | When successful rethink retains the current slice, accepted-plan reconciliation may requeue the same implementation unit but must preserve the same open implementation `reviewed_task`, its admitted producer and policy, and its enclosing open `deep_task`. The sealed documentation child is neither rerun nor replaced. Later parts arise only from the existing eligible `implementation_cut`. If the plan removes the slice, the origin does not resume. | operator amendment A2; current retained-unit requeue `orchestrator/state.py:1777-1859`; reconciliation close `orchestrator/driver.py:5941-5954`; frozen deep policy `orchestrator/tasks.py:882-904` | touch milestone reconciliation's task settlement and continuation association; do-not-create a sibling/replacement task, another documentation cycle, a retry hierarchy, or a new accounting identity |
+| Rethink reconciliation | Continuity depends on active execution, not slice-id presence. If reconciliation preserves the open origin, the same implementation `reviewed_task`, admitted producer and policy, and enclosing `deep_task` continue; sealed documentation is not rerun and later parts arise only from an eligible `implementation_cut`. If the slice is removed or the rollback boundary precedes the origin, active product ancestry returns to the last retained completed-slice gate, or the milestone-start skeleton gate when none remains, while the repaired final commit preserves accepted design. Affected open tasks fail once as superseded; completed work after the boundary remains immutable but inactive. The first open slice starts a new documentation-first `deep_task`, and removed slices do not run. | operator amendment A3; rollback account `orchestrator/plan_reconciliation.py:203-227,326-367`; reconciliation close `orchestrator/driver.py:5862-5989`; frozen deep policy `orchestrator/tasks.py:882-904` | touch milestone reconciliation's task settlement, continuation association, and prospective deep admission; do-not-replace a survivor, reopen or requeue a terminal task, create a sibling implementation task, or bypass ordinary documentation for the new deep task |
 | Milestone verification | Skeleton is one reviewed task; each logical slice is one deep task; complete verification is a sibling reviewed task after five completed logical slices and at final current-content closure. It does not count as a slice, and later work waits for success. Its separate panel item exposes task status, duration, cost, findings, review evidence, and result. No `verification_task` type exists. | `implementation/milestones/deep-reviewed-tasks/goal.md:150-174`; `orchestrator/driver.py:53,1451-1467` | touch new-run milestone scheduling, current-byte certification, and projection; do-not-retain an in-slice checkpoint for new runs or duplicate a current final verification |
 | Ownership boundary | Milestone law retains sequencing, canonical-plan establishment, higher-level closure and ledgers, design repair, reconciliation, aggregate run accounting, stop, liveness, and deployment. Reclassification stays a direct routed call; merge repair and synchronization stay direct operations. | `implementation/milestones/deep-reviewed-tasks/goal.md:176-186` | touch only reviewed-cycle ownership and milestone composition; do-not-create hidden task types for ratings, repair, or sync |
 | Compatibility and projections | Resumable runs finish under their original law; existing history is neither rewritten nor backfilled. Task records and parent/child authority are strict; chips, grouping, and convenience projections are best-effort. | `implementation/milestones/deep-reviewed-tasks/goal.md:188-208,223-224`; `orchestrator/state.py:2595-2634` | touch prospective activation and additive readers; do-not-reinterpret old checkpoints/per-call tasks or make display state an execution gate |
