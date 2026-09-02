@@ -8,7 +8,7 @@ from orchestrator import contracts, prompt_contracts, prompt_router, prompt_sets
 
 def validation_values(prompt_set):
     names = set()
-    fixed = {"kind", "role"}
+    fixed = {"kind", "role", "workarea_boundary"}
 
     def walk(value):
         if isinstance(value, dict):

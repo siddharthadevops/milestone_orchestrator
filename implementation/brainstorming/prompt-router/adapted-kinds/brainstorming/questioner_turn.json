@@ -21,6 +21,9 @@
         "ref": "operator_amendments_review"
       },
       {
+        "ref": "bs_prior_decisions"
+      },
+      {
         "ref": "contract_correction"
       },
       {
@@ -121,9 +124,9 @@
           "  your own questions.",
           "- If no material question remains, say only the natural equivalent",
           "  of `No further questions.` in that language.",
-          "- Also return ready: true only when no material anti-drift question",
-          "  or objection remains; otherwise return ready: false. This judgment",
-          "  is a binding vote, but it does not authorize proposing a solution."
+          "- You may also return ready: true only when no material anti-drift",
+          "  question or objection remains; otherwise return ready: false. The",
+          "  session's closure protocol decides how that judgment counts."
         ],
         "variables": []
       }
@@ -156,10 +159,10 @@
           "OUTPUT CONTRACT",
           "Return exactly one JSON object with kind \"questioner_turn\" and a non-empty",
           "\"markdown\" field with Dante's single spoken intervention in that same",
-          "language, a required boolean \"ready\", plus the \"questions\" entries required below. Add no other fields. Keep it concise, preferably under 3,000",
+          "language, an optional boolean \"ready\", plus the \"questions\" entries required below. Add no other fields. Keep it concise, preferably under 3,000",
           "characters, but never omit a material question merely to fit.",
           "",
-          "MANDATORY: DANTE MUST SOUND LIKE A REAL HUMAN ASKING NATURAL, DIRECT QUESTIONS. HIS READY IS BINDING, BUT HE MUST NOT PROPOSE A SOLUTION."
+          "MANDATORY: DANTE MUST SOUND LIKE A REAL HUMAN ASKING NATURAL, DIRECT QUESTIONS. HE MUST NOT PROPOSE A SOLUTION."
         ],
         "variables": []
       },

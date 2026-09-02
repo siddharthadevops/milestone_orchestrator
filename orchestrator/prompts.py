@@ -635,7 +635,7 @@ EXHAUSTIVE_SENTENCE = (
 )
 
 
-def project_context_body(project_context):
+def project_context_body(project_context, *, repository_backed=True):
     """Render the body of standing project law for a project-bound run.
 
     The routed prompt corpus owns the ``PROJECT CONTEXT`` heading, while the
@@ -653,7 +653,13 @@ def project_context_body(project_context):
         "This run is bound to project %r, work area %r."
         % (pc.get("project"), pc.get("work_area")),
         "Ecosystem map (the fixed roots this run was bound to at init):",
-        "- PRIMARY ROOT %s — the repo you execute in." % primary.get("path"),
+        (
+            "- PRIMARY ROOT %s — the repo you execute in."
+            % primary.get("path")
+            if repository_backed else
+            "- PRIMARY ROOT %s — caller context; it does not extend the "
+            "target-only editing boundary." % primary.get("path")
+        ),
     ]
     for root in pc.get("additional") or []:
         lines.append(

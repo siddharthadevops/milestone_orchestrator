@@ -4655,6 +4655,7 @@ def make_handler(home, task_host=None):
                     self._json(200, {
                         "ok": True,
                         "prompt_sets": prompt_sets.list_names(home),
+                        "brainstorming_prompt_sets": True,
                     })
                 elif route == "/api/tasks":
                     run_id = query.get("run_id")

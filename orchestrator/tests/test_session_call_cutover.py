@@ -871,6 +871,101 @@ class SessionCallCutoverTest(unittest.TestCase):
             prompt_router.render(second.bound.prompt, expected_values),
         )
 
+    def test_standalone_prepare_turn_always_uses_prompt_router(self):
+        prompt_sets.ensure_default(self.workspace)
+        target = brainstorming.make_target_revision(
+            True, b"current target\n", 0o644
+        )
+        session_state = {
+            "request": {
+                "workspace_path": self.workspace,
+                "target_path": "docs/decision.md",
+                "context": {
+                    "references": ["docs/reference.md"],
+                    "amendments": [{"id": "A1", "text": "Keep it small."}],
+                },
+            },
+            "transcript_ref": "%s/chat.md" % self.workspace,
+            "accepted_target_revision": None,
+            "recovery_baseline_revision": target["revision"],
+        }
+        expected = {
+            "initial_position": (
+                "discussion_turn",
+                ["turn_environment_fit", "turn_human_scale"],
+            ),
+            "contrary_position": (
+                "discussion_turn",
+                ["turn_environment_fit", "turn_human_scale"],
+            ),
+            "common_sense": (
+                "questioner_turn",
+                [
+                    "turn_environment_fit", "turn_human_scale",
+                    "request_focus",
+                ],
+            ),
+        }
+        project_context = {
+            "project": "orchestrator",
+            "work_area": "implementation",
+            "primary": {"path": self.workspace},
+            "additional": [{"path": "/tmp/read-only-evidence"}],
+            "reuse_sources": [],
+            "safeguards": [],
+        }
+        with mock.patch.object(
+            prompt_router, "resolve", wraps=prompt_router.resolve
+        ) as routed:
+            for role, (kind, question_ids) in expected.items():
+                participant = {"id": role, "role": role}
+                prepared = session_calls.prepare_turn(
+                    self.workspace,
+                    session_state,
+                    participant,
+                    1,
+                    target,
+                    prompt_set="default",
+                    project_context=project_context,
+                )
+                self.assertEqual(prepared.bound.prompt["kind"], kind)
+                self.assertEqual(list(prepared.bound.question_ids), question_ids)
+                self.assertIn(
+                    "revisable context, not an operator mandate",
+                    prepared.prompt,
+                )
+                self.assertIn("[A1] Keep it small.", prepared.prompt)
+                self.assertNotIn(
+                    "OPERATOR AMENDMENTS (binding", prepared.prompt
+                )
+                self.assertIn("/tmp/read-only-evidence", prepared.prompt)
+                self.assertIn(
+                    "it does not extend the target-only editing boundary",
+                    prepared.prompt,
+                )
+                self.assertNotIn("the repo you execute in", prepared.prompt)
+                if role != "common_sense":
+                    self.assertIn("TARGET ONLY", prepared.prompt)
+                    self.assertNotIn("REPOSITORY CHARGE", prepared.prompt)
+                    self.assertIn(
+                        "unaccepted recovery baseline %s"
+                        % target["revision"],
+                        prepared.prompt,
+                    )
+                else:
+                    self.assertIn("docs/decision.md", prepared.prompt)
+                reply = {
+                    "kind": kind,
+                    "markdown": "One bounded intervention.",
+                    "questions": question_answers(prepared.bound),
+                }
+                prepared.validate(reply)
+        self.assertEqual(len(routed.call_args_list), 3)
+        self.assertTrue(all(
+            call.kwargs["job"] == prompt_router.STANDALONE_SESSION_JOB
+            for call in routed.call_args_list
+        ))
+
     def test_prepared_exchange_refreshes_its_correction_package(self):
         store = brainstorming.SessionStore(self.workspace)
         participant = {

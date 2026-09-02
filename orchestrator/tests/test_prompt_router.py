@@ -33,7 +33,7 @@ EXPECTED_GOLDENS = frozenset((
 def validation_values(prompt_set):
     """Supply opaque fixture values for every declaration in the seed."""
     names = set()
-    fixed = {"kind", "role"}
+    fixed = {"kind", "role", "workarea_boundary"}
 
     def walk(value):
         if isinstance(value, dict):
@@ -331,6 +331,45 @@ class PromptRouterTest(unittest.TestCase):
                         lead=numeric_lead,
                     )
 
+    def test_standalone_brainstorming_has_its_own_closed_route(self):
+        expected_questions = {
+            "initial_position": [
+                "turn_environment_fit", "turn_human_scale",
+            ],
+            "contrary_position": [
+                "turn_environment_fit", "turn_human_scale",
+            ],
+            "common_sense": [
+                "turn_environment_fit", "turn_human_scale", "request_focus",
+            ],
+        }
+        for (role, lead), kind in prompt_router.SEATS.items():
+            with self.subTest(role=role):
+                prompt = prompt_router.assemble(
+                    self.prompt_set,
+                    job=prompt_router.STANDALONE_SESSION_JOB,
+                    executor="brainstorming",
+                    material="default",
+                    values=self.values(prompt_router.STANDALONE_SESSION_JOB),
+                    role=role,
+                    lead=lead,
+                )
+                self.assertEqual(prompt["kind"], kind)
+                self.assertEqual(
+                    [item["id"] for item in prompt["questions"]["items"]],
+                    expected_questions[role],
+                )
+                text = self.text(prompt)
+                self.assertNotIn("TWO-REGISTER DOCUMENT", text)
+                self.assertNotIn("IMPLEMENTATION RULES", text)
+                if role != "common_sense":
+                    self.assertIn(
+                        prompt_router.STANDALONE_WORKAREA_BOUNDARY, text
+                    )
+                    self.assertNotIn(
+                        prompt_router.REPOSITORY_WORKAREA_BOUNDARY, text
+                    )
+
     def test_invalid_charge_coordinates_and_raw_selectors_are_rejected(self):
         job = "implement@slice_impl"
         valid = {
@@ -397,6 +436,7 @@ class PromptRouterTest(unittest.TestCase):
             "target_type",
             "variant",
             "variants",
+            "workarea_boundary",
         ))
         self.assertEqual(prompt_router._FORBIDDEN_VALUES, retired_controls)
         for control in retired_controls:
@@ -437,6 +477,7 @@ class PromptRouterTest(unittest.TestCase):
 
     def test_all_session_seats_and_artifact_coordinates_are_closed(self):
         session_targets = (
+            (prompt_router.STANDALONE_SESSION_JOB, None),
             ("draft_slice_note@slice_doc", None),
             ("implement@slice_impl", None),
             ("rethink", "document"),

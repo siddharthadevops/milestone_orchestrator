@@ -777,6 +777,11 @@
     <label style="display:flex;align-items:center;gap:6px;font-size:12px">
       <input type="checkbox" id="b_deliver_chat" style="width:auto">
       deliver chat document</label></div>
+  <div class="field"><label>Prompt set</label>
+    <div class="pathrow">
+      <select id="b_prompt_set"><option value="default">default</option></select>
+    </div>
+    <div class="hint" id="b_prompt_set_hint">Names only; prompt contents are checked per call.</div></div>
   <div class="formrow">
     <span id="bsError" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
     <button class="btn" onclick="document.getElementById('bsform').close()">Cancel</button>
@@ -4358,22 +4363,29 @@ function openForm(preselect) {
   document.getElementById("form").showModal();
 }
 
-async function loadPromptSets() {
-  const select = document.getElementById("f_prompt_set");
-  const hint = document.getElementById("f_prompt_set_hint");
+async function loadPromptSetSelect(selectId, hintId, forBrainstorming=false) {
+  const select = document.getElementById(selectId);
+  const hint = document.getElementById(hintId);
   select.innerHTML = '<option value="default">default</option>';
   select.value = "default";
   try {
     const data = await api("/api/prompt-sets");
-    const names = Array.isArray(data.prompt_sets) && data.prompt_sets.length
+    const available = Array.isArray(data.prompt_sets) && data.prompt_sets.length
       ? data.prompt_sets : ["default"];
+    const supported = !forBrainstorming || data.brainstorming_prompt_sets === true;
+    const names = supported ? available : ["default"];
     select.innerHTML = names.map(name =>
       `<option value="${esc(name)}">${esc(name)}</option>`).join("");
     select.value = names.includes("default") ? "default" : names[0];
-    hint.textContent = "Names only; prompt contents are checked per call.";
+    hint.textContent = supported
+      ? "Names only; prompt contents are checked per call."
+      : "Restart the panel service to enable saved prompt sets here.";
   } catch (e) {
     hint.textContent = e.message;
   }
+}
+async function loadPromptSets() {
+  return loadPromptSetSelect("f_prompt_set", "f_prompt_set_hint");
 }
 
 /* ---- staffing documents: the one catalogue read every staffing choice
@@ -6107,6 +6119,7 @@ function openBrainstormingForm(preselect) {
   renderBsRefs();
   loadBsProjects(preselect);
   loadStandaloneStaffing("bs");
+  loadPromptSetSelect("b_prompt_set", "b_prompt_set_hint", true);
   document.getElementById("bsform").showModal();
 }
 async function loadBsProjects(preselect) {
@@ -6281,6 +6294,8 @@ async function submitBrainstorming() {
     project: project.slug,
     work_area: area.record.name,
   };
+  const promptSet = document.getElementById("b_prompt_set").value || "default";
+  if(promptSet !== "default") payload.prompt_set = promptSet;
   // Armed by "New…": the service creates the target's missing folders at
   // launch (and removes them again if the create fails).
   if (bsCreateParents) payload.create_target_parents = true;

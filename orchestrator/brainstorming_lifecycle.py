@@ -30,7 +30,7 @@ from datetime import datetime
 from orchestrator import brainstorming
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_execution as execution
-from orchestrator import driver, errclass, kvstore, pricing, registry
+from orchestrator import driver, errclass, kvstore, pricing, prompt_sets, registry
 from orchestrator import runners, session_calls, session_repository, staffing
 
 try:
@@ -175,7 +175,7 @@ def _validate_record(record):
         # value is the session they resolve through, or `None` for the default
         # document. Historical production records may also carry a frozen
         # `staffing_material`; it remains readable but no longer routes calls.
-        ("staffing_session", "staffing_material"),
+        ("staffing_session", "staffing_material", "prompt_set"),
         "service_record",
     )
     try:
@@ -205,6 +205,13 @@ def _validate_record(record):
     pid = record["pid"]
     if pid is not None and (type(pid) is not int or pid <= 0):
         raise RuntimeError("invalid Brainstorming service registry")
+    if "prompt_set" in record:
+        try:
+            prompt_sets.validate_name(record["prompt_set"])
+        except prompt_sets.PromptSetError as exc:
+            raise RuntimeError(
+                "invalid Brainstorming service registry"
+            ) from exc
     if "staffing_session" in record:
         session = record["staffing_session"]
         if session is not None and (
@@ -350,7 +357,7 @@ def validate_create_body(body):
             # The caller's access to the named session is decided by the
             # route, which is the only place that knows who is asking.
             ("project", "work_area", "create_target_parents",
-             "staffing_session"),
+             "staffing_session", "prompt_set"),
             "brainstorming create body",
         )
         request = brainstorming.validate_request(body["request"])
@@ -501,6 +508,14 @@ def validate_create_body(body):
             staffing_session = brainstorming._text(
                 staffing_session, "staffing_session"
             )
+        try:
+            prompt_set = prompt_sets.validate_name(
+                body.get("prompt_set", prompt_sets.DEFAULT_SET_NAME)
+            )
+        except prompt_sets.PromptSetError as exc:
+            raise brainstorming.ContractError(
+                "prompt_set is invalid"
+            ) from exc
         return {
             "request": request,
             "participants": participants,
@@ -509,6 +524,7 @@ def validate_create_body(body):
             "work_area": work_area,
             "create_target_parents": create_parents,
             "staffing_session": staffing_session,
+            "prompt_set": prompt_set,
         }
     except (TypeError, ValueError, brainstorming.ContractError) as exc:
         raise PublicLifecycleError(400, INVALID_REQUEST) from exc
@@ -1665,6 +1681,25 @@ def record_staffing_session(record, supplied=None):
     return supplied
 
 
+def record_prompt_set(record):
+    """Return a standalone record's prompt set, defaulting old records."""
+    try:
+        return prompt_sets.validate_name(
+            record.get("prompt_set", prompt_sets.DEFAULT_SET_NAME)
+        )
+    except (AttributeError, prompt_sets.PromptSetError) as exc:
+        raise RuntimeError("invalid Brainstorming service registry") from exc
+
+
+def session_prompt_set(record, state):
+    """Return the one prompt-set authority for this session."""
+    charge = session_calls.charge_from_state(state)
+    return (
+        charge["prompt_set"]
+        if charge is not None else record_prompt_set(record)
+    )
+
+
 def _activity_projection(store, record, state):
     activity = store.read_activity(record["id"])
     events = [] if activity is None else copy.deepcopy(activity["events"])
@@ -1892,12 +1927,13 @@ def _create_session(
 ):
     """Validate, bind, durably create, and launch one standalone session.
 
-    Every standalone discussion opened here is router-backed. The body's
-    optional `staffing_session` says WHICH session its automatic calls ask;
+    Every standalone discussion opened here is Staffing Router-backed. The
+    body's optional `staffing_session` says WHICH session its automatic calls ask;
     omitting it does not opt out of the router, it takes the default
     document at `medium` with this machine's configured families — and the
     durable mark records that, so a restart of a session created today can
     never be read as a pre-cutover record whose seats carry static pins.
+    Prompt Router selection is independent and applies to every turn.
     """
     checked = validate_create_body(body)
     try:
@@ -2023,8 +2059,8 @@ def _create_session_with_context(
     static_binding=False,
 ):
     # `staffing_selection` present — even carrying no session — is what
-    # makes this a router-backed session: its automatic calls resolve
-    # through the router, and the durable record says so for every later
+    # makes this a Staffing Router-backed session: its automatic dispatches
+    # resolve through that router, and the durable record says so for every later
     # restart. Absent, nothing changes: the roster's own pins and rotation
     # stay the authority they were.
     staffing_binding = None
@@ -2177,6 +2213,8 @@ def _create_session_with_context(
                 record["target_identity"] = identity
             if staffing_binding is not None:
                 record["staffing_session"] = staffing_binding["session"]
+            if repository is None:
+                record["prompt_set"] = checked["prompt_set"]
             document["sessions"].append(record)
             _save_registry(home, document)
         projected = _projection(home, record)
@@ -3624,23 +3662,32 @@ def run_lifecycle(
             participant_process_factory or _spawn_participant,
             staffing_binding=staffing_binding,
         )
+        prompt_set = (
+            prompt_sets.DEFAULT_SET_NAME
+            if seed is None else session_prompt_set(record, seed.state)
+        )
+        prompt_project_context = (
+            record["execution_context"]
+            if isinstance(record["execution_context"].get("primary"), dict)
+            else None
+        )
         turn_preparer = (
-            None
-            if seed is None
-            or session_calls.charge_from_state(seed.state) is None
-            else lambda state, participant, round_number, target_revision,
-                        correction: session_calls.prepare_turn(
-                            home,
-                            state,
-                            participant,
-                            round_number,
-                            target_revision,
-                            correction,
-                            staffing_session=(
-                                staffing_binding["session"]
-                                if staffing_binding is not None else None
-                            ),
-                        )
+            None if seed is None else
+            lambda state, participant, round_number, target_revision,
+                   correction: session_calls.prepare_turn(
+                       home,
+                       state,
+                       participant,
+                       round_number,
+                       target_revision,
+                       correction,
+                       staffing_session=(
+                           staffing_binding["session"]
+                           if staffing_binding is not None else None
+                       ),
+                       prompt_set=prompt_set,
+                       project_context=prompt_project_context,
+                   )
         )
         coordinator = coordination.BrainstormingCoordinator(
             store, participant_execution, turn_preparer=turn_preparer

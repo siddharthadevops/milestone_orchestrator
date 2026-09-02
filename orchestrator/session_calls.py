@@ -1,9 +1,10 @@
-"""Fresh routed prompt and reply boundary for milestone session seats."""
+"""Fresh routed prompt and reply boundary for every Brainstorming turn."""
 
 from __future__ import annotations
 
 import collections
 import copy
+import os
 
 from . import (
     brainstorming,
@@ -23,6 +24,9 @@ SESSION_JOBS = frozenset((
     "draft_slice_note@slice_doc",
     "implement@slice_impl",
     "rethink",
+))
+ROUTED_SESSION_JOBS = SESSION_JOBS | frozenset((
+    prompt_router.STANDALONE_SESSION_JOB,
 ))
 _CHARGE_REQUIRED = frozenset((
     "job", "prompt_set", "values", "amendments_path",
@@ -103,6 +107,34 @@ def _mounted_variable_substitutions(prompt, variable):
         for unit in prompt[section]
         for line in unit["text"]
     )
+
+
+def _prior_decisions(items):
+    """Render prior Brainstorming decisions as revisable context."""
+    if not isinstance(items, (list, tuple)):
+        raise prompt_router.PromptRouterError(
+            "prior decisions must be a sequence"
+        )
+    lines = []
+    for item in items:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("text"), str)
+            or not item["text"].strip()
+        ):
+            raise prompt_router.PromptRouterError(
+                "prior decisions contain a malformed entry"
+            )
+        decision_id = item.get("id")
+        if decision_id is not None and (
+            not isinstance(decision_id, str) or not decision_id.strip()
+        ):
+            raise prompt_router.PromptRouterError(
+                "prior decisions contain a malformed id"
+            )
+        label = "[%s] " % decision_id.strip() if decision_id else ""
+        lines.append("- %s%s" % (label, item["text"].strip()))
+    return "\n".join(lines)
 
 
 def read_current_amendments(path, accepted=()):
@@ -204,12 +236,79 @@ def charge_from_state(state):
 def prepare_turn(
     home, state, participant, round_number, target_revision,
     correction=None, staffing_session=None,
+    prompt_set=prompt_sets.DEFAULT_SET_NAME,
+    project_context=None,
 ):
     """Prepare one routed seat attempt from durable session identity."""
     charge = charge_from_state(state)
-    if charge is None:
-        return None
     role = participant.get("role") if isinstance(participant, dict) else None
+    seat = {
+        "initial_position": True,
+        "contrary_position": False,
+        "common_sense": False,
+    }
+    if role not in seat:
+        raise prompt_router.PromptRouterError(
+            "Brainstorming participant has an unknown role"
+        )
+    if isinstance(round_number, bool) or not isinstance(round_number, int) \
+            or round_number <= 0:
+        raise prompt_router.PromptRouterError(
+            "Brainstorming round must be positive"
+        )
+    references = state["request"]["context"].get("references") or []
+    reference_lines = (
+        "\n".join("  - %s" % item for item in references)
+        if references else "  - none"
+    )
+    common_values = {
+        "workspace": state["request"]["workspace_path"],
+        "chat_path": state["transcript_ref"],
+        "reference_documents": reference_lines,
+        "participant_id": participant["id"],
+        "role": role,
+        "round": str(round_number),
+    }
+
+    if charge is None:
+        target = brainstorming.validate_target_revision(target_revision)
+        request = state["request"]
+        accepted = state.get("accepted_target_revision")
+        authority = "%s %s" % (
+            (
+                "accepted revision"
+                if accepted is not None else
+                "unaccepted recovery baseline"
+            ),
+            target["revision"],
+        )
+        amendments = copy.deepcopy(
+            request["context"].get("amendments") or []
+        )
+        values = dict(common_values)
+        target_path = request["target_path"]
+        if not os.path.isabs(target_path):
+            target_path = os.path.join(request["workspace_path"], target_path)
+        values.update({
+            "target_path": os.path.abspath(target_path),
+            "target_authority": authority,
+            "target_state": "present" if target["exists"] else "absent",
+        })
+        return prepare(
+            home,
+            job=prompt_router.STANDALONE_SESSION_JOB,
+            material=staffing.session_material(home, staffing_session),
+            role=role,
+            lead=seat[role],
+            values=values,
+            prompt_set=prompt_set,
+            operator_amendments=(),
+            prior_decisions=amendments,
+            project_context=project_context,
+            workspace=os.path.abspath(request["workspace_path"]),
+            correction=correction,
+        )
+
     run_config = state.get("run_config") if isinstance(state, dict) else None
     binding_agreement = (
         isinstance(run_config, dict)
@@ -218,20 +317,6 @@ def prepare_turn(
             brainstorming.LEGACY_AGREEMENT_VERSION,
         ) == brainstorming.CURRENT_AGREEMENT_VERSION
     )
-    seat = {
-        "initial_position": True,
-        "contrary_position": False,
-        "common_sense": False,
-    }
-    if role not in seat:
-        raise prompt_router.PromptRouterError(
-            "milestone session participant has an unknown role"
-        )
-    if isinstance(round_number, bool) or not isinstance(round_number, int) \
-            or round_number <= 0:
-        raise prompt_router.PromptRouterError(
-            "milestone session round must be positive"
-        )
     repository_backed = "repository" in charge
     if repository_backed:
         if (
@@ -249,20 +334,8 @@ def prepare_turn(
         raise prompt_router.PromptRouterError(
             "milestone session target authority is unavailable"
         )
-    references = state["request"]["context"].get("references") or []
-    reference_lines = (
-        "\n".join("  - %s" % item for item in references)
-        if references else "  - none"
-    )
     values = dict(charge["values"])
-    values.update({
-        "workspace": state["request"]["workspace_path"],
-        "chat_path": state["transcript_ref"],
-        "reference_documents": reference_lines,
-        "participant_id": participant["id"],
-        "role": role,
-        "round": str(round_number),
-    })
+    values.update(common_values)
     if charge["job"] == "rethink":
         values["repository_authority"] = "Git commit %s" % target_revision
     else:
@@ -304,7 +377,7 @@ def prepare_turn(
     )
 
 
-def _project_authority(project_context):
+def _project_authority(project_context, *, repository_backed=True):
     if project_context is None:
         return None, (), ()
     if not isinstance(project_context, dict):
@@ -324,7 +397,13 @@ def _project_authority(project_context):
         raise prompt_router.PromptRouterError(
             "project_context has incomplete granted roots"
         )
-    return prompts.project_context_body(authority), extensions, tuple(roots)
+    return (
+        prompts.project_context_body(
+            authority, repository_backed=repository_backed
+        ),
+        extensions,
+        tuple(roots),
+    )
 
 
 def prepare(
@@ -339,16 +418,17 @@ def prepare(
     artifact_type=None,
     operator_amendments,
     accepted_amendments=(),
+    prior_decisions=(),
     project_context=None,
     workspace=None,
     correction=None,
     require_questioner_readiness=False,
     binding_agreement=False,
 ):
-    """Resolve and bind one physical milestone Brainstorming seat attempt."""
-    if job not in SESSION_JOBS:
+    """Resolve and bind one physical Brainstorming turn attempt."""
+    if job not in ROUTED_SESSION_JOBS:
         raise prompt_router.PromptRouterError(
-            "job %r is not a milestone session charge" % job
+            "job %r is not a routed Brainstorming job" % job
         )
     if not isinstance(values, dict):
         raise prompt_router.PromptRouterError("values must be an object")
@@ -380,7 +460,8 @@ def prepare(
             "producer session cannot carry a rethink problem"
         )
     owned = {
-        "operator_amendments", "ecosystem_map", "contract_correction",
+        "operator_amendments", "prior_decisions", "ecosystem_map",
+        "contract_correction",
     }
     collision = sorted(owned.intersection(values))
     if collision:
@@ -388,10 +469,29 @@ def prepare(
             "session-owned value %r was supplied by its caller" % collision[0]
         )
     charge_values = dict(values)
-    charge_values["operator_amendments"] = prompt_authority.current_amendments(
-        operator_amendments, accepted_amendments
+    standalone = job == prompt_router.STANDALONE_SESSION_JOB
+    rendered_prior_decisions = None
+    if standalone:
+        if operator_amendments or accepted_amendments:
+            raise prompt_router.PromptRouterError(
+                "standalone prior decisions are not operator amendments"
+            )
+        rendered_prior_decisions = _prior_decisions(prior_decisions)
+        if rendered_prior_decisions:
+            charge_values["prior_decisions"] = rendered_prior_decisions
+    else:
+        if prior_decisions:
+            raise prompt_router.PromptRouterError(
+                "milestone sessions do not accept standalone prior decisions"
+            )
+        charge_values["operator_amendments"] = (
+            prompt_authority.current_amendments(
+                operator_amendments, accepted_amendments
+            )
+        )
+    authority_body, extensions, roots = _project_authority(
+        project_context, repository_backed=not standalone
     )
-    authority_body, extensions, roots = _project_authority(project_context)
     if authority_body is not None:
         charge_values["ecosystem_map"] = authority_body
     if correction is not None:
@@ -432,7 +532,11 @@ def prepare(
                 % exc
             ) from exc
         declarations = _mounted_variable_declarations(prompt)
-        required_mounts = ["operator_amendments"]
+        required_mounts = (
+            ["prior_decisions"]
+            if standalone and rendered_prior_decisions else
+            ([] if standalone else ["operator_amendments"])
+        )
         if job == "rethink":
             required_mounts.extend((
                 "rethink_problem", "repository_authority",
@@ -462,7 +566,18 @@ def prepare(
                     "routed session prompt must mount adapter-owned payload "
                     "%r exactly once" % variable
                 )
-        prompt_router.render(bound.prompt, charge_values)
+        rendered_prompt = prompt_router.render(bound.prompt, charge_values)
+        if (
+            standalone
+            and role != "common_sense"
+            and rendered_prompt.count(
+                prompt_router.STANDALONE_WORKAREA_BOUNDARY
+            ) != 1
+        ):
+            raise prompt_sets.PromptSetError(
+                "standalone discussion prompt must carry its target-only "
+                "editing boundary exactly once"
+            )
 
     resolution = prompt_router.resolve(
         home,

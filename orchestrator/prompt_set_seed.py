@@ -1051,23 +1051,74 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           'HEAD '
                                                                           'unchanged.'],
                                                                  'variables': []},
-                                  'bs_workarea': {'text': ['WORK AREA',
-                                                           "- This is the project's "
-                                                           'git repository. The '
-                                                           'Initial Position is the',
-                                                           '  sole editing seat; every '
-                                                           'completed author turn is '
-                                                           'committed by the',
-                                                           '  driver. Contrary '
-                                                           'Position and the '
+                                  'bs_workarea': {'text': ['WORK AREA — EXPLICIT '
+                                                           'EDITING BOUNDARY',
+                                                           '{{workarea_boundary}}',
+                                                           'Contrary Position and the '
                                                            'questioner leave files, '
-                                                           'the index,',
-                                                           '  and HEAD unchanged. Chat '
-                                                           'carries what changed and '
-                                                           'why; the diff',
-                                                           '  carries the letter — '
-                                                           'verify claims against it.'],
-                                                  'variables': []}},
+                                                           'the index, and HEAD',
+                                                           'unchanged. Chat carries '
+                                                           'what changed and why; '
+                                                           'verify claims against the',
+                                                           'current target or Git diff '
+                                                           'named by the boundary.'],
+                                                  'variables': [{'name': 'workarea_boundary',
+                                                                 'required': False,
+                                                                 'default': 'REPOSITORY '
+                                                                            'CHARGE — '
+                                                                            'the '
+                                                                            'Initial '
+                                                                            'Position '
+                                                                            'may make '
+                                                                            'only the '
+                                                                            'repository '
+                                                                            'changes '
+                                                                            'allowed '
+                                                                            'by this '
+                                                                            "session's "
+                                                                            'charge. '
+                                                                            'The '
+                                                                            'driver '
+                                                                            'commits '
+                                                                            'each '
+                                                                            'completed '
+                                                                            'author '
+                                                                            'turn.',
+                                                                 'description': 'Router-owned '
+                                                                                'target-only '
+                                                                                'or '
+                                                                                'repository-charge '
+                                                                                'editing '
+                                                                                'authority.'}]},
+                                  'bs_prior_decisions': {'text': ['PRIOR PROJECT '
+                                                                  'DECISIONS '
+                                                                  '(revisable context, '
+                                                                  'not an operator '
+                                                                  'mandate)',
+                                                                  'These came from '
+                                                                  'earlier discussions '
+                                                                  'and are not '
+                                                                  'unquestionable '
+                                                                  'assumptions.',
+                                                                  'Test them against '
+                                                                  'current evidence. '
+                                                                  'If one is mistaken, '
+                                                                  'incomplete, or',
+                                                                  'disproportionate, '
+                                                                  'identify or '
+                                                                  'question it within '
+                                                                  'your role.',
+                                                                  '{{prior_decisions}}'],
+                                                         'variables': [{'name': 'prior_decisions',
+                                                                        'required': False,
+                                                                        'drop_unit_if_absent': True,
+                                                                        'description': 'Earlier '
+                                                                                       'project '
+                                                                                       'decisions '
+                                                                                       'supplied '
+                                                                                       'as '
+                                                                                       'revisable '
+                                                                                       'context.'}]}},
                         'contract_sections': {'envelope_verbose': {'text': ['OUTPUT '
                                                                             'CONTRACT '
                                                                             '(mandatory)',
@@ -4680,6 +4731,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                     'mount': ['role:initial_position']},
                                                                    {'ref': 'operator_amendments_review',
                                                                     'mount': ['role:contrary_position']},
+                                                                   {'ref': 'bs_prior_decisions'},
                                                                    {'ref': 'contract_correction'},
                                                                    {'ref': 'bs_workarea'},
                                                                    {'ref': 'process_authority'},
@@ -5044,40 +5096,22 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                    'no '
                                                                                    'further '
                                                                                    'turns. '
-                                                                                   'A '
-                                                                                   'ready '
-                                                                                   'anchors '
+                                                                                   'Ready '
+                                                                                   'refers '
                                                                                    'to',
                                                                                    'the '
-                                                                                   'work '
-                                                                                   "area's "
                                                                                    'current '
-                                                                                   'revision: '
-                                                                                   'any '
-                                                                                   'later '
-                                                                                   'commit '
-                                                                                   'voids '
-                                                                                   'every '
-                                                                                   'earlier',
-                                                                                   'ready, '
-                                                                                   'and '
-                                                                                   'when '
-                                                                                   'every '
-                                                                                   'voting '
-                                                                                   "seat's "
-                                                                                   'ready '
-                                                                                   '— '
-                                                                                   'including '
-                                                                                   "Dante's "
-                                                                                   '— '
-                                                                                   'anchors',
-                                                                                   'to '
+                                                                                   'accepted '
+                                                                                   'revision; '
                                                                                    'the '
-                                                                                   'same '
-                                                                                   'revision, '
-                                                                                   'the '
-                                                                                   'conversation '
-                                                                                   'closes. '
+                                                                                   "session's "
+                                                                                   'closure '
+                                                                                   'protocol '
+                                                                                   'decides',
+                                                                                   'how '
+                                                                                   'that '
+                                                                                   'judgment '
+                                                                                   'counts. '
                                                                                    'Do '
                                                                                    'not '
                                                                                    'add '
@@ -5114,6 +5148,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                     'variables': []},
                                                                    {'ref': 'project_context'},
                                                                    {'ref': 'operator_amendments_review'},
+                                                                   {'ref': 'bs_prior_decisions'},
                                                                    {'ref': 'contract_correction'},
                                                                    {'ref': 'process_authority'},
                                                                    {'text': ['SOURCES',
@@ -5320,33 +5355,33 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                              'questions.` '
                                                                              'in that '
                                                                              'language.',
-                                                                             '- Also '
+                                                                             '- You '
+                                                                             'may also '
                                                                              'return '
                                                                              'ready: '
                                                                              'true '
                                                                              'only '
                                                                              'when no '
                                                                              'material '
-                                                                             'anti-drift '
-                                                                             'question',
-                                                                             '  or '
+                                                                             'anti-drift',
+                                                                             '  '
+                                                                             'question '
+                                                                             'or '
                                                                              'objection '
                                                                              'remains; '
                                                                              'otherwise '
                                                                              'return '
                                                                              'ready: '
                                                                              'false. '
-                                                                             'This '
-                                                                             'judgment',
-                                                                             '  is a '
-                                                                             'binding '
-                                                                             'vote, '
-                                                                             'but it '
-                                                                             'does not '
-                                                                             'authorize '
-                                                                             'proposing '
-                                                                             'a '
-                                                                             'solution.'],
+                                                                             'The',
+                                                                             '  '
+                                                                             "session's "
+                                                                             'closure '
+                                                                             'protocol '
+                                                                             'decides '
+                                                                             'how that '
+                                                                             'judgment '
+                                                                             'counts.'],
                                                                     'variables': []}]},
                                         'questions': {'intro': ['QUESTIONS (answer '
                                                                 'each in output, '
@@ -5460,8 +5495,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                    'that '
                                                                                    'same',
                                                                                    'language, '
-                                                                                   'a '
-                                                                                   'required '
+                                                                                   'an '
+                                                                                   'optional '
                                                                                    'boolean '
                                                                                    '"ready", '
                                                                                    'plus '
@@ -5503,11 +5538,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                    'NATURAL, '
                                                                                    'DIRECT '
                                                                                    'QUESTIONS. '
-                                                                                   'HIS '
-                                                                                   'READY '
-                                                                                   'IS '
-                                                                                   'BINDING, '
-                                                                                   'BUT '
                                                                                    'HE '
                                                                                    'MUST '
                                                                                    'NOT '

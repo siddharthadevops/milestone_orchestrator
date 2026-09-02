@@ -24,7 +24,8 @@ from orchestrator import brainstorming as bs
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import brainstorming_tasks as task_adapter
-from orchestrator import registry, runners, service, staffing, state, tasks
+from orchestrator import prompt_sets, registry, runners, service, staffing
+from orchestrator import state, tasks
 from orchestrator import workareas
 
 
@@ -135,8 +136,13 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 }), flush=True)
 
         target_match = re.search(r"^- target_path: (.+)$", prompt, re.M)
+        if target_match is None:
+            target_match = re.search(
+                r"^- work area at .+; primary target: ([^,]+),", prompt, re.M
+            )
         target_name = target_match.group(1).strip() if target_match else ""
         discussion = 'kind "discussion_turn"' in prompt
+        questioner = 'kind "questioner_turn"' in prompt
         proposal = 'kind: "closure_proposal"' in prompt
         vote = 'kind "closure_vote"' in prompt
 
@@ -228,6 +234,11 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 with open(temporary, "wb") as handle:
                     handle.write(b"accepted replacement")
                 os.replace(temporary, target)
+        elif questioner:
+            answer = {
+                "kind": "questioner_turn",
+                "markdown": "No further questions.",
+            }
         elif proposal:
             proposes = True
             if target_name.endswith("decline-once.md"):
@@ -256,7 +267,23 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         else:
             answer = {"kind": "discussion_turn", "markdown": "Accepted turn."}
 
-        if target_name.endswith("repair.md") and "REPAIR:" not in prompt:
+        question_ids = [
+            question_id for question_id in (
+                "turn_environment_fit", "turn_human_scale", "request_focus",
+            )
+            if "- %s:" % question_id in prompt
+        ]
+        if question_ids:
+            answer["questions"] = [
+                {"id": question_id, "answer": "Checked the current request."}
+                for question_id in question_ids
+            ]
+
+        if (
+            target_name.endswith("repair.md")
+            and "REPAIR:" not in prompt
+            and "CONTRACT CORRECTION" not in prompt
+        ):
             rendered = "malformed"
         else:
             rendered = json.dumps(answer)
@@ -575,6 +602,95 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertEqual(registry.load(self.home)["runs"], [])
         self.assertFalse(os.path.exists(registry.registry_path(self.home)))
         self.assertFalse(os.path.exists(os.path.join(self.workspace, ".git")))
+
+    def test_standalone_prompt_set_defaults_validates_and_survives_restart(self):
+        for index, (supplied, expected) in enumerate((
+            (None, "default"),
+            ("operator", "operator"),
+        )):
+            target_name = "prompt-set-%d.md" % index
+            self._target(target_name)
+            payload = self._payload(target_name)
+            if supplied is not None:
+                payload["prompt_set"] = supplied
+            created = lifecycle.create_session(
+                self.home,
+                payload,
+                access.ADMIN_EMAIL,
+                launcher=self._sleeper_launcher,
+            )
+            record = self._stop_sleeper_record(created["id"])
+            self.assertEqual(record["prompt_set"], expected)
+
+        before = copy.deepcopy(lifecycle._load_registry(self.home))
+        self._target("invalid-prompt-set.md")
+        for invalid in (None, "", "../other", "two words", True):
+            payload = self._payload("invalid-prompt-set.md")
+            payload["prompt_set"] = invalid
+            with self.subTest(invalid=invalid), self.assertRaises(
+                lifecycle.PublicLifecycleError
+            ) as refused:
+                lifecycle.create_session(
+                    self.home,
+                    payload,
+                    access.ADMIN_EMAIL,
+                    launcher=self._sleeper_launcher,
+                )
+            self.assertEqual(refused.exception.code, lifecycle.INVALID_REQUEST)
+        self.assertEqual(lifecycle._load_registry(self.home), before)
+
+        document = lifecycle._load_registry(self.home)
+        historical = document["sessions"][0]
+        historical.pop("prompt_set")
+        lifecycle._save_registry(self.home, document)
+        self.assertEqual(
+            lifecycle.record_prompt_set(
+                lifecycle._record_by_id(self.home, historical["id"])
+            ),
+            prompt_sets.DEFAULT_SET_NAME,
+        )
+
+    def test_standalone_lifecycle_routes_every_discussion_turn(self):
+        self._target("routed-turns.md")
+        payload = self._payload("routed-turns.md")
+        payload["prompt_set"] = "operator"
+        created = lifecycle.create_session(
+            self.home,
+            payload,
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        self._stop_sleeper_record(created["id"])
+        with mock.patch.object(
+            coordination,
+            "build_turn_prompt",
+            side_effect=AssertionError("direct turn builder reached"),
+        ), mock.patch.object(
+            lifecycle.session_calls,
+            "prepare_turn",
+            wraps=lifecycle.session_calls.prepare_turn,
+        ) as routed_turn:
+            code = lifecycle.run_lifecycle(
+                self.home,
+                created["id"],
+                require_pid_claim=False,
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(len(routed_turn.call_args_list), 2)
+        self.assertTrue(all(
+            call.kwargs["prompt_set"] == "operator"
+            for call in routed_turn.call_args_list
+        ))
+        state = lifecycle.inspect_session(
+            self.home, created["id"], lambda _record: None
+        )["state"]
+        prompts = pathlib.Path(state["transcript_ref"]).parent / "prompts"
+        routed = sorted(prompts.glob("discussion_turn-*-discussion_turn.txt"))
+        self.assertEqual(len(routed), 2)
+        for path in routed:
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("turn_environment_fit", text)
+            self.assertIn("turn_human_scale", text)
 
     def test_seat_pins_are_inert_and_the_document_staffs_every_seat(self):
         """Router law: each seat runs what the staffing document assigns it.
@@ -1898,6 +2014,18 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             [event["stage"] for event in dante_calls],
             ["discussion", "vote"],
         )
+        prompts = (
+            pathlib.Path(terminal["state"]["transcript_ref"]).parent
+            / "prompts"
+        )
+        questioner = sorted(
+            prompts.glob("*-questioner_turn.txt")
+        )
+        self.assertEqual(len(questioner), 1)
+        dante_prompt = questioner[0].read_text(encoding="utf-8")
+        self.assertIn("turn_environment_fit", dante_prompt)
+        self.assertIn("turn_human_scale", dante_prompt)
+        self.assertIn("request_focus", dante_prompt)
         ballot = next(
             event["fact"]
             for event in terminal["state"]["transcript_events"]

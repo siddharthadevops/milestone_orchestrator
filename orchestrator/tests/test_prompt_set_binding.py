@@ -212,7 +212,11 @@ class PromptSetBindingTests(unittest.TestCase):
         ) as load:
             status, response = self.request("GET", "/api/prompt-sets")
             self.assertEqual(status, 200)
-            self.assertEqual(set(response), {"ok", "prompt_sets"})
+            self.assertEqual(
+                set(response),
+                {"ok", "prompt_sets", "brainstorming_prompt_sets"},
+            )
+            self.assertIs(response["brainstorming_prompt_sets"], True)
             self.assertEqual(
                 response["prompt_sets"],
                 ["default", "malformed", "operator", "zed"],
@@ -281,11 +285,32 @@ class PromptSetBindingTests(unittest.TestCase):
             Path(__file__).resolve().parents[1] / "static" / "panel.html"
         ).read_text(encoding="utf-8")
         self.assertIn('id="f_prompt_set"', panel)
+        self.assertIn('id="b_prompt_set"', panel)
         self.assertEqual(panel.count('api("/api/prompt-sets")'), 1)
         self.assertIn(
             'payload.prompt_set = document.getElementById("f_prompt_set").value',
             panel,
         )
+        self.assertIn(
+            'const promptSet = document.getElementById("b_prompt_set").value '
+            '|| "default"',
+            panel,
+        )
+        self.assertIn(
+            'if(promptSet !== "default") payload.prompt_set = promptSet',
+            panel,
+        )
+        self.assertIn(
+            'loadPromptSetSelect("b_prompt_set", "b_prompt_set_hint", true)',
+            panel,
+        )
+        self.assertIn(
+            'data.brainstorming_prompt_sets === true', panel
+        )
+        self.assertIn(
+            'const names = supported ? available : ["default"]', panel
+        )
+        self.assertNotIn('id="b_more"', panel)
         self.assertIn('select.value = "default"', panel)
         self.assertIn("prompt set: ${esc(sum.prompt_set)}", panel)
         self.assertIn("${esc(sl.intent)}", panel)

@@ -7,12 +7,11 @@ PROJECT CONTEXT (standing project law; binding)
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/agent_99 — a READ-ONLY grant: you may read it for evidence; never edit it.
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
 
-WORK AREA
-- This is the project's git repository. The Initial Position is the
-  sole editing seat; every completed author turn is committed by the
-  driver. Contrary Position and the questioner leave files, the index,
-  and HEAD unchanged. Chat carries what changed and why; the diff
-  carries the letter — verify claims against it.
+WORK AREA — EXPLICIT EDITING BOUNDARY
+REPOSITORY CHARGE — the Initial Position may make only the repository changes allowed by this session's charge. The driver commits each completed author turn.
+Contrary Position and the questioner leave files, the index, and HEAD
+unchanged. Chat carries what changed and why; verify claims against the
+current target or Git diff named by the boundary.
 
 PROCESS AUTHORITY
 - Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)
@@ -110,10 +109,9 @@ QUESTIONS (answer each in output, backed by an explanation)
 OUTPUT CONTRACT
 Return exactly one JSON object with kind "discussion_turn", one non-empty
 "markdown" field, and the "questions" entries required below. You may add
-ready: true when your position needs no further turns. A ready anchors to
-the work area's current revision: any later commit voids every earlier
-ready, and when every voting seat's ready — including Dante's — anchors
-to the same revision, the conversation closes. Do not add source
+ready: true when your position needs no further turns. Ready refers to
+the current accepted revision; the session's closure protocol decides
+how that judgment counts. Do not add source
 content or control metadata beyond these fields.
 
 "questions": [{"id": "<id>", "answer": "<the answer, backed by an explanation>"}, ...]

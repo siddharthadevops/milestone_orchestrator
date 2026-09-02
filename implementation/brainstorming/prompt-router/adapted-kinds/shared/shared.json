@@ -532,14 +532,37 @@
     },
     "bs_workarea": {
       "text": [
-        "WORK AREA",
-        "- This is the project's git repository. The Initial Position is the",
-        "  sole editing seat; every completed author turn is committed by the",
-        "  driver. Contrary Position and the questioner leave files, the index,",
-        "  and HEAD unchanged. Chat carries what changed and why; the diff",
-        "  carries the letter — verify claims against it."
+        "WORK AREA — EXPLICIT EDITING BOUNDARY",
+        "{{workarea_boundary}}",
+        "Contrary Position and the questioner leave files, the index, and HEAD",
+        "unchanged. Chat carries what changed and why; verify claims against the",
+        "current target or Git diff named by the boundary."
       ],
-      "variables": []
+      "variables": [
+        {
+          "name": "workarea_boundary",
+          "required": false,
+          "default": "REPOSITORY CHARGE — the Initial Position may make only the repository changes allowed by this session's charge. The driver commits each completed author turn.",
+          "description": "Router-owned target-only or repository-charge editing authority."
+        }
+      ]
+    },
+    "bs_prior_decisions": {
+      "text": [
+        "PRIOR PROJECT DECISIONS (revisable context, not an operator mandate)",
+        "These came from earlier discussions and are not unquestionable assumptions.",
+        "Test them against current evidence. If one is mistaken, incomplete, or",
+        "disproportionate, identify or question it within your role.",
+        "{{prior_decisions}}"
+      ],
+      "variables": [
+        {
+          "name": "prior_decisions",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Earlier project decisions supplied as revisable context."
+        }
+      ]
     }
   },
   "contract_sections": {

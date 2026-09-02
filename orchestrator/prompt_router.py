@@ -42,7 +42,23 @@ DIRECT_ROUTES = {
     "suite_checkpoint@workspace": ("suite_checkpoint", None),
     "merge_repair@workspace": ("merge_repair", None),
 }
+STANDALONE_SESSION_JOB = "standalone@document"
+STANDALONE_WORKAREA_BOUNDARY = (
+    "TARGET ONLY — the Initial Position may edit only the primary target "
+    "named in TURN; this is not a repository-wide edit grant. The driver "
+    "retains each completed target revision."
+)
+REPOSITORY_WORKAREA_BOUNDARY = (
+    "REPOSITORY CHARGE — the Initial Position may make only the repository "
+    "changes allowed by this session's charge. The driver commits each "
+    "completed author turn."
+)
+_PRODUCER_SESSION_JOBS = frozenset((
+    "draft_slice_note@slice_doc",
+    "implement@slice_impl",
+))
 SESSION_JOBS = {
+    STANDALONE_SESSION_JOB: None,
     "draft_slice_note@slice_doc": "document",
     "implement@slice_impl": "implementation",
     "rethink": None,
@@ -70,6 +86,7 @@ _FORBIDDEN_VALUES = frozenset((
     "target_type",
     "variant",
     "variants",
+    "workarea_boundary",
 ))
 _PLACEHOLDER = re.compile(r"\{\{([A-Za-z_]\w*)\}\}")
 
@@ -115,15 +132,24 @@ def _route(job, executor, material, role, lead, artifact_type):
         target_type = artifact_type
     elif artifact_type is not None:
         raise PromptRouterError(
-            "producer jobs derive artifact type from their canonical job"
+            "non-rethink jobs do not accept an artifact-type coordinate"
         )
-    tags = {
-        "role:%s" % role,
-        "target:%s" % target_type,
-        "job:%s" % ("rethink" if job == "rethink" else "producer"),
-    }
+    tags = {"role:%s" % role}
+    if target_type is not None:
+        tags.add("target:%s" % target_type)
+    if job == STANDALONE_SESSION_JOB:
+        # Standalone discussions are target-backed like producer sessions,
+        # but they borrow no producer-kind questions or artifact craft law.
+        tags.add("job:producer")
+    else:
+        tags.add(
+            "job:%s" % ("rethink" if job == "rethink" else "producer")
+        )
     variants = {"role_stance": role} if kind == "discussion_turn" else {}
-    borrowed = job.split("@", 1)[0] if lead and job != "rethink" else None
+    borrowed = (
+        job.split("@", 1)[0]
+        if lead and job in _PRODUCER_SESSION_JOBS else None
+    )
     return _Route(kind, target_type, variants, frozenset(tags), borrowed)
 
 
@@ -317,6 +343,11 @@ def _assemble(
     fixed = {"kind": route.kind}
     if role is not None:
         fixed["role"] = role
+        fixed["workarea_boundary"] = (
+            STANDALONE_WORKAREA_BOUNDARY
+            if job == STANDALONE_SESSION_JOB else
+            REPOSITORY_WORKAREA_BOUNDARY
+        )
     instructions, variant_questions = _parts(
         document,
         shared,
