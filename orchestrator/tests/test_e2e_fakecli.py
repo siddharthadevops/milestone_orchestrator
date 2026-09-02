@@ -17,9 +17,9 @@ The scenario exercises the review/fix separation model end to end:
   implementation: codex docstring finding -> fix episode (the scripted
     replacement also corrects the deliberate div bug);
     claude README finding -> fix episode; every byte change restarts review at
-    codex; current codex+claude reviews precede the milestone-final suite and
-    satisfy one deterministic seal. No full suite runs before implementation
-    or between review/fix cycles.
+    codex; current codex+claude reviews precede the final sibling complete-
+    verification task and satisfy one deterministic seal. No full suite runs
+    before implementation or between review/fix cycles.
 
 The run happens once in setUpClass; each test asserts one aspect.
 
@@ -48,10 +48,11 @@ GOAL = "Build a small CLI calculator (add/sub/mul/div) with unit tests"
 
 ADJ_ID = "skeleton-claude-r3/F1"
 
-# The five canonical gate messages, newest first (git log order). Routed
-# canonical-plan calls may leave their own repository-boundary commits between
-# gates; those commits are implementation evidence rather than extra gates.
-GATE_MESSAGES = [
+# The stable canonical gate messages, newest first around the dynamic sibling
+# verification gate. Routed canonical-plan calls may leave their own
+# repository-boundary commits between gates; those commits are implementation
+# evidence rather than extra gates.
+STABLE_GATE_MESSAGES = [
     "Close milestone",
     "Complete review of slice 01 implementation",
     "Complete review of slice 01 note",
@@ -227,6 +228,7 @@ class TestCalculatorE2E(unittest.TestCase):
                 ("skeleton", "sealed"),
                 ("slice_doc-01", "sealed"),
                 ("slice_impl-01", "sealed"),
+                ("milestone_verification-1", "sealed"),
             ],
         )
         self.assertEqual(
@@ -295,16 +297,28 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertGreaterEqual(summ["events_total"], len(summ["last_events"]))
         self.assertFalse(summ["implementation_stabilization"])
         for u in summ["units"]:
+            expected_keys = {
+                "unit", "display_unit", "slice_id", "part", "status",
+                "artifact", "gate_sha", "wip_sha", "draft", "drafts",
+                "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
+                "reclassify", "repairs", "brainstormings", "verifications",
+                "work_duration_s", "work_token_usage",
+                "work_token_usage_partial", "work_cost", "work_cost_partial",
+                "task_ids",
+            }
+            if u["unit"] == "milestone_verification-1":
+                expected_keys.add("task")
             self.assertEqual(
                 set(u.keys()),
-                {"unit", "display_unit", "slice_id", "part", "status",
-                 "artifact", "gate_sha", "wip_sha", "draft", "drafts",
-                 "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
-                 "reclassify", "repairs", "brainstormings", "verifications",
-                 "work_duration_s", "work_token_usage",
-                 "work_token_usage_partial", "work_cost", "work_cost_partial",
-                 "task_ids"},
+                expected_keys,
             )
+        verification = self.unit("milestone_verification-1")
+        self.assertEqual(verification["task"]["task_executor"], "reviewed_task")
+        self.assertEqual(verification["task"]["status"], "success")
+        self.assertEqual(
+            verification["task"]["id"],
+            self.state_unit("milestone_verification-1")["reviewed_task_id"],
+        )
         # The CLI's JSON is exactly state.summary() over the on-disk state.
         self.assertEqual(summ, st.summary(self.disk_state()))
 
@@ -386,16 +400,19 @@ class TestCalculatorE2E(unittest.TestCase):
 
     def test_full_suite_runs_only_at_the_due_final_boundary(self):
         impl = self.state_unit("slice_impl-01")
+        verification_unit = self.state_unit("milestone_verification-1")
         events = self.disk_state()["events"]
         verifications = [
             e for e in events
-            if e["type"] == "verification" and e["unit"] == "slice_impl-01"
+            if e["type"] == "verification"
+            and e["unit"] == "milestone_verification-1"
         ]
         self.assertEqual(
             [e["boundary"] for e in verifications], ["final"]
         )
         self.assertTrue(all(e["ok"] for e in verifications))
-        self.assertEqual(verifications[0].get("cadence"), "milestone_final")
+        self.assertEqual(verifications[0].get("cadence"), "complete_verification")
+        self.assertEqual(verification_unit["status"], st.U_SEALED)
         # This fake's docstring fix also corrects div, so no suite-failure
         # fixer is expected here; the lifecycle mock covers that final-failure
         # path explicitly. Every fixer in this subprocess E2E came from a
@@ -577,17 +594,25 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertEqual(
             os.path.realpath(toplevel), os.path.realpath(self.work)
         )
-        # The five gates remain exact and ordered. Routed calls may retain
+        # The six gates remain exact and ordered. Routed calls may retain
         # only their declared canonical-plan/wip boundary commits between
         # those gates.
         subjects = self.git_work("log", "--format=%s").strip().splitlines()
+        verification_message = "Complete milestone verification %s" % (
+            self.state_unit("milestone_verification-1")["reviewed_task_id"]
+        )
+        gate_messages = [
+            STABLE_GATE_MESSAGES[0],
+            verification_message,
+            *STABLE_GATE_MESSAGES[1:],
+        ]
         self.assertEqual(
-            [subject for subject in subjects if subject in GATE_MESSAGES],
-            GATE_MESSAGES,
+            [subject for subject in subjects if subject in gate_messages],
+            gate_messages,
         )
         self.assertFalse([
             subject for subject in subjects
-            if subject not in GATE_MESSAGES
+            if subject not in gate_messages
             and not subject.startswith(INTERNAL_COMMIT_PREFIXES)
         ])
         # Each sealed unit recorded the short sha of ITS gate commit.
@@ -599,6 +624,7 @@ class TestCalculatorE2E(unittest.TestCase):
             ("skeleton", "Complete review of milestone skeleton"),
             ("slice_doc-01", "Complete review of slice 01 note"),
             ("slice_impl-01", "Complete review of slice 01 implementation"),
+            ("milestone_verification-1", verification_message),
         ):
             self.assertEqual(
                 self.state_unit(unit_key)["gate_commit"],
@@ -614,7 +640,10 @@ class TestCalculatorE2E(unittest.TestCase):
         wips = [e for e in events if e["type"] == "wip_commit"]
         self.assertEqual(
             [e["unit"] for e in wips],
-            ["skeleton", "slice_doc-01", "slice_impl-01"],
+            [
+                "skeleton", "slice_doc-01", "slice_impl-01",
+                "milestone_verification-1",
+            ],
         )
         # One amend per green fix episode: two on the skeleton and two on
         # the implementation (docstring and README review findings).
@@ -624,14 +653,18 @@ class TestCalculatorE2E(unittest.TestCase):
             ["skeleton", "skeleton",
              "slice_impl-01", "slice_impl-01"],
         )
-        # Gate commits: three unit gates plus the milestone close.
+        # Gate commits: four unit gates plus the milestone close.
         gates = [e for e in events if e["type"] == "gate_commit"]
+        verification_message = "Complete milestone verification %s" % (
+            self.state_unit("milestone_verification-1")["reviewed_task_id"]
+        )
         self.assertEqual(
             [(e["unit"], e["message"]) for e in gates],
             [
                 ("skeleton", "Complete review of milestone skeleton"),
                 ("slice_doc-01", "Complete review of slice 01 note"),
                 ("slice_impl-01", "Complete review of slice 01 implementation"),
+                ("milestone_verification-1", verification_message),
                 (None, "Close milestone"),
             ],
         )

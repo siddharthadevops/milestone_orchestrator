@@ -847,3 +847,27 @@
 - `codex-DRT-S12-001` (raised codex, cleared codex): The declared test touch inventory contradicts the fixtures required by the mandatory gates — The contradictory inventory could initially steer a builder away from the retained Brainstorming fixtures, but mandatory gates expose the coverage defect deterministically and correction is a local current-law fixture alignment before review.
 - `codex-DRT-S12-002` (raised codex, cleared codex): The operative skeleton contains stale hard-register source citations — The cited skeleton ranges land on unrelated handler, policy-validation, and accounting/projection code, but Slice 12 restates the contracts with usable authorities, so a careful builder will detect the mismatch while correction is only local citation repair.
 
+## slice_impl-12 (Presentation, compatibility, and conformance)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-12-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-codex-r1.txt` |
+| slice_impl-12-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-claude-r1.txt` |
+| slice_impl-12-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-fix1.txt` |
+| slice_impl-12-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-delta1.txt` |
+| slice_impl-12-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-codex-r2.txt` |
+| slice_impl-12-claude-r2 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-12-codex-r4`, `slice_impl-12-claude-r2`
+- scheduled verification event: `1350`
+
+**Deferred debt (independently classified):**
+- `codex-codex-DRT-S12I-001` (raised codex, cleared codex): A transient milestone-verification stop permanently terminalizes its task — The implementation and retained acceptance test positively encode a transient verification stop as terminal while the closing conformance matrix omits that recovery seam, making later work likely to trust the wrong contract, though correction remains bounded to failure classification and focused rec
+- `codex-codex-DRT-S12I-002` (raised codex, cleared codex): The closing conformance cells do not exercise the milestone verification and size-control seams they claim — The hard register falsely presents the named green cells as proof of real milestone-verification lifecycle/recovery and deep Brainstorming size isolation, creating a trusted route to missed behavioral regressions, while correction remains bounded to the conformance matrix and any local seam defects 
+- `claude-S12-IMPL-R1-001` (raised claude, cleared codex): Two presentation contracts the note pins — distinct verification attempts staying distinct, and verification work never entering a slice subtotal — have no named passing test in the slice that owns presentation. — The behaviours are correctly pinned but untested, so a careful builder can recover the intent while a later panel refactor could pass green tests, yet correction remains a small local rendering-and-test fix because execution and canonical accounting are unaffected.
+
