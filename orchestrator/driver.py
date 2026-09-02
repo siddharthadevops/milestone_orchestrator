@@ -751,32 +751,10 @@ class ReviewedWorkLifecycle(object):
             expected is not None
             and expected != self.host._gate_candidate_fingerprint(unit)
         ):
-            self.host.state.pop("pending_gate_unit", None)
-            self.host.state.pop("pending_gate_fingerprint", None)
-            st.restart_reviews_after_candidate_change(
-                self.host.state,
+            self.invalidate_gate_candidate(
                 unit,
                 "candidate bytes changed while the reviewed gate was pending",
             )
-            restart_status = (
-                st.U_PRE_SEAL_VERIFY
-                if self._is_complete_verification(unit)
-                else st.U_PRE_REVIEW_VERIFY
-            )
-            unit["status"] = restart_status
-            st.append_event(
-                self.host.state,
-                "unit_transition",
-                unit=st.unit_key(unit),
-                from_status=st.U_SEALED,
-                to_status=restart_status,
-                reason=(
-                    "pending gate candidate changed; verification invalidated"
-                    if self._is_complete_verification(unit)
-                    else "pending gate candidate changed; reviews invalidated"
-                ),
-            )
-            self.host._save()
             return unit, None
         self.host._gate_commit(unit)
         return unit, self.result(unit)
@@ -829,13 +807,47 @@ class ReviewedWorkLifecycle(object):
         result = None
         if sealed_unit is not None:
             gate_context = self.gate(sealed_unit, before_gate=before_gate)
-            result = self.result(sealed_unit)
+            if sealed_unit.get("status") == st.U_SEALED:
+                result = self.result(sealed_unit)
+            else:
+                note = "gate candidate changed; verification invalidated"
+                sealed_unit = None
         return note, sealed_unit, gate_context, result
 
     def gate(self, unit, before_gate=None):
         gate_context = before_gate(unit) if before_gate is not None else None
         self.host._gate_commit(unit)
         return gate_context
+
+    def invalidate_gate_candidate(self, unit, reason):
+        """Reopen a sealed unit when its gate candidate is no longer current."""
+        self.host.state.pop("pending_gate_unit", None)
+        self.host.state.pop("pending_gate_fingerprint", None)
+        unit["gate_commit"] = None
+        st.restart_reviews_after_candidate_change(
+            self.host.state,
+            unit,
+            reason,
+        )
+        restart_status = (
+            st.U_PRE_SEAL_VERIFY
+            if self._is_complete_verification(unit)
+            else st.U_PRE_REVIEW_VERIFY
+        )
+        unit["status"] = restart_status
+        st.append_event(
+            self.host.state,
+            "unit_transition",
+            unit=st.unit_key(unit),
+            from_status=st.U_SEALED,
+            to_status=restart_status,
+            reason=(
+                "pending gate candidate changed; verification invalidated"
+                if self._is_complete_verification(unit)
+                else "pending gate candidate changed; reviews invalidated"
+            ),
+        )
+        self.host._save()
 
 
 def _runtime_sidecar_path(state_path, filename):
@@ -1814,7 +1826,7 @@ class Driver(object):
                 return event
         return None
 
-    def _current_complete_verification_event(self, unit):
+    def _current_complete_verification_event(self, unit, event_seq=None):
         """Return the latest accepted complete-verification proof for now."""
         if not self.reviewed_work._is_complete_verification(unit):
             return None
@@ -1824,6 +1836,7 @@ class Driver(object):
             if (
                 event.get("type") == "verification"
                 and event.get("unit") == st.unit_key(unit)
+                and (event_seq is None or event.get("seq") == event_seq)
                 and event.get("cadence")
                 == tasks.REVIEWED_COMPLETE_VERIFICATION
                 and event.get("status") in ("passed", "no_suite")
@@ -14119,7 +14132,8 @@ class Driver(object):
         gate_context = self.reviewed_work.gate(
             unit, before_gate=self._prepare_milestone_gate
         )
-        self._advance_milestone_after_gate(unit, gate_context=gate_context)
+        if unit.get("status") == st.U_SEALED:
+            self._advance_milestone_after_gate(unit, gate_context=gate_context)
 
     def _gate_message(self, unit):
         reviewed = self.state.get("reviewed_task") or {}
@@ -14159,6 +14173,22 @@ class Driver(object):
         is finalized under the canonical gate message."""
         if not gitops.enabled(self.config):
             return
+        verification_seq = None
+        if self.reviewed_work._is_complete_verification(unit):
+            seals = unit.get("seals") or []
+            if seals:
+                verification_seq = seals[-1].get("verification_event_seq")
+            if (
+                not isinstance(verification_seq, int)
+                or self._current_complete_verification_event(
+                    unit, event_seq=verification_seq
+                ) is None
+            ):
+                self.reviewed_work.invalidate_gate_candidate(
+                    unit,
+                    "complete-verification bytes changed before gate",
+                )
+                return
         if self.state.get("pending_gate_unit") != st.unit_key(unit):
             self.state["pending_gate_unit"] = st.unit_key(unit)
             self.state["pending_gate_fingerprint"] = (
@@ -14196,6 +14226,17 @@ class Driver(object):
             st.fail_run(self.state, "gate commit failed: %s" % exc, unit=unit)
             self._save()
             raise StopStep(str(exc))
+        if (
+            verification_seq is not None
+            and self._current_complete_verification_event(
+                unit, event_seq=verification_seq
+            ) is None
+        ):
+            self.reviewed_work.invalidate_gate_candidate(
+                unit,
+                "complete-verification bytes changed during gate",
+            )
+            return
         unit["gate_commit"] = sha
         self.state.pop("pending_gate_unit", None)
         self.state.pop("pending_gate_fingerprint", None)

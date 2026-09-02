@@ -347,6 +347,65 @@ class ReviewedCompleteVerificationTest(unittest.TestCase):
         self.assertEqual(recovered["result"]["status"], "success")
         self.assertEqual(len(runner.calls), 1)
 
+    def test_gate_rejects_post_verification_edits(self):
+        workspace, _base, _tree = self._baseline("post-verification-edit")
+        record = self._admit(workspace, self._config())
+        certified_trees = []
+        runner = runners.MockRunner([
+            self._call(
+                self._checkpoint("passed"),
+                side_effect=lambda root: certified_trees.append(
+                    self._git(root, "rev-parse", "HEAD^{tree}")
+                ),
+            ),
+        ])
+        subject = drv.Driver(
+            task_api.reviewed_state_path(self.home, record["id"]),
+            runner=runner,
+            model_profiles_home=self.home,
+        )
+        self._standalone_step(subject)  # task-owned empty WIP
+        real_gate = gitops.finalize_gate
+
+        def edit_then_gate(root, message):
+            write_file("app.txt", "changed after verification\n")(root)
+            return real_gate(root, message)
+
+        with mock.patch.object(
+            gitops, "finalize_gate", side_effect=edit_then_gate
+        ):
+            self._standalone_step(subject)
+
+        unit = subject._unit_by_key(subject.state["reviewed_task"]["unit"])
+        self.assertEqual(unit["status"], st.U_PRE_SEAL_VERIFY)
+        self.assertFalse(unit.get("gate_commit"))
+        self.assertNotIn("pending_gate_unit", subject.state)
+        self.assertEqual(len(runner.calls), 1)
+        self.assertFalse(any(
+            event.get("type") == "gate_commit"
+            and event.get("unit") == st.unit_key(unit)
+            for event in subject.state["events"]
+        ))
+        self.assertIsNone(
+            task_api.StandaloneTaskStore(self.home).record(record["id"])[
+                "result"
+            ]
+        )
+
+        runner.script.append(self._call(
+            self._checkpoint("passed"),
+            side_effect=lambda root: certified_trees.append(
+                self._git(root, "rev-parse", "HEAD^{tree}")
+            ),
+        ))
+        terminal = self._adopt_reviewed(record, runner)
+        self.assertEqual(terminal["result"]["status"], "success")
+        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(
+            self._git(workspace, "rev-parse", "HEAD^{tree}"),
+            certified_trees[-1],
+        )
+
     def test_slice_ten_leaves_milestone_cadence_and_old_records_unchanged(self):
         self.assertEqual(drv.FULL_VERIFICATION_SLICE_INTERVAL, 4)
         catalogue = tasks.task_executor_catalogue()

@@ -771,3 +771,24 @@
 - `claude-DRT-S10-R1-002` (raised claude, cleared codex): The pinned focused command omits orchestrator.tests.test_tasks, the one module holding the existing assertion that a complete_verification order must be refused, so the slice's own proof command stays green while a checkpoint-suite module is red by construction. — The omitted module can silently preserve a directly contradictory assertion, but a careful builder should resolve it from the twice-cited rejection evidence and explicit contract inversion, while correction is only a local stale-test expectation change.
 - `claude-DRT-S10-R1-003` (raised claude, cleared codex): The standard's strict guarantee "selected one- or two-family convergence" and "succeeds only after convergence on current contents" carries no verification carve-out, while Slice 10 has an unchanged pass and a no-suite discovery succeed, seal and gate with zero reviewer calls. — Slice 10 and the goal clearly specialize convergence to changed bytes, so a careful max-effort builder should resolve the skeleton’s universal wording, but a hasty reading could add reviewer calls and require bounded lifecycle and focused-test rework.
 
+## slice_impl-10 (Sibling complete-verification task)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-10-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-codex-r1.txt` |
+| slice_impl-10-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-fix1.txt` |
+| slice_impl-10-codex-r3 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-delta1.txt` |
+| slice_impl-10-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-codex-r2.txt` |
+| slice_impl-10-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-10-codex-r4`, `slice_impl-10-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S10-DELTA-001` (raised codex, cleared codex): Gate-time edits bypass the required review cycle — Risk is xhigh because the artifact silently certifies changed bytes without the explicitly pinned delta and whole-review cycle, while damage is medium because correction is bounded to this unit’s invalidation transition and focused regression coverage before shipment.
+- `codex-codex-DRT-S10-VERIFY-001` (raised codex, cleared codex): Repaired success exposes an invalid passed suite proof — The repaired path contradicts the pinned equal-cardinality proof contract by recording configured commands with no results, making silent downstream reliance plausible, while correction is bounded to this repair path and its focused test before milestone publication.
+
