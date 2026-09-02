@@ -135,6 +135,8 @@ def _orchestrator_rev():
 PROMPT_SET_KEY = "prompt_set"
 SKELETON_COMPOSITION_KEY = "skeleton_composition_version"
 SKELETON_COMPOSITION_VERSION = 1
+DEEP_SLICE_COMPOSITION_KEY = "deep_slice_composition_version"
+DEEP_SLICE_COMPOSITION_VERSION = 1
 
 
 def new_state(goal, workspace, config, name=None, slug=None, project=None,
@@ -373,7 +375,8 @@ def _assert_task_history(old_tasks, new_tasks):
     for index, record in enumerate(new_tasks):
         if not isinstance(record, dict):
             raise HistoryRewriteError("tasks[%d]: record must be an object" % index)
-        if set(record) != {"id", "order", "resolved_staffing", "result"}:
+        fields = {"id", "order", "resolved_staffing", "result"}
+        if set(record) not in (fields, fields | {"parent"}):
             raise HistoryRewriteError(
                 "tasks[%d]: record has invalid fields" % index
             )
@@ -1537,6 +1540,24 @@ def maybe_close_milestone(state):
         unit = have.get(key)
         if unit is None or unit["status"] != U_SEALED:
             return False
+    if (
+        state["milestone"].get(DEEP_SLICE_COMPOSITION_KEY)
+        == DEEP_SLICE_COMPOSITION_VERSION
+    ):
+        for slice_plan in state["milestone"]["slices"]:
+            parents = [
+                record for record in state.get("tasks", [])
+                if record.get("order", {}).get("task_executor") == "deep_task"
+                and record.get("order", {}).get("request", {}).get(
+                    "context", {}
+                ).get("milestone_slice_id") == slice_plan["id"]
+            ]
+            if (
+                not parents
+                or (parents[-1].get("result") or {}).get("status")
+                != "success"
+            ):
+                return False
     state["milestone"]["status"] = M_CLOSED
     append_event(state, "milestone_closed")
     return True

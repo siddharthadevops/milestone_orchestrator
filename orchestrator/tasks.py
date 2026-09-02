@@ -1130,6 +1130,123 @@ def task_record(state, task_id):
     raise TaskRecordError("unknown task %r" % task_id)
 
 
+def related_task(state, parent_task_id, phase, part):
+    """Return the one child admitted for a deep parent phase and part."""
+    relation = {
+        "task_id": parent_task_id,
+        "phase": phase,
+        "part": part,
+    }
+    found = [
+        record for record in state.get("tasks", [])
+        if record.get("parent") == relation
+    ]
+    if len(found) > 1:
+        raise TaskRecordError(
+            "duplicate related task for %s/%s/%s"
+            % (parent_task_id, phase, part)
+        )
+    return (
+        _json_copy(found[0], "task record") if found else None
+    )
+
+
+def admit_related_task(
+    state,
+    parent_task_id,
+    phase,
+    part,
+    order,
+    resolved_staffing,
+    primary_workspace=None,
+):
+    """Admit or reuse one canonical deep child in a loaded task history."""
+    existing = related_task(state, parent_task_id, phase, part)
+    if existing is not None:
+        return existing
+    parent = task_record(state, parent_task_id)
+    if parent["result"] is not None:
+        raise TaskRecordError(
+            "terminal task %s cannot admit a child" % parent_task_id
+        )
+    return admit_task(
+        state,
+        order,
+        resolved_staffing,
+        primary_workspace=primary_workspace,
+        parent={
+            "task_id": parent_task_id,
+            "phase": phase,
+            "part": part,
+        },
+    )
+
+
+def deep_documentation_order(record):
+    """Build the reviewed documentation child from one frozen deep order."""
+    configuration = copy.deepcopy(
+        record["order"]["configuration"]["documentation"]
+    )
+    configuration["task_kind"] = contracts.KIND_DRAFT_SLICE_NOTE
+    return {
+        "task_executor": "reviewed_task",
+        "configuration": configuration,
+        "request": copy.deepcopy(record["order"]["request"]),
+        "staffing_session": record["order"].get("staffing_session"),
+    }
+
+
+def deep_implementation_order(record, documentation_reference):
+    """Build a reviewed implementation child from one frozen deep order."""
+    configuration = copy.deepcopy(
+        record["order"]["configuration"]["implementation"]
+    )
+    configuration["task_kind"] = contracts.KIND_IMPLEMENT
+    request = copy.deepcopy(record["order"]["request"])
+    request["reference_documents"].append(documentation_reference)
+    return {
+        "task_executor": "reviewed_task",
+        "configuration": configuration,
+        "request": request,
+        "staffing_session": record["order"].get("staffing_session"),
+    }
+
+
+def deep_task_result(status, child_results, reason=None):
+    """Aggregate child envelopes without creating another physical charge."""
+    duration = 0.0
+    usage = None
+    cost = None
+    usage_partial = not child_results
+    cost_partial = not child_results
+    for result in child_results:
+        duration += result["duration_s"]
+        usage = st._add_token_usage(usage, result["token_usage"])
+        cost = st._add_cost(cost, result["cost"])
+        usage_partial = bool(
+            usage_partial
+            or result["token_usage_partial"]
+            or result["token_usage"] is None
+        )
+        cost_partial = bool(
+            cost_partial
+            or result["cost_partial"]
+            or result["cost"] is None
+        )
+    terminal = {
+        "status": status,
+        "duration_s": duration,
+        "token_usage": usage,
+        "token_usage_partial": bool(usage_partial or usage is None),
+        "cost": cost,
+        "cost_partial": bool(cost_partial or cost is None),
+        "native_result": None,
+    }
+    if status == "failure":
+        terminal["reason"] = str(reason or "Deep task failed")
+    return validate_result(terminal)
+
+
 def execute_worker(record, dispatch):
     """Pass one admitted common request through the Worker unchanged.
 

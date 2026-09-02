@@ -754,6 +754,7 @@ class MilestoneSkeletonCompositionTest(base.DriverTestCase):
             _path, subject, _runner, _final = self._fixture(workspace)
             skeleton = subject._find_unit(st.UNIT_SKELETON, None)
             self._until(subject, lambda: skeleton["status"] == st.U_SEALED)
+            subject.state["milestone"].pop(st.DEEP_SLICE_COMPOSITION_KEY)
             skeleton_task = tasks.task_records(subject.state)[0]
             document = st.current_unit(subject.state)
             document["status"] = st.U_SEALED

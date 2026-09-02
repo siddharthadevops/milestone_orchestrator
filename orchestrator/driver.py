@@ -4106,13 +4106,16 @@ class Driver(object):
 
     def _reviewed_call_task_id(self, unit):
         """Return the outer reviewed identity for evidence attribution."""
-        if not self._initial_skeleton_task_pending(unit):
-            return None
         task_id = unit.get("reviewed_task_id")
         if task_id is None:
             return None
         record = tasks.task_record(self.state, task_id)
-        return task_id if record.get("result") is None else None
+        return (
+            task_id
+            if record["order"]["task_executor"] == "reviewed_task"
+            and record.get("result") is None
+            else None
+        )
 
     def _initial_skeleton_failure_is_terminal(self, unit):
         """Whether the recorded run stop also terminates its outer task."""
@@ -4262,6 +4265,197 @@ class Driver(object):
         st.ensure_due_unit(self.state)
         self._save()
         return True
+
+    def _deep_slice_composition_active(self):
+        return bool(
+            not self.state.get("reviewed_task")
+            and self.state["milestone"].get(
+                st.DEEP_SLICE_COMPOSITION_KEY
+            ) == st.DEEP_SLICE_COMPOSITION_VERSION
+        )
+
+    def _open_milestone_deep_parent(self, slice_id):
+        parents = [
+            record for record in tasks.task_records(self.state)
+            if record["order"]["task_executor"] == "deep_task"
+            and record["order"]["request"].get("context", {}).get(
+                "milestone_slice_id"
+            ) == slice_id
+            and record.get("result") is None
+        ]
+        if len(parents) > 1:
+            raise st.IllegalTransition(
+                "slice %02d has multiple open deep tasks" % slice_id
+            )
+        return parents[0] if parents else None
+
+    def _admit_milestone_deep_parent(self, unit):
+        slice_info = self._slice_info(unit["slice_id"])
+        producers = tasks.effective_slice_producers(slice_info)
+        configuration = tasks.resolve_deep_task_configuration(
+            {
+                "documentation": {
+                    "producer": producers[contracts.KIND_DRAFT_SLICE_NOTE]
+                },
+                "implementation": {
+                    "producer": producers[contracts.KIND_IMPLEMENT]
+                },
+            },
+            defaults=self.config,
+        )
+        return tasks.admit_task(
+            self.state,
+            {
+                "task_executor": "deep_task",
+                "configuration": configuration,
+                "staffing_session": st.staffing_session(self.state),
+                "request": {
+                    "work_area": self._task_work_area(),
+                    "request": slice_info["intent"],
+                    "context": {
+                        "unit": st.unit_key(unit),
+                        "milestone_slice_id": unit["slice_id"],
+                    },
+                    "reference_documents": [self._skeleton_artifact()],
+                },
+            },
+            {},
+            self.workspace,
+        )
+
+    def _milestone_deep_child_order(self, parent, unit):
+        if unit["kind"] == st.UNIT_SLICE_DOC:
+            return tasks.deep_documentation_order(parent), "documentation", None
+        documentation = tasks.related_task(
+            self.state, parent["id"], "documentation", None
+        )
+        if (
+            documentation is None
+            or (documentation.get("result") or {}).get("status") != "success"
+        ):
+            raise st.IllegalTransition(
+                "implementation cannot precede its reviewed documentation"
+            )
+        artifact = documentation["result"]["native_result"][
+            "production_result"
+        ]["artifact"]
+        reference = tasks.resolve_derived_path(
+            os.path.realpath(self.workspace), artifact
+        )
+        part = st.implementation_part(unit) or "a"
+        return (
+            tasks.deep_implementation_order(parent, reference),
+            "implementation",
+            part,
+        )
+
+    def _ensure_milestone_deep_child(self, unit):
+        if (
+            not self._deep_slice_composition_active()
+            or unit is None
+            or unit["kind"] not in (st.UNIT_SLICE_DOC, st.UNIT_SLICE_IMPL)
+        ):
+            return False
+        parent = self._open_milestone_deep_parent(unit["slice_id"])
+        admitted_parent = parent is None
+        if admitted_parent:
+            if unit["kind"] != st.UNIT_SLICE_DOC:
+                raise st.IllegalTransition(
+                    "implementation has no open documentation-first deep task"
+                )
+            parent = self._admit_milestone_deep_parent(unit)
+        order, phase, part = self._milestone_deep_child_order(parent, unit)
+        policy = copy.deepcopy(order["configuration"])
+        policy.pop("task_kind")
+        self.reviewed_work._configure_locked(unit, policy)
+        child = tasks.admit_related_task(
+            self.state,
+            parent["id"],
+            phase,
+            part,
+            order,
+            {},
+            self.workspace,
+        )
+        current = unit.get("reviewed_task_id")
+        if current not in (None, child["id"]):
+            raise st.IllegalTransition(
+                "unit %s is associated with another reviewed task"
+                % st.unit_key(unit)
+            )
+        unit["reviewed_task_id"] = child["id"]
+        self._save()
+        return bool(admitted_parent or current is None)
+
+    def _consume_milestone_deep_child_result(self, unit, result=None):
+        if not self._deep_slice_composition_active():
+            return False
+        task_id = unit.get("reviewed_task_id")
+        if task_id is None:
+            return False
+        child = tasks.task_record(self.state, task_id)
+        relation = child.get("parent") or {}
+        if relation.get("phase") not in ("documentation", "implementation"):
+            return False
+        changed = False
+        if child["result"] is None:
+            result = result or self.reviewed_work.result(unit)
+            if result is None:
+                return False
+            child = tasks.record_task_result(self.state, task_id, result)
+            changed = True
+        parent = tasks.task_record(self.state, relation["task_id"])
+        final_child = (
+            child["result"]["status"] == "failure"
+            or (
+                relation["phase"] == "implementation"
+                and unit.get("implementation_cut") is None
+            )
+        )
+        if final_child and parent["result"] is None:
+            children = [
+                record["result"] for record in tasks.task_records(self.state)
+                if (record.get("parent") or {}).get("task_id") == parent["id"]
+            ]
+            if any(item is None for item in children):
+                raise st.IllegalTransition(
+                    "deep task cannot finish before every admitted child"
+                )
+            status = child["result"]["status"]
+            tasks.record_task_result(
+                self.state,
+                parent["id"],
+                tasks.deep_task_result(
+                    status,
+                    children,
+                    child["result"].get("reason"),
+                ),
+            )
+            changed = True
+        return changed
+
+    def _prepare_milestone_deep_slice(self):
+        if (
+            not self._deep_slice_composition_active()
+            or self.state.get("failure") is not None
+            or self.state["milestone"].get(
+                canonical_plan.RECONCILIATION_KEY
+            ) is not None
+        ):
+            return False
+        changed = False
+        for unit in self.state.get("units") or []:
+            if (
+                unit.get("slice_id") is not None
+                and unit.get("status") == st.U_SEALED
+            ):
+                changed = bool(
+                    self._consume_milestone_deep_child_result(unit) or changed
+                )
+        if changed:
+            st.ensure_due_unit(self.state)
+            self._save()
+        return changed
 
     def _active_worker_task(self, unit, kind):
         reference = unit.get("active_task")
@@ -8647,6 +8841,12 @@ class Driver(object):
                 return Action(A_FAILED, reason=str(exc)), "run failed: %s" % exc
             if prepared and self.state.get("failure") is None:
                 action, boundary_note = self._decide_at_strategy_boundary()
+            try:
+                prepared = self._prepare_milestone_deep_slice()
+            except StopStep as exc:
+                return Action(A_FAILED, reason=str(exc)), "run failed: %s" % exc
+            if prepared and self.state.get("failure") is None:
+                action, boundary_note = self._decide_at_strategy_boundary()
             if action.type in (A_DONE, A_FAILED):
                 return action, boundary_note
             waiting_session = (
@@ -8670,6 +8870,9 @@ class Driver(object):
                     )
                 if sealed_unit is not None:
                     self._consume_initial_skeleton_result(
+                        sealed_unit, reviewed_result
+                    )
+                    self._consume_milestone_deep_child_result(
                         sealed_unit, reviewed_result
                     )
                     self._advance_milestone_after_gate(
@@ -8944,6 +9147,7 @@ class Driver(object):
 
     def _do_draft(self, unit=None, call_preparation=None):
         unit = unit if unit is not None else _current_author_unit(self.state)
+        self._ensure_milestone_deep_child(unit)
         call_preparation = (
             call_preparation or self.milestone_reviewed_calls
         )
@@ -14162,6 +14366,9 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
     # that must finish under the historical direct-skeleton boundary.
     state["milestone"][st.SKELETON_COMPOSITION_KEY] = (
         st.SKELETON_COMPOSITION_VERSION
+    )
+    state["milestone"][st.DEEP_SLICE_COMPOSITION_KEY] = (
+        st.DEEP_SLICE_COMPOSITION_VERSION
     )
     st.append_event(state, "initialized", goal=goal)
     if project_block is not None:

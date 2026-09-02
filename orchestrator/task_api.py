@@ -170,18 +170,9 @@ class StandaloneTaskStore:
 
     @staticmethod
     def _related(records, parent_task_id, phase, part):
-        relation = {
-            "task_id": parent_task_id,
-            "phase": phase,
-            "part": part,
-        }
-        found = [record for record in records if record.get("parent") == relation]
-        if len(found) > 1:
-            raise tasks.TaskRecordError(
-                "duplicate related task for %s/%s/%s"
-                % (parent_task_id, phase, part)
-            )
-        return found[0] if found else None
+        return tasks.related_task(
+            {"tasks": records}, parent_task_id, phase, part
+        )
 
     def related(self, parent_task_id, phase, part):
         """Return the child durably admitted for one parent phase and part."""
@@ -201,23 +192,15 @@ class StandaloneTaskStore:
         existing = self._related(records, parent_task_id, phase, part)
         if existing is not None:
             return existing
-        parent = tasks.task_record({"tasks": records}, parent_task_id)
-        if parent["result"] is not None:
-            raise tasks.TaskRecordError(
-                "terminal task %s cannot admit a child" % parent_task_id
-            )
-        relation = {
-            "task_id": parent_task_id,
-            "phase": phase,
-            "part": part,
-        }
         state = {"tasks": records}
-        record = tasks.admit_task(
+        record = tasks.admit_related_task(
             state,
+            parent_task_id,
+            phase,
+            part,
             order,
             resolved_staffing,
             primary_workspace=primary_workspace,
-            parent=relation,
         )
         outcome = self._store.cas(
             task_key(record["id"]),
@@ -885,31 +868,13 @@ class DirectTaskHost:
 
     @staticmethod
     def _deep_child_order(record):
-        configuration = copy.deepcopy(
-            record["order"]["configuration"]["documentation"]
-        )
-        configuration["task_kind"] = contracts.KIND_DRAFT_SLICE_NOTE
-        return {
-            "task_executor": "reviewed_task",
-            "configuration": configuration,
-            "request": copy.deepcopy(record["order"]["request"]),
-            "staffing_session": record["order"].get("staffing_session"),
-        }
+        return tasks.deep_documentation_order(record)
 
     @staticmethod
     def _deep_implementation_order(record, documentation_reference):
-        configuration = copy.deepcopy(
-            record["order"]["configuration"]["implementation"]
+        return tasks.deep_implementation_order(
+            record, documentation_reference
         )
-        configuration["task_kind"] = contracts.KIND_IMPLEMENT
-        request = copy.deepcopy(record["order"]["request"])
-        request["reference_documents"].append(documentation_reference)
-        return {
-            "task_executor": "reviewed_task",
-            "configuration": configuration,
-            "request": request,
-            "staffing_session": record["order"].get("staffing_session"),
-        }
 
     def _deep_implementation_scope(self, record):
         relation = record.get("parent") or {}
@@ -966,37 +931,7 @@ class DirectTaskHost:
 
     @staticmethod
     def _deep_result(status, child_results, reason=None):
-        duration = 0.0
-        usage = None
-        cost = None
-        usage_partial = not child_results
-        cost_partial = not child_results
-        for result in child_results:
-            duration += result["duration_s"]
-            usage = st._add_token_usage(usage, result["token_usage"])
-            cost = st._add_cost(cost, result["cost"])
-            usage_partial = bool(
-                usage_partial
-                or result["token_usage_partial"]
-                or result["token_usage"] is None
-            )
-            cost_partial = bool(
-                cost_partial
-                or result["cost_partial"]
-                or result["cost"] is None
-            )
-        terminal = {
-            "status": status,
-            "duration_s": duration,
-            "token_usage": usage,
-            "token_usage_partial": bool(usage_partial or usage is None),
-            "cost": cost,
-            "cost_partial": bool(cost_partial or cost is None),
-            "native_result": None,
-        }
-        if status == "failure":
-            terminal["reason"] = str(reason or "Deep task failed")
-        return terminal
+        return tasks.deep_task_result(status, child_results, reason)
 
     @classmethod
     def _deep_failure(cls, reason, child_result=None):
