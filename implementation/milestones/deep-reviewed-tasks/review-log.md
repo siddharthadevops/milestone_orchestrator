@@ -829,3 +829,21 @@
 - `claude-claude-S11-FULL-001` (raised claude, cleared codex): Any transient run failure attributed to the milestone verification unit is written into its reviewed_task record as a terminal `failure`, and because the record can never leave that terminal value, the next step re-fails the run forever — an operator-resumable hiccup permanently kills the milestone. The established classifier for exactly this distinction, `_initial_skeleton_failure_is_terminal` (orchestrator/driver.py:4248), already exists for the skeleton's outer reviewed task and is not reused. — Production behavior and its focused acceptance test wrongly pin transient verification stops as immutable terminal failures, making future work likely to preserve a contract violation, while correction remains bounded to this slice’s failure classification and recovery test.
 - `claude-claude-S11-FULL-002` (raised claude, cleared codex): Two contracts the note pins have no named passing test: the milestone-close block, and the verification unit reaching a seal and gate through the real lifecycle. `test_parts_count_once_and_open_or_failed_verification_blocks` is named for the block but never calls `maybe_close_milestone`/`_maybe_close_milestone`, and `_mark_verification_success` fabricates the seal by assigning `unit['status'] = st.U_SEALED` directly, bypassing `st.transition_unit` — so the newly introduced `UNIT_MILESTONE_VERIFICATION` unit shape is never proven to be legally executable. — The note falsely pins close blocking and real seal/gate lifecycle coverage that its named tests do not execute, plausibly hiding regressions, while correction remains bounded to two focused tests and any local defects they expose.
 
+## slice_doc-12 (Presentation, compatibility, and conformance)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-12.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-12-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-12-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-12-codex-r1.txt` |
+| slice_doc-12-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-12-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-12-codex-r1`, `slice_doc-12-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S12-001` (raised codex, cleared codex): The declared test touch inventory contradicts the fixtures required by the mandatory gates — The contradictory inventory could initially steer a builder away from the retained Brainstorming fixtures, but mandatory gates expose the coverage defect deterministically and correction is a local current-law fixture alignment before review.
+- `codex-DRT-S12-002` (raised codex, cleared codex): The operative skeleton contains stale hard-register source citations — The cited skeleton ranges land on unrelated handler, policy-validation, and accounting/projection code, but Slice 12 restates the contracts with usable authorities, so a careful builder will detect the mismatch while correction is only local citation repair.
+

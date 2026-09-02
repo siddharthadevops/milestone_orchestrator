@@ -315,4 +315,5 @@ The goal is achieved when:
 | slice_doc-10 (Sibling complete-verification task) | reviewed | 2 | satisfied | 31e3cde |
 | slice_impl-10 (Sibling complete-verification task) | reviewed | 5 | satisfied | 92d13b0 |
 | slice_doc-11 (Five-slice and final verification cadence) | reviewed | 2 | satisfied | 9b08d07 |
-| slice_impl-11 (Five-slice and final verification cadence) | reviewed | 2 | satisfied | - |
+| slice_impl-11 (Five-slice and final verification cadence) | reviewed | 2 | satisfied | e7b9800 |
+| slice_doc-12 (Presentation, compatibility, and conformance) | reviewed | 2 | satisfied | - |
