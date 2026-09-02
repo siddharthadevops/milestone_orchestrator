@@ -313,4 +313,5 @@ The goal is achieved when:
 | slice_impl-09-a (Milestone deep-slice composition) | reviewed | 5 | satisfied | 965176d |
 | slice_impl-09-b (Milestone deep-slice composition) | reviewed | 5 | satisfied | db1c8e2 |
 | slice_doc-10 (Sibling complete-verification task) | reviewed | 2 | satisfied | 31e3cde |
-| slice_impl-10 (Sibling complete-verification task) | reviewed | 5 | satisfied | - |
+| slice_impl-10 (Sibling complete-verification task) | reviewed | 5 | satisfied | 92d13b0 |
+| slice_doc-11 (Five-slice and final verification cadence) | reviewed | 2 | satisfied | - |

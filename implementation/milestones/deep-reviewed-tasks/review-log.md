@@ -792,3 +792,21 @@
 - `codex-DRT-S10-DELTA-001` (raised codex, cleared codex): Gate-time edits bypass the required review cycle — Risk is xhigh because the artifact silently certifies changed bytes without the explicitly pinned delta and whole-review cycle, while damage is medium because correction is bounded to this unit’s invalidation transition and focused regression coverage before shipment.
 - `codex-codex-DRT-S10-VERIFY-001` (raised codex, cleared codex): Repaired success exposes an invalid passed suite proof — The repaired path contradicts the pinned equal-cardinality proof contract by recording configured commands with no results, making silent downstream reliance plausible, while correction is bounded to this repair path and its focused test before milestone publication.
 
+## slice_doc-11 (Five-slice and final verification cadence)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-11.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-11-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-11-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-11-codex-r1.txt` |
+| slice_doc-11-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-11-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-11-codex-r1`, `slice_doc-11-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S11-R1-001` (raised codex, cleared codex): Rollback handling is undefined for an open sibling verification origin — The hard-register rule that any failed due verification blocks advancement directly contradicts A3 for a superseded origin and would likely produce wrong lifecycle logic, while correction is bounded to active-boundary handling and focused verification within Slice 11.
+- `claude-claude-S11-R2-001` (raised claude, cleared codex): The periodic five-slice due boundary is pinned to immutable terminal-successful `deep_task` results with no reconciliation-supersession filter, so slices unwound by an accepted-plan rollback keep counting toward the next verification; this drops the barrier guard today's cadence already applies and violates the note's own strict "five completed logical slices per periodic boundary". (Distinct from codex-DRT-S11-R1-001, which concerns the fate of an open verification origin, not the counting basis.) — The hard register explicitly makes immutable terminal-successful deep-task results the periodic counting basis without excluding reconciliation-superseded executions, so implementation as written likely schedules verification incorrectly, but correction remains bounded to this cadence unit and its t
+
