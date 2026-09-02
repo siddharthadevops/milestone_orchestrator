@@ -115,7 +115,7 @@ def _normalize_task_ids(obj):
             result = {}
             for key, member in value.items():
                 if (
-                    key == "task_id"
+                    key in ("task_id", "reviewed_task_id")
                     and isinstance(member, str)
                     and _GENERATED_TASK_ID_RE.fullmatch(member)
                 ):

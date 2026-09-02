@@ -256,7 +256,7 @@ class TestNaturalRethinkExit(unittest.TestCase):
 
         historical = self.fixer(gap_enabled=True)
         self.assertIn("fits_remodel", historical)
-        self.assertIn("failure_gap", historical)
+        self.assertNotIn("failure_gap", historical)
 
 
 class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
@@ -1483,8 +1483,9 @@ class TestPromptCompression(unittest.TestCase):
         for prompt in (review, fix):
             self.assertNotIn("Kind draft_skeleton adds", prompt)
             self.assertNotIn("Kind implement adds", prompt)
-            self.assertIn("<normalized workspace-relative path>", prompt)
+            self.assertNotIn("<normalized workspace-relative path>", prompt)
             self.assertNotIn("<workspace path>", prompt)
+            self.assertNotIn('"target_path"', prompt)
         self.assertNotIn('"disposition":"fixed', review)
         self.assertIn('"disposition":"fixed|rejected', fix)
         self.assertNotIn('"retry_reason":"consultation_unavailable"', fix)

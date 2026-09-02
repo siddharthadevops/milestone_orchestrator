@@ -283,7 +283,9 @@ class StaffingCutoverTestCase(DriverTestCase):
 
 class DriverCallsAskTheRouter(StaffingCutoverTestCase):
     def test_every_driver_call_asks_the_router(self):
-        path = self.run_state("ws-requests")
+        path = self.run_state(
+            "ws-requests", p3_reclassify_debt=False
+        )
         script = [
             routed_skeleton_step(PLAN[0]),
             step("review_round",
