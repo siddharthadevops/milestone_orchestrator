@@ -2,7 +2,7 @@
 
 # Milestone
 
-Status: **open**
+Status: **closed**
 
 ## Goal
 
@@ -317,4 +317,4 @@ The goal is achieved when:
 | slice_doc-11 (Five-slice and final verification cadence) | reviewed | 2 | satisfied | 9b08d07 |
 | slice_impl-11 (Five-slice and final verification cadence) | reviewed | 2 | satisfied | e7b9800 |
 | slice_doc-12 (Presentation, compatibility, and conformance) | reviewed | 2 | satisfied | 60776bd |
-| slice_impl-12 (Presentation, compatibility, and conformance) | reviewed | 6 | satisfied | - |
+| slice_impl-12 (Presentation, compatibility, and conformance) | reviewed | 6 | satisfied | 691b53c |
