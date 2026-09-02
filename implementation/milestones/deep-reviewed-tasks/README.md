@@ -310,4 +310,5 @@ The goal is achieved when:
 | slice_impl-08-a (Milestone skeleton composition) | reviewed | 10 | satisfied | ac1cfed |
 | slice_impl-08-b (Milestone skeleton composition) | reviewed | 13 | satisfied | 48c3511 |
 | slice_doc-09 (Milestone deep-slice composition) | reviewed | 6 | satisfied | f6fc3ca |
-| slice_impl-09-a (Milestone deep-slice composition) | reviewed | 5 | satisfied | - |
+| slice_impl-09-a (Milestone deep-slice composition) | reviewed | 5 | satisfied | 965176d |
+| slice_impl-09-b (Milestone deep-slice composition) | reviewed | 5 | satisfied | - |

@@ -836,3 +836,67 @@ class MilestoneDeepSliceCompositionTest(base.DriverTestCase):
                     tasks.task_record(subject.state, task_id)["result"], result
                 )
             self.assertEqual(runner.script, [])
+
+    def test_rollback_discards_superseded_cut_authority_before_new_deep_parts(self):
+        with tempfile.TemporaryDirectory(
+            prefix="milestone-rethink-cut-authority-"
+        ) as workspace:
+            path = self._fixture(workspace)
+            subject = drv.Driver(path, runner=runners.MockRunner([]))
+            documentation = st.current_unit(subject.state)
+            documentation["status"] = st.U_SEALED
+            implementation = st.ensure_next_unit(subject.state)
+            old_cut = st.record_implementation_cut(
+                subject.state,
+                implementation,
+                "Complete obsolete part a.",
+                "Complete obsolete part b.",
+            )
+            self.assertIn(
+                (st.UNIT_SLICE_IMPL, 1, "b"),
+                st.planned_execution_units(subject.state),
+            )
+
+            subject._requeue_reconciled_deep_slices(
+                {
+                    "wipe_boundary": "rollback-base",
+                    "requeue_slice_ids": [1],
+                },
+                "accepted-rethink",
+            )
+
+            self.assertNotIn("implementation_cut", implementation)
+            self.assertEqual(
+                implementation["superseded_implementation_cuts"],
+                [{
+                    "cut": old_cut,
+                    "accepted_revision": "accepted-rethink",
+                }],
+            )
+            self.assertNotIn(
+                (st.UNIT_SLICE_IMPL, 1, "b"),
+                st.planned_execution_units(subject.state),
+            )
+
+            new_cut = st.record_implementation_cut(
+                subject.state,
+                implementation,
+                "Complete reconciled part a.",
+                "Complete reconciled part b with new scope.",
+            )
+            self.assertNotEqual(new_cut, old_cut)
+            self.assertEqual(
+                st.implementation_scope(subject.state, implementation),
+                {
+                    "part": "a",
+                    "scope": "Complete reconciled part a.",
+                    "delegated_remaining": (
+                        "Complete reconciled part b with new scope."
+                    ),
+                    "source_unit": "slice_impl-01",
+                },
+            )
+            self.assertIn(
+                (st.UNIT_SLICE_IMPL, 1, "b"),
+                st.planned_execution_units(subject.state),
+            )

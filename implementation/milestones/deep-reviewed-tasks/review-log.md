@@ -727,3 +727,28 @@
 - `claude-claude-S09A-R1-001` (raised claude, cleared codex): The new deep-composition gate in `_do_draft` breaks 13 retained tests that passed at the reviewed baseline, including `test_brainstorming_implementation_never_activates_size_control` — the only named proof of operator amendment A1 — and the whole cross-surface `test_task_conformance` matrix. — The stale fixtures and task-count assertions could mislead a hasty builder, but the binding composition law and loud 13-test failure let a careful builder resolve the conflict, while correction is bounded to updating the two retained test modules and restoring the A1 assertion path.
 - `claude-claude-S09A-R1-002` (raised claude, cleared codex): This part's scope names "recovery of admitted identities", and the note pins the durable parent/phase/part as the sole admission authority, but no named test proves that re-entering an interrupted slice reuses the same deep parent and child instead of admitting a second one. — The contract and shared identity-reuse mechanism are correct, but the milestone-specific restart and result-consumption paths lack direct proof, so a hasty builder could miss a regression while correction would remain bounded to this integration and its tests.
 
+## slice_impl-09-b (Milestone deep-slice composition)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-09-b-codex-r1 | review_round | codex | 4 | 4 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-codex-r1.txt` |
+| slice_impl-09-b-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-fix1.txt` |
+| slice_impl-09-b-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-delta1.txt` |
+| slice_impl-09-b-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-codex-r2.txt` |
+| slice_impl-09-b-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-09-b-codex-r4`, `slice_impl-09-b-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S09B-001` (raised codex, cleared codex): Operational or missing rethink sessions leave the deep tree open; missing test: test_failed_rethink_terminalizes_deep_tree — The implemented failure paths contradict the pinned immutable-terminality contract and can silently normalize reuse of failed identities, while correction remains bounded to Slice 9 failure settlement and focused regression coverage.
+- `codex-DRT-S09B-002` (raised codex, cleared codex): Resume after no-agreement failure has no lawful successor path; missing test: test_failed_rethink_resume_starts_distinct_deep_attempt — The untested Resume path deterministically contradicts terminal-identity and lawful-retry contracts, plausibly misleading later recovery work, while correction remains bounded to successor admission and focused regression coverage.
+- `codex-DRT-S09B-004` (raised codex, cleared codex): Fresh production and fix continuation overwrites the spent rethink call’s raw evidence; missing test: test_surviving_rethink_retains_both_physical_call_outputs — The slice requires inspectable evidence for every spent and fresh physical call, but production and fix continuation clobber the origin path and can mislead downstream evidence or presentation work (high risk), while correction is bounded to collision-free raw naming plus one focused regression with
+- `codex-codex-DRT-S09B-005` (raised codex, cleared codex): A removed slice cannot later return as a fresh deep attempt — The implementation contradicts A3 by retaining sealed units and terminal associations across removal and later reintroduction, plausibly misleading later scheduling work, while correction remains bounded to Slice 09 reentry logic and focused regression coverage before shipment.
+- `claude-claude-S09B-R1-001` (raised claude, cleared codex): The reconciled documentation restart keeps the superseded attempt's `phantom_retried` flag, so the new deep task's documentation child loses its one-shot phantom-fix retry, unlike the implementation unit reset by the same function. — The fresh-child contract is affirmatively violated by a retained active-episode flag, so reconciliation work can silently preserve wrong behavior, but the rare typed stop corrupts no accepted result and needs only a local reset correction plus regression test.
+- `claude-claude-S09B-R1-002` (raised claude, cleared codex): No test proves the note's explicit clause that a slice id already present in the prior plan restarts as a new deep task after rollback supersession; the named rollback test only covers a slice id that never appeared before. — The note states the correct A3 contract and the implementation currently handles terminal same-id parents, but the broad named test exercises only a new slice id, so a hasty builder could overlook the repeated-id branch while any regression would require bounded code-and-test rework within this unit
+

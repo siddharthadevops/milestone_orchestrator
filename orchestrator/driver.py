@@ -4363,7 +4363,10 @@ class Driver(object):
                     unit.pop(field, None)
             elif unit.get("kind") == st.UNIT_SLICE_IMPL:
                 st.requeue_implementation_after_reconciliation(
-                    self.state, unit, accepted_revision
+                    self.state,
+                    unit,
+                    accepted_revision,
+                    discard_cut_authority=True,
                 )
             else:
                 continue

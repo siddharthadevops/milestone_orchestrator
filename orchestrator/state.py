@@ -307,14 +307,31 @@ def assert_append_only(old_state, new_state_):
         if unit_identity(nu) != unit_identity(old_unit):
             raise HistoryRewriteError("%s: identity changed" % uctx)
         # Once a budget cut has assigned the current coherent part and the
-        # delegated remainder, that boundary is immutable evidence.  Future
-        # parts are derived from it; rewriting it would silently change the
-        # execution plan and the scope earlier reviews judged.
+        # delegated remainder, that boundary is immutable evidence.  A
+        # rollback-superseded deep attempt may move it, unchanged, into the
+        # append-only superseded history before a fresh attempt derives its
+        # own parts.  Any other rewrite would silently change the execution
+        # plan and the scope earlier reviews judged.
         old_cut = old_unit.get("implementation_cut")
         if old_cut is not None and nu.get("implementation_cut") != old_cut:
-            raise HistoryRewriteError(
-                "%s.implementation_cut: recorded boundary was modified" % uctx
+            old_history = old_unit.get("superseded_implementation_cuts", [])
+            new_history = nu.get("superseded_implementation_cuts", [])
+            archived = (
+                nu.get("implementation_cut") is None
+                and len(new_history) == len(old_history) + 1
+                and new_history[:-1] == old_history
+                and (new_history[-1] or {}).get("cut") == old_cut
             )
+            if not archived:
+                raise HistoryRewriteError(
+                    "%s.implementation_cut: recorded boundary was modified"
+                    % uctx
+                )
+        _assert_list_prefix(
+            old_unit.get("superseded_implementation_cuts", []),
+            nu.get("superseded_implementation_cuts", []),
+            uctx + ".superseded_implementation_cuts",
+        )
         for transient in (
             "implementation_attempt_snapshot",
             "implementation_stabilization",
@@ -1796,15 +1813,16 @@ def reset_for_redraft(state, unit, reason):
 
 
 def requeue_implementation_after_reconciliation(
-    state, unit, accepted_revision
+    state, unit, accepted_revision, discard_cut_authority=False
 ):
     """Return one retained invalidated implementation to a fresh draft.
 
     Reconciliation does not create a second unit identity or rewrite audit
-    history.  The existing implementation record keeps its immutable cut,
-    rounds, seals, debt, and verification episode sequence.  Only the stale
-    candidate/closure fields and in-flight episode state are retired before
-    the same record becomes pending again.
+    history.  The existing implementation record keeps its rounds, seals,
+    debt, and verification episode sequence.  Legacy requeues also keep their
+    cut active.  A rollback-superseded deep attempt instead archives that cut
+    as immutable history so the replacement deep task derives parts only from
+    its own implementation results.
 
     ``accepted_revision`` is the identity of the one-shot reconciliation; it
     is copied onto the append-only event instead of introducing another id.
@@ -1823,6 +1841,12 @@ def requeue_implementation_after_reconciliation(
     prior_gate = unit.get("gate_commit")
     rounds_before = len(unit.get("rounds") or [])
     seals_before = len(unit.get("seals") or [])
+
+    if discard_cut_authority and unit.get("implementation_cut") is not None:
+        unit.setdefault("superseded_implementation_cuts", []).append({
+            "cut": copy.deepcopy(unit.pop("implementation_cut")),
+            "accepted_revision": accepted_revision,
+        })
 
     unit["status"] = U_PENDING
     unit["artifact"] = None
@@ -1876,6 +1900,7 @@ def requeue_implementation_after_reconciliation(
         prior_gate_commit=prior_gate,
         rounds_before=rounds_before,
         seals_before=seals_before,
+        cut_authority_discarded=bool(discard_cut_authority),
     )
     return unit
 
