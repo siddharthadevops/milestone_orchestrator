@@ -752,3 +752,22 @@
 - `claude-claude-S09B-R1-001` (raised claude, cleared codex): The reconciled documentation restart keeps the superseded attempt's `phantom_retried` flag, so the new deep task's documentation child loses its one-shot phantom-fix retry, unlike the implementation unit reset by the same function. — The fresh-child contract is affirmatively violated by a retained active-episode flag, so reconciliation work can silently preserve wrong behavior, but the rare typed stop corrupts no accepted result and needs only a local reset correction plus regression test.
 - `claude-claude-S09B-R1-002` (raised claude, cleared codex): No test proves the note's explicit clause that a slice id already present in the prior plan restarts as a new deep task after rollback supersession; the named rollback test only covers a slice id that never appeared before. — The note states the correct A3 contract and the implementation currently handles terminal same-id parents, but the broad named test exercises only a new slice id, so a hasty builder could overlook the repeated-id branch while any regression would require bounded code-and-test rework within this unit
 
+## slice_doc-10 (Sibling complete-verification task)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-10.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-10-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-10-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-10-codex-r1.txt` |
+| slice_doc-10-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-10-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-10-codex-r1`, `slice_doc-10-claude-r1`
+
+**Deferred debt (independently classified):**
+- `claude-DRT-S10-R1-001` (raised claude, cleared codex): The note pins "its own new allow-empty WIP/final gate commit, not the preceding task's commit" only for unchanged success, leaving the failed-then-repaired path — the slice's primary normal-use path — with no pinned commit boundary, while the shared gate mechanism amends HEAD by default. — Risk is medium because the global own-gate invariant lets a careful builder infer the missing repair boundary, but the unchanged-only pin and amend-by-default mechanism can plausibly mislead; damage is medium because correction is bounded to the repaired path and focused coverage and should be caugh
+- `claude-DRT-S10-R1-002` (raised claude, cleared codex): The pinned focused command omits orchestrator.tests.test_tasks, the one module holding the existing assertion that a complete_verification order must be refused, so the slice's own proof command stays green while a checkpoint-suite module is red by construction. — The omitted module can silently preserve a directly contradictory assertion, but a careful builder should resolve it from the twice-cited rejection evidence and explicit contract inversion, while correction is only a local stale-test expectation change.
+- `claude-DRT-S10-R1-003` (raised claude, cleared codex): The standard's strict guarantee "selected one- or two-family convergence" and "succeeds only after convergence on current contents" carries no verification carve-out, while Slice 10 has an unchanged pass and a no-suite discovery succeed, seal and gate with zero reviewer calls. — Slice 10 and the goal clearly specialize convergence to changed bytes, so a careful max-effort builder should resolve the skeleton’s universal wording, but a hasty reading could add reviewer calls and require bounded lifecycle and focused-test rework.
+
