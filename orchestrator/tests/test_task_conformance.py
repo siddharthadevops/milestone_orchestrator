@@ -22,6 +22,14 @@ from orchestrator import task_api
 from orchestrator import tasks
 from orchestrator.tests import test_brainstorming_slice_production as production_cases
 from orchestrator.tests import test_brainstorming_tasks as brainstorming_cases
+from orchestrator.tests import test_deep_task_documentation as deep_documentation_cases
+from orchestrator.tests import test_deep_task_implementation as deep_implementation_cases
+from orchestrator.tests import test_milestone_deep_slice_composition as deep_slice_cases
+from orchestrator.tests import test_milestone_skeleton_composition as skeleton_cases
+from orchestrator.tests import test_milestone_verification_cadence as cadence_cases
+from orchestrator.tests import test_reviewed_call_routing as routing_cases
+from orchestrator.tests import test_reviewed_complete_verification as verification_cases
+from orchestrator.tests import test_reviewed_policy as policy_cases
 from orchestrator.tests import test_task_activity as activity_cases
 from orchestrator.tests import test_task_api as api_cases
 from orchestrator.tests import test_tasks as task_cases
@@ -102,6 +110,12 @@ class TaskConformanceTest(unittest.TestCase):
         gitops.ensure_repo(workspace)
 
         state = st.load(path)
+        for key in (
+            st.SKELETON_COMPOSITION_KEY,
+            st.DEEP_SLICE_COMPOSITION_KEY,
+            st.MILESTONE_VERIFICATION_CADENCE_KEY,
+        ):
+            state["milestone"].pop(key, None)
         canonical_plan.establish_current_plan(state, "docs/skeleton.md")
         state["units"][0].update({
             "status": st.U_SEALED,
@@ -114,6 +128,97 @@ class TaskConformanceTest(unittest.TestCase):
         state["units"].extend([note, implementation])
         st.save(path, state)
         return path
+
+    def test_public_reviewed_and_deep_ordering_conforms(self):
+        self._assert_existing_cases(
+            (
+                task_cases.TaskContractsTest,
+                "test_catalogue_has_exact_builtins_and_self_description",
+            ),
+            (
+                api_cases.TaskApiTest,
+                "test_reviewed_task_resolves_before_admission_and_reaches_its_gate",
+            ),
+            (
+                deep_documentation_cases.DeepTaskDocumentationTest,
+                "test_one_public_documentation_child_owns_gate_before_implementation",
+            ),
+        )
+
+    def test_milestone_hierarchy_commits_and_totals_conform(self):
+        self._assert_existing_cases(
+            (
+                skeleton_cases.MilestoneSkeletonCompositionTest,
+                "test_task_gate_result_anchors_the_same_commit_and_final_table",
+            ),
+            (
+                deep_slice_cases.MilestoneDeepSliceCompositionTest,
+                "test_slice_delivery_gates_documentation_and_parts",
+            ),
+            (
+                deep_implementation_cases.DeepTaskImplementationTest,
+                "test_final_uncut_part_completes_parent_with_child_owned_results_"
+                "and_single_count_totals",
+            ),
+            (
+                verification_cases.ReviewedCompleteVerificationTest,
+                "test_unchanged_pass_and_no_suite_each_own_seal_and_gate",
+            ),
+            (
+                cadence_cases.MilestoneVerificationCadenceTest,
+                "test_five_completed_deep_tasks_admit_one_sibling_before_slice_six",
+            ),
+        )
+
+    def test_recovery_rethink_prompt_and_size_boundaries_conform(self):
+        self._assert_existing_cases(
+            (
+                deep_implementation_cases.DeepTaskImplementationTest,
+                "test_part_admission_crash_windows_and_races_reuse_exact_child",
+            ),
+            (
+                deep_slice_cases.MilestoneDeepSliceCompositionTest,
+                "test_surviving_rethink_resumes_same_child_and_phase_without_"
+                "redocumentation",
+            ),
+            (
+                deep_slice_cases.MilestoneDeepSliceCompositionTest,
+                "test_rollback_supersession_fails_open_tree_and_starts_new_"
+                "documentation_first_deep_task",
+            ),
+            (
+                routing_cases.ReviewedCallRoutingTest,
+                "test_offered_matrix_routes_every_reviewed_attempt",
+            ),
+            (
+                routing_cases.ReviewedCallRoutingTest,
+                "test_internal_agent_calls_create_evidence_without_child_tasks",
+            ),
+            (
+                policy_cases.ReviewedProducerPolicyTest,
+                "test_brainstorming_implementation_refuses_size_control_before_freeze",
+            ),
+        )
+
+    def test_pre_activation_and_current_cadence_conform(self):
+        self._assert_existing_cases(
+            (
+                skeleton_cases.MilestoneSkeletonCompositionTest,
+                "test_pre_activation_run_keeps_direct_skeleton_law",
+            ),
+            (
+                deep_slice_cases.MilestoneDeepSliceCompositionTest,
+                "test_pre_activation_run_keeps_direct_slice_law",
+            ),
+            (
+                cadence_cases.MilestoneVerificationCadenceTest,
+                "test_activation_replaces_only_new_runs_in_slice_cadence",
+            ),
+            (
+                cadence_cases.MilestoneVerificationCadenceTest,
+                "test_final_reuses_only_current_active_five_slice_verification",
+            ),
+        )
 
     def test_mixed_producer_paths_remain_independent_without_spillover(self):
         self._assert_existing_cases(

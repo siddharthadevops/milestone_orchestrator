@@ -2748,6 +2748,7 @@ def summary(state, acts_overlay=None, current_review_model=None):
     from orchestrator import tasks
     unit_keys = {unit_key(item) for item in state.get("units") or []}
     task_ids_by_unit = {key: [] for key in unit_keys}
+    task_records_by_id = {}
     task_history = state.get("tasks", [])
     if not isinstance(task_history, list):
         raise ValueError("task history must be a list")
@@ -2757,12 +2758,32 @@ def summary(state, acts_overlay=None, current_review_model=None):
         )
         linked_unit = context.get("unit") if isinstance(context, dict) else None
         task_id = record.get("id")
+        if isinstance(task_id, str) and task_id:
+            task_records_by_id[task_id] = record
         if (
             linked_unit in task_ids_by_unit
             and isinstance(task_id, str)
             and task_id
         ):
             task_ids_by_unit[linked_unit].append(task_id)
+
+    def milestone_task_view(unit):
+        """Compact canonical task facts for one verification presentation."""
+        if unit.get("kind") != UNIT_MILESTONE_VERIFICATION:
+            return None
+        record = task_records_by_id[unit["reviewed_task_id"]]
+        result = record.get("result")
+        accounting = result or tasks.task_accounting(state, record["id"])
+        return {
+            "id": record["id"],
+            "task_executor": record["order"]["task_executor"],
+            "status": "open" if result is None else result["status"],
+            "duration_s": accounting["duration_s"],
+            "token_usage": copy.deepcopy(accounting["token_usage"]),
+            "token_usage_partial": accounting["token_usage_partial"],
+            "cost": copy.deepcopy(accounting["cost"]),
+            "cost_partial": accounting["cost_partial"],
+        }
 
     def effective_setting(family, explicit, field):
         if explicit:
@@ -2892,6 +2913,7 @@ def summary(state, acts_overlay=None, current_review_model=None):
     units_view = []
     for u in state["units"]:
         draft_history = _draft_history(state, u)
+        task_view = milestone_task_view(u)
         units_view.append(
             {
                 "unit": unit_key(u),
@@ -2929,6 +2951,7 @@ def summary(state, acts_overlay=None, current_review_model=None):
                     unit_key(u), False
                 ),
                 "task_ids": list(task_ids_by_unit.get(unit_key(u), [])),
+                **({"task": task_view} if task_view is not None else {}),
                 "drafts": [
                     {
                         "kind": draft.get("kind"),

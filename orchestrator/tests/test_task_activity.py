@@ -121,6 +121,61 @@ class TaskActivityProjectionTests(unittest.TestCase):
                 [first["id"], last["id"]],
             )
 
+    def test_milestone_verification_projects_compact_canonical_task_facts(self):
+        state = self.state()
+        unit = st._new_unit(
+            st.UNIT_MILESTONE_VERIFICATION, None, part="1"
+        )
+        unit["status"] = st.U_SEALED
+        order = self.order(
+            st.unit_key(unit), tasks.REVIEWED_COMPLETE_VERIFICATION,
+            executor="reviewed_task",
+        )
+        order["configuration"] = tasks.resolve_reviewed_task_configuration(
+            {"task_kind": tasks.REVIEWED_COMPLETE_VERIFICATION}, {}
+        )
+        record = tasks.admit_task(state, order, {}, self.workspace)
+        unit["reviewed_task_id"] = record["id"]
+        state["units"].append(unit)
+
+        # A gate/result crash window must still read as an open task even
+        # though the unit has already sealed.
+        projected = st.summary(state)["units"][-1]
+        self.assertEqual(projected["task_ids"], [record["id"]])
+        self.assertEqual(projected["task"], {
+            "id": record["id"],
+            "task_executor": "reviewed_task",
+            "status": "open",
+            "duration_s": 0.0,
+            "token_usage": None,
+            "token_usage_partial": True,
+            "cost": None,
+            "cost_partial": True,
+        })
+
+        result = self.terminal(
+            duration_s=4.0,
+            token_usage={
+                "input_tokens": 5,
+                "cached_input_tokens": 1,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 1,
+                "total_tokens": 8,
+            },
+            token_usage_partial=False,
+            cost={"api_usd": 0.4, "real_usd": 0.0},
+            cost_partial=False,
+            native={"large": "canonical detail only"},
+        )
+        tasks.record_task_result(state, record["id"], result)
+        compact = st.summary(state)["units"][-1]["task"]
+        self.assertEqual(compact["status"], "success")
+        self.assertEqual(compact["duration_s"], 4.0)
+        self.assertEqual(compact["cost"], result["cost"])
+        self.assertFalse(compact["cost_partial"])
+        for copied in ("order", "configuration", "native_result", "result"):
+            self.assertNotIn(copied, compact)
+
     def test_task_history_and_detail_use_canonical_records(self):
         direct = task_api.StandaloneTaskStore(self.home).admit(
             self.order(),

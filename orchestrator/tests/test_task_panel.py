@@ -174,6 +174,44 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn("lastTaskPage.result !== null && !taskStopping) return", page)
         self.assertIn("wasOpen", page)
 
+    def test_milestone_verification_renders_as_task_backed_peer(self):
+        row = re.search(
+            r"const verificationRow = u => \{(.*?)\n      \};",
+            self.panel,
+            re.S,
+        ).group(1)
+        for field in (
+            "u.task", "task.task_executor", "task.status",
+            "task.duration_s", "task.token_usage_partial",
+            "task.cost_partial",
+        ):
+            self.assertIn(field, row)
+        self.assertIn("catRow(`Verification ${ordinal}`", row)
+        self.assertIn("unitHistory(u, s, running)", row)
+        self.assertIn("gitLink(u)", row)
+        self.assertIn("openTaskDetail", row)
+        self.assertNotIn("native_result", row)
+
+        pipeline = self.panel.split("const verificationAfter = new Map();", 1)[1]
+        pipeline = pipeline.split("<div class=\"card\"><h3>Pipeline", 1)[0]
+        self.assertIn("appendVerifications(sl.id)", pipeline)
+        self.assertIn("seen[u.unit] = 1", pipeline)
+        self.assertLess(
+            pipeline.index("appendVerifications(sl.id)"),
+            pipeline.index("if (seen[u.unit]) return"),
+        )
+
+        detail = re.search(
+            r"function renderTaskPage\(record, admittedAt\) \{(.*?)\n\}",
+            self.panel,
+            re.S,
+        ).group(1)
+        self.assertIn('executor.replace(/_/g, " ")', detail)
+        self.assertNotIn(
+            'executor === "brainstorming" ? "brainstorming task" : "agent call"',
+            detail,
+        )
+
     def test_task_detail_preserves_native_result_and_accounting(self):
         detail = re.search(
             r"function renderTaskPage\(record, admittedAt\) \{(.*?)\n\}",

@@ -97,6 +97,16 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         config["docs_dir"] = "docs"
         config["git"] = {"enabled": True}
         self.path = drv.init_run("Produce one mixed slice.", self.workspace, config=config)
+        # This retained matrix exercises the direct slice-production law that
+        # predates reviewed skeletons, deep slices, and sibling verification.
+        state = st.load(self.path)
+        for key in (
+            st.SKELETON_COMPOSITION_KEY,
+            st.DEEP_SLICE_COMPOSITION_KEY,
+            st.MILESTONE_VERIFICATION_CADENCE_KEY,
+        ):
+            state["milestone"].pop(key, None)
+        st.save(self.path, state)
 
     @staticmethod
     def _git(workspace, *args):

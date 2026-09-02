@@ -332,7 +332,8 @@
   .unit-head { display: flex; justify-content: space-between; }
   .unit-name { font-weight: 500; font-size: 12px; color: #71717a; }
   .st { font-size: 12px; color: var(--dim); }
-  .st.sealed { color: var(--ok); } .st.failed { color: var(--bad); }
+  .st.sealed, .st.success { color: var(--ok); }
+  .st.failed, .st.failure { color: var(--bad); }
   .st.rounds, .st.sealing, .st.seal_fix, .st.verify_fix { color: var(--warn); }
   .evt { padding: 3px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
   .evt .t { color: var(--dim); margin-right: 8px; }
@@ -3919,6 +3920,24 @@ async function refreshDetail() {
             <span class="st">pending</span></div>
         </div>`;
       };
+      const verificationRow = u => {
+        const task = u.task;
+        const ordinal = u.part || String(u.unit).split("-").pop();
+        const title = `<span class="unit-title">Complete repository verification</span>
+          <span class="slice-intent">${esc(task.task_executor)} · ${esc(task.id)}</span>`;
+        return catRow(`Verification ${ordinal}`, title, task.status,
+                      task.duration_s, task.token_usage,
+                      task.token_usage_partial, "slice-cat",
+                      task.cost, task.cost_partial) + `
+          <div class="unit phase">
+            <div class="unit-head"><span class="unit-name">Evidence</span>
+              <span class="unit-right">${gitLink(u)}
+                <span class="chip work clicky" title="${esc(task.id)}"
+                  onclick="openTaskDetail('${esc(escJsSq(task.id))}')">Open task</span>
+              </span></div>
+            ${unitHistory(u, s, running)}
+          </div>`;
+      };
       const byKey = {};
       (sum.units || []).forEach(u => { byKey[u.unit] = u; });
       const seen = {};
@@ -3933,6 +3952,25 @@ async function refreshDetail() {
               + unitRow(byKey.skeleton);
         seen.skeleton = 1;
       }
+      // Verification units are admitted between logical slices. Preserve that
+      // state-backed order while presenting each as a peer milestone item.
+      const verificationAfter = new Map();
+      let precedingSlice = null;
+      (sum.units || []).forEach(u => {
+        if (u.slice_id != null) precedingSlice = u.slice_id;
+        if (u.task && String(u.unit).startsWith("milestone_verification-")) {
+          const peers = verificationAfter.get(precedingSlice) || [];
+          peers.push(u);
+          verificationAfter.set(precedingSlice, peers);
+        }
+      });
+      const appendVerifications = sliceId => {
+        (verificationAfter.get(sliceId) || []).forEach(u => {
+          rows += verificationRow(u);
+          seen[u.unit] = 1;
+        });
+      };
+      appendVerifications(null);
       // The state-backed array is the delivery order. Never reinterpret its
       // ids as a second ordering authority in the operator projection.
       (sum.slices || []).forEach(sl => {
@@ -3970,8 +4008,13 @@ async function refreshDetail() {
           rows += unitRow(u); seen[u.unit] = 1;
         });
         else if (started) rows += ghostRow(`slice_impl-${pad}`);
+        appendVerifications(sl.id);
       });
-      (sum.units || []).forEach(u => { if (!seen[u.unit]) rows += unitRow(u); });
+      (sum.units || []).forEach(u => {
+        if (seen[u.unit]) return;
+        rows += u.task && String(u.unit).startsWith("milestone_verification-")
+          ? verificationRow(u) : unitRow(u);
+      });
       html += `<div class="card"><h3>Pipeline</h3>` + rows + `</div>`;
     } else if (runView !== "edit" && d.summary_error) {
       html += `<div class="failure">state unreadable: ${esc(d.summary_error)}</div>`;
@@ -5323,7 +5366,7 @@ function renderTaskPage(record, admittedAt) {
   html += `<div class="run-title-row"><h2>${esc(taskTitle(record))}</h2>` +
     `<span class="chip ${stateCls}">${esc(state)}</span></div>`;
   const bits = [
-    executor === "brainstorming" ? "brainstorming task" : "agent call",
+    executor.replace(/_/g, " "),
     area.work_area ? `area ${area.work_area}` : "",
     admittedAt ? `ordered ${fmtAdmitted(admittedAt)}` : "",
     result && result.duration_s != null ? `took ${fmtDHMS(result.duration_s)}` : "",
