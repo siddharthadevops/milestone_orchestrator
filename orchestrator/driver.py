@@ -2624,6 +2624,19 @@ class Driver(object):
             unit, name, self.config.get(name, DEFAULT_CONFIG[name])
         )
 
+    def _reviewed_convergence_failure_type(self, unit):
+        """Keep terminal first-plan caps behind deliberate run Resume.
+
+        Other reviewed units retain their established unclassified recovery
+        posture; only a composed skeleton cap creates a terminal outer task
+        whose distinct successor requires operator authorization.
+        """
+        return (
+            "orchestrator"
+            if self._initial_skeleton_task_pending(unit)
+            else "unknown"
+        )
+
     def _reviewed_policy_defaults(self, unit):
         return tasks.reviewed_policy_defaults(
             self.reviewed_work._production_kind(unit), self.config
@@ -10654,6 +10667,7 @@ class Driver(object):
             "family %s reached max_rounds_per_family=%d on %s without a "
             "clean round" % (family, cap, st.unit_key(unit)),
             unit=unit,
+            type_=self._reviewed_convergence_failure_type(unit),
         )
         self._save()
         raise StopStep("round cap")
@@ -11166,6 +11180,7 @@ class Driver(object):
                 "loops (source: %s)"
                 % (st.unit_key(unit), max_loops, source.get("type")),
                 unit=unit,
+                type_=self._reviewed_convergence_failure_type(unit),
             )
             self._save()
             raise StopStep("fix loop cap")

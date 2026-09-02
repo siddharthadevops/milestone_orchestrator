@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import canonical_plan, contracts, driver as drv
+from orchestrator import canonical_plan, contracts, driver as drv, errclass
 from orchestrator import gitops, ledgers, registry, runners, service
 from orchestrator import state as st, tasks
 from orchestrator.tests import test_driver_mock as base
@@ -375,6 +375,64 @@ class MilestoneSkeletonCompositionTest(base.DriverTestCase):
             self.assertAlmostEqual(
                 st.summary(resumed.state)["work_duration_s"], 0.06
             )
+
+    def test_skeleton_convergence_caps_wait_for_operator_retry(self):
+        for cap_kind in ("review", "fix"):
+            with self.subTest(cap_kind=cap_kind), tempfile.TemporaryDirectory(
+                prefix="skeleton-cap-"
+            ) as workspace:
+                path = self._activated(workspace)
+                subject = drv.Driver(path, runner=runners.MockRunner([]))
+                unit = subject._find_unit(st.UNIT_SKELETON, None)
+                failed_id = subject._ensure_initial_skeleton_task(unit)["id"]
+
+                if cap_kind == "review":
+                    unit["reviewed_policy"]["max_rounds_per_family"] = 0
+                else:
+                    unit["reviewed_policy"]["max_fix_loops"] = 0
+
+                with self.assertRaises(drv.StopStep):
+                    if cap_kind == "review":
+                        subject._enforce_review_round_cap(unit, "codex")
+                    else:
+                        subject._do_fix(unit)
+                subject._record_initial_skeleton_task_failure(unit)
+
+                self.assertEqual(
+                    subject.state["failure"]["type"], "orchestrator"
+                )
+                self.assertNotIn(
+                    subject.state["failure"]["type"], errclass.AUTO_RESUMABLE
+                )
+                self.assertEqual(
+                    tasks.task_record(subject.state, failed_id)["result"][
+                        "status"
+                    ],
+                    "failure",
+                )
+
+                still_failed = drv.Driver(
+                    path, runner=runners.MockRunner([])
+                )
+                still_failed._prepare_initial_skeleton_task(
+                    still_failed._find_unit(st.UNIT_SKELETON, None)
+                )
+                self.assertEqual(
+                    [record["id"] for record in tasks.task_records(
+                        still_failed.state
+                    )],
+                    [failed_id],
+                )
+
+                st.resume_run(still_failed.state)
+                st.save(path, still_failed.state)
+                resumed = drv.Driver(path, runner=runners.MockRunner([]))
+                resumed._prepare_initial_skeleton_task(
+                    resumed._find_unit(st.UNIT_SKELETON, None)
+                )
+                successor_id = resumed.state["units"][0]["reviewed_task_id"]
+                self.assertNotEqual(successor_id, failed_id)
+                self.assertEqual(len(tasks.task_records(resumed.state)), 2)
 
     def test_repeated_phantom_fix_resume_uses_disjoint_successor(self):
         with tempfile.TemporaryDirectory(
