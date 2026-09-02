@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -15,6 +16,7 @@ from orchestrator import access, brainstorming_tasks, registry, runners, service
 from orchestrator import staffing
 from orchestrator import state as st
 from orchestrator import task_api, tasks
+from orchestrator.tests.test_driver_mock import make_config, report, skeleton_script, step
 
 
 class NoopHost:
@@ -138,6 +140,54 @@ class TaskApiTest(unittest.TestCase):
                              ["max_rounds"]["default"], 27)
             self.assertEqual(tasks.resolve_configuration("brainstorming")
                              ["max_rounds"], 27)
+
+    def test_reviewed_task_resolves_before_admission_and_reaches_its_gate(self):
+        subprocess.run(["git", "init", "-q", self.primary], check=True)
+        config = make_config(docs_dir="docs")
+        script = [
+            skeleton_script()[0],
+            step("review_round", report("review_round")),
+            step("review_round", report("review_round")),
+        ]
+        for call in script:
+            call.pop("expect_family", None)
+        runner = runners.MockRunner(script)
+        host = task_api.DirectTaskHost(
+            self.home,
+            runner_factory=lambda _config, _workspace: runner,
+            poll_interval=0.01,
+        )
+        self.start_server(host)
+        order = self.order("reviewed_task")
+        order["configuration"] = {"task_kind": "draft_skeleton"}
+        with mock.patch.object(
+            service, "_direct_task_config", return_value=config
+        ):
+            status, body = self.request("POST", "/api/tasks", order)
+            self.assertEqual(status, 201, body)
+            record = body["task"]
+            resolved = record["order"]["configuration"]
+            self.assertEqual(resolved["review_breadth"], "double")
+            self.assertEqual(
+                resolved["producer"]["task_executor"], "agent_call"
+            )
+            terminal = self.wait_record(record["id"])
+
+        result = terminal["result"]
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(
+            set(result["native_result"]),
+            {"production_result", "review_evidence", "gate_commit"},
+        )
+        lifecycle = st.load(
+            task_api.reviewed_state_path(self.home, record["id"])
+        )
+        self.assertEqual(tasks.task_records(lifecycle), [])
+        subject = subprocess.run(
+            ["git", "log", "-1", "--format=%s"],
+            cwd=self.primary, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        self.assertEqual(subject, "Complete reviewed task %s" % record["id"])
 
     def test_direct_order_resolves_access_before_admission(self):
         self.project("mine", self.primary, [access.USER_EMAILS[0]])
@@ -702,7 +752,7 @@ class TaskApiTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=5)
 
-    def test_service_restart_does_not_auto_start_open_brainstorming_task(self):
+    def test_service_restart_adopts_open_brainstorming_and_reviewed_tasks(self):
         pins = {
             "dispatch_authority": "static",
             "participants": [{"id": "lead"}],
@@ -714,16 +764,52 @@ class TaskApiTest(unittest.TestCase):
                 "POST", "/api/tasks", self.order("brainstorming")
             )[1]["task"]
 
-        restarted_host = NoopHost()
+        reviewed_primary = self.directory("restart-reviewed-primary")
+        subprocess.run(["git", "init", "-q", reviewed_primary], check=True)
+        reviewed_order = self.order("reviewed_task", work_area={
+            "workspace_path": reviewed_primary,
+            "primary": reviewed_primary,
+            "additional": [],
+        })
+        reviewed_order["configuration"] = {"task_kind": "draft_skeleton"}
+        reviewed = self.request(
+            "POST", "/api/tasks", reviewed_order
+        )[1]["task"]
+
+        restarted_host = task_api.DirectTaskHost(self.home)
+        resolved = {}
+        direct_config = {"restart_config": "direct"}
+        reviewed_config = {"restart_config": "reviewed"}
+
+        def capture_start(current, config_resolver):
+            resolved[current["id"]] = config_resolver()
+            return object()
+
         with mock.patch.object(
+            restarted_host, "start", side_effect=capture_start
+        ), mock.patch.object(
+            restarted_host,
+            "adopt_open_tasks",
+            wraps=restarted_host.adopt_open_tasks,
+        ) as adoption, mock.patch.object(
             service.task_api, "DirectTaskHost", return_value=restarted_host
-        ):
+        ), mock.patch.object(
+            service, "_direct_task_config", return_value=direct_config
+        ) as direct_resolver, mock.patch.object(
+            service, "_reviewed_task_config", return_value=reviewed_config
+        ) as reviewed_resolver:
             server = service.make_server(self.home, 0)
         try:
-            self.assertIsNone(
-                task_api.StandaloneTaskStore(self.home).record(record["id"])["result"]
-            )
-            self.assertEqual(restarted_host.started, [])
+            adoption.assert_called_once()
+            self.assertEqual(resolved, {
+                record["id"]: direct_config,
+                reviewed["id"]: reviewed_config,
+            })
+            direct_resolver.assert_called_once_with(self.home, None)
+            reviewed_resolver.assert_called_once_with(self.home, None)
+            store = task_api.StandaloneTaskStore(self.home)
+            self.assertIsNone(store.record(record["id"])["result"])
+            self.assertIsNone(store.record(reviewed["id"])["result"])
         finally:
             server.server_close()
 

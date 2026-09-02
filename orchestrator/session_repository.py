@@ -43,9 +43,17 @@ def _relative_path(value, label):
 
 
 def validate_context(value):
-    if not isinstance(value, dict) or set(value) != {
-        "state_path", "skeleton_path", "pre_session_commit"
-    }:
+    if not isinstance(value, dict):
+        raise SessionRepositoryError(
+            "milestone session repository context is invalid"
+        )
+    standalone = value.get("mode") == "standalone_reviewed"
+    expected = (
+        {"state_path", "pre_session_commit", "mode"}
+        if standalone else
+        {"state_path", "skeleton_path", "pre_session_commit"}
+    )
+    if set(value) != expected:
         raise SessionRepositoryError(
             "milestone session repository context is invalid"
         )
@@ -63,16 +71,22 @@ def validate_context(value):
         raise SessionRepositoryError(
             "milestone session pre_session_commit must be a full revision"
         )
-    return {
+    checked = {
         "state_path": state_path,
-        "skeleton_path": _relative_path(
-            value["skeleton_path"], "skeleton_path"
-        ),
         "pre_session_commit": revision,
     }
+    if standalone:
+        checked["mode"] = "standalone_reviewed"
+    else:
+        checked["skeleton_path"] = _relative_path(
+            value["skeleton_path"], "skeleton_path"
+        )
+    return checked
 
 
-def checkpoint_context(workspace, state_path, skeleton_path, message):
+def checkpoint_context(
+    workspace, state_path, skeleton_path, message, *, standalone_reviewed=False
+):
     """Commit the shared workspace and return one durable session base."""
     if not isinstance(workspace, str) or not os.path.isabs(workspace):
         raise SessionRepositoryError("session workspace must be absolute")
@@ -81,9 +95,14 @@ def checkpoint_context(workspace, state_path, skeleton_path, message):
     gitops.commit_plain(workspace, message)
     context = {
         "state_path": os.path.abspath(state_path),
-        "skeleton_path": _relative_path(skeleton_path, "skeleton_path"),
         "pre_session_commit": gitops.head_full_sha(workspace),
     }
+    if standalone_reviewed:
+        context["mode"] = "standalone_reviewed"
+    else:
+        context["skeleton_path"] = _relative_path(
+            skeleton_path, "skeleton_path"
+        )
     return validate_context(context)
 
 
@@ -147,6 +166,20 @@ def begin_attempt(session_state, charge, role):
         raise SessionRepositoryError(
             "session and milestone repository workspaces do not match"
         )
+    if context.get("mode") == "standalone_reviewed":
+        if not milestone_state.get("reviewed_task"):
+            raise SessionRepositoryError(
+                "standalone reviewed repository context has no reviewed task"
+            )
+        return RepositoryAttempt(
+            context,
+            {
+                "workspace": workspace,
+                "anchor": None,
+                "repository": canonical_plan._repository_snapshot(workspace),
+            },
+            role,
+        )
     try:
         snapshot = canonical_plan.begin_author_call(
             milestone_state, context["skeleton_path"]
@@ -164,6 +197,55 @@ def complete_attempt(attempt, participant_id, round_number):
     try:
         with st.exclusive_mutation(context["state_path"], wait=True):
             milestone_state = st.load(context["state_path"])
+            if context.get("mode") == "standalone_reviewed":
+                if not milestone_state.get("reviewed_task"):
+                    raise SessionRepositoryError(
+                        "standalone reviewed repository context lost its task"
+                    )
+                workspace = milestone_state["workspace"]
+                repository = attempt.snapshot["repository"]
+                if attempt.role == "initial_position":
+                    if (
+                        gitops.head_symbolic_ref(workspace)
+                        != repository["sym"]
+                        or gitops.head_full_sha(workspace)
+                        != repository["head"]
+                    ):
+                        canonical_plan._reject_author_call(
+                            attempt.snapshot,
+                            SessionRepositoryError(
+                                "an editing seat changed HEAD before driver commit"
+                            ),
+                        )
+                    try:
+                        committed = gitops.commit_plain(
+                            workspace,
+                            "Brainstorming round %s — %s"
+                            % (round_number, participant_id),
+                        ) is not None
+                    except gitops.GitError as exc:
+                        canonical_plan._reject_author_call(
+                            attempt.snapshot, exc
+                        )
+                    return {
+                        "accept_reply": True,
+                        "committed": committed,
+                        "plan_changed": False,
+                        "revision": gitops.head_full_sha(workspace),
+                        "anchor": None,
+                    }
+                unchanged = canonical_plan._repository_matches_snapshot(
+                    attempt.snapshot
+                )
+                if not unchanged:
+                    canonical_plan.restore_author_call(attempt.snapshot)
+                return {
+                    "accept_reply": unchanged,
+                    "committed": False,
+                    "plan_changed": False,
+                    "revision": repository["head"],
+                    "anchor": None,
+                }
             current_anchor = milestone_state["milestone"].get(
                 canonical_plan.ANCHOR_KEY
             )

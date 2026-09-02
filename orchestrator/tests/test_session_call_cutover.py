@@ -302,6 +302,14 @@ class SessionCallCutoverTest(unittest.TestCase):
             model_profiles_home=home,
         )
         document = state.load(state_path)
+        # This retained case exercises the direct slice-production cutover,
+        # not the later reviewed/deep milestone composition boundaries.
+        for key in (
+            state.SKELETON_COMPOSITION_KEY,
+            state.DEEP_SLICE_COMPOSITION_KEY,
+            state.MILESTONE_VERIFICATION_CADENCE_KEY,
+        ):
+            document["milestone"].pop(key, None)
         skeleton_path = ledgers.skeleton_path(document)
         note_path = ledgers.slice_note_path(document, 1)
         plan = {"slices": [{

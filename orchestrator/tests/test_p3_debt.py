@@ -174,6 +174,57 @@ def reclassify(defer_ok, family, reason="verified", risk=None,
 
 
 class TestP3Debt(DriverTestCase):
+    def test_single_family_defaults_to_fix_without_classification(self):
+        with tempfile.TemporaryDirectory(prefix="orch-single-debt-") as ws:
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            runner = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "stale word")]),
+                    family="codex",
+                ),
+            ])
+            subject = drv.Driver(path, runner=runner)
+            subject.reviewed_work.configure(subject.state["units"][0], {
+                "review_breadth": "single",
+                "p3_reclassify_debt": True,
+            })
+            self.step_until(
+                subject,
+                lambda state: state["units"][0]["status"] == st.U_FIXING,
+            )
+            unit = st.load(path)["units"][0]
+            self.assertEqual([finding["id"] for finding in unit["fix_queue"]], ["F1"])
+            self.assertNotIn("reclassify", [call[1] for call in runner.calls])
+
+    def test_single_family_explicit_second_look_rates_fresh_on_same_family(self):
+        with tempfile.TemporaryDirectory(prefix="orch-single-debt-") as ws:
+            config = make_config(p3_reclassify_debt=True)
+            config["acts"] = dict(config["acts"], reclassifier="codex")
+            path = init_state(ws, config)
+            runner = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "stale word")]),
+                    family="codex",
+                ),
+                reclassify(True, family="codex", reason="fresh second look"),
+            ])
+            subject = drv.Driver(path, runner=runner)
+            subject.reviewed_work.configure(subject.state["units"][0], {
+                "review_breadth": "single",
+                "same_family_second_look": True,
+                "p3_reclassify_debt": True,
+            })
+            self.step_until(subject, lambda state: state["units"][0]["debt"])
+            unit = st.load(path)["units"][0]
+            self.assertEqual(unit["debt"][0]["cleared_by"], "codex")
+            self.assertEqual(
+                [round_["family"] for round_ in unit["rounds"]], ["codex"]
+            )
+
     def test_reclassifier_repair_keeps_full_duration_and_identity(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             cfg = make_config(p3_reclassify_debt=True)
@@ -327,13 +378,15 @@ class TestP3Debt(DriverTestCase):
             original_mark = driver._mark_busy
 
             def admit(label, kind, family, model=None, effort=None,
-                      nested=False, task_id=None, staffing_fallback=None):
+                      nested=False, task_id=None, staffing_fallback=None,
+                      unit=None):
                 if kind == contracts.KIND_RECLASSIFY:
                     return False
                 return original_mark(
                     label, kind, family, model=model, effort=effort,
                     nested=nested, task_id=task_id,
                     staffing_fallback=staffing_fallback,
+                    unit=unit,
                 )
 
             with mock.patch.object(driver, "_mark_busy", side_effect=admit):
@@ -473,7 +526,7 @@ class TestP3Debt(DriverTestCase):
             # gate reads the families the RUN supplies, not a profile.
             def remove_explicit_rater_after_admission(
                 label, kind, family, model=None, effort=None, nested=False,
-                task_id=None, staffing_fallback=None,
+                task_id=None, staffing_fallback=None, unit=None,
             ):
                 admitted = original_mark(
                     label,
@@ -484,6 +537,7 @@ class TestP3Debt(DriverTestCase):
                     nested=nested,
                     task_id=task_id,
                     staffing_fallback=staffing_fallback,
+                    unit=unit,
                 )
                 if admitted and kind == contracts.KIND_REVIEW_ROUND:
                     edited = model_profiles.load(home, "default")

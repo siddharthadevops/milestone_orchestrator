@@ -2,4 +2,38 @@
 
 # Adjudicated Rejections
 
-(none)
+Settled findings: re-raising one requires referencing its id with
+genuinely new evidence (`contests`).
+
+## [slice_impl-01-codex-r10/DRT-S01-FULL-002]
+
+- unit: slice_impl-01
+- severity: P2
+- finding: Current posture cannot reach historical cross-unit gap repair
+- rationale: No harm beyond the permitted baseline; the claimed repair episode is unreachable.
+- prevention: orchestrator/driver.py (Clarified that unconditional modern design updates bypass historical skeleton and sibling re-documentation code.)
+
+## [slice_impl-02-b-codex-r3/codex-slice_impl-02-b-r2/DRT-S02B-004]
+
+- unit: slice_impl-02-b
+- severity: P1
+- finding: Brainstorming bypasses the existing live implementation-size controller
+- rationale: None beyond the permitted baseline; no Brainstorming size-controller guarantee exists to lose.
+- prevention: implementation/milestones/deep-reviewed-tasks/skeleton.md (Clarified producer-gated size ownership and prohibited Brainstorming-specific size machinery.)
+
+## [slice_doc-05-claude-r1/DRT-S05-R1-003]
+
+- unit: slice_doc-05
+- severity: P2
+- finding: Slice 5 requires a new current-byte precondition inside shared pending-gate recovery, which is Slice 4's sealed territory and changes milestone-caller behavior the same note promises is unchanged
+- rationale: None. Closing the shared gap once preserves parity and adds no milestone phase, task, call, or outcome law.
+- prevention: implementation/milestones/deep-reviewed-tasks/slices/slice-05.md (Clarified that current-byte recovery is one shared Slice 4 invariant applied equally to standalone and milestone callers, not a standalone fork or composition change.)
+
+## [slice_doc-09-claude-r1/claude-S09-R1-001]
+
+- unit: slice_doc-09
+- severity: P2
+- finding: The claim is stale: its quoted criteria are absent, and A3 explicitly requires documentation-first restart only after rollback supersession.
+- rationale: None beyond baseline; surviving origins add no documentation cycle, while superseded origins follow A3's required cycle.
+- prevention: implementation/milestones/deep-reviewed-tasks/slices/slice-09.md (Clarified the A3 active-execution versus rollback-supersession split and aligned the skeleton.)
+

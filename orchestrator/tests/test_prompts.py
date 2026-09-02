@@ -256,7 +256,7 @@ class TestNaturalRethinkExit(unittest.TestCase):
 
         historical = self.fixer(gap_enabled=True)
         self.assertIn("fits_remodel", historical)
-        self.assertIn("failure_gap", historical)
+        self.assertNotIn("failure_gap", historical)
 
 
 class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
@@ -1462,6 +1462,14 @@ class TestPlannerMaterialChannel(unittest.TestCase):
         for name, prompt in self._plan_authoring_prompts().items():
             with self.subTest(surface=name):
                 self.assertIn("TASKEXECUTOR CATALOGUE", prompt)
+                catalogue_text = prompt.split(
+                    "TASKEXECUTOR CATALOGUE:\n", 1
+                )[1]
+                catalogue = json.JSONDecoder().raw_decode(catalogue_text)[0]
+                self.assertEqual(
+                    [entry["id"] for entry in catalogue],
+                    ["agent_call", "brainstorming"],
+                )
                 self.assertNotIn("SLICE MATERIAL PLANNING", prompt)
                 self.assertNotIn("MATERIAL CATALOGUE", prompt)
 
@@ -1475,8 +1483,9 @@ class TestPromptCompression(unittest.TestCase):
         for prompt in (review, fix):
             self.assertNotIn("Kind draft_skeleton adds", prompt)
             self.assertNotIn("Kind implement adds", prompt)
-            self.assertIn("<normalized workspace-relative path>", prompt)
+            self.assertNotIn("<normalized workspace-relative path>", prompt)
             self.assertNotIn("<workspace path>", prompt)
+            self.assertNotIn('"target_path"', prompt)
         self.assertNotIn('"disposition":"fixed', review)
         self.assertIn('"disposition":"fixed|rejected', fix)
         self.assertNotIn('"retry_reason":"consultation_unavailable"', fix)

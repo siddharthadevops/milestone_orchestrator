@@ -22,6 +22,7 @@ import tempfile
 import unittest
 
 from orchestrator import contracts
+from orchestrator import prompt_contracts
 from orchestrator import verifiers
 from orchestrator.runners import MockRunner, WorkerProtocolError, call_worker
 
@@ -284,7 +285,7 @@ class TestFieldCollisions(unittest.TestCase):
         self.assertEqual(
             contracts.reserved_output_keys("implement"),
             {"status", "kind", "blocked_reason", "notes", "gaps",
-             "request", "finding", "target_path", "max_rounds",
+             "problem", "request", "finding", "target_path", "max_rounds",
              "result_mode", "failure_gap", "files_changed",
              "slices", "implementation_cut"},
         )
@@ -863,24 +864,14 @@ class TestMergedOutputValidation(FilesystemCase):
             )
             self.assertIs(out, obj)
 
-    def test_need_rethink_output_is_exempt_from_extension_audit(self):
+    def test_routed_need_rethink_output_is_exempt_from_extension_audit(self):
         obj = {
             "status": "need_rethink",
-            "kind": "implement",
-            "request": "Choose the compatible behavior for the design.",
-            "finding": {"id": "BUILD", "summary": "choice is unsettled"},
-            "target_path": "proposals/rethink.md",
-            "max_rounds": 20,
-            "failure_gap": {
-                "classification": "fits_remodel",
-                "missing_or_conflict": "the design leaves one choice open",
-                "where": "docs/slice-01.md:12",
-                "forced_decision": "select one behavior",
-                "proposal": None,
-                "plain": "The builder needs one design choice.",
-                "example": "The builder must choose A or B without guidance.",
-            },
+            "problem": "Two governing requirements contradict.",
         }
+        bound = prompt_contracts.BoundContract(
+            {"kind": "implement"}, ("need_rethink",), ()
+        )
         for root in (None, self.outside, "nope"):
             ext = self.ext
             if root is not None:
@@ -889,7 +880,13 @@ class TestMergedOutputValidation(FilesystemCase):
                       "match_field": "package"}]
                 )
             out = verifiers.validate_merged_output(
-                obj, "implement", [ext], self.roots
+                obj,
+                "implement",
+                [ext],
+                self.roots,
+                base_validator=lambda candidate: prompt_contracts.validate(
+                    bound, candidate
+                ),
             )
             self.assertIs(out, obj)
 

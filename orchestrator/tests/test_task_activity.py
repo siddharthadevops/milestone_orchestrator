@@ -121,6 +121,61 @@ class TaskActivityProjectionTests(unittest.TestCase):
                 [first["id"], last["id"]],
             )
 
+    def test_milestone_verification_projects_compact_canonical_task_facts(self):
+        state = self.state()
+        unit = st._new_unit(
+            st.UNIT_MILESTONE_VERIFICATION, None, part="1"
+        )
+        unit["status"] = st.U_SEALED
+        order = self.order(
+            st.unit_key(unit), tasks.REVIEWED_COMPLETE_VERIFICATION,
+            executor="reviewed_task",
+        )
+        order["configuration"] = tasks.resolve_reviewed_task_configuration(
+            {"task_kind": tasks.REVIEWED_COMPLETE_VERIFICATION}, {}
+        )
+        record = tasks.admit_task(state, order, {}, self.workspace)
+        unit["reviewed_task_id"] = record["id"]
+        state["units"].append(unit)
+
+        # A gate/result crash window must still read as an open task even
+        # though the unit has already sealed.
+        projected = st.summary(state)["units"][-1]
+        self.assertEqual(projected["task_ids"], [record["id"]])
+        self.assertEqual(projected["task"], {
+            "id": record["id"],
+            "task_executor": "reviewed_task",
+            "status": "open",
+            "duration_s": 0.0,
+            "token_usage": None,
+            "token_usage_partial": True,
+            "cost": None,
+            "cost_partial": True,
+        })
+
+        result = self.terminal(
+            duration_s=4.0,
+            token_usage={
+                "input_tokens": 5,
+                "cached_input_tokens": 1,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 1,
+                "total_tokens": 8,
+            },
+            token_usage_partial=False,
+            cost={"api_usd": 0.4, "real_usd": 0.0},
+            cost_partial=False,
+            native={"large": "canonical detail only"},
+        )
+        tasks.record_task_result(state, record["id"], result)
+        compact = st.summary(state)["units"][-1]["task"]
+        self.assertEqual(compact["status"], "success")
+        self.assertEqual(compact["duration_s"], 4.0)
+        self.assertEqual(compact["cost"], result["cost"])
+        self.assertFalse(compact["cost_partial"])
+        for copied in ("order", "configuration", "native_result", "result"):
+            self.assertNotIn(copied, compact)
+
     def test_task_history_and_detail_use_canonical_records(self):
         direct = task_api.StandaloneTaskStore(self.home).admit(
             self.order(),
@@ -165,6 +220,115 @@ class TaskActivityProjectionTests(unittest.TestCase):
                 self.home, who, direct["id"], run_id="task-activity-run"
             )
         self.assertEqual(raised.exception.status, 404)
+
+    def test_internal_call_activity_has_evidence_without_task_chips(self):
+        state = self.state()
+        unit = state["units"][0]
+        st.record_draft(
+            state,
+            unit,
+            contracts.KIND_DRAFT_SKELETON,
+            self.draft_result(),
+            family="codex",
+            model="call-model",
+            effort="high",
+            duration=1.0,
+        )
+        unit["status"] = st.U_ROUNDS
+        st.record_round(
+            state,
+            unit,
+            "codex",
+            contracts.KIND_REVIEW_ROUND,
+            self.clean_review(),
+            duration=2.0,
+        )
+        st.append_event(
+            state,
+            "worker_malformed",
+            unit="skeleton",
+            kind=contracts.KIND_REVIEW_ROUND,
+            family="codex",
+            fatal=False,
+            raw_path=".orchestrator/raw/review-malformed.txt",
+        )
+        st.append_event(
+            state,
+            "reclassify_recorded",
+            unit="skeleton",
+            source_round="skeleton-codex-r1",
+            finding_id="codex-F1",
+            reclassifier="claude",
+            drift_risk="low",
+            drift_damage="low",
+            threshold="low",
+            defer_ok=True,
+            reason="bounded debt",
+            duration_s=3.0,
+        )
+        st.append_event(
+            state,
+            "brainstorming_origin_recorded",
+            unit="skeleton",
+            kind=contracts.KIND_REVIEW_ROUND,
+            family="codex",
+            raw_path=".orchestrator/raw/rethink-origin.txt",
+            duration_s=4.0,
+        )
+        st.append_event(
+            state,
+            "brainstorming_wait_started",
+            unit="skeleton",
+            session_id="rethink-session",
+            kind=contracts.KIND_REVIEW_ROUND,
+            family="codex",
+        )
+
+        state_path = os.path.join(self.tmp.name, "state.json")
+        st.save_new(state_path, state)
+        registry.add(
+            self.home,
+            registry.new_entry(
+                "reviewed-activity-run",
+                "reviewed activity",
+                self.workspace,
+                state_path,
+            ),
+        )
+        direct = task_api.StandaloneTaskStore(self.home).admit(
+            self.order(),
+            {"agent_call": {"agent": "codex"}},
+            self.workspace,
+        )
+
+        summary = st.summary(state)
+        view = summary["units"][0]
+        self.assertEqual(view["task_ids"], [])
+        self.assertEqual(len(view["drafts"]), 1)
+        self.assertEqual(len(view["rounds"]), 1)
+        self.assertEqual(len(view["reclassify"]), 1)
+        self.assertEqual(len(view["brainstormings"]), 1)
+        self.assertEqual(len(summary["malformed"]), 1)
+        for evidence in (
+            view["drafts"]
+            + view["rounds"]
+            + view["reclassify"]
+            + view["brainstormings"]
+            + summary["malformed"]
+        ):
+            self.assertNotIn("task_id", evidence)
+
+        who = {"admin": True}
+        self.assertEqual(
+            service.visible_run_tasks(
+                self.home, who, "reviewed-activity-run"
+            ),
+            [],
+        )
+        self.assertEqual(service.visible_tasks(self.home, who), [direct])
+        self.assertEqual(
+            service.read_task(self.home, who, direct["id"]), direct
+        )
 
     def test_failed_review_origin_and_later_review_have_distinct_chips(self):
         state = self.state()

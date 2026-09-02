@@ -87,7 +87,17 @@ class TaskContractsTest(unittest.TestCase):
         self.assertIsInstance(catalogue, list)
         self.assertEqual(
             [entry["id"] for entry in catalogue],
+            ["agent_call", "brainstorming", "reviewed_task", "deep_task"],
+        )
+        producer_catalogue = tasks.producer_task_executor_catalogue()
+        self.assertEqual(
+            [entry["id"] for entry in producer_catalogue],
             ["agent_call", "brainstorming"],
+        )
+        producer_catalogue[0]["description"] = "changed"
+        self.assertNotEqual(
+            tasks.producer_task_executor_catalogue()[0]["description"],
+            "changed",
         )
         fields = {
             "id",
@@ -168,6 +178,62 @@ class TaskContractsTest(unittest.TestCase):
             20,
         )
 
+        reviewed = catalogue[2]["configuration_schema"]
+        producer = reviewed["producer"]
+        self.assertEqual(producer["type"], "task_executor")
+        self.assertEqual(
+            [choice["value"] for choice in producer["choices"]],
+            ["agent_call", "brainstorming"],
+        )
+        self.assertEqual(
+            producer["choices"][0]["configuration_schema_by"]["schemas"],
+            {
+                kind: {
+                    "role": {
+                        "type": "choice",
+                        "choices": [role],
+                        "optional": True,
+                        "default": "",
+                    },
+                }
+                for kind, role in (
+                    ("draft_skeleton", "plan"),
+                    ("draft_slice_note", "draft"),
+                    ("implement", "implement"),
+                    ("complete_verification", "implement"),
+                )
+            },
+        )
+        self.assertEqual(
+            producer["choices"][1]["configuration_schema"],
+            tasks.task_executor_catalogue()[1]["configuration_schema"],
+        )
+        self.assertEqual(
+            reviewed["doc_reclassify_from"]["applicable_when"],
+            {"task_kind": ["draft_skeleton", "draft_slice_note"]},
+        )
+        self.assertEqual(
+            reviewed["impl_reclassify_from"]["applicable_when"],
+            {"task_kind": ["implement", "complete_verification"]},
+        )
+        size = reviewed["implementation_size_control"]
+        self.assertEqual(size["type"], "object")
+        self.assertEqual(
+            size["applicable_when"],
+            {
+                "task_kind": ["implement"],
+                "producer.task_executor": [None, "agent_call"],
+            },
+        )
+        self.assertEqual(
+            set(size["properties"]),
+            {
+                "soft_lines", "hard_lines", "unconfirmed_grace_s",
+                "confirmed_grace_s",
+            },
+        )
+        self.assertNotIn('"type": "json"', json.dumps(reviewed))
+
     def test_configuration_schema_and_resolution(self):
         self.assertEqual(
             tasks.resolve_configuration("agent_call"), {"role": "implement"}
@@ -228,6 +294,55 @@ class TaskContractsTest(unittest.TestCase):
             tasks.resolve_configuration,
             1,
         )
+
+        reviewed = tasks.resolve_configuration(
+            "reviewed_task", {"task_kind": "implement"}
+        )
+        self.assertEqual(reviewed["task_kind"], "implement")
+        self.assertEqual(
+            reviewed["producer"]["task_executor"], "agent_call"
+        )
+        self.assertEqual(reviewed["review_breadth"], "double")
+        self.assertIn("implementation_size_control", reviewed)
+        inherited = tasks.resolve_configuration(
+            "reviewed_task",
+            {"task_kind": "implement"},
+            reviewed_defaults={
+                "max_fix_loops": 7,
+                "implementation_size_control": {
+                    "soft_lines": 40,
+                    "hard_lines": 60,
+                    "unconfirmed_grace_s": 9,
+                    "confirmed_grace_s": 15,
+                },
+            },
+        )
+        self.assertEqual(inherited["max_fix_loops"], 7)
+        self.assertEqual(
+            inherited["implementation_size_control"]["soft_lines"], 40
+        )
+        for configuration, code in (
+            ({}, tasks.INVALID_TASK_REQUEST),
+            ({"task_kind": "draft_skeleton", "producer": {
+                "task_executor": "brainstorming",
+            }}, tasks.INVALID_TASK_REQUEST),
+            ({"task_kind": "implement", "producer": {
+                "task_executor": "reviewed_task",
+            }}, tasks.INVALID_TASK_REQUEST),
+            ({"task_kind": "implement", "producer": {
+                "task_executor": "missing",
+            }}, tasks.UNKNOWN_TASK_EXECUTOR),
+            ({"task_kind": "implement", "producer": {
+                "task_executor": "brainstorming",
+            }, "implementation_size_control": {}}, tasks.INVALID_TASK_REQUEST),
+        ):
+            with self.subTest(configuration=configuration):
+                self.assert_request_error(
+                    code,
+                    tasks.resolve_configuration,
+                    "reviewed_task",
+                    configuration,
+                )
 
         definition = tasks._TASK_EXECUTOR_BY_ID["brainstorming"][
             "configuration_schema"
@@ -966,6 +1081,8 @@ class DurableTaskRecordsTest(unittest.TestCase):
                 driver.state["events"][-1]["task_id"], task["id"]
             )
 
+            implementation = st._new_unit(st.UNIT_SLICE_IMPL, 1)
+
             with mock.patch.object(
                 drv.gitops, "enabled", return_value=True
             ), mock.patch.object(
@@ -974,19 +1091,19 @@ class DurableTaskRecordsTest(unittest.TestCase):
                 driver, "_matching_busy_call", return_value={}
             ):
                 control, marker = driver._implementation_size_control(
-                    "base-tree", task_id=task["id"]
+                    "base-tree", task_id=task["id"], unit=implementation
                 )
                 marker["interrupt_lines"] = 1600
                 control._bind(lambda _text: True, lambda _reason: True)
                 self.assertTrue(control.interrupt("hard size limit"))
                 control._close()
-            durable = st.current_unit(driver.state)[
+            durable = implementation[
                 "implementation_stabilization"
             ]["implementation_size"]
             self.assertEqual(durable["task_id"], task["id"])
 
             driver._ensure_implementation_stabilization_events(
-                st.current_unit(driver.state), durable
+                implementation, durable
             )
             interrupted = [
                 event for event in driver.state["events"]

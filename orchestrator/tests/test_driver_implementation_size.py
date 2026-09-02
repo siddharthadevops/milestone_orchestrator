@@ -20,6 +20,7 @@ from orchestrator import driver as drv
 from orchestrator import gitops
 from orchestrator import runners
 from orchestrator import state as st
+from orchestrator import tasks
 from orchestrator.tests.test_driver_mock import (
     git_init_workspace,
     make_config,
@@ -1115,6 +1116,69 @@ class DriverImplementationSizeTest(unittest.TestCase):
             subject = gitops._run(ws, "log", "-1", "--format=%s").stdout.strip()
             self.assertEqual(subject, "wip: slice_impl-01-a")
 
+    def test_size_choices_apply_only_to_implementation(self):
+        with tempfile.TemporaryDirectory(prefix="orch-reviewed-size-") as ws:
+            runner = LiveControlRunner(
+                "hard",
+                self._cut_response(),
+                recovery_response=self._cut_response(
+                    "custom-sized core", "remaining wiring"
+                ),
+            )
+            path, driver, implementation = self._ready_driver(ws, runner)
+            custom = {
+                "soft_lines": 2,
+                "hard_lines": 6,
+                "unconfirmed_grace_s": 0.02,
+                "confirmed_grace_s": 0.08,
+            }
+            document = driver._unit_by_key("slice_doc-01")
+            before = st.load(path)
+            with self.assertRaises(tasks.TaskRequestError) as refused:
+                driver.reviewed_work.configure(document, {
+                    "implementation_size_control": custom,
+                })
+            self.assertEqual(refused.exception.code, tasks.INVALID_TASK_REQUEST)
+            self.assertEqual(st.load(path), before)
+            self.assertIsNone(driver._implementation_size_settings(document))
+
+            frozen = driver.reviewed_work.configure(implementation, {
+                "implementation_size_control": custom,
+            })
+            action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            state = st.load(path)
+            unit = st.current_unit(state)
+            self.assertEqual(
+                frozen["implementation_size_control"], custom
+            )
+            self.assertEqual(
+                unit["reviewed_policy"]["implementation_size_control"], custom
+            )
+            self.assertEqual(
+                unit["implementation_cut"]["cut_scope"], "custom-sized core"
+            )
+            steer = next(
+                event for event in state["events"]
+                if event["type"] == "implementation_size_steer"
+            )
+            interrupted = next(
+                event for event in state["events"]
+                if event["type"] == "implementation_size_interrupted"
+            )
+            self.assertEqual(
+                (steer["soft_lines"], steer["hard_lines"]), (2, 6)
+            )
+            self.assertEqual(steer["grace_kind"], "unconfirmed")
+            self.assertEqual(interrupted["grace_kind"], "unconfirmed")
+            self.assertGreaterEqual(unit["implementation_cut"]["steer_lines"], 2)
+            self.assertGreaterEqual(
+                unit["implementation_cut"]["interrupt_lines"], 6
+            )
+            self.assertIsNotNone(runner.controls[0])
+            self.assertIsNone(runner.controls[1])
+
     def test_proactive_cut_without_a_live_steer_opens_part_a(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-proactive-") as ws:
             runner = LiveControlRunner("normal", self._cut_response())
@@ -2061,6 +2125,42 @@ class DriverImplementationSizeTest(unittest.TestCase):
             )
             self.assertEqual(st.unit_key(continuation), "slice_impl-01-b")
             self.assertEqual(continuation["status"], st.U_PENDING)
+
+    def test_pending_gate_rewind_preserves_design_update(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-design-rewind-") as ws:
+            path, driver, first = self._ready_driver(
+                ws, runners.MockRunner([])
+            )
+            first["status"] = st.U_SEALED
+            design_update = {
+                "editable_paths": ["docs/skeleton.md"],
+                "changed_paths": ["docs/skeleton.md"],
+                "amendment": "Use the agreed boundary.",
+            }
+            first["design_update"] = design_update
+            gitops.commit_wip(ws, "wip: slice_impl-01")
+            driver.state["pending_gate_unit"] = st.unit_key(first)
+            driver.state["pending_gate_fingerprint"] = (
+                driver._gate_candidate_fingerprint(first)
+            )
+            driver._save()
+
+            with open(os.path.join(ws, "implementation.py"), "w",
+                      encoding="utf-8") as handle:
+                handle.write("downtime_edit = True\n")
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+
+            recovered_first = next(
+                unit for unit in recovered.state["units"]
+                if unit["kind"] == st.UNIT_SLICE_IMPL
+                and unit.get("part") is None
+            )
+            self.assertEqual(recovered_first["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertEqual(recovered_first["design_update"], design_update)
+            self.assertFalse(recovered_first.get("gate_commit"))
+            self.assertNotIn("pending_gate_unit", recovered.state)
+            self.assertNotIn("pending_gate_fingerprint", recovered.state)
 
     def test_failed_last_gate_recovery_closes_with_a_final_commit(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-last-gate-") as ws:

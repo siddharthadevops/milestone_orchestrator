@@ -577,7 +577,13 @@ def impl_script():
 class TestHappyLifecycle(DriverTestCase):
     def test_full_lifecycle_covers_final_verification_failure(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config(verification=[VERIFY_CMD]))
+            path = init_state(
+                ws,
+                make_config(
+                    verification=[VERIFY_CMD],
+                    p3_reclassify_debt=False,
+                ),
+            )
             mock = runners.MockRunner(
                 skeleton_script() + doc_script() + impl_script()
             )

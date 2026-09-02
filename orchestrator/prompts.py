@@ -1391,7 +1391,7 @@ def _producer_planning_block():
         "plan shorter discussions than the catalogue allows.\n"
         "TASKEXECUTOR CATALOGUE:\n%s\n\n"
         % json.dumps(
-            tasks.task_executor_catalogue(),
+            tasks.producer_task_executor_catalogue(),
             ensure_ascii=False,
             sort_keys=True,
             indent=2,

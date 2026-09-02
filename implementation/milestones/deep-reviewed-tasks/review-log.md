@@ -44,3 +44,830 @@
 - `codex-S1-STATE-APPEND` (raised codex, cleared codex): The note incorrectly makes entire state saves append-only — The false append-only rule appears twice as a hard persistence guarantee and could plausibly drive unnecessary machinery or rejection of legitimate status and marker updates, but correction remains bounded to this unit and should be caught during its review.
 - `claude-S1-GAP-REDOC-UNALLOCATED` (raised claude, cleared codex): The note allocates every in-cycle exit of the current reviewed lifecycle except the gap / re-documentation-wave exit, so nothing decides whether cross-unit design repair lands inside or outside the extracted boundary, and no named check can fail either way. — A careful builder should infer from the explicit milestone ownership of design repair that gap handling must exit the reusable boundary, but the missing gap-specific contract could mislead a hasty extraction and require bounded boundary rework at its own review.
 
+## slice_impl-01 (Default reviewed-lifecycle parity)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r1.txt` |
+| slice_impl-01-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-fix1.txt` |
+| slice_impl-01-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-delta1.txt` |
+| slice_impl-01-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r2.txt` |
+| slice_impl-01-codex-r5 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-fix2.txt` |
+| slice_impl-01-codex-r6 | delta_review | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-delta2.txt` |
+| slice_impl-01-codex-r7 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-fix3.txt` |
+| slice_impl-01-codex-r8 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-delta3.txt` |
+| slice_impl-01-codex-r9 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r3.txt` |
+| slice_impl-01-codex-r10 | review_round | codex | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r4.txt` |
+| slice_impl-01-codex-r11 | fix_findings | codex | 1 | 1 rejected | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-fix4.txt` |
+| slice_impl-01-codex-r12 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-delta4.txt` |
+| slice_impl-01-codex-r13 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-codex-r5.txt` |
+| slice_impl-01-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-01-codex-r13`, `slice_impl-01-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DR-880D5A6-1` (raised codex, cleared codex): Reusable checkpoint preparation now owns milestone reconciliation — The reusable checkpoint path silently invokes milestone plan observation despite the pinned independence boundary, plausibly misleading later task work, while correction remains a bounded separation of repository restoration from milestone reconciliation plus focused tests.
+- `codex-DRT-S01-FULL-003` (raised codex, cleared codex): Missing test: test_boundary_keeps_brainstorming_and_gap_exits_outside_milestone_control — Despite its P3 label, this is a correctness-coverage gap: the ownership rule is stated correctly and repeatedly, but the direct proof omits two milestone-control exits, so a regression could pass focused verification yet would require only bounded lifecycle and test rework.
+- `claude-S01-FULL-R2-001` (raised claude, cleared codex): `_after_seal` survives as a production hook with no production caller, duplicating the step() gate composition that the new boundary now owns — The unused duplicate hook and seven direct-call tests could mislead a hasty builder about production coverage, but the production-versus-boundary golden compares events through the gate and would expose advance-before-gate ordering, leaving any correction as bounded Slice 1 hook-and-test rework.
+- `claude-S01-FULL-R2-002` (raised claude, cleared codex): The milestone step loop answers a non-terminal Brainstorming wait before reaching the reviewed-work boundary, so the boundary's own wait handler is unreachable on the milestone path — The accepted ownership contract is factually false on ordinary non-terminal rethink polls, so a later builder could extend or test only the boundary and miss milestone behavior, while correction remains a bounded polling-seam refactor with parity coverage and no state or public-contract migration.
+
+## slice_doc-02 (Producer, review breadth, debt, and caps)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-02.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-02-codex-r1 | review_round | codex | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-02-codex-r1.txt` |
+| slice_doc-02-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-02-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-02-codex-r1`, `slice_doc-02-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S02-FULL-001` (raised codex, cleared codex): Missing Git baseline posture contradicts the existing fail-closed size-control contract — The hard-register statement reverses the existing fail-before-worker contract and zero-call test, so a builder would likely implement or preserve incorrect behavior, while correction remains bounded to Slice 2's size-policy wiring and its own review before shipment or downstream propagation.
+- `codex-DRT-S02-FULL-002` (raised codex, cleared codex): The focused command omits two named Brainstorming producer integration checks — Risk is high because the authoritative focused command can silently certify producer selection without executing two required Brainstorming checks, while damage is medium because correction remains bounded to running the omitted module and repairing any exposed regression within this unit.
+- `codex-DRT-S02-FULL-003` (raised codex, cleared codex): The skeleton’s review-breadth/debt row cites unrelated verification code — The cited range is visibly unrelated, while Slice 02 supplies the correct debt-gate range and behavioral checks, so a strong builder is unlikely to be silently diverted and correction is only a local citation re-pin.
+- `claude-slice_doc-02-claude-r1/FULL-001` (raised claude, cleared codex): The note pins `distinct_families_unsatisfiable` — a document-scoped Staffing Router condition — as the enforcement for an order-scoped breadth contract, but that condition is provably not raised when the run's staffing document assigns `review` a single seat, so the new strict default ("never seals on one") has no mechanism that can refuse. — The hard register falsely presents the existing Staffing Router refusal as enforcing the strict two-family default even though one supported review seat bypasses it and seals, making wrong-contract implementation likely while correction remains bounded to Slice 2 breadth enforcement and focused test
+- `claude-slice_doc-02-claude-r1/FULL-002` (raised claude, cleared codex): The note never states what happens when the explicitly cheaper one-family order runs on a machine whose staffing document declares `review` split across two seats — the exact configuration where the cheap option is wanted — and today that combination fails the run rather than reviewing once. — The slice expressly requires one-family completion independent of the staffing document's arbitrary seat count, so a strong builder is unlikely to preserve the refusal, while any miss requires bounded Slice 2 routing and test rework.
+
+## slice_impl-02-a (Producer, review breadth, debt, and caps)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r1.txt` |
+| slice_impl-02-claude-r1 | review_round | claude | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r1.txt` |
+| slice_impl-02-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix1.txt` |
+| slice_impl-02-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta1.txt` |
+| slice_impl-02-codex-r4 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r2.txt` |
+| slice_impl-02-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix2.txt` |
+| slice_impl-02-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta2.txt` |
+| slice_impl-02-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r3.txt` |
+| slice_impl-02-claude-r2 | review_round | claude | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r2.txt` |
+| slice_impl-02-codex-r8 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix3.txt` |
+| slice_impl-02-codex-r9 | delta_review | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta3.txt` |
+| slice_impl-02-codex-r10 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix4.txt` |
+| slice_impl-02-codex-r11 | delta_review | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta4.txt` |
+| slice_impl-02-codex-r12 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix5.txt` |
+| slice_impl-02-codex-r13 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta5.txt` |
+| slice_impl-02-codex-r14 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r4.txt` |
+| slice_impl-02-claude-r3 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r3.txt` |
+| slice_impl-02-codex-r15 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix6.txt` |
+| slice_impl-02-codex-r16 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta6.txt` |
+| slice_impl-02-codex-r17 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r5.txt` |
+| slice_impl-02-claude-r4 | review_round | claude | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r4.txt` |
+| slice_impl-02-codex-r18 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-fix7.txt` |
+| slice_impl-02-codex-r19 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-delta7.txt` |
+| slice_impl-02-codex-r20 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-codex-r6.txt` |
+| slice_impl-02-claude-r5 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-claude-r5.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-codex-r20`, `slice_impl-02-claude-r5`
+
+**Deferred debt (independently classified):**
+- `claude-slice_impl-02-a-claude-r1/DRT-S02A-012` (raised claude, cleared codex): The cut adds a third copy of the unit-kind-to-task-kind table and a second copy of the production role table instead of reusing the existing ones — The tiny tables currently agree and tests separately pin both policy and admitted-order roles, so only a hasty future change could leave one stale, while correction would be a small local consolidation or value update caught within the unit.
+- `claude-claude-slice_impl-02-a-r1/S02A-003` (raised claude, cleared codex): The pre-production freeze guard omits the parked rethink-continuation carrier, so a policy can be frozen after a production call has already completed and paid — The strict pre-first-call invariant is falsely presented as enforced despite a persisted paid-output state that later builders could trust without re-auditing, but correction is a local guard-and-regression-test change requiring no contract redesign or cross-slice rework.
+- `claude-claude-slice_impl-02-a-r2/S02A-102` (raised claude, cleared codex): A refused producer resolution inside the automatic freeze escapes `Driver.step` as an unhandled `TaskRequestError`, bypassing the run's own failure discipline and recording nothing in state — The defect is real but limited to noncanonical hand-seeded or legacy state, becomes immediately visible as a repeatable exception, and needs only a local failure-recording correction once encountered.
+- `codex-S02A-201` (raised codex, cleared codex): The pinned producer-policy verification test is missing — Slice 2 explicitly requires one combined named producer regression that is absent, so a builder could overlook the proof gap despite passing component tests, but discovery is straightforward and correction is a small local test addition with no demonstrated runtime defect.
+- `claude-claude-slice_impl-02-a-r3/S02A-301` (raised claude, cleared codex): The slice-02 Verification Contract's focused command omits orchestrator/tests/test_brainstorming_slice_production.py, the only module holding two of the producer row's own named retained checks — exactly the Brainstorming production adapter this part rerouted through the frozen selection. — The pinned command can plausibly give the next builder false green proof while skipping the changed Brainstorming adapter, but correction is a local command amendment and rerun because the omitted 12-test module already passes.
+
+## slice_impl-02-b (Producer, review breadth, debt, and caps)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-b-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-codex-r1.txt` |
+| slice_impl-02-b-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-fix1.txt` |
+| slice_impl-02-b-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-delta1.txt` |
+| slice_impl-02-b-codex-r4 | fix_findings | codex | 1 | 1 rejected | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-fix2.txt` |
+| slice_impl-02-b-codex-r5 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-delta2.txt` |
+| slice_impl-02-b-codex-r6 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-codex-r2.txt` |
+| slice_impl-02-b-codex-r7 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-fix3.txt` |
+| slice_impl-02-b-codex-r8 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-delta3.txt` |
+| slice_impl-02-b-codex-r9 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-codex-r3.txt` |
+| slice_impl-02-b-claude-r1 | review_round | claude | 4 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-b-codex-r9`, `slice_impl-02-b-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-slice_impl-02-b-codex-r1/DRT-S02B-002` (raised codex, cleared codex): New skeleton work never freezes the required default policy — The skeleton path silently bypasses automatic policy freezing and contradicts the pinned exactly-two-family default that downstream lifecycle work will trust, while correction is a local pre-draft freeze and focused regression test rather than propagated rework.
+- `codex-slice_impl-02-b-codex-r1/DRT-S02B-003` (raised codex, cleared codex): Two non-delegated pinned checks are absent — The two strict named checks are absent and nearby coverage does not prove their full lifecycle and isolation claims, so a careful builder can detect the explicit gap while a hasty one may trust a green focused suite, with correction remaining bounded to this unit’s tests and any behavior they expose
+- `codex-codex-slice_impl-02-b-delta-r1/DRT-S02B-005` (raised codex, cleared codex): The retained Brainstorming size-isolation test now errors — The stale request fails deterministically before assertions in the required extended suite, so it cannot silently mislead a capable builder and correction is a small local test update restoring the retained runtime proof.
+- `codex-codex-slice_impl-02-b-review-r1/DRT-S02B-006` (raised codex, cleared codex): Double-family staffing refusal escapes without durable failure — The strict contract promises a durable staffing failure, but exact-breadth selection escapes its persistence handler, plausibly misleading downstream reviewed-task work while correction remains a bounded exception-path and regression-test repair within this unit.
+- `codex-codex-slice_impl-02-b-review-r1/DRT-S02B-007` (raised codex, cleared codex): Plan reconciliation erases unrelated order-local policy — The helper and its test explicitly discard all frozen policy despite the pinned durability contract, making wrong recovery semantics likely to be trusted, while correction remains bounded to preserving compatible order fields and updating reconciliation tests within this unit.
+- `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-008` (raised claude, cleared codex): Every default reviewed order now demands two distinct review families, hard-failing single-family runs before their first review call — The one-family regression is real, but it fails visibly at the first review and is already caught by retained goldens, while correction is bounded to reconciling Slice 2's conflicting default-breadth contract and focused tests.
+- `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-009` (raised claude, cleared codex): A default order re-arms implementation size control on a run whose config deliberately disabled it — The frozen policy silently contradicts the pinned default-parity contract when run-wide size control is disabled and can steer later implementation behavior, while correction remains bounded to preserving the disabled state through policy resolution plus focused regression coverage.
+- `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-010` (raised claude, cleared codex): The delta checkpoint lost its int coercion and zero clamp, so a malformed config value now crashes or inverts it — The behavior is a real but compatibility-edge correctness regression that a careful builder can distinguish from validated order-local values, while correction only restores the former local coercion and clamp.
+- `claude-claude-slice_impl-02-b-review-r1/DRT-S02B-011` (raised claude, cleared codex): The two-seat special case in _staffing_resolution adds a second staffing-document read per review resolution and changes no reachable outcome — The proposed one-read simplification is correct, but the claim that no reachable outcome changes overlooks a live document rewrite between the two reads, so context is needed to recover the concurrency rationale while correction remains a small local change.
+
+## slice_impl-02-c (Producer, review breadth, debt, and caps)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-c-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-c-codex-r1.txt` |
+| slice_impl-02-c-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-02-c-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-c-codex-r1`, `slice_impl-02-c-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-slice_impl-02-c-codex-r1/DRT-S02C-001` (raised codex, cleared codex): Focused command omits two pinned producer checks — The authoritative focused command silently omits the module holding two explicitly pinned producer checks, making false-green guidance plausible, while both checks currently pass and correction is a one-line command expansion.
+- `codex-slice_impl-02-c-codex-r1/DRT-S02C-002` (raised codex, cleared codex): Custom grace overrides remain unproven — The named test can falsely certify order-local grace behavior despite asserting neither duration nor timing, but the runtime currently consumes the override and correction is a small focused assertion or local wiring fix.
+- `claude-REV-S02C-001` (raised claude, cleared codex): Default review breadth is never applied to the skeleton production, so the milestone skeleton reviews at the document's seat count instead of the mandated two distinct families — The skeleton silently violates the pinned two-family default and goldens bless that behavior, plausibly steering later lifecycle code and tests wrong, while correction remains bounded policy-freezing and coverage rework caught before publication.
+- `claude-REV-S02C-002` (raised claude, cleared codex): The named double-family check proves sealing and refusal only on the profileless fallback cycle, a path no real run takes — The artifact falsely certifies router-backed double-family selection and refusal through a named test that exercises only the profileless fallback, so later work can trust unproved production behavior, while correction is a focused homed test and at most a small local fix.
+- `claude-REV-S02C-003` (raised claude, cleared codex): Three of the nine new named checks in the slice's Verification Contract do not exist under those names — The incorrect test names and unasserted single-review citation can mislead someone who trusts the verification table, but a careful builder will expose the mismatch immediately and correction is limited to repinning the checks and adding one focused assertion.
+
+## slice_doc-03 (Routed calls and rethink continuity)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-03.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-03-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-codex-r1.txt` |
+| slice_doc-03-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-fix1.txt` |
+| slice_doc-03-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-delta1.txt` |
+| slice_doc-03-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-codex-r2.txt` |
+| slice_doc-03-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-03-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-03-codex-r4`, `slice_doc-03-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S03-002` (raised codex, cleared codex): Complete Prompt Router matrix omits failure classification — The artifact wrongly calls its matrix complete while omitting a live model-classification prompt that controls recovery, plausibly preserving wrong routing and tests, but correction remains bounded to this slice before publication.
+- `claude-DRT-S03-R1-001` (raised claude, cleared codex): Slice 3 deletes the internal task record that today anchors mid-attempt recovery, without pinning any replacement contract for resumption framing or frozen validation/result strategy — The slice leaves attempt-resumption framing and frozen validation/result policy unpinned, so a hasty builder could lose them, but the milestone’s preservation rule and included recovery tests should alert a careful builder, while correction is bounded to restoring durable attempt metadata and focuse
+
+## slice_impl-03-a (Routed calls and rethink continuity)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-codex-r1.txt` |
+| slice_impl-03-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-codex-r1`, `slice_impl-03-claude-r1`
+
+**Deferred debt (independently classified):**
+- `claude-DRT-S03A-001` (raised claude, cleared codex): Internal task-admission machinery is now unreachable but retained, and ~35 tests still pin it — The authoritative slice and live dispatch clearly establish direct reviewed calls, so a careful builder will recognize the callerless admission helper, stale comment, and roughly 35 test calls across nine modules as obsolete, while correction requires bounded cleanup and test refactoring within this
+- `claude-DRT-S03A-002` (raised claude, cleared codex): Rethink-continuity is proven for the implement origin only, not every eligible origin — Despite its P3 label, this is a real strict test-coverage gap: the artifact promises continuity for five origins while exercising only implementation, so a builder might trust the green suite, but correction remains bounded to rethink routing and its tests.
+
+## slice_impl-03-b (Routed calls and rethink continuity)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-b-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-b-codex-r1.txt` |
+| slice_impl-03-b-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-03-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-b-codex-r1`, `slice_impl-03-b-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S03B-001` (raised codex, cleared codex): Blocked calls lose their durable structured result evidence — The focused test and runtime falsely imply the strict blocked-call evidence guarantee is met, so later result or recovery work could trust a missing structured/raw link, while correction remains bounded to the central blocked-event path and its assertions within this unit.
+- `codex-DRT-S03B-002` (raised codex, cleared codex): The every-origin rethink golden still covers only implementation — The strict contract claims five-origin continuity while the golden executes only implement, so a builder could trust a green gate and miss four phase regressions, but correction remains bounded to origin-specific tests and any local defects they expose.
+
+## slice_doc-04 (Reviewed seal, gate, result, and recovery)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-04.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-04-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-04-codex-r1.txt` |
+| slice_doc-04-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-04-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-04-codex-r1`, `slice_doc-04-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S04-FULL-001` (raised codex, cleared codex): Reviewed-success pin cites unrelated task lines — Slice 04 correctly pins success/failure at tasks.py:53-64 and validation at 1018-1092, so the skeleton’s bad supporting pin is unlikely to misdirect a max-effort builder, while correction is a one-line citation repair requiring no contract or implementation rework.
+- `claude-claude-DRT-S04-FULL-001` (raised claude, cleared codex): Gate recovery claim has no idempotence seam: a crash after the gate commit lands can stack a second identical gate commit when a fixer left linear commits — Although labeled P3, this is a real correctness and test-coverage gap: the strict post-Git-effect recovery promise can miss the fixer-preserved branch, but a careful builder can derive the missing identity seam and correction remains bounded to Slice 04 recovery and tests.
+
+## slice_impl-04 (Reviewed seal, gate, result, and recovery)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-04-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-codex-r1.txt` |
+| slice_impl-04-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-fix1.txt` |
+| slice_impl-04-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-delta1.txt` |
+| slice_impl-04-codex-r4 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-codex-r2.txt` |
+| slice_impl-04-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-claude-r1.txt` |
+| slice_impl-04-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-fix2.txt` |
+| slice_impl-04-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-delta2.txt` |
+| slice_impl-04-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-codex-r3.txt` |
+| slice_impl-04-claude-r2 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-04-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-04-codex-r7`, `slice_impl-04-claude-r2`
+- scheduled verification event: `490`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S04-001` (raised codex, cleared codex): Gate recovery can certify repository bytes changed after review — The slice pins strict current-byte gate recovery, but pending-gate state stores no reviewed repository identity and recovery amends whatever HEAD now exists, so the reusable boundary falsely certifies behavior a builder will trust, while correction remains a localized recovery check and regression t
+- `codex-DRT-S04-003` (raised codex, cleared codex): Reviewed results omit verification tokens and cost — The strict pinned accounting contract is falsely satisfied while verification tokens and cost are omitted, so later public and composite builders will likely propagate understated totals, but correction is a local accounting inclusion plus focused regression test.
+- `codex-DRT-S04-FULL-001` (raised codex, cleared codex): Reconciliation-paused calls disappear from reviewed-result accounting — The artifact falsely presents retained-call accounting as strictly complete while excluding a reconciliation-pause event, so later builders will trust incorrect totals, but correction is a small local aggregation and regression-test fix.
+- `codex-DRT-S04-FULL-002` (raised codex, cleared codex): Suite-repair fixer duration is counted twice — The hard once-only accounting claim and its named test falsely certify suite-repair duration, so later builders can silently consume a doubled terminal total, while correction remains bounded to accounting ownership and focused regression coverage.
+
+## slice_doc-05 (Standalone reviewed-task ordering)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-05.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-05-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r1.txt` |
+| slice_doc-05-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-fix1.txt` |
+| slice_doc-05-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-delta1.txt` |
+| slice_doc-05-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r2.txt` |
+| slice_doc-05-claude-r1 | review_round | claude | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-claude-r1.txt` |
+| slice_doc-05-codex-r5 | fix_findings | codex | 3 | 2 fixed, 1 rejected | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-fix2.txt` |
+| slice_doc-05-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-delta2.txt` |
+| slice_doc-05-codex-r7 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r3.txt` |
+| slice_doc-05-codex-r8 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-fix3.txt` |
+| slice_doc-05-codex-r9 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-delta3.txt` |
+| slice_doc-05-codex-r10 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r4.txt` |
+| slice_doc-05-claude-r2 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-claude-r2.txt` |
+| slice_doc-05-codex-r11 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-fix4.txt` |
+| slice_doc-05-codex-r12 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-delta4.txt` |
+| slice_doc-05-codex-r13 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-codex-r5.txt` |
+| slice_doc-05-claude-r3 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-05-claude-r3.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-05-codex-r13`, `slice_doc-05-claude-r3`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S05-FULL-001` (raised codex, cleared codex): The standard’s hard-register code citations are stale — The unrelated ranges could misdirect a hasty builder, but the clear prose and obvious citation mismatch should alert a careful max-effort agent; any resulting wrong-seam implementation or missed test would be bounded Slice 5 rework caught at its review.
+- `codex-codex-DRT-S05-FULL-002` (raised codex, cleared codex): Standalone ordering omits mutable operator-amendment continuity — The slice promises lifecycle reuse but neither pins nor tests amendment refresh, so a careful builder should identify the omission while a mistaken order-time freeze could cause incorrect behavior and bounded Slice 5 implementation-and-test rework.
+- `claude-claude-DRT-S05-FULL-002` (raised claude, cleared codex): The note's Stop contract closes only the outer task record; it pins nothing about the reviewed task's own live internal Brainstorming session, so an operator Stop during a rethink leaves that session's process running on the work area — contradicting the note's own pass condition that Stop releases the work area. — The slice strictly requires Stop to fail the task and release its work area but leaves rethink-session termination implicit, so a careful builder should derive the missing behavior while a hasty one could miss it, with correction requiring bounded Stop/lifecycle plumbing and coverage within Slice 5.
+- `codex-codex-DRT-S05-FULL-003` (raised codex, cleared codex): Standalone ordering does not pin live standing-project-law refresh — The slice ambiguously pairs admission-frozen configuration with resolved safeguards for every phase, so a careful builder can preserve the existing per-episode refresh while a hasty one may freeze it; correction would be bounded to this unit's handoff and tests rather than alter the public contract.
+- `claude-claude-DRT-S05-FULL-004` (raised claude, cleared codex): Slice 5 pins single-count accounting only for the success envelope; nothing in its contract, acceptance criteria, or verification rows requires a stopped or failed standalone reviewed task to report the physical spend it already made, so its immutable terminal record can show no cost or token usage after dozens of real provider calls. — The artifact strongly implies task-scoped exact accounting and compatibility with generic terminal behavior but never explicitly binds stopped or failed results to lifecycle totals, so a strong builder would likely resolve or flag the gap, while a miss would require bounded Slice 5 projection and te
+
+## slice_impl-05-a (Standalone reviewed-task ordering)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-codex-r1.txt` |
+| slice_impl-05-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-fix1.txt` |
+| slice_impl-05-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-delta1.txt` |
+| slice_impl-05-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-codex-r2.txt` |
+| slice_impl-05-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-fix2.txt` |
+| slice_impl-05-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-delta2.txt` |
+| slice_impl-05-codex-r7 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-codex-r3.txt` |
+| slice_impl-05-claude-r1 | review_round | claude | 4 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-codex-r7`, `slice_impl-05-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S05A-R1-002` (raised codex, cleared codex): Project-valid partial size settings are rejected against unrelated built-in defaults — The admission path silently contradicts the pinned project-default inheritance contract, plausibly misleading dependent builders, while correction remains bounded to Slice 5 validation ordering and focused regression coverage.
+- `codex-DRT-S05A-R1-003` (raised codex, cleared codex): The current part lacks its contract-pinned reviewed-task tests — The absent named module is self-revealing when the focused command runs, so a careful builder should catch it, but trusting the narrower happy-path test could carry unpinned current-part defects forward; correction remains bounded to this part’s contract tests and resulting local fixes.
+- `codex-codex-DRT-S05A-R2-002` (raised codex, cleared codex): Falsey project Git disablements are silently overridden instead of refused — The accepted slice pins refusal for every explicitly resolved Git disablement, but the central guard recognizes only literal false while runtime gating treats 0, null, and an empty string as disabled, so later composition can silently inherit the wrong admission contract although correction is a loc
+- `codex-codex-DRT-S05A-R3-001` (raised codex, cleared codex): The panel misrepresents reviewed tasks and obscures their resolved configuration — The false executor label can mislead a hasty builder, but the conspicuous object text and intact canonical record should trigger a strong builder to verify it, while correction is confined to task-detail rendering and focused regression coverage.
+- `codex-codex-DRT-S05A-R3-002` (raised codex, cleared codex): An explicitly null size-control object is accepted instead of refused — The resolver explicitly converts a forbidden null into valid defaults, which could plausibly teach later callers or tests the wrong admission contract, while correction is a local presence/type check plus a regression test.
+- `claude-claude-DRT-S05A-R4-002` (raised claude, cleared codex): The new candidate-change gate rewind leaves the milestone unit's already-written slice closure in place, so a slice back in review is still counted as completed — The recovery branch records an authoritative closure for an unsealed, ungated unit and bypasses the legal state transition, so later ledger or cadence work could plausibly trust a false fact, while correction remains bounded to recovery-state accounting and focused regression tests before shipment.
+- `claude-claude-DRT-S05A-R4-003` (raised claude, cleared codex): Pending-gate recovery discards a milestone unit's Brainstorming-granted design-update authority even when no gate was completed — The mismatch-recovery branch falsely retires durable design authority before any gate, plausibly misleading later work that trusts shared recovery, while correction remains bounded to distinguishing rewind from completed closure and adding focused regression coverage.
+- `claude-claude-DRT-S05A-R4-004` (raised claude, cleared codex): A reviewed task ordered with an output_directory fails immediately after admission when the work area's primary path contains a symlink — The realpath-versus-registered-path mismatch affects only symlink-aliased primaries, fails synchronously before work begins rather than silently corrupting later work, and is corrected locally by using a consistent canonical base plus one regression test.
+
+## slice_impl-05-b (Standalone reviewed-task ordering)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-b-codex-r1 | review_round | codex | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-codex-r1.txt` |
+| slice_impl-05-b-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-claude-r1.txt` |
+| slice_impl-05-b-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-fix1.txt` |
+| slice_impl-05-b-codex-r3 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-delta1.txt` |
+| slice_impl-05-b-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-codex-r2.txt` |
+| slice_impl-05-b-claude-r2 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-b-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-b-codex-r4`, `slice_impl-05-b-claude-r2`
+
+**Deferred debt (independently classified):**
+- `codex-slice_impl-05-b-codex-r1/DRT-S05B-001` (raised codex, cleared codex): A project-default update can turn a required refusal into an admitted failure — The strict contract freezes effective configuration before acknowledgement, but handoff silently re-resolves it, so later reviewed/deep-task builders can trust a false admission invariant, while correction remains bounded to carrying the resolved configuration through handoff and adding a focused ra
+- `codex-slice_impl-05-b-codex-r1/DRT-S05B-002` (raised codex, cleared codex): The pinned defaults check never exercises an untouched panel order — The strict named test falsely signals full API/panel and all-default coverage while exercising only the API and five defaults, so later panel/default work can silently trust a regression-safe contract that is not actually pinned, but correction remains bounded to this slice’s missing assertions, pan
+- `codex-slice_impl-05-b-codex-r1/DRT-S05B-003` (raised codex, cleared codex): Successive-order isolation is not pinned after a stopped predecessor — The strict slice contract requires successor isolation after both success and Stop, but the named test covers only success, so a builder can plausibly trust false coverage while correction remains bounded to one stopped-predecessor test and any revealed reviewed-task lifecycle fix.
+- `claude-slice_impl-05-b-claude-r1/DRT-S05B-R1-002` (raised claude, cleared codex): The slice's pinned standalone-versus-milestone parity test is absent from the workspace and is not part of the delegated remainder, so no named test proves the standalone adapter hands its admitted objective, context, references, safeguards and staffing session to the routed phases or counts their calls once — The named parity obligation is visibly absent from both the tests and delegated remainder, so a careful builder should detect it while a hasty builder could trust the cut summary, and correction is bounded to this unit’s handoff/accounting assertions and any local defects they expose.
+- `codex-DRT-S05B-D2-001` (raised codex, cleared codex): The new synthetic authority path prevents agent-call rethink attachment — This is a real runtime-correctness and coverage defect: the absolute synthetic artifact conflicts with the strict workspace-relative rethink boundary and could survive mocked tests, but the next part’s mandated real rethink/restart scenario should expose it and correction stays within the standalone
+- `claude-claude-slice_impl-05-b-claude-r2/DRT-S05B-R2-001` (raised claude, cleared codex): The standalone read-only suite-checkpoint boundary returns a result shaped for a different consumer, so every standalone reviewed implementation records its verification evidence with null `candidate_before`/`candidate_after` where the milestone caller records the certified repository revision — The strict standalone/milestone evidence-parity claim is false on the normal success path and could silently propagate into later verification work, but no gate or consumer depends on the blank fields and correction is a small local boundary-shape fix plus regression assertion.
+
+## slice_impl-05-c (Standalone reviewed-task ordering)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-c-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-c-codex-r1.txt` |
+| slice_impl-05-c-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-c-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-c-codex-r1`, `slice_impl-05-c-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S05C-001` (raised codex, cleared codex): Stop finalizes an attached rethink without settling its session evidence — The implementation and its reassuring attached-rethink Stop test violate the pinned exact-once evidence/accounting contract across a real attachment race, likely misleading downstream builders, while correction remains bounded to reviewed-task Stop/session settlement and focused tests.
+- `codex-DRT-S05C-002` (raised codex, cleared codex): Skeleton-review rethink loses the standalone task authority — The rethink session silently omits pinned caller authority that even a careful agent cannot reconstruct when resolving a reference-dependent conflict, creating a high risk of a wrong edit, but fresh reviewed phases regain that authority before sealing, keeping correction to bounded rethink and revie
+- `claude-claude-S05C-R1-001` (raised claude, cleared codex): The plan-free read-only repository turn is written a second time in session_repository instead of reusing the identical completion added in 05-b — The two identical plan-free completions could diverge if a later semantic change reaches only one caller, but careful search should expose both copies, and correction is a small local consolidation or matching edit before shipment.
+- `claude-claude-S05C-R1-002` (raised claude, cleared codex): The standalone crash-window tests delete the in-flight call marker a real crash leaves, so stale-marker recovery is never exercised on the reviewed path — The strict named crash test falsely presents marker-backed spent-call accounting and clean-tree recovery as proved while its helper removes the marker before adoption, so later work can plausibly trust a correctness-critical false green, whereas repair remains bounded to the standalone crash harness
+
+## slice_impl-05-d (Standalone reviewed-task ordering)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-d-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-codex-r1.txt` |
+| slice_impl-05-d-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-claude-r1.txt` |
+| slice_impl-05-d-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-fix1.txt` |
+| slice_impl-05-d-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-delta1.txt` |
+| slice_impl-05-d-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-codex-r2.txt` |
+| slice_impl-05-d-claude-r2 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-05-d-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-d-codex-r4`, `slice_impl-05-d-claude-r2`
+
+**Deferred debt (independently classified):**
+- `claude-DRT-S05D-002` (raised claude, cleared codex): Retained restart golden backing Slice 5's adoption compatibility passes vacuously and asserts a law the code contradicts — The swallowed AttributeError makes a named compatibility golden affirm the opposite of actual startup adoption and leaves make_server’s reviewed resolver unpinned, so later work can trust the wrong restart behavior, while correction remains bounded to the service-level adoption harness and any local
+
+## slice_doc-06 (Deep documentation and child authority)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-06.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-06-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-codex-r1.txt` |
+| slice_doc-06-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-fix1.txt` |
+| slice_doc-06-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-delta1.txt` |
+| slice_doc-06-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-fix2.txt` |
+| slice_doc-06-codex-r5 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-delta2.txt` |
+| slice_doc-06-codex-r6 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-codex-r2.txt` |
+| slice_doc-06-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-06-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-06-codex-r6`, `slice_doc-06-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S06-DELTA-001` (raised codex, cleared codex): Stop accounting is contradictory before child admission — Risk is high because the hard Stop invariant requires accounting from a child that may not exist while the named Stop test covers only an active child, plausibly causing deadlock or forbidden admission; damage is medium because correcting the contract, branch, and focused recovery test is bounded to
+- `codex-DRT-S06-FULL-001` (raised codex, cleared codex): Normal documentation-child failure has no parent outcome — The artifact omits rather than misstates normal documentation-child failure, so a strong builder should flag it but could implement the specified paths literally; correction requires bounded parent failure/recovery behavior and tests within this unit.
+- `claude-claude-DRT-S06-R1-001` (raised claude, cleared codex): The hard-register route row says `deep_task` uses only three routes, while the same note mandates a fourth (`POST /api/tasks/<id>/stop`) — The exclusive route wording could mislead a hasty builder, but the repeated Stop requirements and mandatory focused test should expose and contain the mistake within Slice 6, requiring bounded rework.
+
+## slice_impl-06-a (Deep documentation and child authority)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-codex-r1.txt` |
+| slice_impl-06-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-claude-r1.txt` |
+| slice_impl-06-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-fix1.txt` |
+| slice_impl-06-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-delta1.txt` |
+| slice_impl-06-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-codex-r2.txt` |
+| slice_impl-06-claude-r2 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-codex-r4`, `slice_impl-06-claude-r2`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S06A-001` (raised codex, cleared codex): Deep preflight rejects valid partial size overrides before loading project defaults — The pre-binding validation contradicts the explicit inheritance contract and can silently become the next slice’s accepted admission baseline, while correction remains bounded to the admission-resolution seam and focused regression coverage.
+- `codex-DRT-S06A-002` (raised codex, cleared codex): Repository verification still asserts the obsolete three-executor catalogue — The obsolete executable assertion could misdirect a hasty builder, but Slice 6 and several current catalogue tests immediately expose the contradiction, making correction a small local test repair before propagation.
+- `claude-claude-r1/DRT-S06A-R-002` (raised claude, cleared codex): No named test exercises deep-task restart adoption, so the pinned 'restart still finds the same terminal child' guarantee has no executable enforcement — Risk is high because the strict verification table falsely presents restart reuse as exercised while the two-test module proves only deletion refusal for this row, so Slice 7 can regress the same relation/admission seams under a green focused command; damage is medium because correction is bounded t
+- `claude-claude-s06a-r2/DRT-S06A-STOP-001` (raised claude, cleared codex): The deep parent's own terminal write is not fenced against Stop the way this same commit fences the child's, so `POST /api/tasks/<deep-id>/stop` can answer `stopping` for a parent that has already closed with a non-operator reason — This P3 is a strict behavioural-correctness defect: the accepted implementation and reassuring adjacent race test can plausibly teach later deep-task work that parent terminalization is safely fenced, while correction remains bounded to terminal-write synchronization and focused concurrency coverage
+
+## slice_impl-06-b (Deep documentation and child authority)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-b-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-b-codex-r1.txt` |
+| slice_impl-06-b-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-b-codex-r1`, `slice_impl-06-b-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-slice_impl-06-b-codex-r1/DRT-S06B-001` (raised codex, cleared codex): Parent Stop propagation permits post-acceptance child lifecycle calls — The implementation and reassuring Stop test silently violate the pinned post-acceptance lifecycle boundary, so later deep-child work could reuse polling-based propagation and start paid calls, while correction remains bounded to this unit’s Stop synchronization and focused race coverage.
+- `claude-claude-slice_impl-06-b-r1/DRT-S06B-SIZE-001` (raised claude, cleared codex): The bound partial size-control repair is gated on `deep_task`, so the sibling public `reviewed_task` order still refuses partial overrides that are valid against the bound project's defaults — The executor-specific preflight encodes a false asymmetry that rejects a schema-promised, project-valid reviewed_task payload and can plausibly propagate the wrong admission contract, while correction remains bounded to this unit’s resolver and focused parity coverage before shipment.
+
+## slice_impl-06-c (Deep documentation and child authority)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-c-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-c-codex-r1.txt` |
+| slice_impl-06-c-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-06-c-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-c-codex-r1`, `slice_impl-06-c-claude-r1`
+
+**Deferred debt (independently classified):**
+- `claude-DRT-S06C-R1-001` (raised claude, cleared codex): The note's named check for open-parent retention of a terminal documentation child does not exist anywhere in the repository — Risk is high because the exact named check is absent and restart/evidence preservation remain unproven, but an existing focused test does attempt deletion and assert refusal, making the finding's zero-coverage and mutation-survives claims false; damage is low because correction only requires narrowi
+- `claude-DRT-S06C-R1-002` (raised claude, cleared codex): The repaired restart-adoption test pins the brainstorming and reviewed_task config branches exhaustively but omits deep_task, leaving the deep restart Git gate unenforced — The production mapping is currently correct and the strict child-gate contract is explicit elsewhere, but the exhaustive-looking restart assertion omits the only deep service path, so a hasty builder could regress it silently while correction would remain bounded to this unit’s mapping, test, and an
+
+## slice_doc-07 (Deep implementation-part delivery)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-07.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-07-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-07-codex-r1 | review_round | codex | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-07-codex-r1.txt` |
+| slice_doc-07-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-07-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-07-codex-r1`, `slice_doc-07-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S07-R1-001` (raised codex, cleared codex): Accepted parent Stop has no durable recovery authority — The artifact presents accepted Stop as a strict recovery-safe fence while pinning only the existing volatile mechanism and omitting the acceptance-plus-restart case, which can plausibly produce wrong implementation and tests, but correction is bounded to durable intent, recovery handling, and focuse
+- `codex-DRT-S07-R1-002` (raised codex, cleared codex): Recovery does not pin successors to the predecessor’s gate commit — Risk is high because the named gates and tests plausibly lead a builder to treat historical gate success plus current readability as sufficient despite the strict predecessor-commit guarantee; damage is medium because correction is bounded to Slice 7 recovery checks and tests and should be caught at
+- `codex-DRT-S07-R1-003` (raised codex, cleared codex): Internal module counts are promoted into contract scope — The artifact explicitly and repeatedly forbids a new runtime module and permits only one focused test module, so a strong builder could treat those non-contractual organization choices as binding, while correction remains bounded refactoring within Slice 7.
+- `claude-claude-S07-R2-001` (raised claude, cleared codex): The hard register pins documentation-artifact containment and readability to `tasks.resolve_derived_path` (orchestrator/tasks.py:1084-1108) and to `driver.py:6570-6590`, but the first is keyed to the optional `output_directory` rather than the workspace and explicitly accepts non-existent paths, while the second silently skips missing files; neither can enforce the note's strict rule that an unreadable artifact must fail the parent, and applying the pinned mechanism to the real workspace-relative artifact path misresolves it. — The hard register falsely presents output-directory containment and a missing-file filter as enforcement of workspace-relative readability, which can plausibly produce a wrongly admitted child, but correction remains bounded to Slice 7 path validation and its focused tests.
+- `claude-claude-S07-R2-002` (raised claude, cleared codex): The note pins that the parent succeeds 'only when the last implementation child has no cut' while also forbidding any continuation from a Brainstorming-produced child, and gives no outcome for the reachable case of a successful Brainstorming implementation child that returns `implementation_cut`. — The hard register incorrectly treats a valid Brainstorming cut as unreachable while pinning mutually exclusive continuation and success rules, so implementation as written likely mishandles that terminal branch, but correction is bounded to Slice 7 behavior and its focused test coverage.
+- `claude-claude-S07-R2-003` (raised claude, cleared codex): The note pins every field of the terminal parent result except `native_result`: it forbids copying child native results but never says what a successful deep parent's own `native_result` is. — This is an omission rather than a false pin: a max-effort builder should surface the native_result choice, and any silent drift requires only a small parent-field and test correction because child authority and execution behavior remain unchanged.
+
+## slice_impl-07-a (Deep implementation-part delivery)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-codex-r1.txt` |
+| slice_impl-07-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-07-codex-r1`, `slice_impl-07-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S07A-001` (raised codex, cleared codex): The cut-chain test never proves a successor waits for its predecessor's gate — The artifact falsely presents a strict temporal gate as proved although the test observes only the completed chain, creating a plausible silent false-green, while correction remains bounded to a pausing assertion and potentially the local successor-admission seam.
+- `codex-DRT-S07A-002` (raised codex, cleared codex): The named final-accounting test covers only one implementation child — The strict verification row claims multi-part single-count accounting, but its named test proves only documentation plus part a while another test merely proves a/b/c sequencing, so a careful builder can detect the mismatch whereas trusting the advertised coverage could permit bounded deep-task acco
+- `claude-claude-S07A-001` (raised claude, cleared codex): The open-parent child-retention refusal lost its only test and is now unproven anywhere in the repository — The pinned rule and live guard guide a careful builder, but removing its sole direct regression assertion could let a related edit escape a hasty review; correction would be a small local guard-and-test restoration.
+- `claude-claude-S07A-002` (raised claude, cleared codex): Documentation-artifact containment is narrowed to output_directory, so a readable in-workspace note outside it fails the whole paid parent — The strict Slice 7 contract accepts any readable workspace-contained documentation artifact, but the implementation and passing focused test silently narrow that boundary to output_directory, so later work can inherit the wrong behavior and test contract, while correction remains a bounded helper-an
+- `claude-claude-S07A-003` (raised claude, cleared codex): Part `a` of an uncut deep task is told it is a runtime size cut, diverging from the identical directly ordered reviewed task — The false size-cut label conflicts with the exact full scope and explicit no-remainder instruction, so a careful max-effort builder should resolve it, but mis-scoping remains plausible and would require bounded part-a rework within its own review cycle.
+
+## slice_impl-07-b (Deep implementation-part delivery)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-b-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-b-codex-r1.txt` |
+| slice_impl-07-b-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-07-b-codex-r1`, `slice_impl-07-b-claude-r1`
+
+## slice_impl-07-c (Deep implementation-part delivery)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-c-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-codex-r1.txt` |
+| slice_impl-07-c-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-fix1.txt` |
+| slice_impl-07-c-codex-r3 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-delta1.txt` |
+| slice_impl-07-c-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-codex-r2.txt` |
+| slice_impl-07-c-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-07-c-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-07-c-codex-r4`, `slice_impl-07-c-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S07C-002` (raised codex, cleared codex): Recovery does not anchor successors to the predecessor gate — Risk is high because the strict predecessor-gate contract is contradicted by recovery behavior and a reassuring crash test that keeps HEAD at that gate, while damage is medium because correction is bounded to successor anchoring or refusal plus Slice 7 recovery tests.
+- `codex-codex-DRT-S07C-003` (raised codex, cleared codex): Recovered Stop discards durable reviewed-child accounting — Risk is high because passing recovery coverage can silently legitimize behavior that contradicts strict durable single-count accounting, while damage is medium because correction is bounded to the reviewed-child Stop/recovery settlement path and its focused test.
+- `codex-DRT-S07C-004` (raised codex, cleared codex): Durable Stop recovery can abandon a live Brainstorming session — The durable-Stop recovery path falsely treats a failed child record as settlement while its attached Brainstorming session can remain live, making later composition likely to trust a wrong pinned Stop/workspace-release invariant, while correction is bounded to recovered-session pausing and focused c
+
+## slice_doc-08 (Milestone skeleton composition)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-08.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-08-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-08-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-08-codex-r1.txt` |
+| slice_doc-08-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-08-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-08-codex-r1`, `slice_doc-08-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S08-FULL-001` (raised codex, cleared codex): The governing skeleton’s hard-register citations have drifted from their claims — Two hard-register code ranges plainly substantiate unrelated behavior, so a hasty builder could skip the intended API/result verification, but the claims, goal citations, and Slice 08’s correct local seams make the mismatch self-revealing and correction is only bounded citation repair.
+- `claude-DRT-S08-R1-001` (raised claude, cleared codex): Slice 08 pins the pre-gate plan-authority change at the driver seam only, but the anchor and slice projection are installed by the shared canonical-plan author-call acceptance on every skeleton draft and fix, so the note's own touch boundary and "no new machinery" claim cannot deliver its acceptance criteria. — The pinned seam understates that shared call completion writes the anchor and projection, but the explicit pre-gate invariant and named failing test should lead a careful max-effort builder to that path, while any miss causes bounded Slice 08 rework caught at its own test or review.
+- `claude-DRT-S08-R1-002` (raised claude, cleared codex): The note requires the skeleton to stay unanchored through its whole review cycle but never states what governs plan-block guarding while unanchored; `begin_author_call` refuses an unanchored plan for every review/fix/delta call, and its anchored drift guard silently disappears. — A careful builder should discover or stop on the unanchored-call precondition, but a hasty implementation could enable unanchored calls and silently remove drift protection, with correction remaining bounded to Slice 08 and likely caught at its review.
+
+## slice_impl-08-a (Milestone skeleton composition)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-08-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-codex-r1.txt` |
+| slice_impl-08-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-claude-r1.txt` |
+| slice_impl-08-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-fix1.txt` |
+| slice_impl-08-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-delta1.txt` |
+| slice_impl-08-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-codex-r2.txt` |
+| slice_impl-08-claude-r2 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-claude-r2.txt` |
+| slice_impl-08-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-fix2.txt` |
+| slice_impl-08-codex-r6 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-delta2.txt` |
+| slice_impl-08-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-codex-r3.txt` |
+| slice_impl-08-claude-r3 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-claude-r3.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-08-codex-r7`, `slice_impl-08-claude-r3`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S08A-R1-001` (raised codex, cleared codex): Pending profile authority is applied after skeleton policy admission — Risk is high because the task freezes a stale weaker policy before applying the valid pending profile and the named test falsely omits that transition; damage is medium because correction is bounded to Slice 8 ordering and regression-test work without changing the cross-slice contract.
+- `codex-DRT-S08A-R1-002` (raised codex, cleared codex): Reclassification calls lose outer-task evidence and accounting attribution — The accepted artifact promises strict outer-task attribution and equal once-only task/run accounting for classification, yet the retained classifier evidence lacks that link and the named test misses the path, plausibly misleading downstream composition while requiring only bounded attribution and r
+- `claude-claude-S08A-R1-002` (raised claude, cleared codex): A crash in the skeleton's pending-gate window makes Driver startup recovery close the milestone as complete with zero slices and leave the reviewed task's result permanently null. — Startup recovery directly contradicts the strict gate/result/anchor convergence contract and presents later composition with a false completed baseline, but correction is bounded to the startup handoff ordering and focused crash regression within Slice 8.
+- `claude-claude-S08A-R2-002` (raised claude, cleared codex): The checkpoint-suite module test_author_call_cutover is left broken by this unit: one stale pre-slice-8 assertion and one uncaught TaskRequestError escaping Driver.step. — The red retained module could briefly misdirect a hasty builder because one executable assertion states the retired eager-anchor law, but the explicit gated-plan contract exposes both failures as stale fixture carry-forward—including an inconsistent hand-seeded activated state—so correction is local
+- `codex-codex-DRT-S08A-R3-001` (raised codex, cleared codex): Semantic protocol failures can reuse an open skeleton task after Resume — Risk is xhigh because the reviewed slice explicitly promises terminal immutability for semantic protocol failures while the reproduced unknown-reference path resumes the same open task, but damage is medium because correcting terminal classification and adding the missing focused pin is bounded rewo
+- `claude-claude-S08A-R4-001` (raised claude, cleared codex): `_initial_skeleton_failure_is_terminal` classifies a run failure recorded while `pending_gate_unit` names the skeleton as a TERMINAL outer-task failure, so a recoverable Git error at the single gate commit permanently kills the milestone run and discards the whole sealed, twice-reviewed skeleton and its paid calls, instead of being retried by the existing `recover_pending_gate` / `_consume_pending_closure` seam that this slice pins as the recovery mechanism. — The implementation silently contradicts the slice’s strict pending-gate recovery guarantee and its claimed crash-window coverage, making later reliance plausibly wrong, while correction and any replay remain bounded to this skeleton unit.
+
+## slice_impl-08-b (Milestone skeleton composition)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-08-b-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-codex-r1.txt` |
+| slice_impl-08-b-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-fix1.txt` |
+| slice_impl-08-b-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-delta1.txt` |
+| slice_impl-08-b-codex-r4 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-codex-r2.txt` |
+| slice_impl-08-b-claude-r1 | review_round | claude | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-claude-r1.txt` |
+| slice_impl-08-b-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-fix2.txt` |
+| slice_impl-08-b-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-delta2.txt` |
+| slice_impl-08-b-codex-r7 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-codex-r3.txt` |
+| slice_impl-08-b-claude-r2 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-claude-r2.txt` |
+| slice_impl-08-b-codex-r8 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-fix3.txt` |
+| slice_impl-08-b-codex-r9 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-delta3.txt` |
+| slice_impl-08-b-codex-r10 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-codex-r4.txt` |
+| slice_impl-08-b-claude-r3 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-08-b-claude-r3.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-08-b-codex-r10`, `slice_impl-08-b-claude-r3`
+- scheduled verification event: `1081`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S08B-002` (raised codex, cleared codex): Rethink-session charges are omitted from the skeleton task result — The completed rethink event is task-linked and counted in run totals but excluded from the task projector, so downstream composition can silently inherit a false zero, while correction remains bounded to the existing accounting seam and focused coverage.
+- `codex-DRT-S08B-003` (raised codex, cleared codex): A second rethink session under the same task is discarded from accounting — The helper promises per-session retention but deduplicates task-linked work by outer task identity, a silent contradiction later accounting work could trust, while correction remains bounded to the deduplication key and focused regression coverage in this unit.
+- `codex-DRT-S08B-004` (raised codex, cleared codex): Successor retries inherit active debt from the failed attempt — The successor is explicitly promised disjoint review evidence yet inherits debt presented as settled and unreportable, a false strict invariant likely to mislead later work, while correction is bounded to isolating predecessor debt and adding focused coverage.
+- `codex-DRT-S08B-005` (raised codex, cleared codex): Skeleton terminality changes recovery for old and unrelated runs — The artifact globally turns shared invalid-fixer failures from the established 15-minute retry into operator-gated stops, contradicting strict old/unrelated-run compatibility and plausibly becoming trusted recovery law, while correction remains bounded to context-sensitive failure typing and focused
+- `codex-DRT-S08B-RR-001` (raised codex, cleared codex): The pinned Stop-to-restart recovery check is absent — Risk is high because the artifact falsely presents an explicit strict Stop/restart identity check as executable coverage, while damage is medium because adding that scenario and correcting any exposed recovery defect is bounded rework within this unit.
+- `claude-claude-S08B-R1-001` (raised claude, cleared codex): A repeated phantom fix is classified as a terminal skeleton-task failure, so operator Resume discards the reviewed candidate and its whole review cycle and pays a fresh draft, overriding the established phantom-fix recovery that re-runs only the fixer — The committed wrapper and named regression encode a concrete exception to the established typed phantom-fix Resume contract, so a builder would likely trust the wrong terminal-redraft behavior, while correction remains bounded to Slice 8 failure classification and recovery coverage.
+- `claude-claude-S08B-R1-002` (raised claude, cleared codex): Three of the six checks the reviewed Verification Contract names by id do not exist under those names, so the note's pinned coverage cannot be located from the note — Three exact identifiers are wrong, making audit confusion plausible, but a careful builder can readily reconstruct the intact coverage in the same module, while correction requires only a small local locator or naming repair with no behavioral or cross-slice rework.
+- `codex-DRT-S08B-RR2-001` (raised codex, cleared codex): A crash after saving a terminal run failure but before saving the task failure causes Resume to reuse the failed task identity — The artifact strictly promises disjoint successor identity after terminal failure while its reassuring normal-resume coverage misses a silent persisted crash state that reopens the same identity, but correction remains bounded to failure settlement/recovery ordering and one focused regression test i
+- `claude-claude-S08B-R3-001` (raised claude, cleared codex): `brainstorming_no_agreement` is listed as a terminal skeleton-task failure at orchestrator/driver.py:4116-4125, so a skeleton rethink discussion that ends without agreement settles the outer task as failed; operator Resume then runs `_retry_initial_skeleton_task` -> `st.reset_for_redraft`, discarding the drafted and reviewed candidate and paying a fresh `draft_skeleton` call plus a whole new review cycle, contradicting both the slice's enumerated terminal causes and this failure's own established 'the original work and candidate are preserved' recovery contract. No named check covers it (no test in the repository references `brainstorming_no_agreement`). — The finding reverses the explicit goal and Slice 3 hard contract that failed Brainstorming fails the originating reviewed task, but that contradiction should alert a careful max-effort builder, while any mistaken change would remain bounded to this failure/resume unit and its focused test.
+
+## slice_doc-09 (Milestone deep-slice composition)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-09.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-09-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-09-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-09-codex-r1.txt` |
+| slice_doc-09-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-09-claude-r1.txt` |
+| slice_doc-09-codex-r2 | fix_findings | codex | 1 | 1 rejected | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-09-fix1.txt` |
+| slice_doc-09-codex-r3 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-09-delta1.txt` |
+| slice_doc-09-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-09-codex-r2.txt` |
+| slice_doc-09-claude-r2 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-09-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-09-codex-r4`, `slice_doc-09-claude-r2`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S09-001` (raised codex, cleared codex): The operative skeleton pins unrelated code ranges as hard-fact authorities — The three stale source ranges are conspicuous mismatches, while the contract text, goal authority, and Slice 09’s current pins identify the correct seams, so a max-effort builder should not be silently redirected and correction is only local citation repinning.
+- `claude-claude-S09-R1-002` (raised claude, cleared codex): Requiring a distinct deep parent for any deliberate retry structurally forces a successful, already-gated documentation child to be discarded and re-run, which existing resume law does not do and the note never addresses — The hard register couples every child to its deep parent and requires documentation first, yet retry distinguishes only “affected” children, so a careful builder should stop on the reuse-versus-redocumentation conflict while a hasty reading could duplicate documentation, with correction bounded to S
+- `codex-DRT-S09-DELTA-001` (raised codex, cleared codex): Skeleton edits leave Slice 09's compatibility authority pin stale — The citation ends five lines early, but the row states the correct no-backfill contract, the authority appears nearby, and a focused test repeats it, making silent behavioral drift unlikely and correction only a local citation re-pin.
+- `claude-claude-S09-R2-001` (raised claude, cleared codex): After a rollback that unwinds several completed slices, Slice 09 pins new documentation-first `deep_task` admission only for the *first* open slice, while its Slice-identity row asserts one canonical `deep_task` per planned slice; the other retained-but-unwound completed slices (A3's own Slice 5 and 6 case) get no stated law, and existing milestone reconciliation would silently rebuild them implementation-only from their still-sealed slice notes. — The singular first-open-slice rule creates a plausible but conspicuous multi-slice ambiguity against the all-slices and immutable-terminal rules, so a strong builder should stop or resolve it, while any mistaken implementation remains bounded to Slice 09 reconciliation/admission and its tests.
+- `claude-claude-S09-R2-002` (raised claude, cleared codex): The note declares no guarantee posture (and no dependencies or risks), which the slice-note contract at `orchestrator/prompts.py:472-488` requires and which every sibling note Slice 01–08 supplies, so the strictness of its central promises — one deep parent per slice before any effect, one child per phase/part, once-only call accounting — is left for later reviewers to invent. — The omission breaches the slice-note standard, but the hard register already makes canonical parent and child identity plus once-only accounting mandatory while explicitly rejecting physical exactly-once behavior, so a max-effort builder is unlikely to infer the wrong contract; if drift occurred, co
+- `claude-claude-S09-R2-003` (raised claude, cleared codex): Slice 09 states that a slice's `deep_task` record exists before any provider call or workspace edit, but gives no observable acceptance and no named check for what a crash or process Stop does to an open milestone deep task and its admitted child, even though this is the crash seam its predecessor slice pinned explicitly. — A careful builder can derive restart reuse from the strict durable-identity and recovery context, but the missing observable restart check could let a hasty implementation duplicate the open parent or child; correcting that would be bounded Slice 09 logic and test rework.
+
+## slice_impl-09-a (Milestone deep-slice composition)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-09-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-codex-r1.txt` |
+| slice_impl-09-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-fix1.txt` |
+| slice_impl-09-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-delta1.txt` |
+| slice_impl-09-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-codex-r2.txt` |
+| slice_impl-09-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-09-codex-r4`, `slice_impl-09-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S09A-001` (raised codex, cleared codex): Terminal reviewed-child failures remain open and are reused on Resume — The behavior directly contradicts the pinned immutable-terminal-identity and child-first-accounting contract, making silent reuse likely to mislead later work, while correction remains bounded to this unit’s failure settlement, retry identity, and focused tests.
+- `claude-claude-S09A-R1-001` (raised claude, cleared codex): The new deep-composition gate in `_do_draft` breaks 13 retained tests that passed at the reviewed baseline, including `test_brainstorming_implementation_never_activates_size_control` — the only named proof of operator amendment A1 — and the whole cross-surface `test_task_conformance` matrix. — The stale fixtures and task-count assertions could mislead a hasty builder, but the binding composition law and loud 13-test failure let a careful builder resolve the conflict, while correction is bounded to updating the two retained test modules and restoring the A1 assertion path.
+- `claude-claude-S09A-R1-002` (raised claude, cleared codex): This part's scope names "recovery of admitted identities", and the note pins the durable parent/phase/part as the sole admission authority, but no named test proves that re-entering an interrupted slice reuses the same deep parent and child instead of admitting a second one. — The contract and shared identity-reuse mechanism are correct, but the milestone-specific restart and result-consumption paths lack direct proof, so a hasty builder could miss a regression while correction would remain bounded to this integration and its tests.
+
+## slice_impl-09-b (Milestone deep-slice composition)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-09-b-codex-r1 | review_round | codex | 4 | 4 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-codex-r1.txt` |
+| slice_impl-09-b-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-fix1.txt` |
+| slice_impl-09-b-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-delta1.txt` |
+| slice_impl-09-b-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-codex-r2.txt` |
+| slice_impl-09-b-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-09-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-09-b-codex-r4`, `slice_impl-09-b-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S09B-001` (raised codex, cleared codex): Operational or missing rethink sessions leave the deep tree open; missing test: test_failed_rethink_terminalizes_deep_tree — The implemented failure paths contradict the pinned immutable-terminality contract and can silently normalize reuse of failed identities, while correction remains bounded to Slice 9 failure settlement and focused regression coverage.
+- `codex-DRT-S09B-002` (raised codex, cleared codex): Resume after no-agreement failure has no lawful successor path; missing test: test_failed_rethink_resume_starts_distinct_deep_attempt — The untested Resume path deterministically contradicts terminal-identity and lawful-retry contracts, plausibly misleading later recovery work, while correction remains bounded to successor admission and focused regression coverage.
+- `codex-DRT-S09B-004` (raised codex, cleared codex): Fresh production and fix continuation overwrites the spent rethink call’s raw evidence; missing test: test_surviving_rethink_retains_both_physical_call_outputs — The slice requires inspectable evidence for every spent and fresh physical call, but production and fix continuation clobber the origin path and can mislead downstream evidence or presentation work (high risk), while correction is bounded to collision-free raw naming plus one focused regression with
+- `codex-codex-DRT-S09B-005` (raised codex, cleared codex): A removed slice cannot later return as a fresh deep attempt — The implementation contradicts A3 by retaining sealed units and terminal associations across removal and later reintroduction, plausibly misleading later scheduling work, while correction remains bounded to Slice 09 reentry logic and focused regression coverage before shipment.
+- `claude-claude-S09B-R1-001` (raised claude, cleared codex): The reconciled documentation restart keeps the superseded attempt's `phantom_retried` flag, so the new deep task's documentation child loses its one-shot phantom-fix retry, unlike the implementation unit reset by the same function. — The fresh-child contract is affirmatively violated by a retained active-episode flag, so reconciliation work can silently preserve wrong behavior, but the rare typed stop corrupts no accepted result and needs only a local reset correction plus regression test.
+- `claude-claude-S09B-R1-002` (raised claude, cleared codex): No test proves the note's explicit clause that a slice id already present in the prior plan restarts as a new deep task after rollback supersession; the named rollback test only covers a slice id that never appeared before. — The note states the correct A3 contract and the implementation currently handles terminal same-id parents, but the broad named test exercises only a new slice id, so a hasty builder could overlook the repeated-id branch while any regression would require bounded code-and-test rework within this unit
+
+## slice_doc-10 (Sibling complete-verification task)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-10.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-10-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-10-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-10-codex-r1.txt` |
+| slice_doc-10-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-10-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-10-codex-r1`, `slice_doc-10-claude-r1`
+
+**Deferred debt (independently classified):**
+- `claude-DRT-S10-R1-001` (raised claude, cleared codex): The note pins "its own new allow-empty WIP/final gate commit, not the preceding task's commit" only for unchanged success, leaving the failed-then-repaired path — the slice's primary normal-use path — with no pinned commit boundary, while the shared gate mechanism amends HEAD by default. — Risk is medium because the global own-gate invariant lets a careful builder infer the missing repair boundary, but the unchanged-only pin and amend-by-default mechanism can plausibly mislead; damage is medium because correction is bounded to the repaired path and focused coverage and should be caugh
+- `claude-DRT-S10-R1-002` (raised claude, cleared codex): The pinned focused command omits orchestrator.tests.test_tasks, the one module holding the existing assertion that a complete_verification order must be refused, so the slice's own proof command stays green while a checkpoint-suite module is red by construction. — The omitted module can silently preserve a directly contradictory assertion, but a careful builder should resolve it from the twice-cited rejection evidence and explicit contract inversion, while correction is only a local stale-test expectation change.
+- `claude-DRT-S10-R1-003` (raised claude, cleared codex): The standard's strict guarantee "selected one- or two-family convergence" and "succeeds only after convergence on current contents" carries no verification carve-out, while Slice 10 has an unchanged pass and a no-suite discovery succeed, seal and gate with zero reviewer calls. — Slice 10 and the goal clearly specialize convergence to changed bytes, so a careful max-effort builder should resolve the skeleton’s universal wording, but a hasty reading could add reviewer calls and require bounded lifecycle and focused-test rework.
+
+## slice_impl-10 (Sibling complete-verification task)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-10-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-codex-r1.txt` |
+| slice_impl-10-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-fix1.txt` |
+| slice_impl-10-codex-r3 | delta_review | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-delta1.txt` |
+| slice_impl-10-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-codex-r2.txt` |
+| slice_impl-10-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-10-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-10-codex-r4`, `slice_impl-10-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S10-DELTA-001` (raised codex, cleared codex): Gate-time edits bypass the required review cycle — Risk is xhigh because the artifact silently certifies changed bytes without the explicitly pinned delta and whole-review cycle, while damage is medium because correction is bounded to this unit’s invalidation transition and focused regression coverage before shipment.
+- `codex-codex-DRT-S10-VERIFY-001` (raised codex, cleared codex): Repaired success exposes an invalid passed suite proof — The repaired path contradicts the pinned equal-cardinality proof contract by recording configured commands with no results, making silent downstream reliance plausible, while correction is bounded to this repair path and its focused test before milestone publication.
+
+## slice_doc-11 (Five-slice and final verification cadence)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-11.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-11-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-11-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-11-codex-r1.txt` |
+| slice_doc-11-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-11-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-11-codex-r1`, `slice_doc-11-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S11-R1-001` (raised codex, cleared codex): Rollback handling is undefined for an open sibling verification origin — The hard-register rule that any failed due verification blocks advancement directly contradicts A3 for a superseded origin and would likely produce wrong lifecycle logic, while correction is bounded to active-boundary handling and focused verification within Slice 11.
+- `claude-claude-S11-R2-001` (raised claude, cleared codex): The periodic five-slice due boundary is pinned to immutable terminal-successful `deep_task` results with no reconciliation-supersession filter, so slices unwound by an accepted-plan rollback keep counting toward the next verification; this drops the barrier guard today's cadence already applies and violates the note's own strict "five completed logical slices per periodic boundary". (Distinct from codex-DRT-S11-R1-001, which concerns the fate of an open verification origin, not the counting basis.) — The hard register explicitly makes immutable terminal-successful deep-task results the periodic counting basis without excluding reconciliation-superseded executions, so implementation as written likely schedules verification incorrectly, but correction remains bounded to this cadence unit and its t
+
+## slice_impl-11 (Five-slice and final verification cadence)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-11-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-11-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-11-codex-r1.txt` |
+| slice_impl-11-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-11-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-11-codex-r1`, `slice_impl-11-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S11-FULL-001` (raised codex, cleared codex): Closed milestones can acquire an unreachable second final-verification task — The unguarded cadence path admits unreachable work despite terminal closure, plausibly teaching later builders the wrong lifecycle contract, but correction is a local closed-state guard plus one focused regression test.
+- `claude-claude-S11-FULL-001` (raised claude, cleared codex): Any transient run failure attributed to the milestone verification unit is written into its reviewed_task record as a terminal `failure`, and because the record can never leave that terminal value, the next step re-fails the run forever — an operator-resumable hiccup permanently kills the milestone. The established classifier for exactly this distinction, `_initial_skeleton_failure_is_terminal` (orchestrator/driver.py:4248), already exists for the skeleton's outer reviewed task and is not reused. — Production behavior and its focused acceptance test wrongly pin transient verification stops as immutable terminal failures, making future work likely to preserve a contract violation, while correction remains bounded to this slice’s failure classification and recovery test.
+- `claude-claude-S11-FULL-002` (raised claude, cleared codex): Two contracts the note pins have no named passing test: the milestone-close block, and the verification unit reaching a seal and gate through the real lifecycle. `test_parts_count_once_and_open_or_failed_verification_blocks` is named for the block but never calls `maybe_close_milestone`/`_maybe_close_milestone`, and `_mark_verification_success` fabricates the seal by assigning `unit['status'] = st.U_SEALED` directly, bypassing `st.transition_unit` — so the newly introduced `UNIT_MILESTONE_VERIFICATION` unit shape is never proven to be legally executable. — The note falsely pins close blocking and real seal/gate lifecycle coverage that its named tests do not execute, plausibly hiding regressions, while correction remains bounded to two focused tests and any local defects they expose.
+
+## slice_doc-12 (Presentation, compatibility, and conformance)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/deep-reviewed-tasks/slices/slice-12.md` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-12-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-12-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-12-codex-r1.txt` |
+| slice_doc-12-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_doc-12-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-12-codex-r1`, `slice_doc-12-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S12-001` (raised codex, cleared codex): The declared test touch inventory contradicts the fixtures required by the mandatory gates — The contradictory inventory could initially steer a builder away from the retained Brainstorming fixtures, but mandatory gates expose the coverage defect deterministically and correction is a local current-law fixture alignment before review.
+- `codex-DRT-S12-002` (raised codex, cleared codex): The operative skeleton contains stale hard-register source citations — The cited skeleton ranges land on unrelated handler, policy-validation, and accounting/projection code, but Slice 12 restates the contracts with usable authorities, so a careful builder will detect the mismatch while correction is only local citation repair.
+
+## slice_impl-12 (Presentation, compatibility, and conformance)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-12-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-codex-r1.txt` |
+| slice_impl-12-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-claude-r1.txt` |
+| slice_impl-12-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-fix1.txt` |
+| slice_impl-12-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-delta1.txt` |
+| slice_impl-12-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-codex-r2.txt` |
+| slice_impl-12-claude-r2 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-12-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-12-codex-r4`, `slice_impl-12-claude-r2`
+- scheduled verification event: `1350`
+
+**Deferred debt (independently classified):**
+- `codex-codex-DRT-S12I-001` (raised codex, cleared codex): A transient milestone-verification stop permanently terminalizes its task — The implementation and retained acceptance test positively encode a transient verification stop as terminal while the closing conformance matrix omits that recovery seam, making later work likely to trust the wrong contract, though correction remains bounded to failure classification and focused rec
+- `codex-codex-DRT-S12I-002` (raised codex, cleared codex): The closing conformance cells do not exercise the milestone verification and size-control seams they claim — The hard register falsely presents the named green cells as proof of real milestone-verification lifecycle/recovery and deep Brainstorming size isolation, creating a trusted route to missed behavioral regressions, while correction remains bounded to the conformance matrix and any local seam defects 
+- `claude-S12-IMPL-R1-001` (raised claude, cleared codex): Two presentation contracts the note pins — distinct verification attempts staying distinct, and verification work never entering a slice subtotal — have no named passing test in the slice that owns presentation. — The behaviours are correctly pinned but untested, so a careful builder can recover the intent while a later panel refactor could pass green tests, yet correction remains a small local rendering-and-test fix because execution and canonical accounting are unaffected.
+

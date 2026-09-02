@@ -678,7 +678,7 @@ class AuthorCallPreparationTest(unittest.TestCase):
 
 
 class DriverAuthorActivationTest(unittest.TestCase):
-    def test_skeleton_dispatch_uses_router_and_persists_plan_adoption(self):
+    def test_skeleton_dispatch_uses_router_and_keeps_plan_candidate(self):
         with tempfile.TemporaryDirectory(prefix="orch-author-driver-") as ws, \
                 tempfile.TemporaryDirectory(prefix="orch-author-home-") as home:
             subprocess.run(["git", "init", "-q"], cwd=ws, check=True)
@@ -750,19 +750,18 @@ class DriverAuthorActivationTest(unittest.TestCase):
                 "CURRENT MUTABLE OPERATOR AMENDMENTS: none.",
                 runner.calls[0][2],
             )
-            self.assertEqual(
-                [item["id"] for item in persisted["milestone"]["slices"]],
-                [1],
-            )
-            self.assertIn("canonical_plan_anchor", persisted["milestone"])
+            self.assertEqual(persisted["milestone"]["slices"], [])
+            self.assertNotIn("canonical_plan_anchor", persisted["milestone"])
             fallback = prompt_sets.PROMPT_SET_FALLBACK_DEFAULT
             self.assertEqual(
                 persisted["units"][0]["draft"]["prompt_set_fallback"],
                 fallback,
             )
+            records = tasks.task_records(persisted)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["order"]["task_executor"], "reviewed_task")
             self.assertEqual(
-                persisted["tasks"][0]["result"]["prompt_set_fallback"],
-                fallback,
+                persisted["units"][0]["draft"]["task_id"], records[0]["id"]
             )
             draft_event = next(
                 event for event in persisted["events"]
@@ -800,6 +799,8 @@ class DriverAuthorActivationTest(unittest.TestCase):
                 model_profiles_home=home,
             )
             persisted = state.load(state_path)
+            # This fixture exercises the historical eager-anchor law.
+            persisted["milestone"].pop(state.SKELETON_COMPOSITION_KEY)
             skeleton_path = ledgers.skeleton_path(persisted)
             plan = {
                 "slices": [
@@ -932,7 +933,7 @@ class DriverAuthorActivationTest(unittest.TestCase):
                 )
                 for event in reloaded["events"]
             ))
-            self.assertIsNone(reloaded["tasks"][0]["result"])
+            self.assertEqual(tasks.task_records(reloaded), [])
 
 
 class DriverAuthorFindingRegressionTest(unittest.TestCase):

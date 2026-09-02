@@ -4108,6 +4108,34 @@ def _direct_task_config(home, project=None):
     return config
 
 
+def _reviewed_task_config(home, project=None):
+    """Effective standalone config with the reviewed task's required gate."""
+    config = _direct_task_config(home, project)
+    if project is not None:
+        declared = registry.get_project(
+            registry.load_projects_record(home), project
+        )
+        defaults = (declared or {}).get("defaults") or {}
+        declared_git = defaults.get("git")
+        if "git" in defaults and (
+            not isinstance(declared_git, dict)
+            or (
+                "enabled" in declared_git
+                and not bool(declared_git["enabled"])
+            )
+        ):
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "reviewed tasks require Git gating",
+            )
+    git = config.get("git")
+    if not isinstance(git, dict):
+        git = {}
+        config["git"] = git
+    git["enabled"] = True
+    return config
+
+
 def _projectless_task_work_area(who, value):
     if not who.get("admin"):
         raise ApiError(403, FORBIDDEN)
@@ -4164,7 +4192,14 @@ def _validate_task_references(order):
 
 def _resolve_direct_task_order(home, who, body):
     try:
-        order = tasks.validate_order(body)
+        # A deep order's implementation thresholds can be a partial override
+        # of the bound project's values. Validate the common envelope first,
+        # then freeze the actual two policies once that project is known.
+        preflight = body
+        if isinstance(body, dict) and body.get("task_executor") == "deep_task":
+            preflight = copy.deepcopy(body)
+            preflight["configuration"] = {}
+        order = tasks.validate_order(preflight)
         selector = order["request"]["work_area"]
         if set(selector) == {"project", "work_area"}:
             project = require_project_access(home, who, selector["project"])
@@ -4191,6 +4226,20 @@ def _resolve_direct_task_order(home, who, body):
                 tasks.INVALID_TASK_REQUEST, "invalid task work area selector"
             )
         order["request"]["work_area"] = work_area
+        if order["task_executor"] in ("reviewed_task", "deep_task"):
+            config = _reviewed_task_config(home, project_slug)
+            if order["task_executor"] == "reviewed_task":
+                order["configuration"] = (
+                    tasks.resolve_reviewed_task_configuration(
+                        body["configuration"], defaults=config
+                    )
+                )
+            else:
+                order["configuration"] = (
+                    tasks.resolve_deep_task_configuration(
+                        body.get("configuration", {}), defaults=config
+                    )
+                )
         if order["staffing_session"] is not None:
             # A named session must be one this caller could already read:
             # the same authorization its own route applies, so an order
@@ -4203,9 +4252,14 @@ def _resolve_direct_task_order(home, who, body):
             read_staffing_session(home, who, order["staffing_session"])
         primary = _validate_task_references(order)
         order = tasks._canonical_output_directory(order, primary)
+        if (
+            order["task_executor"] in ("reviewed_task", "deep_task")
+            and not gitops.is_repo_root(primary)
+        ):
+            raise ApiError(400, PRIMARY_NOT_REPO_ROOT)
         if order["task_executor"] == "agent_call":
             staffing = task_api.worker_staffing(config)
-        else:
+        elif order["task_executor"] == "brainstorming":
             staffing = brainstorming_tasks.resolve_staffing(
                 config,
                 os.path.realpath(primary),
@@ -4213,6 +4267,8 @@ def _resolve_direct_task_order(home, who, body):
                     order["staffing_session"]
                 ),
             )
+        else:
+            staffing = {}
         return order, staffing, primary, project_slug
     except tasks.TaskRequestError as exc:
         _raise_task_request(exc)
@@ -4261,6 +4317,14 @@ def delete_task(home, who, task_id, host):
         raise ApiError(403, FORBIDDEN)
     if record["result"] is None:
         raise ApiError(409, "stop the task before deleting it")
+    relation = record.get("parent")
+    if relation is not None:
+        try:
+            parent = direct.record(relation["task_id"])
+        except tasks.TaskRecordError:
+            parent = None
+        if parent is not None and parent["result"] is None:
+            raise ApiError(409, "the task is retained by its open parent")
     session_id = task_api.task_session_id(home, record, host)
     if session_id:
         try:
@@ -4286,7 +4350,11 @@ def create_task(home, who, body, host):
         home, who, body
     )
     store = task_api.StandaloneTaskStore(home)
-    resolver = lambda: _direct_task_config(home, project)
+    resolver = (
+        (lambda: _reviewed_task_config(home, project))
+        if order["task_executor"] in ("reviewed_task", "deep_task")
+        else (lambda: _direct_task_config(home, project))
+    )
     # Reap outside the lock: reaping takes the registry lock itself.
     reap_exited_drivers(home)
     with registry.locked(home):
@@ -5442,7 +5510,12 @@ def make_server(home, port, task_host=None):
     try:
         outcome = {"adopted": [], "closed": []} if not adopt else task_host.adopt_open_tasks(
             lambda record: (
-                lambda: _direct_task_config(home, _task_project(record))
+                lambda: (
+                    _reviewed_task_config(home, _task_project(record))
+                    if (record.get("order") or {}).get("task_executor")
+                    in ("reviewed_task", "deep_task")
+                    else _direct_task_config(home, _task_project(record))
+                )
             )
         )
         if outcome["adopted"] or outcome["closed"]:

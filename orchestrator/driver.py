@@ -51,6 +51,7 @@ from . import state as st
 
 IMPLEMENTATION_SIZE_ACK = "IMPLEMENTATION_SIZE_CUTOFF_ACK"
 FULL_VERIFICATION_SLICE_INTERVAL = 4
+MILESTONE_VERIFICATION_INTERVAL = 5
 
 
 class _NoIndependentReclassifier(runners.RunnerError):
@@ -461,17 +462,58 @@ class MilestoneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
     """Milestone-owned canonical-plan handling around reviewed calls."""
 
     def ensure_author_plan(self, unit, kind):
+        if self.host._initial_skeleton_task_pending(unit):
+            return False
         return self.host._ensure_author_plan(unit, kind)
 
     def author(self, unit, kind, raw_name, **kwargs):
+        if self.host._initial_skeleton_task_pending(unit):
+            return super().author(unit, kind, raw_name, **kwargs)
         return self.host._author_prepare_call(
             unit, kind, raw_name, **kwargs
         )
 
     def judgment(self, unit, kind, raw_name, **kwargs):
+        if self.host._initial_skeleton_task_pending(unit):
+            return super().judgment(unit, kind, raw_name, **kwargs)
         return self.host._judgment_prepare_call(
             unit, kind, raw_name, **kwargs
         )
+
+
+class StandaloneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
+    """Routed calls with a plan-free, read-only repository checkpoint."""
+
+    def suite_checkpoint(self, unit, cadence, configured_commands):
+        routed = self.host._routed_suite_checkpoint_prepare_call(
+            unit, cadence, configured_commands
+        )
+
+        def prepare(repair_error):
+            prepared = routed(repair_error)
+            repository = canonical_plan._repository_snapshot(
+                self.host.workspace
+            )
+
+            def complete():
+                unchanged = canonical_plan._repository_matches_snapshot(
+                    {"repository": repository}
+                )
+                if not unchanged:
+                    canonical_plan.restore_author_call(
+                        {"repository": repository}
+                    )
+                return {
+                    "accept_reply": unchanged,
+                    "committed": False,
+                    "plan_changed": False,
+                    "revision": repository["head"],
+                    "anchor": None,
+                }
+
+            return prepared._replace(complete=complete)
+
+        return prepare
 
 
 class ReviewedWorkLifecycle(object):
@@ -495,8 +537,228 @@ class ReviewedWorkLifecycle(object):
     def __init__(self, host):
         self.host = host
 
+    @staticmethod
+    def _production_kind(unit):
+        if unit.get("reviewed_task_kind") == (
+            tasks.REVIEWED_COMPLETE_VERIFICATION
+        ):
+            return tasks.REVIEWED_COMPLETE_VERIFICATION
+        return {
+            st.UNIT_SKELETON: contracts.KIND_DRAFT_SKELETON,
+            st.UNIT_SLICE_DOC: contracts.KIND_DRAFT_SLICE_NOTE,
+            st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
+        }[unit["kind"]]
+
+    @classmethod
+    def _is_complete_verification(cls, unit):
+        return cls._production_kind(unit) == (
+            tasks.REVIEWED_COMPLETE_VERIFICATION
+        )
+
+    @staticmethod
+    def _verification_event(state, seq):
+        return next((
+            event for event in state.get("events") or []
+            if event.get("type") == "verification"
+            and event.get("seq") == seq
+        ), None)
+
+    @staticmethod
+    def _verification_production_result(event):
+        checkpoint = event.get("checkpoint_result")
+        if isinstance(checkpoint, dict):
+            return copy.deepcopy(checkpoint)
+        return {
+            "status": event.get("status"),
+            "kind": contracts.KIND_SUITE_CHECKPOINT,
+            "commands": copy.deepcopy(event.get("commands") or []),
+            "results": copy.deepcopy(event.get("results") or []),
+            "fixer_certified": bool(event.get("fixer_certified")),
+            "verification_event_seq": event.get("seq"),
+        }
+
+    def _configure_locked(self, unit, policy=None):
+        """Freeze one policy while the host's state lock is held."""
+        unit_key = st.unit_key(unit)
+        selected = self.host._unit_by_key(unit_key)
+        if selected is None:
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "reviewed policy names an unknown selected production",
+            )
+        task_kind = self._production_kind(selected)
+        existing = selected.get("reviewed_policy")
+        defaults = self.host._reviewed_policy_defaults(selected)
+        if existing is not None:
+            if not policy:
+                return copy.deepcopy(existing)
+            checked = tasks.resolve_reviewed_policy(
+                task_kind,
+                policy,
+                default_producer=existing["producer"],
+                defaults=dict(defaults, **existing),
+            )
+        elif task_kind in tasks.PRODUCER_TASK_KINDS:
+            default_producer = tasks.effective_slice_producers(
+                self.host._slice_info(selected["slice_id"])
+            )[task_kind]
+            checked = tasks.resolve_reviewed_policy(
+                task_kind,
+                policy,
+                default_producer=default_producer,
+                defaults=defaults,
+            )
+        else:
+            checked = tasks.resolve_reviewed_policy(
+                task_kind, policy, defaults=defaults
+            )
+        if existing is not None:
+            if existing != checked:
+                raise tasks.TaskRequestError(
+                    tasks.INVALID_TASK_REQUEST,
+                    "reviewed policy is already frozen for %s" % unit_key,
+                )
+            return copy.deepcopy(existing)
+        if (
+            selected.get("status") != st.U_PENDING
+            or selected.get("draft") is not None
+            or selected.get("active_task") is not None
+            or selected.get("brainstorming_wait") is not None
+        ):
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "reviewed policy must be frozen before production starts",
+            )
+        selected["reviewed_policy"] = copy.deepcopy(checked)
+        st.append_event(
+            self.host.state,
+            "reviewed_policy_frozen",
+            unit=unit_key,
+            task_kind=task_kind,
+            task_executor=checked["producer"]["task_executor"],
+        )
+        self.host._save()
+        return copy.deepcopy(checked)
+
+    def configure(self, unit, policy=None):
+        """Validate and durably freeze choices before production starts."""
+        with self.host._exclusive():
+            self.host._assert_not_stale()
+            return self._configure_locked(unit, policy)
+
+    @classmethod
+    def producer(cls, unit, task_kind=None):
+        if (
+            task_kind is not None
+            and task_kind != cls._production_kind(unit)
+        ):
+            return None
+        policy = unit.get("reviewed_policy")
+        if policy is None:
+            return None
+        return copy.deepcopy(policy["producer"])
+
     def next_action(self, unit):
         return decide_reviewed_work(self.host.state, unit)
+
+    def result(self, unit):
+        """Project success only from the current seal's completed Git gate."""
+        key = st.unit_key(unit)
+        if (
+            not gitops.enabled(self.host.config)
+            or unit.get("status") != st.U_SEALED
+            or self.host.state.get("pending_gate_unit") == key
+            or not unit.get("gate_commit")
+        ):
+            return None
+        seal_event = next((
+            event for event in reversed(self.host.state.get("events") or [])
+            if event.get("type") == "seal_satisfied"
+            and event.get("unit") == key
+        ), None)
+        if seal_event is None:
+            return None
+        gate_event = next((
+            event for event in reversed(self.host.state.get("events") or [])
+            if event.get("type") == "gate_commit"
+            and event.get("unit") == key
+            and event.get("seq") > seal_event.get("seq")
+        ), None)
+        if (
+            gate_event is None
+            or gate_event.get("sha") != unit.get("gate_commit")
+        ):
+            return None
+        seal = unit["seals"][-1]
+        if self._is_complete_verification(unit):
+            verification_event = self._verification_event(
+                self.host.state, seal.get("verification_event_seq")
+            )
+            if (
+                verification_event is None
+                or verification_event.get("status") != "passed"
+                and verification_event.get("status") != "no_suite"
+                or verification_event.get("ok") is not True
+                or verification_event.get("stable") is not True
+            ):
+                return None
+            production_result = self._verification_production_result(
+                verification_event
+            )
+        else:
+            production_result = copy.deepcopy(unit["draft"]["result"])
+        native_result = {
+            "production_result": production_result,
+            "review_evidence": {
+                "seal_attempt": seal["attempt"],
+                "reviews": list(seal["reviews"]),
+                "verification_event_seq": seal.get(
+                    "verification_event_seq"
+                ),
+            },
+            "gate_commit": unit["gate_commit"],
+        }
+        task_id = unit.get("reviewed_task_id")
+        accounting = (
+            tasks.task_accounting(self.host.state, task_id)
+            if task_id is not None
+            else st.reviewed_work_accounting(self.host.state, unit)
+        )
+        return tasks.validate_result({
+            "status": "success",
+            **accounting,
+            "native_result": native_result,
+        })
+
+    def recover_pending_gate(self):
+        """Complete the one durable reviewed gate intent, if present."""
+        if not gitops.enabled(self.host.config):
+            return None
+        pending = self.host.state.get("pending_gate_unit")
+        if not pending:
+            return None
+        unit = self.host._unit_by_key(pending)
+        if unit is None or unit.get("status") != st.U_SEALED:
+            st.fail_run(
+                self.host.state,
+                "cannot recover the pending gate for %s" % pending,
+                unit=unit,
+                type_="gate_recovery",
+            )
+            self.host._save()
+            raise StopStep("pending gate unit is unavailable")
+        expected = self.host.state.get("pending_gate_fingerprint")
+        if (
+            expected is not None
+            and expected != self.host._gate_candidate_fingerprint(unit)
+        ):
+            self.invalidate_gate_candidate(
+                unit,
+                "candidate bytes changed while the reviewed gate was pending",
+            )
+            return unit, None
+        self.host._gate_commit(unit)
+        return unit, self.result(unit)
 
     def execute(self, action, before_gate=None, call_preparation=None):
         unit = self.host._unit_by_key(action.params["unit"])
@@ -505,8 +767,35 @@ class ReviewedWorkLifecycle(object):
                 "reviewed-work action names an unknown unit %r"
                 % action.params["unit"]
             )
-        was_sealed = unit.get("status") == st.U_SEALED
         calls = call_preparation or ReviewedWorkCallPreparation(self.host)
+        if (
+            action.type == A_DRAFT
+            and self._production_kind(unit) in tasks.PRODUCER_TASK_KINDS
+            and unit.get("reviewed_policy") is None
+            and unit.get("status") == st.U_PENDING
+            and unit.get("draft") is None
+            and unit.get("active_task") is None
+            and unit.get("brainstorming_wait") is None
+            and unit.get("brainstorming_resume") is None
+            and unit.get("preserved_candidate") is None
+            and unit.get("implementation_attempt_snapshot") is None
+            and unit.get("implementation_stabilization") is None
+            and unit.get("pending_wip") is None
+        ):
+            # ``Driver.step`` holds the state lock around execute. Persist the
+            # resolved producer after milestone-owned plan establishment has
+            # refreshed the selected unit, but before either production adapter
+            # can make the first physical call.
+            kind = self._production_kind(unit)
+            if calls.ensure_author_plan(unit, kind):
+                return (
+                    "canonical plan established; work order refreshed",
+                    None,
+                    None,
+                    None,
+                )
+            self._configure_locked(unit)
+        was_sealed = unit.get("status") == st.U_SEALED
         note = getattr(self.host, self._HANDLERS[action.type])(
             unit=unit, call_preparation=calls
         )
@@ -516,14 +805,50 @@ class ReviewedWorkLifecycle(object):
             else None
         )
         gate_context = None
+        result = None
         if sealed_unit is not None:
             gate_context = self.gate(sealed_unit, before_gate=before_gate)
-        return note, sealed_unit, gate_context
+            if sealed_unit.get("status") == st.U_SEALED:
+                result = self.result(sealed_unit)
+            else:
+                note = "gate candidate changed; verification invalidated"
+                sealed_unit = None
+        return note, sealed_unit, gate_context, result
 
     def gate(self, unit, before_gate=None):
         gate_context = before_gate(unit) if before_gate is not None else None
         self.host._gate_commit(unit)
         return gate_context
+
+    def invalidate_gate_candidate(self, unit, reason):
+        """Reopen a sealed unit when its gate candidate is no longer current."""
+        self.host.state.pop("pending_gate_unit", None)
+        self.host.state.pop("pending_gate_fingerprint", None)
+        unit["gate_commit"] = None
+        st.restart_reviews_after_candidate_change(
+            self.host.state,
+            unit,
+            reason,
+        )
+        restart_status = (
+            st.U_PRE_SEAL_VERIFY
+            if self._is_complete_verification(unit)
+            else st.U_PRE_REVIEW_VERIFY
+        )
+        unit["status"] = restart_status
+        st.append_event(
+            self.host.state,
+            "unit_transition",
+            unit=st.unit_key(unit),
+            from_status=st.U_SEALED,
+            to_status=restart_status,
+            reason=(
+                "pending gate candidate changed; verification invalidated"
+                if self._is_complete_verification(unit)
+                else "pending gate candidate changed; reviews invalidated"
+            ),
+        )
+        self.host._save()
 
 
 def _runtime_sidecar_path(state_path, filename):
@@ -1114,7 +1439,8 @@ class Driver(object):
             # dispatch can ask for one, and whether or not the conversion
             # above ran or completed: the session names a document, it does
             # not need one to exist.
-            self._derive_staffing_session()
+            if not self.state.get("reviewed_task"):
+                self._derive_staffing_session()
         startup_reconciliation = self.state["milestone"].get(
             canonical_plan.RECONCILIATION_KEY
         )
@@ -1156,7 +1482,10 @@ class Driver(object):
         # mid-step; mutating beside it would surface as HistoryRewriteError
         # instead of a clean refusal). On contention, skip: the lock holder
         # materializes it.
-        if self.state.get("failure") is None:
+        if (
+            self.state.get("failure") is None
+            and not self.state.get("reviewed_task")
+        ):
             try:
                 with self._exclusive():
                     self.state = st.load(self.state_path)
@@ -1216,7 +1545,7 @@ class Driver(object):
                                     self.state["milestone"]["status"]
                                     == st.M_CLOSED
                                 )
-                                if st.maybe_close_milestone(self.state):
+                                if self._maybe_close_milestone():
                                     closed_now = not was_closed
                                     if (
                                         closed_now
@@ -1498,6 +1827,31 @@ class Driver(object):
                 return event
         return None
 
+    def _current_complete_verification_event(self, unit, event_seq=None):
+        """Return the latest accepted complete-verification proof for now."""
+        if not self.reviewed_work._is_complete_verification(unit):
+            return None
+        fingerprint = self._verification_candidate_fingerprint()
+        configured = self._suite_checkpoint_configured_commands(unit)
+        for event in reversed(self.state.get("events") or []):
+            if (
+                event.get("type") == "verification"
+                and event.get("unit") == st.unit_key(unit)
+                and (event_seq is None or event.get("seq") == event_seq)
+                and event.get("cadence")
+                == tasks.REVIEWED_COMPLETE_VERIFICATION
+                and event.get("status") in ("passed", "no_suite")
+                and event.get("ok") is True
+                and event.get("stable") is True
+                and event.get("candidate_after") == fingerprint
+                and (
+                    configured is None
+                    or event.get("commands") == configured
+                )
+            ):
+                return event
+        return None
+
     def _latest_full_verification_checkpoint(self):
         """Latest full-suite proof whose logical slice actually closed.
 
@@ -1620,6 +1974,14 @@ class Driver(object):
                 return event["cadence"]
         return None
 
+    def _in_slice_verification_cadence(self, unit):
+        if self._milestone_verification_cadence_active():
+            return None
+        return (
+            self._invalidated_suite_checkpoint_cadence(unit)
+            or self._full_verification_cadence(unit)
+        )
+
     def _review_evidence_inputs(self, unit):
         """Return immutable review evidence plus this episode's hot rules.
 
@@ -1663,6 +2025,19 @@ class Driver(object):
         return "review-evidence-sha256:%s" % hashlib.sha256(
             payload
         ).hexdigest()
+
+    def _gate_candidate_fingerprint(self, unit):
+        """Bind pending-gate recovery to product bytes, not ledgers."""
+        payload = json.dumps(
+            {
+                "candidate": self._verification_candidate_fingerprint(),
+                "implementation_scope": self._implementation_scope(unit),
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return "gate-candidate-sha256:%s" % hashlib.sha256(payload).hexdigest()
 
     @staticmethod
     def _snapshot_diff(before, after):
@@ -1783,6 +2158,8 @@ class Driver(object):
         return self._save_raw(candidate, text)
 
     def _unit_desc(self, unit):
+        if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION:
+            return "the milestone complete-verification task"
         if unit["kind"] == st.UNIT_SKELETON:
             return "the milestone skeleton"
         title = ""
@@ -1798,6 +2175,14 @@ class Driver(object):
             unit["slice_id"], "-%s" % part if part else ""
         )
         return "the slice %s implementation (%s)" % (token, title)
+
+    @staticmethod
+    def _review_unit_kind(unit):
+        return (
+            st.UNIT_SLICE_IMPL
+            if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION
+            else unit["kind"]
+        )
 
     def _implementation_scope(self, unit):
         return st.implementation_scope(self.state, unit)
@@ -1862,13 +2247,13 @@ class Driver(object):
         values = {
             "kind": kind,
             "workspace": self.workspace,
-            "goal_path": ledgers.goal_path(self.state),
+            "goal_path": self._goal_authority_path(),
             "skeleton_path": skeleton_path,
         }
         if kind == contracts.KIND_DRAFT_SKELETON:
             catalogue = [
                 {"id": item["id"], "description": item["description"]}
-                for item in tasks.task_executor_catalogue()
+                for item in tasks.producer_task_executor_catalogue()
             ]
             values["task_executor_catalogue"] = json.dumps(
                 catalogue, ensure_ascii=False, sort_keys=True, indent=2
@@ -1939,8 +2324,13 @@ class Driver(object):
             return session_repository.checkpoint_context(
                 self.workspace,
                 self.state_path,
-                self._skeleton_artifact(),
+                (
+                    None
+                    if self.state.get("reviewed_task")
+                    else self._skeleton_artifact()
+                ),
                 "Prepare Brainstorming session for %s" % st.unit_key(unit),
+                standalone_reviewed=bool(self.state.get("reviewed_task")),
             )
         except (session_repository.SessionRepositoryError, gitops.GitError) as exc:
             st.fail_run(
@@ -2122,6 +2512,7 @@ class Driver(object):
             st.UNIT_SKELETON: "skeleton",
             st.UNIT_SLICE_DOC: "slice_doc",
             st.UNIT_SLICE_IMPL: "slice_impl",
+            st.UNIT_MILESTONE_VERIFICATION: "slice_impl",
         }.get(unit.get("kind"))
         if target is None:
             raise st.IllegalTransition("unsupported judgment unit kind")
@@ -2133,7 +2524,7 @@ class Driver(object):
         values = {
             "kind": kind,
             "workspace": self.workspace,
-            "goal_path": ledgers.goal_path(self.state),
+            "goal_path": self._goal_authority_path(),
             "skeleton_path": skeleton,
         }
         if (
@@ -2152,14 +2543,22 @@ class Driver(object):
             if unit["kind"] != st.UNIT_SKELETON:
                 values["target"] = self._artifact(unit)
                 values["reference_path"] = (
-                    skeleton if unit["kind"] == st.UNIT_SLICE_DOC
+                    skeleton
+                    if unit["kind"] in (
+                        st.UNIT_SLICE_DOC,
+                        st.UNIT_MILESTONE_VERIFICATION,
+                    )
                     else self._slice_note_artifact(unit["slice_id"])
                 )
         elif kind == contracts.KIND_DELTA_REVIEW:
             values["delta_base_revision"] = context["delta_base_revision"]
             if unit["kind"] != st.UNIT_SKELETON:
                 values["reference_path"] = (
-                    skeleton if unit["kind"] == st.UNIT_SLICE_DOC
+                    skeleton
+                    if unit["kind"] in (
+                        st.UNIT_SLICE_DOC,
+                        st.UNIT_MILESTONE_VERIFICATION,
+                    )
                     else self._slice_note_artifact(unit["slice_id"])
                 )
         elif kind == contracts.KIND_FIX_FINDINGS:
@@ -2339,18 +2738,65 @@ class Driver(object):
             raise StopStep(str(exc))
         return st.current_unit(self.state) is not unit
 
-    def _implementation_size_settings(self):
-        configured = self.config.get("implementation_size_control")
+    @staticmethod
+    def _reviewed_setting(unit, name, default=None):
+        return (unit.get("reviewed_policy") or {}).get(name, default)
+
+    def _reviewed_limit(self, unit, name):
+        return self._reviewed_setting(
+            unit, name, self.config.get(name, DEFAULT_CONFIG[name])
+        )
+
+    def _reviewed_convergence_failure_type(self, unit):
+        """Keep terminal first-plan caps behind deliberate run Resume.
+
+        Other reviewed units retain their established unclassified recovery
+        posture; only a composed skeleton cap creates a terminal outer task
+        whose distinct successor requires operator authorization.
+        """
+        return (
+            "orchestrator"
+            if self._initial_skeleton_task_pending(unit)
+            else "unknown"
+        )
+
+    def _reviewed_policy_defaults(self, unit):
+        return tasks.reviewed_policy_defaults(
+            self.reviewed_work._production_kind(unit), self.config
+        )
+
+    def _implementation_size_settings(self, unit=None):
+        if unit is not None and unit.get("kind") != st.UNIT_SLICE_IMPL:
+            return None
+        if (
+            unit is not None
+            and ((unit.get("reviewed_policy") or {}).get("producer") or {}).get(
+                "task_executor"
+            ) == "brainstorming"
+        ):
+            return None
+        policy_control = (
+            (unit.get("reviewed_policy") or {}).get(
+                "implementation_size_control"
+            )
+            if unit is not None else None
+        )
+        configured = policy_control or self.config.get(
+            "implementation_size_control"
+        )
         if configured is None:
             configured = DEFAULT_CONFIG["implementation_size_control"]
         if not isinstance(configured, dict):
             return None
+        poll_source = self.config.get("implementation_size_control")
+        if not isinstance(poll_source, dict):
+            poll_source = DEFAULT_CONFIG["implementation_size_control"]
         try:
             settings = {
                 "soft_lines": int(configured.get("soft_lines", 500)),
                 "hard_lines": int(configured.get("hard_lines", 750)),
                 "poll_interval_s": float(
-                    configured.get("poll_interval_s", 2)
+                    poll_source.get("poll_interval_s", 2)
                 ),
                 "unconfirmed_grace_s": float(
                     configured.get("unconfirmed_grace_s", 180)
@@ -2388,7 +2834,7 @@ class Driver(object):
         if not base_tree or not gitops.enabled(self.config):
             return None, None
         unit = unit if unit is not None else st.current_unit(self.state)
-        settings = self._implementation_size_settings()
+        settings = self._implementation_size_settings(unit)
         if settings is None:
             return None, None
         soft = settings["soft_lines"]
@@ -3115,6 +3561,8 @@ class Driver(object):
             return self._skeleton_artifact()
         if unit["kind"] == st.UNIT_SLICE_IMPL:
             return self._slice_note_artifact(unit["slice_id"])
+        if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION:
+            return self._skeleton_artifact()
         return None
 
     def _save_protocol_raws(self, raw_name, exc):
@@ -3269,7 +3717,7 @@ class Driver(object):
         calls = deduped
         marker_unit = None
         for call in reversed(calls):
-            marker_unit = self._active_task_unit(call.get("task_id"))
+            marker_unit = self._worker_call_unit(call)
             if marker_unit is not None:
                 break
         marker_state = marker.get("state_digest")
@@ -3294,7 +3742,7 @@ class Driver(object):
             if not call.get("family"):
                 continue
             unit = (
-                self._active_task_unit(call.get("task_id"))
+                self._worker_call_unit(call)
                 or marker_unit
                 or st.current_unit(self.state)
             )
@@ -3346,7 +3794,7 @@ class Driver(object):
             self._clear_busy()
             return
         unit = (
-            self._active_task_unit(root_call.get("task_id"))
+            self._worker_call_unit(root_call)
             or marker_unit
             or st.current_unit(self.state)
         )
@@ -3593,7 +4041,10 @@ class Driver(object):
             return None, None, None
         try:
             policies, reuse_sources = self._read_standing_law(
-                kind, unit["kind"]
+                kind,
+                st.UNIT_SLICE_IMPL
+                if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION
+                else unit["kind"],
             )
             extensions = verifiers.compile_extensions(policies)
         except (_StandingLawError, verifiers.VerifierError) as exc:
@@ -3731,6 +4182,784 @@ class Driver(object):
             "additional": [],
         }
 
+    def _initial_skeleton_task_pending(self, unit):
+        """Whether first-plan authority belongs to the reviewed skeleton."""
+        return bool(
+            not self.state.get("reviewed_task")
+            and unit is not None
+            and unit.get("kind") == st.UNIT_SKELETON
+            and self.state["milestone"].get(st.SKELETON_COMPOSITION_KEY)
+            == st.SKELETON_COMPOSITION_VERSION
+            and self.state["milestone"].get(canonical_plan.ANCHOR_KEY) is None
+        )
+
+    def _ensure_initial_skeleton_task(self, unit):
+        """Admit and associate the outer task before skeleton dispatch."""
+        if not self._initial_skeleton_task_pending(unit):
+            return None
+        task_id = unit.get("reviewed_task_id")
+        if task_id is not None:
+            return tasks.task_record(self.state, task_id)
+
+        policy = self.reviewed_work._configure_locked(unit)
+        order = {
+            "task_executor": "reviewed_task",
+            "configuration": {
+                "task_kind": contracts.KIND_DRAFT_SKELETON,
+                **copy.deepcopy(policy),
+            },
+            "staffing_session": st.staffing_session(self.state),
+            "request": {
+                "work_area": self._task_work_area(),
+                "request": self.state["goal"],
+                "context": {"unit": st.unit_key(unit)},
+                "reference_documents": [ledgers.goal_path(self.state)],
+            },
+        }
+        record = tasks.admit_task(
+            self.state, order, {}, self.workspace
+        )
+        unit["reviewed_task_id"] = record["id"]
+        self._save()
+        if not gitops.enabled(self.config):
+            st.fail_run(
+                self.state,
+                "reviewed skeleton task requires its Git gate",
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._record_initial_skeleton_task_failure(unit, terminal=True)
+            raise StopStep("reviewed skeleton task requires its Git gate")
+        return record
+
+    def _reviewed_call_task_id(self, unit):
+        """Return the outer reviewed identity for evidence attribution."""
+        task_id = unit.get("reviewed_task_id")
+        if task_id is None:
+            return None
+        record = tasks.task_record(self.state, task_id)
+        return (
+            task_id
+            if record["order"]["task_executor"] == "reviewed_task"
+            and record.get("result") is None
+            else None
+        )
+
+    def _initial_skeleton_failure_is_terminal(self, unit):
+        """Whether the recorded run stop also terminates its outer task."""
+        failure = self.state.get("failure") or {}
+        if failure.get("type") in (
+            "worker_protocol",
+            "canonical_plan_boundary",
+            "brainstorming_no_agreement",
+            "phantom_fix",
+        ):
+            return True
+        reason = failure.get("reason") or ""
+        return bool(
+            "reached max_rounds_per_family=" in reason
+            or (
+                "did not converge after" in reason
+                and "fixer+delta loops" in reason
+            )
+        )
+
+    def _record_initial_skeleton_task_failure(self, unit, terminal=False):
+        """Settle the outer task only for a terminal reviewed-work failure."""
+        if not self._initial_skeleton_task_pending(unit):
+            return None
+        if (
+            not terminal
+            and not self._initial_skeleton_failure_is_terminal(unit)
+        ):
+            return None
+        task_id = unit.get("reviewed_task_id")
+        if task_id is None:
+            return None
+        record = tasks.task_record(self.state, task_id)
+        if record.get("result") is not None:
+            return record
+        failure = self.state.get("failure") or {}
+        result = tasks.validate_result({
+            "status": "failure",
+            "reason": failure.get("reason") or "skeleton task failed",
+            **tasks.task_accounting(self.state, task_id),
+            "native_result": None,
+        })
+        record = tasks.record_task_result(self.state, task_id, result)
+        self._save()
+        return record
+
+    def _retry_initial_skeleton_task(self, unit):
+        """Start a fresh reviewed attempt after deliberate run Resume."""
+        st.reset_for_redraft(
+            self.state, unit, "terminal skeleton task replaced on Resume"
+        )
+        unit.pop("reviewed_task_id", None)
+        unit.pop("reviewed_policy", None)
+        unit.pop("active_task", None)
+        unit.pop("brainstorming_wait", None)
+        unit.pop("brainstorming_resume", None)
+        unit.pop("deferred_fix_episode", None)
+        unit["gate_commit"] = None
+        if self.state.get("pending_gate_unit") == st.unit_key(unit):
+            self.state.pop("pending_gate_unit", None)
+            self.state.pop("pending_gate_fingerprint", None)
+        self._save()
+        return self._ensure_initial_skeleton_task(unit)
+
+    def _prepare_initial_skeleton_task(self, unit):
+        """Recover, retry, or admit the prospective skeleton task."""
+        if not self._initial_skeleton_task_pending(unit):
+            return False
+        if self.state.get("failure") is not None:
+            before = tasks.task_records(self.state)
+            self._record_initial_skeleton_task_failure(unit)
+            return before != tasks.task_records(self.state)
+
+        task_id = unit.get("reviewed_task_id")
+        if task_id is not None:
+            record = tasks.task_record(self.state, task_id)
+            if (record.get("result") or {}).get("status") == "failure":
+                self._retry_initial_skeleton_task(unit)
+                return True
+        admitted = unit.get("reviewed_task_id") is None
+        self._ensure_initial_skeleton_task(unit)
+        consumed = self._consume_initial_skeleton_result(
+            unit, self.reviewed_work.result(unit)
+        )
+        return bool(admitted or consumed)
+
+    def _consume_initial_skeleton_result(self, unit, result=None):
+        """Install first plan authority only from the outer task's gate."""
+        if not self._initial_skeleton_task_pending(unit):
+            return False
+        record = self._ensure_initial_skeleton_task(unit)
+        if record["result"] is None:
+            if result is None:
+                return False
+            record = tasks.record_task_result(
+                self.state, record["id"], result
+            )
+            # Keep the task-result/plan-anchor crash boundary recoverable.
+            self._save()
+        result = record["result"]
+        if result["status"] != "success":
+            reason = (
+                "cannot continue milestone skeleton from terminal reviewed "
+                "task %s; a distinct retry attempt is required"
+                % record["id"]
+            )
+            st.fail_run(
+                self.state,
+                reason,
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            raise StopStep(reason)
+
+        gate_commit = result["native_result"]["gate_commit"]
+        try:
+            accepted_revision = gitops.commit_full_sha(
+                self.workspace, gate_commit
+            )
+            if gitops.head_full_sha(self.workspace) != accepted_revision:
+                raise canonical_plan.CanonicalPlanError(
+                    "the skeleton task gate is not the current revision"
+                )
+            anchor = canonical_plan.establish_current_plan(
+                self.state, self._skeleton_artifact()
+            )
+            if anchor["revision"] != accepted_revision:
+                raise canonical_plan.CanonicalPlanError(
+                    "the first plan anchor differs from the skeleton task gate"
+                )
+        except (canonical_plan.CanonicalPlanError, gitops.GitError) as exc:
+            st.fail_run(
+                self.state,
+                "canonical plan could not be established from the skeleton "
+                "task gate: %s" % exc,
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            raise StopStep(str(exc))
+        st.append_event(
+            self.state,
+            "canonical_plan_established",
+            accepted_revision=accepted_revision,
+        )
+        st.ensure_due_unit(self.state)
+        self._save()
+        return True
+
+    def _deep_slice_composition_active(self):
+        return bool(
+            not self.state.get("reviewed_task")
+            and self.state["milestone"].get(
+                st.DEEP_SLICE_COMPOSITION_KEY
+            ) == st.DEEP_SLICE_COMPOSITION_VERSION
+        )
+
+    def _milestone_verification_cadence_active(self):
+        return bool(
+            not self.state.get("reviewed_task")
+            and self.state["milestone"].get(
+                st.MILESTONE_VERIFICATION_CADENCE_KEY
+            ) == st.MILESTONE_VERIFICATION_CADENCE_VERSION
+        )
+
+    def _active_completed_milestone_deep_tasks(self):
+        """Current contiguous logical-slice ancestry, in plan order."""
+        if not self._deep_slice_composition_active():
+            return []
+        execution = st.planned_execution_units(self.state)
+        by_identity = {
+            st.unit_identity(unit): unit for unit in self.state.get("units") or []
+        }
+        completed = []
+        for slice_info in self.state["milestone"]["slices"]:
+            implementations = [
+                identity for identity in execution
+                if identity[0] == st.UNIT_SLICE_IMPL
+                and identity[1] == slice_info["id"]
+            ]
+            unit = by_identity.get(implementations[-1])
+            if unit is None or unit.get("status") != st.U_SEALED:
+                break
+            child = tasks.task_record(self.state, unit["reviewed_task_id"])
+            relation = child["parent"]
+            parent = tasks.task_record(self.state, relation["task_id"])
+            if (
+                relation["phase"] != "implementation"
+                or (child.get("result") or {}).get("status") != "success"
+                or (parent.get("result") or {}).get("status") != "success"
+            ):
+                break
+            completed.append((slice_info["id"], parent))
+        return completed
+
+    @staticmethod
+    def _milestone_verification_context(record):
+        return record["order"]["request"]["context"].get(
+            "milestone_verification"
+        )
+
+    def _milestone_verification_records(self):
+        return [
+            record for record in tasks.task_records(self.state)
+            if record["order"]["task_executor"] == "reviewed_task"
+            and record["order"]["configuration"]["task_kind"]
+            == tasks.REVIEWED_COMPLETE_VERIFICATION
+            and self._milestone_verification_context(record) is not None
+        ]
+
+    def _milestone_verification_unit(self, record):
+        return next(
+            unit for unit in self.state.get("units") or []
+            if unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+            and unit.get("reviewed_task_id") == record["id"]
+        )
+
+    def _milestone_verification_succeeded(self, record, current=False):
+        if (record.get("result") or {}).get("status") != "success":
+            return False
+        unit = self._milestone_verification_unit(record)
+        native = record["result"]["native_result"]
+        if (
+            unit.get("status") != st.U_SEALED
+            or unit.get("gate_commit") != native.get("gate_commit")
+        ):
+            return False
+        return bool(
+            not current
+            or self._current_complete_verification_event(unit) is not None
+        )
+
+    def _consume_milestone_verification_result(self, unit, result=None):
+        if unit.get("kind") != st.UNIT_MILESTONE_VERIFICATION:
+            return False
+        record = tasks.task_record(self.state, unit["reviewed_task_id"])
+        if record["result"] is not None:
+            return False
+        result = result or self.reviewed_work.result(unit)
+        if result is None:
+            return False
+        tasks.record_task_result(self.state, record["id"], result)
+        return True
+
+    def _terminalize_milestone_verification(self, unit, reason):
+        record = tasks.task_record(self.state, unit["reviewed_task_id"])
+        if record["result"] is not None:
+            return False
+        tasks.record_task_result(
+            self.state,
+            record["id"],
+            tasks.validate_result({
+                "status": "failure",
+                "reason": reason,
+                **tasks.task_accounting(self.state, record["id"]),
+                "native_result": None,
+            }),
+        )
+        if unit.get("status") not in (st.U_SEALED, st.U_FAILED):
+            unit["failed_from"] = unit["status"]
+            unit["status"] = st.U_FAILED
+        if self.state.get("pending_gate_unit") == st.unit_key(unit):
+            self.state.pop("pending_gate_unit", None)
+            self.state.pop("pending_gate_fingerprint", None)
+        st.append_event(
+            self.state,
+            "milestone_verification_terminalized",
+            unit=st.unit_key(unit),
+            task_id=record["id"],
+            reason=reason,
+        )
+        return True
+
+    def _prepare_milestone_verification(self):
+        """Recover, block on, or admit the one verification currently due."""
+        if not self._milestone_verification_cadence_active():
+            return False
+        changed = False
+        for unit in self.state.get("units") or []:
+            if (
+                unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+                and unit.get("status") == st.U_SEALED
+            ):
+                changed = bool(
+                    self._consume_milestone_verification_result(unit) or changed
+                )
+
+        failure = self.state.get("failure") or {}
+        if failure:
+            failed = next((
+                unit for unit in self.state.get("units") or []
+                if unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+                and st.unit_key(unit) == failure.get("unit")
+            ), None)
+            if failed is not None:
+                changed = bool(self._terminalize_milestone_verification(
+                    failed, failure.get("reason") or "verification failed"
+                ) or changed)
+            if changed:
+                self._save()
+            return changed
+
+        completed = self._active_completed_milestone_deep_tasks()
+        deep_ids = [record["id"] for _slice_id, record in completed]
+        slice_ids = [slice_id for slice_id, _record in completed]
+        count = len(completed)
+        final = bool(
+            self.state["milestone"]["slices"]
+            and count == len(self.state["milestone"]["slices"])
+        )
+        periodic = bool(
+            count and count % MILESTONE_VERIFICATION_INTERVAL == 0
+        )
+        due = periodic or final
+        records = self._milestone_verification_records()
+
+        for record in records:
+            context = self._milestone_verification_context(record)
+            if record["result"] is None and (
+                context["completed_deep_task_ids"] != deep_ids or not due
+            ):
+                changed = bool(self._terminalize_milestone_verification(
+                    self._milestone_verification_unit(record),
+                    "verification superseded by active milestone ancestry",
+                ) or changed)
+
+        matching = [
+            record for record in records
+            if self._milestone_verification_context(record)[
+                "completed_deep_task_ids"
+            ] == deep_ids
+        ]
+        periodic_satisfied = any(
+            self._milestone_verification_succeeded(record)
+            for record in matching
+        )
+        final_satisfied = any(
+            self._milestone_verification_succeeded(record, current=True)
+            for record in matching
+        )
+        needed = bool(
+            periodic and not periodic_satisfied
+            or final and not final_satisfied
+        )
+        if not needed:
+            if changed:
+                self._save()
+            return changed
+
+        latest = matching[-1] if matching else None
+        if latest is not None and latest["result"] is None:
+            if changed:
+                self._save()
+            return changed
+        if latest is not None and latest["result"]["status"] == "failure":
+            unit = self._milestone_verification_unit(latest)
+            st.fail_run(
+                self.state,
+                "due milestone verification %s failed: %s"
+                % (latest["id"], latest["result"].get("reason")),
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            return True
+
+        ordinal = 1 + sum(
+            unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+            for unit in self.state.get("units") or []
+        )
+        unit = st._new_unit(
+            st.UNIT_MILESTONE_VERIFICATION, None, part=str(ordinal)
+        )
+        configuration = tasks.resolve_reviewed_task_configuration(
+            {"task_kind": tasks.REVIEWED_COMPLETE_VERIFICATION},
+            defaults=self.config,
+        )
+        unit["reviewed_task_kind"] = tasks.REVIEWED_COMPLETE_VERIFICATION
+        unit["reviewed_policy"] = {
+            key: copy.deepcopy(value) for key, value in configuration.items()
+            if key != "task_kind"
+        }
+        context = {
+            "completed_deep_task_ids": deep_ids,
+            "completed_slice_ids": slice_ids,
+            "periodic": periodic,
+            "final": final,
+        }
+        record = tasks.admit_task(
+            self.state,
+            {
+                "task_executor": "reviewed_task",
+                "configuration": configuration,
+                "staffing_session": st.staffing_session(self.state),
+                "request": {
+                    "work_area": self._task_work_area(),
+                    "request": "Run complete repository verification after %d "
+                    "completed logical slices." % count,
+                    "context": {
+                        "unit": st.unit_key(unit),
+                        "milestone_verification": context,
+                    },
+                    "reference_documents": [self._skeleton_artifact()],
+                },
+            },
+            {},
+            self.workspace,
+        )
+        unit["reviewed_task_id"] = record["id"]
+        self.state["units"].append(unit)
+        st.append_event(
+            self.state,
+            "milestone_verification_admitted",
+            unit=st.unit_key(unit),
+            task_id=record["id"],
+            completed_slice_ids=slice_ids,
+            periodic=periodic,
+            final=final,
+        )
+        self._save()
+        return True
+
+    def _milestone_final_verification_current(self):
+        if not self._milestone_verification_cadence_active():
+            return False
+        completed = self._active_completed_milestone_deep_tasks()
+        if len(completed) != len(self.state["milestone"]["slices"]):
+            return False
+        deep_ids = [record["id"] for _slice_id, record in completed]
+        return any(
+            self._milestone_verification_context(record)[
+                "completed_deep_task_ids"
+            ] == deep_ids
+            and self._milestone_verification_succeeded(record, current=True)
+            for record in self._milestone_verification_records()
+        )
+
+    def _maybe_close_milestone(self):
+        return st.maybe_close_milestone(
+            self.state,
+            current_verification=self._milestone_final_verification_current(),
+        )
+
+    def _open_milestone_deep_parent(self, slice_id):
+        parents = [
+            record for record in tasks.task_records(self.state)
+            if record["order"]["task_executor"] == "deep_task"
+            and record["order"]["request"].get("context", {}).get(
+                "milestone_slice_id"
+            ) == slice_id
+            and record.get("result") is None
+        ]
+        if len(parents) > 1:
+            raise st.IllegalTransition(
+                "slice %02d has multiple open deep tasks" % slice_id
+            )
+        return parents[0] if parents else None
+
+    def _fail_open_milestone_deep_tasks(self, slice_ids, reason):
+        """Settle each affected open reviewed child before its deep parent."""
+        if not self._deep_slice_composition_active():
+            return False
+        slice_ids = set(slice_ids)
+        records = tasks.task_records(self.state)
+        parents = [
+            record for record in records
+            if record["order"]["task_executor"] == "deep_task"
+            and record["order"]["request"].get("context", {}).get(
+                "milestone_slice_id"
+            ) in slice_ids
+            and record.get("result") is None
+        ]
+        changed = False
+        for parent in parents:
+            children = [
+                record for record in records
+                if (record.get("parent") or {}).get("task_id") == parent["id"]
+            ]
+            child_results = []
+            for child in children:
+                if child["result"] is None:
+                    child = tasks.record_task_result(
+                        self.state,
+                        child["id"],
+                        tasks.validate_result({
+                            "status": "failure",
+                            "reason": reason,
+                            **tasks.task_accounting(self.state, child["id"]),
+                            "native_result": None,
+                        }),
+                    )
+                    changed = True
+                child_results.append(child["result"])
+            tasks.record_task_result(
+                self.state,
+                parent["id"],
+                tasks.deep_task_result("failure", child_results, reason),
+            )
+            changed = True
+        return changed
+
+    def _requeue_reconciled_deep_slices(self, account, accepted_revision):
+        """Make retained invalidated slices documentation-first again."""
+        if (
+            not self._deep_slice_composition_active()
+            or account.get("wipe_boundary") is None
+        ):
+            return
+        requeue_ids = set(account["requeue_slice_ids"])
+        reason = (
+            "accepted-range reconciliation %s superseded this slice execution"
+            % accepted_revision
+        )
+        for unit in self.state.get("units") or []:
+            if unit.get("slice_id") not in requeue_ids:
+                continue
+            if unit.get("kind") == st.UNIT_SLICE_DOC:
+                st.reset_for_redraft(self.state, unit, reason)
+                unit["closed_record"] = None
+                unit["gate_commit"] = None
+                unit["failed_from"] = None
+                for field in (
+                    "reviewed_policy",
+                    "preserved_candidate",
+                    "design_update",
+                    "deferred_fix_episode",
+                    "gap_repairs",
+                    "has_gap_remodel",
+                ):
+                    unit.pop(field, None)
+            elif unit.get("kind") == st.UNIT_SLICE_IMPL:
+                st.requeue_implementation_after_reconciliation(
+                    self.state,
+                    unit,
+                    accepted_revision,
+                    discard_cut_authority=True,
+                )
+            else:
+                continue
+            for field in (
+                "reviewed_task_id",
+                "active_task",
+                "brainstorming_wait",
+                "brainstorming_resume",
+            ):
+                unit.pop(field, None)
+
+    def _admit_milestone_deep_parent(self, unit):
+        slice_info = self._slice_info(unit["slice_id"])
+        producers = tasks.effective_slice_producers(slice_info)
+        configuration = tasks.resolve_deep_task_configuration(
+            {
+                "documentation": {
+                    "producer": producers[contracts.KIND_DRAFT_SLICE_NOTE]
+                },
+                "implementation": {
+                    "producer": producers[contracts.KIND_IMPLEMENT]
+                },
+            },
+            defaults=self.config,
+        )
+        return tasks.admit_task(
+            self.state,
+            {
+                "task_executor": "deep_task",
+                "configuration": configuration,
+                "staffing_session": st.staffing_session(self.state),
+                "request": {
+                    "work_area": self._task_work_area(),
+                    "request": slice_info["intent"],
+                    "context": {
+                        "unit": st.unit_key(unit),
+                        "milestone_slice_id": unit["slice_id"],
+                    },
+                    "reference_documents": [self._skeleton_artifact()],
+                },
+            },
+            {},
+            self.workspace,
+        )
+
+    def _milestone_deep_child_order(self, parent, unit):
+        if unit["kind"] == st.UNIT_SLICE_DOC:
+            return tasks.deep_documentation_order(parent), "documentation", None
+        documentation = tasks.related_task(
+            self.state, parent["id"], "documentation", None
+        )
+        if (
+            documentation is None
+            or (documentation.get("result") or {}).get("status") != "success"
+        ):
+            raise st.IllegalTransition(
+                "implementation cannot precede its reviewed documentation"
+            )
+        artifact = documentation["result"]["native_result"][
+            "production_result"
+        ]["artifact"]
+        reference = tasks.resolve_derived_path(
+            os.path.realpath(self.workspace), artifact
+        )
+        part = st.implementation_part(unit) or "a"
+        return (
+            tasks.deep_implementation_order(parent, reference),
+            "implementation",
+            part,
+        )
+
+    def _ensure_milestone_deep_child(self, unit):
+        if (
+            not self._deep_slice_composition_active()
+            or unit is None
+            or unit["kind"] not in (st.UNIT_SLICE_DOC, st.UNIT_SLICE_IMPL)
+        ):
+            return False
+        parent = self._open_milestone_deep_parent(unit["slice_id"])
+        admitted_parent = parent is None
+        if admitted_parent:
+            if unit["kind"] != st.UNIT_SLICE_DOC:
+                raise st.IllegalTransition(
+                    "implementation has no open documentation-first deep task"
+                )
+            parent = self._admit_milestone_deep_parent(unit)
+        order, phase, part = self._milestone_deep_child_order(parent, unit)
+        policy = copy.deepcopy(order["configuration"])
+        policy.pop("task_kind")
+        self.reviewed_work._configure_locked(unit, policy)
+        child = tasks.admit_related_task(
+            self.state,
+            parent["id"],
+            phase,
+            part,
+            order,
+            {},
+            self.workspace,
+        )
+        current = unit.get("reviewed_task_id")
+        if current not in (None, child["id"]):
+            raise st.IllegalTransition(
+                "unit %s is associated with another reviewed task"
+                % st.unit_key(unit)
+            )
+        unit["reviewed_task_id"] = child["id"]
+        self._save()
+        return bool(admitted_parent or current is None)
+
+    def _consume_milestone_deep_child_result(self, unit, result=None):
+        if not self._deep_slice_composition_active():
+            return False
+        task_id = unit.get("reviewed_task_id")
+        if task_id is None:
+            return False
+        child = tasks.task_record(self.state, task_id)
+        relation = child.get("parent") or {}
+        if relation.get("phase") not in ("documentation", "implementation"):
+            return False
+        changed = False
+        if child["result"] is None:
+            result = result or self.reviewed_work.result(unit)
+            if result is None:
+                return False
+            child = tasks.record_task_result(self.state, task_id, result)
+            changed = True
+        parent = tasks.task_record(self.state, relation["task_id"])
+        final_child = (
+            child["result"]["status"] == "failure"
+            or (
+                relation["phase"] == "implementation"
+                and unit.get("implementation_cut") is None
+            )
+        )
+        if final_child and parent["result"] is None:
+            children = [
+                record["result"] for record in tasks.task_records(self.state)
+                if (record.get("parent") or {}).get("task_id") == parent["id"]
+            ]
+            if any(item is None for item in children):
+                raise st.IllegalTransition(
+                    "deep task cannot finish before every admitted child"
+                )
+            status = child["result"]["status"]
+            tasks.record_task_result(
+                self.state,
+                parent["id"],
+                tasks.deep_task_result(
+                    status,
+                    children,
+                    child["result"].get("reason"),
+                ),
+            )
+            changed = True
+        return changed
+
+    def _prepare_milestone_deep_slice(self):
+        if (
+            not self._deep_slice_composition_active()
+            or self.state.get("failure") is not None
+            or self.state["milestone"].get(
+                canonical_plan.RECONCILIATION_KEY
+            ) is not None
+        ):
+            return False
+        changed = False
+        for unit in self.state.get("units") or []:
+            if (
+                unit.get("slice_id") is not None
+                and unit.get("status") == st.U_SEALED
+            ):
+                changed = bool(
+                    self._consume_milestone_deep_child_result(unit) or changed
+                )
+        if changed:
+            st.ensure_due_unit(self.state)
+            self._save()
+        return changed
+
     def _active_worker_task(self, unit, kind):
         reference = unit.get("active_task")
         if reference is None:
@@ -3782,6 +5011,9 @@ class Driver(object):
         if reference is not None:
             record = tasks.task_record(self.state, reference.get("id"))
             return record["order"]["task_executor"] == "brainstorming"
+        selection = self.reviewed_work.producer(unit, kind)
+        if selection is not None:
+            return selection["task_executor"] == "brainstorming"
         selection = tasks.effective_slice_producers(
             self._slice_info(unit["slice_id"])
         )[kind]
@@ -3861,7 +5093,16 @@ class Driver(object):
             "configuration": {},
             "request": request,
         }
-        if kind in tasks.PRODUCER_TASK_KINDS:
+        reviewed_producer = self.reviewed_work.producer(unit, kind)
+        if reviewed_producer is not None:
+            order = tasks.producer_order_from_selection(
+                reviewed_producer, request
+            )
+            if order["task_executor"] != "agent_call":
+                raise st.IllegalTransition(
+                    "selected production task is not an agent-call task"
+                )
+        elif kind in tasks.PRODUCER_TASK_KINDS:
             order = tasks.producer_order(
                 self._slice_info(unit["slice_id"]), kind, request
             )
@@ -3898,22 +5139,62 @@ class Driver(object):
 
     def _worker_result_policy(self, unit):
         """Project the current strategy decisions owned by one Worker task."""
-        threshold = str(self.config.get("p3_defer_max_risk") or "low")
+        reviewed = unit.get("reviewed_policy") or {}
+        threshold = str(
+            reviewed.get(
+                "p3_defer_max_risk",
+                self.config.get("p3_defer_max_risk") or "low",
+            )
+        )
         if threshold not in contracts.DRIFT_RISK_LEVELS:
             threshold = "low"
+        floor_name = (
+            "impl_reclassify_from"
+            if unit["kind"] in (
+                st.UNIT_SLICE_IMPL,
+                st.UNIT_MILESTONE_VERIFICATION,
+            )
+            else "doc_reclassify_from"
+        )
+        floor = reviewed.get(floor_name)
+        if floor is None:
+            defer_scope = list(interpreter.defer_scope_for(
+                self.state,
+                st.UNIT_SLICE_IMPL
+                if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION
+                else unit["kind"],
+            ))
+        elif floor == "disabled":
+            defer_scope = []
+        else:
+            defer_scope = list(
+                contracts.SEVERITIES[contracts.SEVERITIES.index(floor):]
+            )
+        same_family_second_look = bool(
+            reviewed.get("review_breadth") == "single"
+            and reviewed.get("same_family_second_look")
+        )
+        reclassify = bool(
+            reviewed.get(
+                "p3_reclassify_debt",
+                self.config.get("p3_reclassify_debt"),
+            )
+        )
+        if reviewed.get("review_breadth") == "single" \
+                and not same_family_second_look:
+            reclassify = False
         return {
-            "defer_scope": list(
-                interpreter.defer_scope_for(self.state, unit["kind"])
-            ),
-            "p3_reclassify_debt": bool(
-                self.config.get("p3_reclassify_debt")
-            ),
+            "defer_scope": defer_scope,
+            "p3_reclassify_debt": reclassify,
             "p3_defer_max_risk": threshold,
             "gap_backstop": bool(interpreter.gap_semantics(self.state)),
+            "same_family_second_look": same_family_second_look,
         }
 
     def _worker_task_result_policy(self, record, unit):
-        """Recover frozen post-result strategy, with pre-field compatibility."""
+        """Recover the reviewed result strategy, with task compatibility."""
+        if record is None:
+            return self._worker_result_policy(unit)
         context = ((record.get("order") or {}).get("request") or {}).get(
             "context"
         ) or {}
@@ -3932,11 +5213,16 @@ class Driver(object):
             or threshold not in contracts.DRIFT_RISK_LEVELS
             or not isinstance(frozen.get("p3_reclassify_debt"), bool)
             or not isinstance(frozen.get("gap_backstop"), bool)
+            or not isinstance(
+                frozen.get("same_family_second_look", False), bool
+            )
         ):
             raise st.IllegalTransition(
                 "Worker task has malformed frozen result policy"
             )
-        return copy.deepcopy(frozen)
+        checked = copy.deepcopy(frozen)
+        checked.setdefault("same_family_second_look", False)
+        return checked
 
     def _worker_task_project_inputs(
         self, record, project_context=None, extensions=None, roots=None
@@ -4003,6 +5289,8 @@ class Driver(object):
         retaining their prior fallback behavior; every new task freezes the
         value, including an explicit empty option set.
         """
+        if record is None:
+            return copy.deepcopy(fallback)
         context = ((record.get("order") or {}).get("request") or {}).get(
             "context"
         ) or {}
@@ -4029,6 +5317,14 @@ class Driver(object):
             task_id = getattr(result, "task_id", None)
         if task_id is None:
             return None
+        reference = unit.get("active_task")
+        if not (
+            isinstance(reference, dict)
+            and reference.get("id") == task_id
+        ):
+            # Reviewed calls carry their outer task id as evidence. Only a
+            # legacy admitted Worker task is terminal at one physical call.
+            return None
         if status == "failure":
             origin_signal = getattr(result, "origin_rethink_signal", None)
             if origin_signal is not None:
@@ -4044,9 +5340,7 @@ class Driver(object):
             ),
         )
         record = tasks.record_task_result(self.state, task_id, envelope)
-        reference = unit.get("active_task")
-        if isinstance(reference, dict) and reference.get("id") == task_id:
-            unit.pop("active_task", None)
+        unit.pop("active_task", None)
         return record
 
     def _fail_waiting_worker_task(self, unit, wait, reason):
@@ -4064,6 +5358,12 @@ class Driver(object):
         if task_id is None:
             task_id = getattr(result, "task_id", None)
         if task_id is None:
+            return None
+        reference = unit.get("active_task")
+        if not (
+            isinstance(reference, dict)
+            and reference.get("id") == task_id
+        ):
             return None
         record = tasks.task_record(self.state, task_id)
         if record["result"] is not None:
@@ -4121,6 +5421,17 @@ class Driver(object):
                 return unit
         return None
 
+    def _worker_call_unit(self, call):
+        """Resolve a call marker to its reviewed-work owner."""
+        if isinstance(call, dict):
+            key = call.get("unit")
+            if isinstance(key, str) and key:
+                unit = self._unit_by_key(key)
+                if unit is not None:
+                    return unit
+            return self._active_task_unit(call.get("task_id"))
+        return None
+
     @staticmethod
     def _retain_call_identity(call, model, effort, family=None):
         """Keep generic staffing available after the busy marker is gone."""
@@ -4151,7 +5462,8 @@ class Driver(object):
             return False
 
     def _mark_busy(self, label, kind, family, model=None, effort=None,
-                   nested=False, task_id=None, staffing_fallback=None):
+                   nested=False, task_id=None, staffing_fallback=None,
+                   unit=None):
         """Durable in-flight marker, with any unsaved parent calls.
 
         The top-level fields remain the panel's active-call projection.
@@ -4185,6 +5497,10 @@ class Driver(object):
                 "state_digest": state_digest,
             }
             marker.update(self._task_id_fields(task_id))
+            if unit is not None:
+                marker["unit"] = st.unit_key(unit)
+            elif pending and pending[-1].get("unit"):
+                marker["unit"] = pending[-1]["unit"]
             if staffing_fallback:
                 marker["staffing_fallback"] = staffing_fallback
             if pending:
@@ -4473,6 +5789,8 @@ class Driver(object):
             episode_unit
             if episode_unit is not None else st.current_unit(self.state)
         )
+        if task_id is None and call_unit is not None:
+            task_id = self._reviewed_call_task_id(call_unit)
         dm, de = self._family_defaults(family)
         model = model or dm
         effort = effort or de
@@ -4489,6 +5807,7 @@ class Driver(object):
             if not self._mark_busy(
                 raw_name, kind, call_family,
                 model=call_model, effort=call_effort, task_id=task_id,
+                unit=call_unit,
                 nested=nested,
                 staffing_fallback=getattr(
                     dispatch_resolver, "staffing_fallback", None
@@ -4680,7 +5999,12 @@ class Driver(object):
                 self._clear_busy()
                 raise StopStep(str(exc))
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
-                failed_duration_s = time.time() - physical_started
+                reported_duration_s = getattr(exc, "duration_s", None)
+                failed_duration_s = (
+                    reported_duration_s
+                    if reported_duration_s is not None
+                    else time.time() - physical_started
+                )
                 actual_family, actual_model, actual_effort = (
                     self._result_identity(
                         exc, call_family, call_model, call_effort
@@ -5212,14 +6536,26 @@ class Driver(object):
                     "reconciliation source task identity is invalid"
                 )
             task = tasks.task_record(self.state, task_id)
+            reviewed_owner = bool(
+                task["order"]["task_executor"] == "reviewed_task"
+                and unit.get("reviewed_task_id") == task_id
+            )
             if active is not None and (
-                not isinstance(active, dict) or active.get("id") != task_id
+                not reviewed_owner
+                and (
+                    not isinstance(active, dict)
+                    or active.get("id") != task_id
+                )
             ):
                 raise st.IllegalTransition(
                     "reconciliation source task no longer owns its unit"
                 )
             if task.get("result") is None and (
-                not isinstance(active, dict) or active.get("id") != task_id
+                not reviewed_owner
+                and (
+                    not isinstance(active, dict)
+                    or active.get("id") != task_id
+                )
             ):
                 raise st.IllegalTransition(
                     "open reconciliation source task is detached"
@@ -5273,6 +6609,12 @@ class Driver(object):
                     "accepted_revision": record["accepted_revision"],
                 }
             account = final["final_account"]
+            superseded_slice_ids = set(account["invalidated_slice_ids"])
+            source_is_reviewed = bool(
+                task_id is not None
+                and task["order"]["task_executor"] == "reviewed_task"
+                and unit.get("reviewed_task_id") == task_id
+            )
             by_key = {
                 st.unit_key(item): item
                 for item in self.state.get("units") or []
@@ -5286,7 +6628,11 @@ class Driver(object):
                     )
                 invalidated.append(target)
 
-            if task_id is not None and task.get("result") is None:
+            if (
+                task_id is not None
+                and task.get("result") is None
+                and not source_is_reviewed
+            ):
                 self._fail_worker_task_if_open(
                     unit,
                     {
@@ -5312,10 +6658,15 @@ class Driver(object):
                 session_id=session_id,
                 owner_survives=(
                     unit.get("slice_id") is None
-                    or unit.get("slice_id") in {
-                        item["id"] for item in final["final_plan"]
-                    }
+                    or unit.get("slice_id") not in superseded_slice_ids
                 ),
+            )
+            supersession_reason = (
+                "open slice execution superseded by accepted-range "
+                "reconciliation"
+            )
+            self._fail_open_milestone_deep_tasks(
+                superseded_slice_ids, supersession_reason
             )
             requeue_ids = set(account["requeue_slice_ids"])
             for target in invalidated:
@@ -5325,12 +6676,18 @@ class Driver(object):
                 # The final repair supersedes every parked pre-repair tree,
                 # including one whose slice is now only historical.
                 target.pop("preserved_candidate", None)
-                if target.get("slice_id") in requeue_ids:
+                if (
+                    target.get("slice_id") in requeue_ids
+                    and not self._deep_slice_composition_active()
+                ):
                     st.requeue_implementation_after_reconciliation(
                         self.state,
                         target,
                         record["accepted_revision"],
                     )
+            self._requeue_reconciled_deep_slices(
+                account, record["accepted_revision"]
+            )
 
             milestone = self.state["milestone"]
             milestone["slices"] = copy.deepcopy(final["projection"])
@@ -5581,12 +6938,14 @@ class Driver(object):
                 raw_name, task_id, unit=unit
             ),
             on_llm_start=self._classify_call_starter(
-                raw_name, task_id, resolver=resolver
+                raw_name, task_id, resolver=resolver, unit=unit
             ),
             resolve_dispatch=resolver,
         )
 
-    def _classify_call_starter(self, raw_name, task_id=None, resolver=None):
+    def _classify_call_starter(
+        self, raw_name, task_id=None, resolver=None, unit=None
+    ):
         """Mark the optional classifier only when its LLM call starts."""
         def _start(call):
             if not self._mark_busy(
@@ -5597,6 +6956,7 @@ class Driver(object):
                 effort=call.get("effort"),
                 nested=True,
                 task_id=task_id,
+                unit=unit,
                 staffing_fallback=getattr(
                     resolver, "staffing_fallback", None
                 ),
@@ -6121,6 +7481,7 @@ class Driver(object):
                 st.UNIT_SKELETON: "document",
                 st.UNIT_SLICE_DOC: "document",
                 st.UNIT_SLICE_IMPL: "implementation",
+                st.UNIT_MILESTONE_VERIFICATION: "implementation",
             }[unit["kind"]]
         except (KeyError, TypeError) as exc:
             raise st.IllegalTransition(
@@ -6814,7 +8175,9 @@ class Driver(object):
                 "origin_type", old_source.get("type", "delta")
             )
             try:
-                max_fix_loops = int(self.config.get("max_fix_loops", 6))
+                max_fix_loops = int(
+                    self._reviewed_limit(unit, "max_fix_loops")
+                )
             except (TypeError, ValueError):
                 max_fix_loops = 6
             preserved_rounds = max(old_fix_loop_rounds, 1)
@@ -7139,6 +8502,35 @@ class Driver(object):
             unit.pop("phantom_retried", None)
         return True
 
+    def _prepare_complete_verification(self, unit):
+        """Open the verification task's own empty WIP before its suite call."""
+        if not gitops.enabled(self.config):
+            reason = "complete verification requires its Git gate"
+            st.fail_run(
+                self.state, reason, unit=unit, type_="orchestrator"
+            )
+            self._save()
+            raise StopStep(reason)
+        try:
+            pending = unit.get("pending_wip")
+            if pending is None:
+                pending = {
+                    "parent": gitops.head_full_sha(self.workspace),
+                    "tree": gitops.snapshot_worktree_tree(self.workspace),
+                    "message": "wip: %s" % st.display_unit_key(unit),
+                    "reason": "complete verification ready",
+                    "target": st.U_PRE_SEAL_VERIFY,
+                }
+                unit["pending_wip"] = pending
+                self._save()
+            return self._complete_pending_wip(unit)
+        except gitops.GitError as exc:
+            st.fail_run(
+                self.state, "wip commit failed: %s" % exc, unit=unit
+            )
+            self._save()
+            raise StopStep(str(exc))
+
     def _finish_draft(self, unit, reason):
         if gitops.enabled(self.config):
             try:
@@ -7259,8 +8651,13 @@ class Driver(object):
             )
             return active, planned
         request, planned = self._brainstorming_production_request(unit, kind)
-        order = tasks.producer_order(
-            self._slice_info(unit["slice_id"]), kind, request
+        reviewed_producer = self.reviewed_work.producer(unit, kind)
+        order = (
+            tasks.producer_order_from_selection(reviewed_producer, request)
+            if reviewed_producer is not None
+            else tasks.producer_order(
+                self._slice_info(unit["slice_id"]), kind, request
+            )
         )
         if order["task_executor"] != "brainstorming":
             raise st.IllegalTransition(
@@ -7440,6 +8837,7 @@ class Driver(object):
         if (
             "source_base_revision" in native
             and "accepted_revision" in native
+            and not self.state.get("reviewed_task")
             and self._observe_accepted_plan_range(
                 native["source_base_revision"],
                 native["accepted_revision"],
@@ -7461,7 +8859,11 @@ class Driver(object):
             token_usage_partial=result.get("token_usage_partial", False),
             cost=result.get("cost"),
             cost_partial=result.get("cost_partial", False),
-            task_id=task_id,
+            # The Brainstorming task retains its own immutable result, while
+            # the production charge belongs to the enclosing reviewed work.
+            # Milestone-composed children therefore attribute the draft to
+            # their reviewed identity, just like direct routed production.
+            task_id=self._reviewed_call_task_id(unit) or task_id,
         )
         if kind == contracts.KIND_DRAFT_SLICE_NOTE:
             planned = origin.get("planned_slice_note_path")
@@ -7481,6 +8883,7 @@ class Driver(object):
         tree = pending.get("tree")
         message = pending.get("message")
         reason = pending.get("reason") or "drafted"
+        target = pending.get("target") or st.U_PRE_REVIEW_VERIFY
         try:
             head = gitops.head_full_sha(self.workspace)
             if head == parent:
@@ -7513,7 +8916,7 @@ class Driver(object):
         unit.pop("pending_wip", None)
         unit.pop("implementation_attempt_snapshot", None)
         st.transition_unit(
-            self.state, unit, st.U_PRE_REVIEW_VERIFY, reason=reason
+            self.state, unit, target, reason=reason
         )
         return "drafted %s" % (unit["artifact"] or "(implementation)")
 
@@ -7527,11 +8930,7 @@ class Driver(object):
             return
         if any(
             event.get("type") == "brainstorming_work_recorded"
-            and (
-                event.get("task_id") == task_id
-                if task_id is not None
-                else event.get("session_id") == session_id
-            )
+            and event.get("session_id") == session_id
             for event in self.state.get("events", [])
         ):
             return
@@ -7658,6 +9057,7 @@ class Driver(object):
                 exc.work_token_usage_partial,
                 cost=getattr(exc, "work_cost", None),
                 cost_partial=getattr(exc, "work_cost_partial", False),
+                task_id=self._reviewed_call_task_id(unit),
             )
             unit.pop("brainstorming_wait", None)
             if (wait.get("origin") or {}).get("kind") \
@@ -7702,6 +9102,7 @@ class Driver(object):
             handoff.get("work_token_usage_partial", False),
             cost=handoff.get("work_cost"),
             cost_partial=handoff.get("work_cost_partial", False),
+            task_id=self._reviewed_call_task_id(unit),
         )
 
         if handoff["result"]["outcome"] == "failure":
@@ -7713,12 +9114,16 @@ class Driver(object):
                 kind=kind,
                 session_id=session_id,
             )
-            st.fail_run(
-                self.state,
+            reason = (
                 "focused design discussion ended without agreement; "
-                "the original work and candidate are preserved",
-                unit=unit,
+                "the original work and candidate are preserved"
+            )
+            st.fail_run(
+                self.state, reason, unit=unit,
                 type_="brainstorming_no_agreement",
+            )
+            self._fail_open_milestone_deep_tasks(
+                {unit.get("slice_id")}, reason
             )
             self._save()
             raise StopStep("Brainstorming ended without agreement")
@@ -7727,15 +9132,16 @@ class Driver(object):
             "source_base_revision" in handoff
             and "accepted_revision" in handoff
         ):
-            if self._observe_accepted_plan_range(
-                handoff["source_base_revision"],
-                handoff["accepted_revision"],
-                copy.deepcopy(origin.get("plan_source") or {}),
-            ):
-                self._save()
-                raise PlanReconciliationOpened(
-                    "accepted rethink plan range requires reconciliation"
-                )
+            if not self.state.get("reviewed_task"):
+                if self._observe_accepted_plan_range(
+                    handoff["source_base_revision"],
+                    handoff["accepted_revision"],
+                    copy.deepcopy(origin.get("plan_source") or {}),
+                ):
+                    self._save()
+                    raise PlanReconciliationOpened(
+                        "accepted rethink plan range requires reconciliation"
+                    )
             unit.pop("brainstorming_wait", None)
             unit.pop("brainstorming_resume", None)
             if kind == contracts.KIND_IMPLEMENT:
@@ -8005,6 +9411,25 @@ class Driver(object):
             if self._brainstorming_wait_session() is not None:
                 self.state = st.load(self.state_path)
             action, boundary_note = self._decide_at_strategy_boundary()
+            skeleton = self._find_unit(st.UNIT_SKELETON, None)
+            try:
+                prepared = self._prepare_initial_skeleton_task(skeleton)
+            except StopStep as exc:
+                return Action(A_FAILED, reason=str(exc)), "run failed: %s" % exc
+            if prepared and self.state.get("failure") is None:
+                action, boundary_note = self._decide_at_strategy_boundary()
+            try:
+                prepared = self._prepare_milestone_deep_slice()
+            except StopStep as exc:
+                return Action(A_FAILED, reason=str(exc)), "run failed: %s" % exc
+            if prepared and self.state.get("failure") is None:
+                action, boundary_note = self._decide_at_strategy_boundary()
+            try:
+                prepared = self._prepare_milestone_verification()
+            except StopStep as exc:
+                return Action(A_FAILED, reason=str(exc)), "run failed: %s" % exc
+            if prepared:
+                action, boundary_note = self._decide_at_strategy_boundary()
             if action.type in (A_DONE, A_FAILED):
                 return action, boundary_note
             waiting_session = (
@@ -8016,18 +9441,46 @@ class Driver(object):
                     note = self._do_reconciliation()
                     sealed_unit = None
                 else:
-                    note, sealed_unit, gate_context = self.reviewed_work.execute(
+                    (
+                        note,
+                        sealed_unit,
+                        gate_context,
+                        reviewed_result,
+                    ) = self.reviewed_work.execute(
                         action,
                         before_gate=self._prepare_milestone_gate,
                         call_preparation=self.milestone_reviewed_calls,
                     )
                 if sealed_unit is not None:
+                    self._consume_initial_skeleton_result(
+                        sealed_unit, reviewed_result
+                    )
+                    self._consume_milestone_deep_child_result(
+                        sealed_unit, reviewed_result
+                    )
+                    self._consume_milestone_verification_result(
+                        sealed_unit, reviewed_result
+                    )
                     self._advance_milestone_after_gate(
                         sealed_unit, gate_context=gate_context
                     )
             except PlanReconciliationOpened as exc:
                 return Action(A_RECONCILIATION), str(exc)
             except StopStep as exc:
+                skeleton = self._find_unit(st.UNIT_SKELETON, None)
+                if self.state.get("failure") is not None:
+                    self._record_initial_skeleton_task_failure(skeleton)
+                    failed_unit = self._unit_by_key(action.params.get("unit"))
+                    if (
+                        failed_unit is not None
+                        and failed_unit.get("kind")
+                        == st.UNIT_MILESTONE_VERIFICATION
+                    ):
+                        self._terminalize_milestone_verification(
+                            failed_unit,
+                            self.state["failure"].get("reason") or str(exc),
+                        )
+                        self._save()
                 return action, "run failed: %s" % exc
             if (
                 action.type == A_BRAINSTORM_WAIT
@@ -8063,7 +9516,7 @@ class Driver(object):
                 if st.current_unit(self.state) is None:
                     with self._exclusive():
                         self._assert_not_stale()
-                        st.maybe_close_milestone(self.state)
+                        self._maybe_close_milestone()
                         self._save()
                 return 0
             if action.type == A_FAILED:
@@ -8182,6 +9635,8 @@ class Driver(object):
         called on the main thread during prompt assembly — before any
         report-call tamper snapshot, so the write is never attributed to
         a reviewer."""
+        if self.state.get("reviewed_task"):
+            return
         rel = ledgers.goal_path(self.state)
         path = os.path.join(self.workspace, rel)
         content = ledgers.render_goal(self.state)
@@ -8289,9 +9744,12 @@ class Driver(object):
 
     def _do_draft(self, unit=None, call_preparation=None):
         unit = unit if unit is not None else _current_author_unit(self.state)
+        self._ensure_milestone_deep_child(unit)
         call_preparation = (
             call_preparation or self.milestone_reviewed_calls
         )
+        if self.reviewed_work._is_complete_verification(unit):
+            return self._prepare_complete_verification(unit)
         if unit.get("preserved_candidate"):
             prepared = self._resume_preserved_candidate(unit)
             if prepared is not None:
@@ -8392,7 +9850,7 @@ class Driver(object):
                 and gitops.enabled(self.config)
                 and unit.get("implementation_stabilization") is None
             ):
-                preview_meter = self._implementation_size_settings()
+                preview_meter = self._implementation_size_settings(unit)
             prompt = self._prepare_author_package(
                 unit,
                 kind,
@@ -8521,18 +9979,9 @@ class Driver(object):
                 ),
             } or None
             start_session = kind in contracts.RETHINK_CONTINUATION_KINDS
-            task = self._admit_worker_task(
-                unit,
-                kind,
-                prompt,
-                family,
-                model=model,
-                effort=effort,
-                dispatch_resolver=dispatch_resolver,
-                project_context=project_context,
-                validate_opts=validate_opts,
-                author_coordinates=author_coordinates,
-            )
+            # New reviewed calls run directly.  ``active_task`` is retained
+            # only to drain a task admitted by an older driver.
+            task = active_task
             self._activate_worker_episode_authority(authority)
             validate_opts = self._worker_task_validate_opts(
                 task, validate_opts
@@ -8556,7 +10005,7 @@ class Driver(object):
                         (implementation_attempt or {}).get("tree") or pre_tree,
                         stabilizing=stabilization_size is not None,
                         dispatch_resolver=dispatch_resolver,
-                        task_id=task["id"],
+                        task_id=(task or {}).get("id"),
                         episode_refresher=lambda next_prompt: (
                             self._refresh_worker_episode(
                                 unit, kind, next_prompt
@@ -8582,16 +10031,15 @@ class Driver(object):
                     raw_path,
                     implementation_size,
                     implementation_stabilized,
-                ) = tasks.execute_worker(
-                    task,
-                    dispatch,
+                ) = (
+                    tasks.execute_worker(task, dispatch)
+                    if task is not None else dispatch(None)
                 )
                 if stabilization_size is not None:
                     implementation_size = stabilization_size
             else:
-                output, result, raw_path = tasks.execute_worker(
-                    task,
-                    lambda _request: self._call(
+                def dispatch(_request):
+                    return self._call(
                         family,
                         prompt,
                         kind,
@@ -8603,7 +10051,7 @@ class Driver(object):
                         validate_opts=validate_opts,
                         start_session=start_session,
                         dispatch_resolver=dispatch_resolver,
-                        task_id=task["id"],
+                        task_id=(task or {}).get("id"),
                         prepare_call=call_preparation.author(
                             unit,
                             kind,
@@ -8612,7 +10060,11 @@ class Driver(object):
                             author_coordinates=author_coordinates,
                         ),
                         episode_unit=unit,
-                    ),
+                    )
+
+                output, result, raw_path = (
+                    tasks.execute_worker(task, dispatch)
+                    if task is not None else dispatch(None)
                 )
             family, model, effort = self._result_identity(
                 result, family, model, effort
@@ -9607,6 +11059,10 @@ class Driver(object):
                 return u["artifact"] or ledgers.skeleton_path(self.state)
         return ledgers.skeleton_path(self.state)
 
+    def _goal_authority_path(self):
+        reviewed = self.state.get("reviewed_task") or {}
+        return reviewed.get("authority_path") or ledgers.goal_path(self.state)
+
     def _slice_note_artifact(self, slice_id):
         for u in self.state["units"]:
             if u["kind"] == st.UNIT_SLICE_DOC and u["slice_id"] == slice_id:
@@ -9733,6 +11189,20 @@ class Driver(object):
     ):
         """One router answer, read live from the run's session."""
         try:
+            breadth = (
+                self._review_breadth(episode_unit)
+                if role == "review" and episode_unit is not None
+                else None
+            )
+            selected_breadth = breadth == 1
+            if breadth == 2:
+                selected_breadth = len(staffing.session_seats(
+                    self.model_profiles_home,
+                    st.staffing_session(self.state),
+                    "review",
+                    material=self._milestone_material(),
+                    families=list(self.config["families_order"]),
+                )) != 2
             return staffing.resolve(
                 self.model_profiles_home,
                 st.staffing_session(self.state),
@@ -9741,6 +11211,10 @@ class Driver(object):
                 round=round,
                 material=self._milestone_material(),
                 families=list(self.config["families_order"]),
+                **(
+                    {"review_breadth": breadth}
+                    if selected_breadth else {}
+                ),
             )
         except staffing.StaffingConditionError as exc:
             self._fail_staffing(exc, episode_unit=episode_unit)
@@ -9771,7 +11245,30 @@ class Driver(object):
     # A `Driver` with no catalogue home has no document to read and keeps
     # reviewing in the configured order.
 
-    def _review_seats(self):
+    def _review_breadth(self, unit):
+        if unit is None:
+            return None
+        breadth = self._reviewed_setting(unit, "review_breadth")
+        return {"single": 1, "double": 2}.get(breadth)
+
+    def _profileless_review_cycle(self, unit):
+        breadth = self._review_breadth(unit)
+        families = list(self.config["families_order"])
+        if breadth is None:
+            return families
+        selected = []
+        for family in families:
+            if family not in selected:
+                selected.append(family)
+            if len(selected) == breadth:
+                return selected
+        raise staffing.StaffingConditionError(
+            staffing.DISTINCT_FAMILIES_UNSATISFIABLE,
+            "this order requires exactly %d distinct review families, but "
+            "the run supplies %d" % (breadth, len(selected)),
+        )
+
+    def _review_seats(self, unit=None):
         """The `review` seat indices this run's document assigns, live.
 
         Never empty: every stored document assigns index 1 to every role
@@ -9781,6 +11278,16 @@ class Driver(object):
         assigns to no `review` seat adds no seat, because this reads the
         assignment and not the family table.
         """
+        breadth = self._review_breadth(unit) if unit is not None else None
+        if breadth is not None:
+            seats, _families = staffing.review_cycle(
+                self.model_profiles_home,
+                st.staffing_session(self.state),
+                breadth,
+                material=self._milestone_material(),
+                families=list(self.config["families_order"]),
+            )
+            return seats
         return staffing.session_seats(
             self.model_profiles_home,
             st.staffing_session(self.state),
@@ -9789,7 +11296,7 @@ class Driver(object):
             families=list(self.config["families_order"]),
         )
 
-    def _review_families(self):
+    def _review_families(self, unit=None):
         """The family each assigned `review` seat runs on, in seat order.
 
         The run's review cycle, as the rotation, the cap and the seal
@@ -9809,7 +11316,17 @@ class Driver(object):
         seat left to review and would open a seal on no reviews at all.
         """
         if self.model_profiles_home is None:
-            return list(self.config["families_order"])
+            return self._profileless_review_cycle(unit)
+        breadth = self._review_breadth(unit) if unit is not None else None
+        if breadth is not None:
+            _seats, families = staffing.review_cycle(
+                self.model_profiles_home,
+                st.staffing_session(self.state),
+                breadth,
+                material=self._milestone_material(),
+                families=list(self.config["families_order"]),
+            )
+            return families
         return staffing.session_seat_families(
             self.model_profiles_home,
             st.staffing_session(self.state),
@@ -9830,9 +11347,9 @@ class Driver(object):
         own declared route through ordinary recovery naming its token.
         """
         try:
-            families = self._review_families()
+            families = self._review_families(unit)
         except staffing.StaffingConditionError as exc:
-            self._fail_staffing(exc)
+            self._fail_staffing(exc, episode_unit=unit)
         return st.seal_predicate_reviews(
             unit, families, current_fingerprint=current_fingerprint
         )
@@ -9846,7 +11363,7 @@ class Driver(object):
         no other record of having done so.
         """
         try:
-            families = self._review_families()
+            families = self._review_families(unit)
         except staffing.StaffingConditionError:
             return None
         return st.current_family(self.state, unit, families=families)
@@ -9870,9 +11387,11 @@ class Driver(object):
         """
         stopping = None
         try:
-            families = self._review_families()
+            families = self._review_families(unit)
         except staffing.StaffingConditionError as exc:
-            families = [None] * len(self._review_seats())
+            if self._review_breadth(unit) is not None:
+                self._fail_staffing(exc, episode_unit=unit)
+            families = [None] * len(self._review_seats(unit))
             stopping = exc
         if deferred:
             st.advance_family_deferred(self.state, unit, families=families)
@@ -9913,14 +11432,16 @@ class Driver(object):
         """
         round_number = 1
         for _ in range(_REVIEW_SEAT_SETTLE_READS):
-            resolution = self._staffing_resolution("review", seat,
-                                                   round_number)
+            resolution = self._staffing_resolution(
+                "review", seat, round_number, episode_unit=unit
+            )
             wanted = 1 + _review_rounds_done(unit, resolution.answer["agent"])
             if wanted == round_number:
                 return round_number, resolution
             round_number = wanted
         return round_number, self._staffing_resolution(
-            "review", seat, round_number)
+            "review", seat, round_number, episode_unit=unit
+        )
 
     def _review_seat_staffing(self, unit, seat):
         """(family, model, effort) a review at *seat* is prepared under.
@@ -9941,7 +11462,7 @@ class Driver(object):
         bind is finally known — a dispatch resolves live and may land on a
         different family than the preparing read named.
         """
-        cap = self.config["max_rounds_per_family"]
+        cap = self._reviewed_limit(unit, "max_rounds_per_family")
         if _review_rounds_done(unit, family) < cap:
             return
         st.fail_run(
@@ -9949,6 +11470,7 @@ class Driver(object):
             "family %s reached max_rounds_per_family=%d on %s without a "
             "clean round" % (family, cap, st.unit_key(unit)),
             unit=unit,
+            type_=self._reviewed_convergence_failure_type(unit),
         )
         self._save()
         raise StopStep("round cap")
@@ -9967,8 +11489,10 @@ class Driver(object):
         is this dispatch's split-family check as well.
         """
         chosen = None
-        for seat in self._review_seats():
-            family, _model, _effort = self._staff("review", index=seat)
+        for seat in self._review_seats(unit):
+            family, _model, _effort = self._staff(
+                "review", index=seat, episode_unit=unit
+            )
             if chosen is None:
                 chosen = seat
             if fixer_family and family == fixer_family:
@@ -10262,6 +11786,9 @@ class Driver(object):
         # Compatibility must never restore retired redocumentation machinery.
         # Persisted runs with a missing or false historical flag use the same
         # lightweight rethink/design-update path as newly created runs.
+        # Because this posture is unconditional, retained in-goal gap outputs
+        # return through _route_pending_gap's retired-retry branches before its
+        # historical skeleton/sibling re-documentation code can be reached.
         return True
 
     def _legacy_gap_enabled(self):
@@ -10332,6 +11859,7 @@ class Driver(object):
                     % (kind, f.get("id"), contests.get("rejection_id"),
                        sorted(known) or "none"),
                     unit=unit,
+                    type_="worker_protocol",
                 )
                 raise StopStep("bad contests reference")
 
@@ -10347,6 +11875,7 @@ class Driver(object):
                         "registry ref %r (known: %s)"
                         % (f.get("id"), ref, sorted(known) or "none"),
                         unit=unit,
+                        type_="worker_protocol",
                     )
                     raise StopStep("bad adjudication reference")
 
@@ -10376,6 +11905,7 @@ class Driver(object):
                     % (f.get("id"), f.get("adjudication_ref"),
                        contested[f.get("id")]),
                     unit=unit,
+                    type_="worker_protocol",
                 )
                 raise StopStep("contested finding killed by pointer")
 
@@ -10394,24 +11924,13 @@ class Driver(object):
         report-only rounds the check never once caught a reviewer editing
         code, while its false positives (artifact churn a reviewer's own
         build or test run wrote) repeatedly discarded good reviews."""
-        task = None
-        if task_id is None:
-            task = self._admit_worker_task(
-                unit,
-                kind,
-                prompt,
-                family,
-                model=model,
-                effort=effort,
-                dispatch_resolver=dispatch_resolver,
-                output_directory=output_directory,
-                project_context=project_context,
-                project_safeguards=project_safeguards,
-                validate_opts=validate_opts,
-            )
-            task_id = task["id"]
-        else:
-            task = tasks.task_record(self.state, task_id)
+        # Reviewed calls are evidence of their owning reviewed work, not
+        # public agent-call tasks.  A task id can still arrive from an older
+        # in-flight run; drain that immutable record under its original law.
+        task = (
+            tasks.task_record(self.state, task_id)
+            if task_id is not None else None
+        )
         validate_opts = self._worker_task_validate_opts(task, validate_opts)
 
         def dispatch(_request):
@@ -10431,8 +11950,10 @@ class Driver(object):
                 episode_unit=unit,
             )
 
-        output, result, raw_path = tasks.execute_worker(task, dispatch)
-        return output, result, raw_path
+        return (
+            tasks.execute_worker(task, dispatch)
+            if task is not None else dispatch(None)
+        )
 
     def _do_fix(self, unit=None, call_preparation=None):
         unit = unit if unit is not None else st.current_unit(self.state)
@@ -10446,7 +11967,7 @@ class Driver(object):
             and isinstance(source.get("suite_repair"), dict)
             else None
         )
-        max_loops = self.config.get("max_fix_loops", 6)
+        max_loops = self._reviewed_limit(unit, "max_fix_loops")
         cap_agreement = (source.get("brainstorming_agreement") or {})
         mandatory_application_retry = bool(
             cap_agreement.get("application_retry_issued")
@@ -10462,6 +11983,7 @@ class Driver(object):
                 "loops (source: %s)"
                 % (st.unit_key(unit), max_loops, source.get("type")),
                 unit=unit,
+                type_=self._reviewed_convergence_failure_type(unit),
             )
             self._save()
             raise StopStep("fix loop cap")
@@ -10569,7 +12091,7 @@ class Driver(object):
             self._unit_desc(unit),
             unit.get("fix_queue") or [],
             self._registry(),
-            unit_kind=unit["kind"],
+            unit_kind=self._review_unit_kind(unit),
             amendments=(authority or {}).get("amendments"),
             phantom_retry=bool(unit.get("phantom_retried")),
             killed_notice=killed_notice,
@@ -10680,17 +12202,7 @@ class Driver(object):
                     ),
                 } or None
             )
-            task = self._admit_worker_task(
-                unit,
-                contracts.KIND_FIX_FINDINGS,
-                prompt,
-                family,
-                model=fix_model,
-                effort=fix_effort,
-                dispatch_resolver=dispatch_resolver,
-                project_context=project_context,
-                validate_opts=validate_opts,
-            )
+            task = active_task
             self._activate_worker_episode_authority(authority)
             validate_opts = self._worker_task_validate_opts(
                 task, validate_opts
@@ -10713,7 +12225,7 @@ class Driver(object):
                     validate_opts=validate_opts,
                     start_session=True,
                     dispatch_resolver=dispatch_resolver,
-                    task_id=task["id"],
+                    task_id=(task or {}).get("id"),
                     prepare_call=call_preparation.judgment(
                         unit,
                         contracts.KIND_FIX_FINDINGS,
@@ -10739,9 +12251,9 @@ class Driver(object):
                     episode_unit=unit,
                 )
 
-            output, result, raw_path = tasks.execute_worker(
-                task,
-                dispatch,
+            output, result, raw_path = (
+                tasks.execute_worker(task, dispatch)
+                if task is not None else dispatch(None)
             )
             if killed_notice:
                 unit.pop("killed_fix_notice", None)
@@ -10964,7 +12476,9 @@ class Driver(object):
             self._fail_worker_task_if_open(
                 unit, output, result=result, reason=str(exc)
             )
-            st.fail_run(self.state, str(exc), unit=unit)
+            st.fail_run(
+                self.state, str(exc), unit=unit, type_="worker_protocol"
+            )
             self._save()
             raise StopStep(str(exc))
         try:
@@ -11140,6 +12654,11 @@ class Driver(object):
             )
             return "Brainstorming result applied; deferred fixer restored"
         if suite_repair:
+            if (
+                fix_workspace_changed
+                and self.reviewed_work._is_complete_verification(unit)
+            ):
+                unit["complete_verification_review_required"] = True
             certified_fingerprint = self._verification_candidate_fingerprint(
                 post_guard_snapshot
             )
@@ -11419,16 +12938,9 @@ class Driver(object):
                 self.state, unit, return_to, reason="no delta (fix episode green)"
             )
             return "no pending delta; episode closed"
-        try:
-            checkpoint_after = int(self.config.get(
-                "delta_full_review_after_fixes",
-                DEFAULT_CONFIG["delta_full_review_after_fixes"],
-            ))
-        except (TypeError, ValueError):
-            checkpoint_after = DEFAULT_CONFIG[
-                "delta_full_review_after_fixes"
-            ]
-        checkpoint_after = max(0, checkpoint_after)
+        checkpoint_after = self._reviewed_limit(
+            unit, "delta_full_review_after_fixes"
+        )
         dirty_deltas = st.active_fix_dirty_deltas(self.state, unit)
         # One fix is currently pending plus one already-applied fix for every
         # accepted dirty delta in this episode.  Deriving this from immutable
@@ -11515,7 +13027,7 @@ class Driver(object):
                 self._goal_for(unit),
                 self._unit_desc(unit),
                 self._registry(),
-                unit_kind=unit["kind"],
+                unit_kind=self._review_unit_kind(unit),
                 governing=self._governing(unit),
                 amendments=authority["amendments"],
                 project_context=project_context,
@@ -11614,8 +13126,10 @@ class Driver(object):
             self._save()
             raise
         findings = list(output.get("findings") or [])
-        delta_task = tasks.task_record(
-            self.state, getattr(result, "task_id", None)
+        delta_task_id = getattr(result, "task_id", None)
+        delta_task = (
+            tasks.task_record(self.state, delta_task_id)
+            if delta_task_id is not None else None
         )
         result_policy = self._worker_task_result_policy(delta_task, unit)
         defer_scope = tuple(result_policy["defer_scope"])
@@ -11648,6 +13162,9 @@ class Driver(object):
                     ),
                     defer_threshold=result_policy["p3_defer_max_risk"],
                     gap_backstop=result_policy["gap_backstop"],
+                    same_family_second_look=result_policy[
+                        "same_family_second_look"
+                    ],
                     call_preparation=call_preparation,
                 )
                 retained_ids = {
@@ -11796,8 +13313,16 @@ class Driver(object):
     def _complete_seal_from_reviews(self, unit, verification_event=None):
         """Seal deterministically from current whole-artifact reviews."""
         current_fingerprint = self._review_evidence_fingerprint(unit)
-        cite = self._seal_reviews(
-            unit, current_fingerprint=current_fingerprint
+        verification_only = (
+            self.reviewed_work._is_complete_verification(unit)
+            and not unit.get("complete_verification_review_required")
+        )
+        cite = (
+            []
+            if verification_only
+            else self._seal_reviews(
+                unit, current_fingerprint=current_fingerprint
+            )
         )
         if cite is None:
             st.restart_reviews_after_candidate_change(
@@ -11884,7 +13409,11 @@ class Driver(object):
         # suite may now certify this boundary without another execution.
         unit.pop("skip_next_verify", None)
 
-        if stage == st.U_PRE_SEAL_VERIFY:
+        reviews_required = (
+            not self.reviewed_work._is_complete_verification(unit)
+            or bool(unit.get("complete_verification_review_required"))
+        )
+        if stage == st.U_PRE_SEAL_VERIFY and reviews_required:
             current_fingerprint = self._review_evidence_fingerprint(unit)
             if self._seal_reviews(
                 unit, current_fingerprint=current_fingerprint
@@ -11903,8 +13432,9 @@ class Driver(object):
                 return "pre-seal evidence stale; review cycle restarted"
 
         cadence = (
-            self._invalidated_suite_checkpoint_cadence(unit)
-            or self._full_verification_cadence(unit)
+            tasks.REVIEWED_COMPLETE_VERIFICATION
+            if self.reviewed_work._is_complete_verification(unit)
+            else self._in_slice_verification_cadence(unit)
         )
         if cadence is None:
             st.append_event(
@@ -11916,8 +13446,12 @@ class Driver(object):
                 reason=(
                     "documentation does not run the full suite"
                     if unit["kind"] != st.UNIT_SLICE_IMPL
-                    else "full suite runs every four completed logical "
-                    "slices and at milestone close"
+                    else (
+                        "complete verification runs as a sibling reviewed task"
+                        if self._milestone_verification_cadence_active()
+                        else "full suite runs every four completed logical "
+                        "slices and at milestone close"
+                    )
                 ),
             )
             closed = self._complete_seal_from_reviews(unit)
@@ -12030,10 +13564,19 @@ class Driver(object):
                 copy.deepcopy(output.get("results") or [])
                 if accepted else []
             ),
-            "candidate_before": call_boundary.get(
-                "source_base_revision"
+            "candidate_before": (
+                candidate_fingerprint
+                if self.reviewed_work._is_complete_verification(unit)
+                else call_boundary.get("source_base_revision")
             ),
-            "candidate_after": call_boundary.get("accepted_revision"),
+            "candidate_after": (
+                candidate_fingerprint
+                if (
+                    accepted
+                    and self.reviewed_work._is_complete_verification(unit)
+                )
+                else call_boundary.get("accepted_revision")
+            ),
             "vacuous": (
                 True if accepted and returned_status == "no_suite" else None
             ),
@@ -12055,6 +13598,8 @@ class Driver(object):
         }
         if accepted and "authority" in output:
             event_fields["authority"] = copy.deepcopy(output["authority"])
+        if accepted and self.reviewed_work._is_complete_verification(unit):
+            event_fields["checkpoint_result"] = copy.deepcopy(output)
         if accepted and returned_status == "failed":
             event_fields["failure_account"] = copy.deepcopy(
                 output["failure_account"]
@@ -12167,6 +13712,7 @@ class Driver(object):
         parent_call=None,
         defer_threshold=None,
         gap_backstop=None,
+        same_family_second_look=False,
         call_preparation=None,
     ):
         """Rate candidates independently and split debt from fix work.
@@ -12201,20 +13747,29 @@ class Driver(object):
                         # BEFORE the router is asked, because a withheld
                         # rating makes no call — and a call nobody makes must
                         # not be stopped by a surfaced condition.
-                        explicit = (
-                            self._opposite(raising_family) != raising_family
-                        )
-                        if explicit:
+                        explicit = self._opposite(raising_family) != raising_family
+                        if explicit or same_family_second_look:
                             # The rater is the `classify` seat the run's
                             # document assigns — the EXPLICIT rater today's
                             # rule already admits as a second look, whichever
                             # family it names.
-                            rater_dispatch = self._dispatch_for_role(
-                                "classify"
-                            )
                             opp, rater_model, rater_effort = self._staff(
-                                "classify"
+                                "classify", episode_unit=unit
                             )
+                            base_dispatch = self._dispatch_for_role(
+                                "classify", episode_unit=unit
+                            )
+
+                            def rater_dispatch():
+                                resolved = base_dispatch()
+                                if (
+                                    same_family_second_look
+                                    and resolved[0] != raising_family
+                                ):
+                                    raise _NoIndependentReclassifier(
+                                        "same-family reclassifier unavailable"
+                                    )
+                                return resolved
                         else:
                             # The single family the run supplies is the only
                             # one collapse could ever answer with, so the
@@ -12246,9 +13801,14 @@ class Driver(object):
                 token_usage_partial = False
                 call_cost = None
                 call_cost_partial = False
+                result = None
                 effective_model = None
                 effective_effort = None
-                if opp == raising_family and not explicit:
+                if same_family_second_look and opp != raising_family:
+                    reason = "same-family reclassifier unavailable"
+                elif opp == raising_family and not (
+                    explicit or same_family_second_look
+                ):
                     # No independent opposite family (single-family config):
                     # cross-family verification is impossible, so the finding
                     # is never deferred — it takes the normal fix path. An
@@ -12291,7 +13851,7 @@ class Driver(object):
                         builder_desc = self._builders_desc()
                     prompt = prompts.build_reclassify(
                         opp, self.workspace, finding, self._artifact(unit),
-                        unit_kind=unit["kind"],
+                        unit_kind=self._review_unit_kind(unit),
                         amendments=self._amendments(unit=unit),
                         project_context=pc,
                         builder_desc=builder_desc,
@@ -12316,7 +13876,16 @@ class Driver(object):
                                     include_explicit=True,
                                 )
                             )
-                            if current_opp == raising_family and not current_explicit:
+                            if (
+                                same_family_second_look
+                                and current_opp != raising_family
+                            ):
+                                raise _NoIndependentReclassifier(
+                                    "same-family reclassifier unavailable"
+                                )
+                            if current_opp == raising_family and not (
+                                current_explicit or same_family_second_look
+                            ):
                                 raise _NoIndependentReclassifier(
                                     "no independent reclassifier"
                                 )
@@ -12407,11 +13976,9 @@ class Driver(object):
                             )
                         else:
                             reason = "reclassifier blocked"
-                    except _NoIndependentReclassifier:
+                    except _NoIndependentReclassifier as exc:
                         self._clear_busy()
-                        reason = (
-                            "no independent reclassifier (single family)"
-                        )
+                        reason = str(exc)
                 st.append_event(
                     self.state, "reclassify_recorded",
                     unit=st.unit_key(unit),
@@ -12428,6 +13995,9 @@ class Driver(object):
                     token_usage_partial=token_usage_partial,
                     cost=copy.deepcopy(call_cost),
                     cost_partial=bool(call_cost_partial),
+                    **self._task_id_fields(
+                        getattr(result, "task_id", None)
+                    ),
                 )
                 if defer_ok:
                     debt.append({
@@ -12518,7 +14088,7 @@ class Driver(object):
         }
         seat = None
         if self.model_profiles_home is not None:
-            seats = self._review_seats()
+            seats = self._review_seats(unit)
             index = int(unit.get("family_index") or 0)
             if index >= len(seats):
                 # Seats are read live, so the list can SHRINK below the seat
@@ -12568,7 +14138,11 @@ class Driver(object):
                 self._review_seat_staffing(unit, seat)
             )
         else:
-            family = st.current_family(self.state, unit)
+            try:
+                families = self._review_families(unit)
+            except staffing.StaffingConditionError as exc:
+                self._fail_staffing(exc, episode_unit=unit)
+            family = st.current_family(self.state, unit, families=families)
             if family is None:
                 raise st.IllegalTransition("rounds status with no family left")
         self._enforce_review_round_cap(unit, family)
@@ -12586,11 +14160,13 @@ class Driver(object):
             self._unit_desc(unit),
             self._artifact(unit),
             self._registry(),
-            unit_kind=unit["kind"],
+            unit_kind=self._review_unit_kind(unit),
             governing=self._governing(unit),
             amendments=amendments,
             project_context=project_context,
-            battery=interpreter.battery_questions(self.state, unit["kind"]),
+            battery=interpreter.battery_questions(
+                self.state, self._review_unit_kind(unit)
+            ),
             debt=self._debt(unit),
             gap_enabled=self._legacy_gap_enabled(),
             wave_docs=self._wave_doc_paths(unit),
@@ -12672,8 +14248,10 @@ class Driver(object):
             self._save()
             raise
         findings = output.get("findings", [])
-        review_task = tasks.task_record(
-            self.state, getattr(result, "task_id", None)
+        review_task_id = getattr(result, "task_id", None)
+        review_task = (
+            tasks.task_record(self.state, review_task_id)
+            if review_task_id is not None else None
         )
         result_policy = self._worker_task_result_policy(review_task, unit)
         # The admitted task freezes the per-phase classification floor.
@@ -12707,6 +14285,9 @@ class Driver(object):
                     ),
                     defer_threshold=result_policy["p3_defer_max_risk"],
                     gap_backstop=result_policy["gap_backstop"],
+                    same_family_second_look=result_policy[
+                        "same_family_second_look"
+                    ],
                     call_preparation=call_preparation,
                 )
                 retained_ids = {f.get("id") for f, _family in retained}
@@ -12772,6 +14353,26 @@ class Driver(object):
     def _do_seal_attempt(self, unit=None, call_preparation=None):
         """Close a recovered sealing state without launching seal reviewers."""
         unit = unit if unit is not None else st.current_unit(self.state)
+        if self.reviewed_work._is_complete_verification(unit):
+            verification_event = self._current_complete_verification_event(
+                unit
+            )
+            if verification_event is not None:
+                return self._complete_seal_from_reviews(
+                    unit, verification_event=verification_event
+                )
+            st.restart_reviews_after_candidate_change(
+                self.state,
+                unit,
+                "persisted sealing state lacked current suite evidence",
+            )
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_PRE_REVIEW_VERIFY,
+                reason="seal recovery invalidated complete verification",
+            )
+            return "seal recovery: complete verification restarted"
         current_fingerprint = self._review_evidence_fingerprint(unit)
         cite = self._seal_reviews(
             unit, current_fingerprint=current_fingerprint
@@ -12868,11 +14469,19 @@ class Driver(object):
         unit.pop("design_update", None)
         if is_anchor:
             self._guard_unplanned_preserved_candidates()
+        self._prepare_milestone_verification()
+        current = st.current_unit(self.state)
+        if (
+            self.state.get("failure") is not None
+            or current is not None
+            and current.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+        ):
+            return
         # Only materialize a continuation whose predecessors have sealed.
         # Re-sealing an earlier documentation anchor must not pre-open a
         # later implementation part while its predecessor is still active.
         nxt = st.ensure_due_unit(self.state)
-        if nxt is None and st.maybe_close_milestone(self.state):
+        if nxt is None and self._maybe_close_milestone():
             self._final_commit()
 
     def _after_seal(self, unit):
@@ -12880,9 +14489,17 @@ class Driver(object):
         gate_context = self.reviewed_work.gate(
             unit, before_gate=self._prepare_milestone_gate
         )
-        self._advance_milestone_after_gate(unit, gate_context=gate_context)
+        if unit.get("status") == st.U_SEALED:
+            self._advance_milestone_after_gate(unit, gate_context=gate_context)
 
     def _gate_message(self, unit):
+        reviewed = self.state.get("reviewed_task") or {}
+        if reviewed:
+            return "Complete reviewed task %s" % reviewed["task_id"]
+        if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION:
+            return "Complete milestone verification %s" % unit[
+                "reviewed_task_id"
+            ]
         if unit["kind"] == st.UNIT_SKELETON:
             return "Complete review of milestone skeleton"
         if unit["kind"] == st.UNIT_SLICE_DOC:
@@ -12899,23 +14516,16 @@ class Driver(object):
         gate metadata, while ensuring a failed gate is retried before the
         next implementation part can be materialized.
         """
-        if not gitops.enabled(self.config):
+        recovered = self.reviewed_work.recover_pending_gate()
+        if recovered is None:
             return False
-        pending = self.state.get("pending_gate_unit")
-        if not pending:
-            return False
-        unit = self._unit_by_key(pending)
-        if unit is None or unit.get("status") != st.U_SEALED:
-            st.fail_run(
-                self.state,
-                "cannot recover the pending gate for %s" % pending,
-                unit=unit,
-                type_="gate_recovery",
-            )
-            self._save()
-            raise StopStep("pending gate unit is unavailable")
-        self._gate_commit(unit)
-        unit.pop("design_update", None)
+        unit, _result = recovered
+        # A byte-mismatch recovery returns the same unit rewound for fresh
+        # review without landing its gate.  Its accepted design-edit authority
+        # remains part of that candidate cycle and is retired only once gate
+        # recovery actually leaves the unit sealed.
+        if unit.get("status") == st.U_SEALED:
+            unit.pop("design_update", None)
         return True
 
     def _gate_commit(self, unit):
@@ -12924,23 +14534,52 @@ class Driver(object):
         is finalized under the canonical gate message."""
         if not gitops.enabled(self.config):
             return
-        self.state["pending_gate_unit"] = st.unit_key(unit)
+        verification_seq = None
+        if self.reviewed_work._is_complete_verification(unit):
+            seals = unit.get("seals") or []
+            if seals:
+                verification_seq = seals[-1].get("verification_event_seq")
+            if (
+                not isinstance(verification_seq, int)
+                or self._current_complete_verification_event(
+                    unit, event_seq=verification_seq
+                ) is None
+            ):
+                self.reviewed_work.invalidate_gate_candidate(
+                    unit,
+                    "complete-verification bytes changed before gate",
+                )
+                return
+        if self.state.get("pending_gate_unit") != st.unit_key(unit):
+            self.state["pending_gate_unit"] = st.unit_key(unit)
+            self.state["pending_gate_fingerprint"] = (
+                self._gate_candidate_fingerprint(unit)
+            )
         self._save()
         try:
-            ledgers.generate(self.state, self.workspace)
-            if any(
-                event.get("type") == "fixer_commits_preserved"
-                and event.get("unit") == st.unit_key(unit)
-                for event in self.state.get("events") or []
-            ):
-                # A fixer may deliberately leave linear commits. Give the
-                # deterministic gate its own disposable child so amending the
-                # gate cannot erase the fixer's reviewed commit identity.
-                gitops.commit_wip(
-                    self.workspace,
-                    "wip: gate %s" % st.display_unit_key(unit),
-                )
-            sha = gitops.finalize_gate(self.workspace, self._gate_message(unit))
+            message = self._gate_message(unit)
+            sha = gitops.landed_gate_sha(self.workspace, message)
+            if sha is None:
+                if not self.state.get("reviewed_task"):
+                    ledgers.generate(self.state, self.workspace)
+                if any(
+                    event.get("type") == "fixer_commits_preserved"
+                    and event.get("unit") == st.unit_key(unit)
+                    for event in self.state.get("events") or []
+                ):
+                    # A fixer may deliberately leave linear commits. Give the
+                    # deterministic gate its own disposable child so amending the
+                    # gate cannot erase the fixer's reviewed commit identity.
+                    gate_wip_message = (
+                        "wip: gate %s" % st.display_unit_key(unit)
+                    )
+                    if gitops.landed_gate_sha(
+                        self.workspace, gate_wip_message
+                    ) is None:
+                        gitops.commit_wip(
+                            self.workspace, gate_wip_message
+                        )
+                sha = gitops.finalize_gate(self.workspace, message)
         except (gitops.GitError, ledgers.LedgerError, OSError) as exc:
             # A hostile/malformed index file must become a RECORDED run
             # failure — an unhandled crash here would discard the sealed
@@ -12948,8 +14587,20 @@ class Driver(object):
             st.fail_run(self.state, "gate commit failed: %s" % exc, unit=unit)
             self._save()
             raise StopStep(str(exc))
+        if (
+            verification_seq is not None
+            and self._current_complete_verification_event(
+                unit, event_seq=verification_seq
+            ) is None
+        ):
+            self.reviewed_work.invalidate_gate_candidate(
+                unit,
+                "complete-verification bytes changed during gate",
+            )
+            return
         unit["gate_commit"] = sha
         self.state.pop("pending_gate_unit", None)
+        self.state.pop("pending_gate_fingerprint", None)
         design_paths = set(self._design_review_paths(unit))
         if design_paths:
             for candidate in self.state.get("units") or []:
@@ -12972,7 +14623,7 @@ class Driver(object):
             "gate_commit",
             unit=st.unit_key(unit),
             sha=sha,
-            message=self._gate_message(unit),
+            message=message,
         )
 
     def _final_commit(self):
@@ -13405,6 +15056,17 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
             )
     state = st.new_state(goal, workspace, config, name=name, slug=slug,
                          project=project_block, prompt_set=prompt_set)
+    # Prospective composition law: an absent key is an already-started run
+    # that must finish under the historical direct-skeleton boundary.
+    state["milestone"][st.SKELETON_COMPOSITION_KEY] = (
+        st.SKELETON_COMPOSITION_VERSION
+    )
+    state["milestone"][st.DEEP_SLICE_COMPOSITION_KEY] = (
+        st.DEEP_SLICE_COMPOSITION_VERSION
+    )
+    state["milestone"][st.MILESTONE_VERIFICATION_CADENCE_KEY] = (
+        st.MILESTONE_VERIFICATION_CADENCE_VERSION
+    )
     st.append_event(state, "initialized", goal=goal)
     if project_block is not None:
         # Frozen ledger shape: payload exactly {project, work_area}, once

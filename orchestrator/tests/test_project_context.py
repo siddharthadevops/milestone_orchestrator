@@ -169,6 +169,10 @@ def skeleton_draft_step(**extra):
     )
 
 
+def interrupt_worker(_workspace):
+    raise KeyboardInterrupt
+
+
 # ---------------------------------------------------------------------------
 # Builder-level: block presence, map content, rendering, authority (AC1-AC3)
 
@@ -505,25 +509,35 @@ class TestSeenEvents(ProjectRunTestCase):
             field="original_ack",
         )
         path = self.init_bound()
-        driver = self.make_driver(path, [skeleton_draft_step()])
+        driver = self.make_driver(
+            path,
+            [
+                skeleton_draft_step(),
+                step(
+                    "review_round",
+                    report("review_round")
+                    | {"original_ack": [{"note": "checked"}]},
+                    family="codex",
+                    side_effect=interrupt_worker,
+                ),
+            ],
+        )
         driver.step()  # draft
         driver.step()  # pre-review verification
-        with mock.patch.object(
-            tasks, "execute_worker", side_effect=KeyboardInterrupt
-        ):
-            with self.assertRaises(KeyboardInterrupt):
-                driver.step()
+        with self.assertRaises(KeyboardInterrupt):
+            driver.step()
 
         interrupted = st.load(path)
-        old_task = tasks.task_records(interrupted)[-1]
+        records = tasks.task_records(interrupted)
+        self.assertEqual(len(records), 1)
+        old_task = records[0]
         self.assertEqual(
-            old_task["order"]["request"]["context"]["task_kind"],
-            contracts.KIND_REVIEW_ROUND,
+            interrupted["units"][0]["reviewed_task_id"], old_task["id"]
         )
         self.assertIsNone(old_task["result"])
         self.assertIn(
             "SAFEGUARD ctx-guard v1",
-            old_task["order"]["request"]["request"],
+            driver.runner.calls[-1][2],
         )
 
         self.put_policy(
@@ -548,12 +562,11 @@ class TestSeenEvents(ProjectRunTestCase):
 
         refreshed = st.load(path)
         records = tasks.task_records(refreshed)
-        self.assertEqual(len(records), 2)  # draft plus the one review task
+        self.assertEqual(len(records), 1)
         review = tasks.task_record(refreshed, old_task["id"])
-        self.assertEqual(review["result"]["status"], "success")
+        self.assertIsNone(review["result"])
         self.assertEqual(
-            review["order"]["request"]["request"],
-            old_task["order"]["request"]["request"],
+            refreshed["units"][0]["reviewed_task_id"], old_task["id"]
         )
         self.assertFalse([
             event for event in refreshed["events"]
@@ -631,19 +644,28 @@ class TestEnforcementBinding(ProjectRunTestCase):
             field="original_ack",
         )
         path = self.init_bound()
-        driver = self.make_driver(path, [])
-        with mock.patch.object(
-            tasks, "execute_worker", side_effect=KeyboardInterrupt
-        ):
-            with self.assertRaises(KeyboardInterrupt):
-                driver.step()
+        driver = self.make_driver(
+            path,
+            [
+                step(
+                    "draft_skeleton",
+                    skeleton_ok(
+                        original_ack=[{"note": "checked"}]
+                    ),
+                    family="codex",
+                    side_effect=interrupt_worker,
+                )
+            ],
+        )
+        with self.assertRaises(KeyboardInterrupt):
+            driver.step()
 
         crashed = st.load(path)
         admitted = tasks.task_records(crashed)[0]
         self.assertEqual(self.seen_pairs(crashed), [("ctx-guard", 1)])
         self.assertIn(
             "SAFEGUARD ctx-guard v1",
-            admitted["order"]["request"]["request"],
+            driver.runner.calls[-1][2],
         )
         self.put_policy(
             version=2,
@@ -654,15 +676,12 @@ class TestEnforcementBinding(ProjectRunTestCase):
         resumed = self.make_driver(path, [])
         resumed.step()
 
-        terminal = tasks.task_records(st.load(path))[0]
-        self.assertIsNone(terminal["result"])
+        recovered = tasks.task_records(st.load(path))[0]
+        self.assertEqual(recovered["id"], admitted["id"])
+        self.assertIsNone(recovered["result"])
         self.assertIsNotNone(st.load(path)["failure"])
         self.assertEqual(resumed.runner.calls, [])
         self.assertEqual(self.seen_pairs(resumed.state), [("ctx-guard", 1)])
-        self.assertIn(
-            "SAFEGUARD ctx-guard v1",
-            terminal["order"]["request"]["request"],
-        )
 
     def test_missing_field_gets_exactly_one_repair_then_proceeds(self):
         self.cite_policy()

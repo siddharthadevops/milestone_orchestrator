@@ -97,6 +97,16 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         config["docs_dir"] = "docs"
         config["git"] = {"enabled": True}
         self.path = drv.init_run("Produce one mixed slice.", self.workspace, config=config)
+        # This retained matrix exercises the direct slice-production law that
+        # predates reviewed skeletons, deep slices, and sibling verification.
+        state = st.load(self.path)
+        for key in (
+            st.SKELETON_COMPOSITION_KEY,
+            st.DEEP_SLICE_COMPOSITION_KEY,
+            st.MILESTONE_VERIFICATION_CADENCE_KEY,
+        ):
+            state["milestone"].pop(key, None)
+        st.save(self.path, state)
 
     @staticmethod
     def _git(workspace, *args):
@@ -232,10 +242,14 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
             self.workspace, "rev-parse", "HEAD"
         )
         st.save(self.path, state)
-        return drv.Driver(
+        subject = drv.Driver(
             self.path,
             runner=runner if runner is not None else runners.MockRunner([]),
         )
+        subject.reviewed_work.configure(
+            st.current_unit(subject.state), {"review_breadth": "single"}
+        )
+        return subject
 
     def complete_brainstorming_implementation(self, subject, result=None):
         result = copy.deepcopy(result or task_success())
@@ -297,8 +311,8 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         impl = st.current_unit(subject.state)
         records = tasks.task_records(subject.state)
         self.assertEqual([row["order"]["task_executor"] for row in records],
-                         ["brainstorming", "agent_call"])
-        self.assertNotEqual(impl["draft"]["task_id"], first_id)
+                         ["brainstorming"])
+        self.assertNotIn("task_id", impl["draft"])
 
     def test_worker_note_then_target_free_brainstorming_implementation(self):
         self.planned("agent_call", "brainstorming")
@@ -328,7 +342,61 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         impl = st.current_unit(subject.state)
         self.assertEqual(impl["status"], st.U_PRE_REVIEW_VERIFY)
         self.assertEqual([row["order"]["task_executor"] for row in tasks.task_records(subject.state)],
-                         ["agent_call", "brainstorming"])
+                         ["brainstorming"])
+
+    def test_brainstorming_implementation_never_activates_size_control(self):
+        subject = self.ready_brainstorming_implementation()
+        implementation = st.current_unit(subject.state)
+        with self.assertRaises(tasks.TaskRequestError):
+            subject.reviewed_work.configure(implementation, {
+                "implementation_size_control": {
+                    "soft_lines": 2,
+                    "hard_lines": 4,
+                    "unconfirmed_grace_s": 3,
+                    "confirmed_grace_s": 7,
+                },
+            })
+
+        with mock.patch.object(
+            adapter, "resolve_staffing", side_effect=self.staffing
+        ), mock.patch.object(
+            adapter, "start_task", return_value={"id": "session-size"}
+        ):
+            subject.step()
+
+        implementation = st.current_unit(subject.state)
+        task_id = implementation["active_task"]["id"]
+        record = tasks.task_record(subject.state, task_id)
+        values = record["order"]["request"]["context"]["session_charge"][
+            "values"
+        ]
+        self.assertIsNone(
+            subject._implementation_size_settings(implementation)
+        )
+        self.assertNotIn("soft_lines", values)
+        self.assertNotIn("hard_lines", values)
+        self.assertNotIn("implementation_attempt_snapshot", implementation)
+        self.assertNotIn(
+            "implementation_size", implementation["brainstorming_wait"]
+        )
+
+        write_file(
+            "oversized.py", "one\ntwo\nthree\nfour\nfive\n"
+        )(self.workspace)
+        self._git(self.workspace, "add", "oversized.py")
+        with mock.patch.object(
+            adapter, "finish_task", side_effect=self.finish_success
+        ):
+            subject.step()
+
+        implementation = st.current_unit(subject.state)
+        self.assertEqual(implementation["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertNotIn("implementation_cut", implementation)
+        self.assertNotIn("implementation_stabilization", implementation)
+        self.assertFalse(any(
+            event["type"].startswith("implementation_size_")
+            for event in subject.state["events"]
+        ))
 
     def test_brainstorming_implementation_reads_later_skeleton_assignment(self):
         self.planned("agent_call", "brainstorming")

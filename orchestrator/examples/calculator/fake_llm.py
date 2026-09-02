@@ -48,11 +48,14 @@ def read_headers(prompt):
 
 def parse_queued(prompt):
     """Extract the queued findings a fix_findings prompt carries."""
-    marker = "`finding` without shortening, normalizing, or dropping fields:\n"
-    start = prompt.find(marker)
-    if start < 0:
+    markers = (
+        "real code/doc before deciding). These are the exact stored objects:\n",
+        "`finding` without shortening, normalizing, or dropping fields:\n",
+    )
+    marker = next((value for value in markers if value in prompt), None)
+    if marker is None:
         return []
-    payload = prompt[start + len(marker):].lstrip()
+    payload = prompt.split(marker, 1)[1].lstrip()
     try:
         queued, _end = json.JSONDecoder().raw_decode(payload)
     except (TypeError, ValueError):

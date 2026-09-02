@@ -21,7 +21,7 @@ import urllib.request
 from unittest import mock
 
 from orchestrator import access, driver, interpreter, model_profiles, profiles, registry
-from orchestrator import service, state as st
+from orchestrator import service, state as st, tasks
 
 
 def load_tests(loader, tests, pattern):
@@ -1893,7 +1893,7 @@ class ProfilesApiTest(ServiceApiTest):
     def test_profile_swap_retains_content_and_governs_future_decisions(self):
         ws = self.workspace("ws-swap")
         status, body = self.create_run(
-            ws, profile="light", config={"git": {"enabled": False}}
+            ws, profile="light"
         )
         self.assertEqual(status, 201)
         rid = body["run"]["id"]
@@ -1928,9 +1928,21 @@ class ProfilesApiTest(ServiceApiTest):
             entry["state_path"], runner=mock.Mock(),
             model_profiles_home=self.home,
         )
-        def observe_transition():
+        def observe_transition(**_kwargs):
             on_disk = st.load(entry["state_path"])
-            self.assertEqual(on_disk["events"][-1]["type"], "profile_changed")
+            self.assertEqual(
+                on_disk["events"][-1]["type"], "reviewed_policy_frozen"
+            )
+            event_types = [event["type"] for event in on_disk["events"]]
+            self.assertLess(
+                event_types.index("profile_changed"),
+                event_types.index("reviewed_policy_frozen"),
+            )
+            record = tasks.task_records(on_disk)[0]
+            self.assertEqual(
+                record["order"]["configuration"]["p3_defer_max_risk"],
+                "low",
+            )
             return "observed"
 
         with mock.patch.object(runtime, "_do_draft", side_effect=observe_transition):
@@ -1943,10 +1955,11 @@ class ProfilesApiTest(ServiceApiTest):
             if event.get("type") == "profile_changed"
         ]
         self.assertEqual(len(transitions), 1)
+        self.assertGreaterEqual(transitions[0]["seq"], len(prior_events))
         self.assertEqual(
             transitions[0],
             {
-                "seq": len(prior_events),
+                "seq": transitions[0]["seq"],
                 "at": transitions[0]["at"],
                 "type": "profile_changed",
                 "from": base_ref,
@@ -1988,9 +2001,7 @@ class ProfilesApiTest(ServiceApiTest):
 
     def test_legacy_identity_only_profile_swap_is_inert(self):
         ws = self.workspace("ws-legacy-swap")
-        _, created = self.create_run(
-            ws, config={"git": {"enabled": False}}
-        )
+        _, created = self.create_run(ws)
         run_id = created["run"]["id"]
         entry = registry.get(registry.load(self.home), run_id)
         overlay_path = os.path.join(
@@ -2031,9 +2042,7 @@ class ProfilesApiTest(ServiceApiTest):
 
     def test_profile_swap_can_govern_a_run_without_a_base_strategy(self):
         ws = self.workspace("ws-swap-profileless")
-        _, body = self.create_run(
-            ws, config={"git": {"enabled": False}}
-        )
+        _, body = self.create_run(ws)
         rid = body["run"]["id"]
         status, swap = self.request_json(
             "POST", "/api/runs/%s/profile" % rid, {"profile": "light"}

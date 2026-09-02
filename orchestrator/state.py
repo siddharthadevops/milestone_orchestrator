@@ -47,6 +47,7 @@ SCHEMA_VERSION = 3
 UNIT_SKELETON = "skeleton"
 UNIT_SLICE_DOC = "slice_doc"
 UNIT_SLICE_IMPL = "slice_impl"
+UNIT_MILESTONE_VERIFICATION = "milestone_verification"
 
 # Unit statuses (the per-unit state machine)
 U_PENDING = "pending"
@@ -133,6 +134,12 @@ def _orchestrator_rev():
 
 
 PROMPT_SET_KEY = "prompt_set"
+SKELETON_COMPOSITION_KEY = "skeleton_composition_version"
+SKELETON_COMPOSITION_VERSION = 1
+DEEP_SLICE_COMPOSITION_KEY = "deep_slice_composition_version"
+DEEP_SLICE_COMPOSITION_VERSION = 1
+MILESTONE_VERIFICATION_CADENCE_KEY = "verification_cadence_version"
+MILESTONE_VERIFICATION_CADENCE_VERSION = 1
 
 
 def new_state(goal, workspace, config, name=None, slug=None, project=None,
@@ -303,14 +310,31 @@ def assert_append_only(old_state, new_state_):
         if unit_identity(nu) != unit_identity(old_unit):
             raise HistoryRewriteError("%s: identity changed" % uctx)
         # Once a budget cut has assigned the current coherent part and the
-        # delegated remainder, that boundary is immutable evidence.  Future
-        # parts are derived from it; rewriting it would silently change the
-        # execution plan and the scope earlier reviews judged.
+        # delegated remainder, that boundary is immutable evidence.  A
+        # rollback-superseded deep attempt may move it, unchanged, into the
+        # append-only superseded history before a fresh attempt derives its
+        # own parts.  Any other rewrite would silently change the execution
+        # plan and the scope earlier reviews judged.
         old_cut = old_unit.get("implementation_cut")
         if old_cut is not None and nu.get("implementation_cut") != old_cut:
-            raise HistoryRewriteError(
-                "%s.implementation_cut: recorded boundary was modified" % uctx
+            old_history = old_unit.get("superseded_implementation_cuts", [])
+            new_history = nu.get("superseded_implementation_cuts", [])
+            archived = (
+                nu.get("implementation_cut") is None
+                and len(new_history) == len(old_history) + 1
+                and new_history[:-1] == old_history
+                and (new_history[-1] or {}).get("cut") == old_cut
             )
+            if not archived:
+                raise HistoryRewriteError(
+                    "%s.implementation_cut: recorded boundary was modified"
+                    % uctx
+                )
+        _assert_list_prefix(
+            old_unit.get("superseded_implementation_cuts", []),
+            nu.get("superseded_implementation_cuts", []),
+            uctx + ".superseded_implementation_cuts",
+        )
         for transient in (
             "implementation_attempt_snapshot",
             "implementation_stabilization",
@@ -371,7 +395,8 @@ def _assert_task_history(old_tasks, new_tasks):
     for index, record in enumerate(new_tasks):
         if not isinstance(record, dict):
             raise HistoryRewriteError("tasks[%d]: record must be an object" % index)
-        if set(record) != {"id", "order", "resolved_staffing", "result"}:
+        fields = {"id", "order", "resolved_staffing", "result"}
+        if set(record) not in (fields, fields | {"parent"}):
             raise HistoryRewriteError(
                 "tasks[%d]: record has invalid fields" % index
             )
@@ -530,6 +555,22 @@ def current_unit(state):
     certification-llm ran slice 13 before the slice 19 it needs). A unit
     whose slice is no longer in the plan is never current. None when the plan
     is fully sealed."""
+    task_by_id = {
+        record.get("id"): record for record in state.get("tasks") or []
+    }
+    verification = [
+        unit for unit in state.get("units") or []
+        if unit.get("kind") == UNIT_MILESTONE_VERIFICATION
+        and unit.get("status") != U_SEALED
+        and task_by_id[unit["reviewed_task_id"]].get("result") is None
+    ]
+    if len(verification) > 1:
+        raise IllegalTransition(
+            "multiple milestone verification tasks are open"
+        )
+    if verification:
+        return verification[0]
+
     by_key = {unit_identity(u): u for u in state["units"]}
     for key in planned_execution_units(state):
         unit = by_key.get(key)
@@ -569,6 +610,8 @@ def slice_token(unit):
 
 
 def unit_key(unit):
+    if unit["kind"] == UNIT_MILESTONE_VERIFICATION:
+        return "%s-%s" % (unit["kind"], unit["part"])
     if unit["slice_id"] is None:
         return unit["kind"]
     # Canonical identity keys never retroactively gain "-a": events emitted
@@ -581,6 +624,8 @@ def unit_key(unit):
 
 def display_unit_key(unit):
     """Human label; unlike unit_key, the original cut is rendered as -a."""
+    if unit["kind"] == UNIT_MILESTONE_VERIFICATION:
+        return unit_key(unit)
     if unit["slice_id"] is None:
         return unit["kind"]
     return "%s-%s" % (unit["kind"], slice_token(unit))
@@ -622,7 +667,10 @@ def record_implementation_cut(state, unit, cut_scope, remaining_scope,
     ):
         if not isinstance(value, str) or not value.strip():
             raise ValueError("%s must be a non-empty string" % name)
-    current_part = unit.get("part") or "a"
+    assigned_part = (
+        (state.get("reviewed_task") or {}).get("implementation_scope") or {}
+    ).get("part")
+    current_part = unit.get("part") or assigned_part or "a"
     cut = {
         "part": current_part,
         "next_part": _next_part(current_part),
@@ -675,6 +723,11 @@ def implementation_scope(state, unit):
             "delegated_remaining": own["remaining_scope"],
             "source_unit": unit_key(unit),
         }
+    reviewed = state.get("reviewed_task") or {}
+    if reviewed.get("unit") == unit_key(unit):
+        assigned = reviewed.get("implementation_scope")
+        if assigned is not None:
+            return copy.deepcopy(assigned)
     part = unit.get("part")
     if not part:
         return None
@@ -810,7 +863,7 @@ def transition_unit(state, unit, new_status, reason=None):
         # is checked in U_DELTA_REVIEW (report-only); a dirty delta loops
         # back to U_FIXING; a green delta is amended and the unit returns
         # exactly where the dirty review would have gone.
-        U_PENDING: (U_PRE_REVIEW_VERIFY, U_FAILED),
+        U_PENDING: (U_PRE_REVIEW_VERIFY, U_PRE_SEAL_VERIFY, U_FAILED),
         U_PRE_REVIEW_VERIFY: (U_ROUNDS, U_FIXING, U_FAILED),
         U_ROUNDS: (U_ROUNDS, U_FIXING, U_PRE_REVIEW_VERIFY,
                    U_PRE_SEAL_VERIFY, U_FAILED),
@@ -1512,15 +1565,45 @@ def _reconciliation_barrier_revision(state, slice_id, barriers=None):
     return event["accepted_revision"]
 
 
-def maybe_close_milestone(state):
+def maybe_close_milestone(state, current_verification=False):
     if state["milestone"]["status"] == M_CLOSED:
         return True  # idempotent: never records milestone_closed twice
+    if (
+        state["milestone"].get(SKELETON_COMPOSITION_KEY)
+        == SKELETON_COMPOSITION_VERSION
+        and state["milestone"].get("canonical_plan_anchor") is None
+    ):
+        return False
+    if (
+        state["milestone"].get(MILESTONE_VERIFICATION_CADENCE_KEY)
+        == MILESTONE_VERIFICATION_CADENCE_VERSION
+        and current_verification is not True
+    ):
+        return False
     plan = planned_execution_units(state)
     have = {unit_identity(u): u for u in state["units"]}
     for key in plan:
         unit = have.get(key)
         if unit is None or unit["status"] != U_SEALED:
             return False
+    if (
+        state["milestone"].get(DEEP_SLICE_COMPOSITION_KEY)
+        == DEEP_SLICE_COMPOSITION_VERSION
+    ):
+        for slice_plan in state["milestone"]["slices"]:
+            parents = [
+                record for record in state.get("tasks", [])
+                if record.get("order", {}).get("task_executor") == "deep_task"
+                and record.get("order", {}).get("request", {}).get(
+                    "context", {}
+                ).get("milestone_slice_id") == slice_plan["id"]
+            ]
+            if (
+                not parents
+                or (parents[-1].get("result") or {}).get("status")
+                != "success"
+            ):
+                return False
     state["milestone"]["status"] = M_CLOSED
     append_event(state, "milestone_closed")
     return True
@@ -1759,15 +1842,16 @@ def reset_for_redraft(state, unit, reason):
 
 
 def requeue_implementation_after_reconciliation(
-    state, unit, accepted_revision
+    state, unit, accepted_revision, discard_cut_authority=False
 ):
     """Return one retained invalidated implementation to a fresh draft.
 
     Reconciliation does not create a second unit identity or rewrite audit
-    history.  The existing implementation record keeps its immutable cut,
-    rounds, seals, debt, and verification episode sequence.  Only the stale
-    candidate/closure fields and in-flight episode state are retired before
-    the same record becomes pending again.
+    history.  The existing implementation record keeps its rounds, seals,
+    debt, and verification episode sequence.  Legacy requeues also keep their
+    cut active.  A rollback-superseded deep attempt instead archives that cut
+    as immutable history so the replacement deep task derives parts only from
+    its own implementation results.
 
     ``accepted_revision`` is the identity of the one-shot reconciliation; it
     is copied onto the append-only event instead of introducing another id.
@@ -1786,6 +1870,12 @@ def requeue_implementation_after_reconciliation(
     prior_gate = unit.get("gate_commit")
     rounds_before = len(unit.get("rounds") or [])
     seals_before = len(unit.get("seals") or [])
+
+    if discard_cut_authority and unit.get("implementation_cut") is not None:
+        unit.setdefault("superseded_implementation_cuts", []).append({
+            "cut": copy.deepcopy(unit.pop("implementation_cut")),
+            "accepted_revision": accepted_revision,
+        })
 
     unit["status"] = U_PENDING
     unit["artifact"] = None
@@ -1806,6 +1896,10 @@ def requeue_implementation_after_reconciliation(
     # evidence already lives in rounds/seals/events; carrying them into the
     # rebuilt implementation would make the new author resume discarded work.
     for transient in (
+        # Ordinary restart retains the order-local producer.  Accepted-plan
+        # reconciliation is different: it explicitly starts a fresh draft
+        # from the repaired slice plan, which may select another producer.
+        "reviewed_policy",
         "implementation_attempt_snapshot",
         "implementation_stabilization",
         "pending_wip",
@@ -1835,6 +1929,7 @@ def requeue_implementation_after_reconciliation(
         prior_gate_commit=prior_gate,
         rounds_before=rounds_before,
         seals_before=seals_before,
+        cut_authority_discarded=bool(discard_cut_authority),
     )
     return unit
 
@@ -2226,7 +2321,10 @@ def _work_durations(state):
             continue
         if etype == "verification":
             key = event.get("unit")
-            if key in totals:
+            # A fixer-owned verification event projects the suite certification
+            # already charged by its fix round; only a direct checkpoint is a
+            # separate physical call.
+            if key in totals and not event.get("fixer_certified"):
                 totals[key] += _completed_duration(event.get("duration_s"))
             continue
         if etype != "worker_malformed":
@@ -2453,6 +2551,17 @@ def _work_token_usage(state):
                 cost_known_partial=event.get("cost_partial", False),
             )
             continue
+        if etype == "verification":
+            if not event.get("fixer_certified"):
+                account(
+                    event.get("unit"),
+                    event.get("duration_s"),
+                    event.get("token_usage"),
+                    event.get("token_usage_partial", False),
+                    cost=event.get("cost"),
+                    cost_known_partial=event.get("cost_partial", False),
+                )
+            continue
         if etype != "worker_malformed":
             continue
         key = event.get("unit")
@@ -2486,6 +2595,28 @@ def _work_token_usage(state):
         totals, partial, unassigned, unassigned_partial,
         cost_totals, cost_partial, unassigned_cost, unassigned_cost_partial,
     )
+
+
+def reviewed_work_accounting(state, unit):
+    """Return one reviewed unit's physical-call totals exactly once."""
+    key = unit_key(unit)
+    work_by_unit, _unassigned_work = _work_durations(state)
+    token_by_unit, token_partial_by_unit, _unassigned_tokens, \
+        _unassigned_tokens_partial, cost_by_unit, cost_partial_by_unit, \
+        _unassigned_cost, _unassigned_cost_partial = _work_token_usage(state)
+    token_usage = copy.deepcopy(token_by_unit.get(key))
+    cost = copy.deepcopy(cost_by_unit.get(key))
+    return {
+        "duration_s": work_by_unit.get(key, 0.0),
+        "token_usage": token_usage,
+        "token_usage_partial": bool(
+            token_partial_by_unit.get(key, False) or token_usage is None
+        ),
+        "cost": cost,
+        "cost_partial": bool(
+            cost_partial_by_unit.get(key, False) or cost is None
+        ),
+    }
 
 
 def _repair_episodes(state):
@@ -2617,6 +2748,7 @@ def summary(state, acts_overlay=None, current_review_model=None):
     from orchestrator import tasks
     unit_keys = {unit_key(item) for item in state.get("units") or []}
     task_ids_by_unit = {key: [] for key in unit_keys}
+    task_records_by_id = {}
     task_history = state.get("tasks", [])
     if not isinstance(task_history, list):
         raise ValueError("task history must be a list")
@@ -2626,12 +2758,32 @@ def summary(state, acts_overlay=None, current_review_model=None):
         )
         linked_unit = context.get("unit") if isinstance(context, dict) else None
         task_id = record.get("id")
+        if isinstance(task_id, str) and task_id:
+            task_records_by_id[task_id] = record
         if (
             linked_unit in task_ids_by_unit
             and isinstance(task_id, str)
             and task_id
         ):
             task_ids_by_unit[linked_unit].append(task_id)
+
+    def milestone_task_view(unit):
+        """Compact canonical task facts for one verification presentation."""
+        if unit.get("kind") != UNIT_MILESTONE_VERIFICATION:
+            return None
+        record = task_records_by_id[unit["reviewed_task_id"]]
+        result = record.get("result")
+        accounting = result or tasks.task_accounting(state, record["id"])
+        return {
+            "id": record["id"],
+            "task_executor": record["order"]["task_executor"],
+            "status": "open" if result is None else result["status"],
+            "duration_s": accounting["duration_s"],
+            "token_usage": copy.deepcopy(accounting["token_usage"]),
+            "token_usage_partial": accounting["token_usage_partial"],
+            "cost": copy.deepcopy(accounting["cost"]),
+            "cost_partial": accounting["cost_partial"],
+        }
 
     def effective_setting(family, explicit, field):
         if explicit:
@@ -2761,6 +2913,7 @@ def summary(state, acts_overlay=None, current_review_model=None):
     units_view = []
     for u in state["units"]:
         draft_history = _draft_history(state, u)
+        task_view = milestone_task_view(u)
         units_view.append(
             {
                 "unit": unit_key(u),
@@ -2798,6 +2951,7 @@ def summary(state, acts_overlay=None, current_review_model=None):
                     unit_key(u), False
                 ),
                 "task_ids": list(task_ids_by_unit.get(unit_key(u), [])),
+                **({"task": task_view} if task_view is not None else {}),
                 "drafts": [
                     {
                         "kind": draft.get("kind"),

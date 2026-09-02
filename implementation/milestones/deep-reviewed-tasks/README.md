@@ -2,7 +2,7 @@
 
 # Milestone
 
-Status: **open**
+Status: **closed**
 
 ## Goal
 
@@ -282,4 +282,39 @@ The goal is achieved when:
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
 | skeleton | reviewed | 5 | satisfied | c583a24 |
-| slice_doc-01 (Default reviewed-lifecycle parity) | reviewed | 2 | satisfied | - |
+| slice_doc-01 (Default reviewed-lifecycle parity) | reviewed | 2 | satisfied | f8f08bb |
+| slice_impl-01 (Default reviewed-lifecycle parity) | reviewed | 14 | satisfied | d0daad8 |
+| slice_doc-02 (Producer, review breadth, debt, and caps) | reviewed | 2 | satisfied | 1305a96 |
+| slice_impl-02-a (Producer, review breadth, debt, and caps) | reviewed | 25 | satisfied | 8b8fcf2 |
+| slice_impl-02-b (Producer, review breadth, debt, and caps) | reviewed | 10 | satisfied | d88a1bf |
+| slice_impl-02-c (Producer, review breadth, debt, and caps) | reviewed | 2 | satisfied | e04a32c |
+| slice_doc-03 (Routed calls and rethink continuity) | reviewed | 5 | satisfied | f8fab03 |
+| slice_impl-03-a (Routed calls and rethink continuity) | reviewed | 2 | satisfied | 0aa22b0 |
+| slice_impl-03-b (Routed calls and rethink continuity) | reviewed | 2 | satisfied | 3b415df |
+| slice_doc-04 (Reviewed seal, gate, result, and recovery) | reviewed | 2 | satisfied | cecc592 |
+| slice_impl-04 (Reviewed seal, gate, result, and recovery) | reviewed | 9 | satisfied | 8123b16 |
+| slice_doc-05 (Standalone reviewed-task ordering) | reviewed | 16 | satisfied | 65f4a0b |
+| slice_impl-05-a (Standalone reviewed-task ordering) | reviewed | 8 | satisfied | 045a77b |
+| slice_impl-05-b (Standalone reviewed-task ordering) | reviewed | 6 | satisfied | e64cf00 |
+| slice_impl-05-c (Standalone reviewed-task ordering) | reviewed | 2 | satisfied | 3c8932a |
+| slice_impl-05-d (Standalone reviewed-task ordering) | reviewed | 6 | satisfied | 32c0100 |
+| slice_doc-06 (Deep documentation and child authority) | reviewed | 7 | satisfied | e50f57b |
+| slice_impl-06-a (Deep documentation and child authority) | reviewed | 6 | satisfied | 9489f35 |
+| slice_impl-06-b (Deep documentation and child authority) | reviewed | 2 | satisfied | 8ec0c01 |
+| slice_impl-06-c (Deep documentation and child authority) | reviewed | 2 | satisfied | f4285ff |
+| slice_doc-07 (Deep implementation-part delivery) | reviewed | 2 | satisfied | 9097b1e |
+| slice_impl-07-a (Deep implementation-part delivery) | reviewed | 2 | satisfied | be77942 |
+| slice_impl-07-b (Deep implementation-part delivery) | reviewed | 2 | satisfied | b4b2741 |
+| slice_impl-07-c (Deep implementation-part delivery) | reviewed | 5 | satisfied | ad99775 |
+| slice_doc-08 (Milestone skeleton composition) | reviewed | 2 | satisfied | 4b9677b |
+| slice_impl-08-a (Milestone skeleton composition) | reviewed | 10 | satisfied | ac1cfed |
+| slice_impl-08-b (Milestone skeleton composition) | reviewed | 13 | satisfied | 48c3511 |
+| slice_doc-09 (Milestone deep-slice composition) | reviewed | 6 | satisfied | f6fc3ca |
+| slice_impl-09-a (Milestone deep-slice composition) | reviewed | 5 | satisfied | 965176d |
+| slice_impl-09-b (Milestone deep-slice composition) | reviewed | 5 | satisfied | db1c8e2 |
+| slice_doc-10 (Sibling complete-verification task) | reviewed | 2 | satisfied | 31e3cde |
+| slice_impl-10 (Sibling complete-verification task) | reviewed | 5 | satisfied | 92d13b0 |
+| slice_doc-11 (Five-slice and final verification cadence) | reviewed | 2 | satisfied | 9b08d07 |
+| slice_impl-11 (Five-slice and final verification cadence) | reviewed | 2 | satisfied | e7b9800 |
+| slice_doc-12 (Presentation, compatibility, and conformance) | reviewed | 2 | satisfied | 60776bd |
+| slice_impl-12 (Presentation, compatibility, and conformance) | reviewed | 6 | satisfied | 691b53c |
