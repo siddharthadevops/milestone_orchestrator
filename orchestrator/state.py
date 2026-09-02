@@ -47,6 +47,7 @@ SCHEMA_VERSION = 3
 UNIT_SKELETON = "skeleton"
 UNIT_SLICE_DOC = "slice_doc"
 UNIT_SLICE_IMPL = "slice_impl"
+UNIT_MILESTONE_VERIFICATION = "milestone_verification"
 
 # Unit statuses (the per-unit state machine)
 U_PENDING = "pending"
@@ -137,6 +138,8 @@ SKELETON_COMPOSITION_KEY = "skeleton_composition_version"
 SKELETON_COMPOSITION_VERSION = 1
 DEEP_SLICE_COMPOSITION_KEY = "deep_slice_composition_version"
 DEEP_SLICE_COMPOSITION_VERSION = 1
+MILESTONE_VERIFICATION_CADENCE_KEY = "verification_cadence_version"
+MILESTONE_VERIFICATION_CADENCE_VERSION = 1
 
 
 def new_state(goal, workspace, config, name=None, slug=None, project=None,
@@ -552,6 +555,22 @@ def current_unit(state):
     certification-llm ran slice 13 before the slice 19 it needs). A unit
     whose slice is no longer in the plan is never current. None when the plan
     is fully sealed."""
+    task_by_id = {
+        record.get("id"): record for record in state.get("tasks") or []
+    }
+    verification = [
+        unit for unit in state.get("units") or []
+        if unit.get("kind") == UNIT_MILESTONE_VERIFICATION
+        and unit.get("status") != U_SEALED
+        and task_by_id[unit["reviewed_task_id"]].get("result") is None
+    ]
+    if len(verification) > 1:
+        raise IllegalTransition(
+            "multiple milestone verification tasks are open"
+        )
+    if verification:
+        return verification[0]
+
     by_key = {unit_identity(u): u for u in state["units"]}
     for key in planned_execution_units(state):
         unit = by_key.get(key)
@@ -591,6 +610,8 @@ def slice_token(unit):
 
 
 def unit_key(unit):
+    if unit["kind"] == UNIT_MILESTONE_VERIFICATION:
+        return "%s-%s" % (unit["kind"], unit["part"])
     if unit["slice_id"] is None:
         return unit["kind"]
     # Canonical identity keys never retroactively gain "-a": events emitted
@@ -603,6 +624,8 @@ def unit_key(unit):
 
 def display_unit_key(unit):
     """Human label; unlike unit_key, the original cut is rendered as -a."""
+    if unit["kind"] == UNIT_MILESTONE_VERIFICATION:
+        return unit_key(unit)
     if unit["slice_id"] is None:
         return unit["kind"]
     return "%s-%s" % (unit["kind"], slice_token(unit))
@@ -1542,13 +1565,19 @@ def _reconciliation_barrier_revision(state, slice_id, barriers=None):
     return event["accepted_revision"]
 
 
-def maybe_close_milestone(state):
+def maybe_close_milestone(state, current_verification=False):
     if state["milestone"]["status"] == M_CLOSED:
         return True  # idempotent: never records milestone_closed twice
     if (
         state["milestone"].get(SKELETON_COMPOSITION_KEY)
         == SKELETON_COMPOSITION_VERSION
         and state["milestone"].get("canonical_plan_anchor") is None
+    ):
+        return False
+    if (
+        state["milestone"].get(MILESTONE_VERIFICATION_CADENCE_KEY)
+        == MILESTONE_VERIFICATION_CADENCE_VERSION
+        and current_verification is not True
     ):
         return False
     plan = planned_execution_units(state)

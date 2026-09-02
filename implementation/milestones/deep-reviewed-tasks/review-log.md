@@ -810,3 +810,22 @@
 - `codex-DRT-S11-R1-001` (raised codex, cleared codex): Rollback handling is undefined for an open sibling verification origin — The hard-register rule that any failed due verification blocks advancement directly contradicts A3 for a superseded origin and would likely produce wrong lifecycle logic, while correction is bounded to active-boundary handling and focused verification within Slice 11.
 - `claude-claude-S11-R2-001` (raised claude, cleared codex): The periodic five-slice due boundary is pinned to immutable terminal-successful `deep_task` results with no reconciliation-supersession filter, so slices unwound by an accepted-plan rollback keep counting toward the next verification; this drops the barrier guard today's cadence already applies and violates the note's own strict "five completed logical slices per periodic boundary". (Distinct from codex-DRT-S11-R1-001, which concerns the fate of an open verification origin, not the counting basis.) — The hard register explicitly makes immutable terminal-successful deep-task results the periodic counting basis without excluding reconciliation-superseded executions, so implementation as written likely schedules verification incorrectly, but correction remains bounded to this cadence unit and its t
 
+## slice_impl-11 (Five-slice and final verification cadence)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-11-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-11-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-11-codex-r1.txt` |
+| slice_impl-11-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/deep-reviewed-tasks/.run/raw/slice_impl-11-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-11-codex-r1`, `slice_impl-11-claude-r1`
+
+**Deferred debt (independently classified):**
+- `codex-DRT-S11-FULL-001` (raised codex, cleared codex): Closed milestones can acquire an unreachable second final-verification task — The unguarded cadence path admits unreachable work despite terminal closure, plausibly teaching later builders the wrong lifecycle contract, but correction is a local closed-state guard plus one focused regression test.
+- `claude-claude-S11-FULL-001` (raised claude, cleared codex): Any transient run failure attributed to the milestone verification unit is written into its reviewed_task record as a terminal `failure`, and because the record can never leave that terminal value, the next step re-fails the run forever — an operator-resumable hiccup permanently kills the milestone. The established classifier for exactly this distinction, `_initial_skeleton_failure_is_terminal` (orchestrator/driver.py:4248), already exists for the skeleton's outer reviewed task and is not reused. — Production behavior and its focused acceptance test wrongly pin transient verification stops as immutable terminal failures, making future work likely to preserve a contract violation, while correction remains bounded to this slice’s failure classification and recovery test.
+- `claude-claude-S11-FULL-002` (raised claude, cleared codex): Two contracts the note pins have no named passing test: the milestone-close block, and the verification unit reaching a seal and gate through the real lifecycle. `test_parts_count_once_and_open_or_failed_verification_blocks` is named for the block but never calls `maybe_close_milestone`/`_maybe_close_milestone`, and `_mark_verification_success` fabricates the seal by assigning `unit['status'] = st.U_SEALED` directly, bypassing `st.transition_unit` — so the newly introduced `UNIT_MILESTONE_VERIFICATION` unit shape is never proven to be legally executable. — The note falsely pins close blocking and real seal/gate lifecycle coverage that its named tests do not execute, plausibly hiding regressions, while correction remains bounded to two focused tests and any local defects they expose.
+

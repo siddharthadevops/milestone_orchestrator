@@ -844,7 +844,9 @@ EXPECTED_ALLOWED = {
     # U_FIXING; the fixer's pending diff is
     # checked in U_DELTA_REVIEW; a dirty delta loops back to U_FIXING; a
     # green delta returns exactly where the dirty review would have gone.
-    st.U_PENDING: {st.U_PRE_REVIEW_VERIFY, st.U_FAILED},
+    st.U_PENDING: {
+        st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY, st.U_FAILED,
+    },
     st.U_PRE_REVIEW_VERIFY: {st.U_ROUNDS, st.U_FIXING, st.U_FAILED},
     st.U_ROUNDS: {
         st.U_ROUNDS, st.U_FIXING, st.U_PRE_REVIEW_VERIFY,

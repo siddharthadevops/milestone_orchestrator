@@ -51,6 +51,7 @@ from . import state as st
 
 IMPLEMENTATION_SIZE_ACK = "IMPLEMENTATION_SIZE_CUTOFF_ACK"
 FULL_VERIFICATION_SLICE_INTERVAL = 4
+MILESTONE_VERIFICATION_INTERVAL = 5
 
 
 class _NoIndependentReclassifier(runners.RunnerError):
@@ -1544,7 +1545,7 @@ class Driver(object):
                                     self.state["milestone"]["status"]
                                     == st.M_CLOSED
                                 )
-                                if st.maybe_close_milestone(self.state):
+                                if self._maybe_close_milestone():
                                     closed_now = not was_closed
                                     if (
                                         closed_now
@@ -1973,6 +1974,14 @@ class Driver(object):
                 return event["cadence"]
         return None
 
+    def _in_slice_verification_cadence(self, unit):
+        if self._milestone_verification_cadence_active():
+            return None
+        return (
+            self._invalidated_suite_checkpoint_cadence(unit)
+            or self._full_verification_cadence(unit)
+        )
+
     def _review_evidence_inputs(self, unit):
         """Return immutable review evidence plus this episode's hot rules.
 
@@ -2149,6 +2158,8 @@ class Driver(object):
         return self._save_raw(candidate, text)
 
     def _unit_desc(self, unit):
+        if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION:
+            return "the milestone complete-verification task"
         if unit["kind"] == st.UNIT_SKELETON:
             return "the milestone skeleton"
         title = ""
@@ -2164,6 +2175,14 @@ class Driver(object):
             unit["slice_id"], "-%s" % part if part else ""
         )
         return "the slice %s implementation (%s)" % (token, title)
+
+    @staticmethod
+    def _review_unit_kind(unit):
+        return (
+            st.UNIT_SLICE_IMPL
+            if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION
+            else unit["kind"]
+        )
 
     def _implementation_scope(self, unit):
         return st.implementation_scope(self.state, unit)
@@ -2493,6 +2512,7 @@ class Driver(object):
             st.UNIT_SKELETON: "skeleton",
             st.UNIT_SLICE_DOC: "slice_doc",
             st.UNIT_SLICE_IMPL: "slice_impl",
+            st.UNIT_MILESTONE_VERIFICATION: "slice_impl",
         }.get(unit.get("kind"))
         if target is None:
             raise st.IllegalTransition("unsupported judgment unit kind")
@@ -2523,14 +2543,22 @@ class Driver(object):
             if unit["kind"] != st.UNIT_SKELETON:
                 values["target"] = self._artifact(unit)
                 values["reference_path"] = (
-                    skeleton if unit["kind"] == st.UNIT_SLICE_DOC
+                    skeleton
+                    if unit["kind"] in (
+                        st.UNIT_SLICE_DOC,
+                        st.UNIT_MILESTONE_VERIFICATION,
+                    )
                     else self._slice_note_artifact(unit["slice_id"])
                 )
         elif kind == contracts.KIND_DELTA_REVIEW:
             values["delta_base_revision"] = context["delta_base_revision"]
             if unit["kind"] != st.UNIT_SKELETON:
                 values["reference_path"] = (
-                    skeleton if unit["kind"] == st.UNIT_SLICE_DOC
+                    skeleton
+                    if unit["kind"] in (
+                        st.UNIT_SLICE_DOC,
+                        st.UNIT_MILESTONE_VERIFICATION,
+                    )
                     else self._slice_note_artifact(unit["slice_id"])
                 )
         elif kind == contracts.KIND_FIX_FINDINGS:
@@ -3533,6 +3561,8 @@ class Driver(object):
             return self._skeleton_artifact()
         if unit["kind"] == st.UNIT_SLICE_IMPL:
             return self._slice_note_artifact(unit["slice_id"])
+        if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION:
+            return self._skeleton_artifact()
         return None
 
     def _save_protocol_raws(self, raw_name, exc):
@@ -4011,7 +4041,10 @@ class Driver(object):
             return None, None, None
         try:
             policies, reuse_sources = self._read_standing_law(
-                kind, unit["kind"]
+                kind,
+                st.UNIT_SLICE_IMPL
+                if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION
+                else unit["kind"],
             )
             extensions = verifiers.compile_extensions(policies)
         except (_StandingLawError, verifiers.VerifierError) as exc:
@@ -4367,6 +4400,292 @@ class Driver(object):
             and self.state["milestone"].get(
                 st.DEEP_SLICE_COMPOSITION_KEY
             ) == st.DEEP_SLICE_COMPOSITION_VERSION
+        )
+
+    def _milestone_verification_cadence_active(self):
+        return bool(
+            not self.state.get("reviewed_task")
+            and self.state["milestone"].get(
+                st.MILESTONE_VERIFICATION_CADENCE_KEY
+            ) == st.MILESTONE_VERIFICATION_CADENCE_VERSION
+        )
+
+    def _active_completed_milestone_deep_tasks(self):
+        """Current contiguous logical-slice ancestry, in plan order."""
+        if not self._deep_slice_composition_active():
+            return []
+        execution = st.planned_execution_units(self.state)
+        by_identity = {
+            st.unit_identity(unit): unit for unit in self.state.get("units") or []
+        }
+        completed = []
+        for slice_info in self.state["milestone"]["slices"]:
+            implementations = [
+                identity for identity in execution
+                if identity[0] == st.UNIT_SLICE_IMPL
+                and identity[1] == slice_info["id"]
+            ]
+            unit = by_identity.get(implementations[-1])
+            if unit is None or unit.get("status") != st.U_SEALED:
+                break
+            child = tasks.task_record(self.state, unit["reviewed_task_id"])
+            relation = child["parent"]
+            parent = tasks.task_record(self.state, relation["task_id"])
+            if (
+                relation["phase"] != "implementation"
+                or (child.get("result") or {}).get("status") != "success"
+                or (parent.get("result") or {}).get("status") != "success"
+            ):
+                break
+            completed.append((slice_info["id"], parent))
+        return completed
+
+    @staticmethod
+    def _milestone_verification_context(record):
+        return record["order"]["request"]["context"].get(
+            "milestone_verification"
+        )
+
+    def _milestone_verification_records(self):
+        return [
+            record for record in tasks.task_records(self.state)
+            if record["order"]["task_executor"] == "reviewed_task"
+            and record["order"]["configuration"]["task_kind"]
+            == tasks.REVIEWED_COMPLETE_VERIFICATION
+            and self._milestone_verification_context(record) is not None
+        ]
+
+    def _milestone_verification_unit(self, record):
+        return next(
+            unit for unit in self.state.get("units") or []
+            if unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+            and unit.get("reviewed_task_id") == record["id"]
+        )
+
+    def _milestone_verification_succeeded(self, record, current=False):
+        if (record.get("result") or {}).get("status") != "success":
+            return False
+        unit = self._milestone_verification_unit(record)
+        native = record["result"]["native_result"]
+        if (
+            unit.get("status") != st.U_SEALED
+            or unit.get("gate_commit") != native.get("gate_commit")
+        ):
+            return False
+        return bool(
+            not current
+            or self._current_complete_verification_event(unit) is not None
+        )
+
+    def _consume_milestone_verification_result(self, unit, result=None):
+        if unit.get("kind") != st.UNIT_MILESTONE_VERIFICATION:
+            return False
+        record = tasks.task_record(self.state, unit["reviewed_task_id"])
+        if record["result"] is not None:
+            return False
+        result = result or self.reviewed_work.result(unit)
+        if result is None:
+            return False
+        tasks.record_task_result(self.state, record["id"], result)
+        return True
+
+    def _terminalize_milestone_verification(self, unit, reason):
+        record = tasks.task_record(self.state, unit["reviewed_task_id"])
+        if record["result"] is not None:
+            return False
+        tasks.record_task_result(
+            self.state,
+            record["id"],
+            tasks.validate_result({
+                "status": "failure",
+                "reason": reason,
+                **tasks.task_accounting(self.state, record["id"]),
+                "native_result": None,
+            }),
+        )
+        if unit.get("status") not in (st.U_SEALED, st.U_FAILED):
+            unit["failed_from"] = unit["status"]
+            unit["status"] = st.U_FAILED
+        if self.state.get("pending_gate_unit") == st.unit_key(unit):
+            self.state.pop("pending_gate_unit", None)
+            self.state.pop("pending_gate_fingerprint", None)
+        st.append_event(
+            self.state,
+            "milestone_verification_terminalized",
+            unit=st.unit_key(unit),
+            task_id=record["id"],
+            reason=reason,
+        )
+        return True
+
+    def _prepare_milestone_verification(self):
+        """Recover, block on, or admit the one verification currently due."""
+        if not self._milestone_verification_cadence_active():
+            return False
+        changed = False
+        for unit in self.state.get("units") or []:
+            if (
+                unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+                and unit.get("status") == st.U_SEALED
+            ):
+                changed = bool(
+                    self._consume_milestone_verification_result(unit) or changed
+                )
+
+        failure = self.state.get("failure") or {}
+        if failure:
+            failed = next((
+                unit for unit in self.state.get("units") or []
+                if unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+                and st.unit_key(unit) == failure.get("unit")
+            ), None)
+            if failed is not None:
+                changed = bool(self._terminalize_milestone_verification(
+                    failed, failure.get("reason") or "verification failed"
+                ) or changed)
+            if changed:
+                self._save()
+            return changed
+
+        completed = self._active_completed_milestone_deep_tasks()
+        deep_ids = [record["id"] for _slice_id, record in completed]
+        slice_ids = [slice_id for slice_id, _record in completed]
+        count = len(completed)
+        final = bool(
+            self.state["milestone"]["slices"]
+            and count == len(self.state["milestone"]["slices"])
+        )
+        periodic = bool(
+            count and count % MILESTONE_VERIFICATION_INTERVAL == 0
+        )
+        due = periodic or final
+        records = self._milestone_verification_records()
+
+        for record in records:
+            context = self._milestone_verification_context(record)
+            if record["result"] is None and (
+                context["completed_deep_task_ids"] != deep_ids or not due
+            ):
+                changed = bool(self._terminalize_milestone_verification(
+                    self._milestone_verification_unit(record),
+                    "verification superseded by active milestone ancestry",
+                ) or changed)
+
+        matching = [
+            record for record in records
+            if self._milestone_verification_context(record)[
+                "completed_deep_task_ids"
+            ] == deep_ids
+        ]
+        periodic_satisfied = any(
+            self._milestone_verification_succeeded(record)
+            for record in matching
+        )
+        final_satisfied = any(
+            self._milestone_verification_succeeded(record, current=True)
+            for record in matching
+        )
+        needed = bool(
+            periodic and not periodic_satisfied
+            or final and not final_satisfied
+        )
+        if not needed:
+            if changed:
+                self._save()
+            return changed
+
+        latest = matching[-1] if matching else None
+        if latest is not None and latest["result"] is None:
+            if changed:
+                self._save()
+            return changed
+        if latest is not None and latest["result"]["status"] == "failure":
+            unit = self._milestone_verification_unit(latest)
+            st.fail_run(
+                self.state,
+                "due milestone verification %s failed: %s"
+                % (latest["id"], latest["result"].get("reason")),
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            return True
+
+        ordinal = 1 + sum(
+            unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+            for unit in self.state.get("units") or []
+        )
+        unit = st._new_unit(
+            st.UNIT_MILESTONE_VERIFICATION, None, part=str(ordinal)
+        )
+        configuration = tasks.resolve_reviewed_task_configuration(
+            {"task_kind": tasks.REVIEWED_COMPLETE_VERIFICATION},
+            defaults=self.config,
+        )
+        unit["reviewed_task_kind"] = tasks.REVIEWED_COMPLETE_VERIFICATION
+        unit["reviewed_policy"] = {
+            key: copy.deepcopy(value) for key, value in configuration.items()
+            if key != "task_kind"
+        }
+        context = {
+            "completed_deep_task_ids": deep_ids,
+            "completed_slice_ids": slice_ids,
+            "periodic": periodic,
+            "final": final,
+        }
+        record = tasks.admit_task(
+            self.state,
+            {
+                "task_executor": "reviewed_task",
+                "configuration": configuration,
+                "staffing_session": st.staffing_session(self.state),
+                "request": {
+                    "work_area": self._task_work_area(),
+                    "request": "Run complete repository verification after %d "
+                    "completed logical slices." % count,
+                    "context": {
+                        "unit": st.unit_key(unit),
+                        "milestone_verification": context,
+                    },
+                    "reference_documents": [self._skeleton_artifact()],
+                },
+            },
+            {},
+            self.workspace,
+        )
+        unit["reviewed_task_id"] = record["id"]
+        self.state["units"].append(unit)
+        st.append_event(
+            self.state,
+            "milestone_verification_admitted",
+            unit=st.unit_key(unit),
+            task_id=record["id"],
+            completed_slice_ids=slice_ids,
+            periodic=periodic,
+            final=final,
+        )
+        self._save()
+        return True
+
+    def _milestone_final_verification_current(self):
+        if not self._milestone_verification_cadence_active():
+            return False
+        completed = self._active_completed_milestone_deep_tasks()
+        if len(completed) != len(self.state["milestone"]["slices"]):
+            return False
+        deep_ids = [record["id"] for _slice_id, record in completed]
+        return any(
+            self._milestone_verification_context(record)[
+                "completed_deep_task_ids"
+            ] == deep_ids
+            and self._milestone_verification_succeeded(record, current=True)
+            for record in self._milestone_verification_records()
+        )
+
+    def _maybe_close_milestone(self):
+        return st.maybe_close_milestone(
+            self.state,
+            current_verification=self._milestone_final_verification_current(),
         )
 
     def _open_milestone_deep_parent(self, slice_id):
@@ -4831,14 +5150,20 @@ class Driver(object):
             threshold = "low"
         floor_name = (
             "impl_reclassify_from"
-            if unit["kind"] == st.UNIT_SLICE_IMPL
+            if unit["kind"] in (
+                st.UNIT_SLICE_IMPL,
+                st.UNIT_MILESTONE_VERIFICATION,
+            )
             else "doc_reclassify_from"
         )
         floor = reviewed.get(floor_name)
         if floor is None:
-            defer_scope = list(
-                interpreter.defer_scope_for(self.state, unit["kind"])
-            )
+            defer_scope = list(interpreter.defer_scope_for(
+                self.state,
+                st.UNIT_SLICE_IMPL
+                if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION
+                else unit["kind"],
+            ))
         elif floor == "disabled":
             defer_scope = []
         else:
@@ -7156,6 +7481,7 @@ class Driver(object):
                 st.UNIT_SKELETON: "document",
                 st.UNIT_SLICE_DOC: "document",
                 st.UNIT_SLICE_IMPL: "implementation",
+                st.UNIT_MILESTONE_VERIFICATION: "implementation",
             }[unit["kind"]]
         except (KeyError, TypeError) as exc:
             raise st.IllegalTransition(
@@ -9098,6 +9424,12 @@ class Driver(object):
                 return Action(A_FAILED, reason=str(exc)), "run failed: %s" % exc
             if prepared and self.state.get("failure") is None:
                 action, boundary_note = self._decide_at_strategy_boundary()
+            try:
+                prepared = self._prepare_milestone_verification()
+            except StopStep as exc:
+                return Action(A_FAILED, reason=str(exc)), "run failed: %s" % exc
+            if prepared:
+                action, boundary_note = self._decide_at_strategy_boundary()
             if action.type in (A_DONE, A_FAILED):
                 return action, boundary_note
             waiting_session = (
@@ -9126,6 +9458,9 @@ class Driver(object):
                     self._consume_milestone_deep_child_result(
                         sealed_unit, reviewed_result
                     )
+                    self._consume_milestone_verification_result(
+                        sealed_unit, reviewed_result
+                    )
                     self._advance_milestone_after_gate(
                         sealed_unit, gate_context=gate_context
                     )
@@ -9135,6 +9470,17 @@ class Driver(object):
                 skeleton = self._find_unit(st.UNIT_SKELETON, None)
                 if self.state.get("failure") is not None:
                     self._record_initial_skeleton_task_failure(skeleton)
+                    failed_unit = self._unit_by_key(action.params.get("unit"))
+                    if (
+                        failed_unit is not None
+                        and failed_unit.get("kind")
+                        == st.UNIT_MILESTONE_VERIFICATION
+                    ):
+                        self._terminalize_milestone_verification(
+                            failed_unit,
+                            self.state["failure"].get("reason") or str(exc),
+                        )
+                        self._save()
                 return action, "run failed: %s" % exc
             if (
                 action.type == A_BRAINSTORM_WAIT
@@ -9170,7 +9516,7 @@ class Driver(object):
                 if st.current_unit(self.state) is None:
                     with self._exclusive():
                         self._assert_not_stale()
-                        st.maybe_close_milestone(self.state)
+                        self._maybe_close_milestone()
                         self._save()
                 return 0
             if action.type == A_FAILED:
@@ -11745,7 +12091,7 @@ class Driver(object):
             self._unit_desc(unit),
             unit.get("fix_queue") or [],
             self._registry(),
-            unit_kind=unit["kind"],
+            unit_kind=self._review_unit_kind(unit),
             amendments=(authority or {}).get("amendments"),
             phantom_retry=bool(unit.get("phantom_retried")),
             killed_notice=killed_notice,
@@ -12681,7 +13027,7 @@ class Driver(object):
                 self._goal_for(unit),
                 self._unit_desc(unit),
                 self._registry(),
-                unit_kind=unit["kind"],
+                unit_kind=self._review_unit_kind(unit),
                 governing=self._governing(unit),
                 amendments=authority["amendments"],
                 project_context=project_context,
@@ -13088,10 +13434,7 @@ class Driver(object):
         cadence = (
             tasks.REVIEWED_COMPLETE_VERIFICATION
             if self.reviewed_work._is_complete_verification(unit)
-            else (
-                self._invalidated_suite_checkpoint_cadence(unit)
-                or self._full_verification_cadence(unit)
-            )
+            else self._in_slice_verification_cadence(unit)
         )
         if cadence is None:
             st.append_event(
@@ -13103,8 +13446,12 @@ class Driver(object):
                 reason=(
                     "documentation does not run the full suite"
                     if unit["kind"] != st.UNIT_SLICE_IMPL
-                    else "full suite runs every four completed logical "
-                    "slices and at milestone close"
+                    else (
+                        "complete verification runs as a sibling reviewed task"
+                        if self._milestone_verification_cadence_active()
+                        else "full suite runs every four completed logical "
+                        "slices and at milestone close"
+                    )
                 ),
             )
             closed = self._complete_seal_from_reviews(unit)
@@ -13504,7 +13851,7 @@ class Driver(object):
                         builder_desc = self._builders_desc()
                     prompt = prompts.build_reclassify(
                         opp, self.workspace, finding, self._artifact(unit),
-                        unit_kind=unit["kind"],
+                        unit_kind=self._review_unit_kind(unit),
                         amendments=self._amendments(unit=unit),
                         project_context=pc,
                         builder_desc=builder_desc,
@@ -13813,11 +14160,13 @@ class Driver(object):
             self._unit_desc(unit),
             self._artifact(unit),
             self._registry(),
-            unit_kind=unit["kind"],
+            unit_kind=self._review_unit_kind(unit),
             governing=self._governing(unit),
             amendments=amendments,
             project_context=project_context,
-            battery=interpreter.battery_questions(self.state, unit["kind"]),
+            battery=interpreter.battery_questions(
+                self.state, self._review_unit_kind(unit)
+            ),
             debt=self._debt(unit),
             gap_enabled=self._legacy_gap_enabled(),
             wave_docs=self._wave_doc_paths(unit),
@@ -14120,11 +14469,19 @@ class Driver(object):
         unit.pop("design_update", None)
         if is_anchor:
             self._guard_unplanned_preserved_candidates()
+        self._prepare_milestone_verification()
+        current = st.current_unit(self.state)
+        if (
+            self.state.get("failure") is not None
+            or current is not None
+            and current.get("kind") == st.UNIT_MILESTONE_VERIFICATION
+        ):
+            return
         # Only materialize a continuation whose predecessors have sealed.
         # Re-sealing an earlier documentation anchor must not pre-open a
         # later implementation part while its predecessor is still active.
         nxt = st.ensure_due_unit(self.state)
-        if nxt is None and st.maybe_close_milestone(self.state):
+        if nxt is None and self._maybe_close_milestone():
             self._final_commit()
 
     def _after_seal(self, unit):
@@ -14139,6 +14496,10 @@ class Driver(object):
         reviewed = self.state.get("reviewed_task") or {}
         if reviewed:
             return "Complete reviewed task %s" % reviewed["task_id"]
+        if unit["kind"] == st.UNIT_MILESTONE_VERIFICATION:
+            return "Complete milestone verification %s" % unit[
+                "reviewed_task_id"
+            ]
         if unit["kind"] == st.UNIT_SKELETON:
             return "Complete review of milestone skeleton"
         if unit["kind"] == st.UNIT_SLICE_DOC:
@@ -14702,6 +15063,9 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
     )
     state["milestone"][st.DEEP_SLICE_COMPOSITION_KEY] = (
         st.DEEP_SLICE_COMPOSITION_VERSION
+    )
+    state["milestone"][st.MILESTONE_VERIFICATION_CADENCE_KEY] = (
+        st.MILESTONE_VERIFICATION_CADENCE_VERSION
     )
     st.append_event(state, "initialized", goal=goal)
     if project_block is not None:
