@@ -73,6 +73,12 @@ def _workspace(request):
     return os.path.abspath(workspace)
 
 
+def _structured_context(request):
+    """Return only the reserved, object-shaped task context metadata."""
+    context = request.get("context")
+    return context if isinstance(context, dict) else {}
+
+
 def _execution_context(request):
     """Translate the frozen work area to the lifecycle's resolved context."""
     work_area = copy.deepcopy(request["work_area"])
@@ -172,7 +178,7 @@ def admit_task(
             tasks.INVALID_TASK_REQUEST,
             "the Brainstorming adapter requires task_executor brainstorming",
         )
-    context = checked["request"].get("context") or {}
+    context = _structured_context(checked["request"])
     charge = context.get("session_charge")
     if charge is not None:
         checked_charge = session_calls.validate_charge(charge)
@@ -260,7 +266,7 @@ def _private_target(workspace, home, task_id):
 
 
 def _repository_target(request):
-    context = request.get("context") or {}
+    context = _structured_context(request)
     target = (
         context.get("planned_slice_note_path")
         or (context.get("author_coordinates") or {}).get("slice_note_path")
@@ -276,12 +282,15 @@ def _creation_body(record, participants, target, workspace):
     request = order["request"]
     configuration = order["configuration"]
     task_context = copy.deepcopy(request["context"])
-    if "session_charge" in task_context:
+    structured_context = (
+        task_context if isinstance(task_context, dict) else {}
+    )
+    if "session_charge" in structured_context:
         task_context["session_charge"] = session_calls.read_charge(
             task_context["session_charge"]
         )
     repository_backed = "repository" in (
-        task_context.get("session_charge") or {}
+        structured_context.get("session_charge") or {}
     )
     brief = (
         "Work directly in the shared project repository. Initial Position "
@@ -317,10 +326,10 @@ def _creation_body(record, participants, target, workspace):
                     **(
                         {
                             "session_charge": copy.deepcopy(
-                                task_context["session_charge"]
+                                structured_context["session_charge"]
                             )
                         }
-                        if "session_charge" in task_context else {}
+                        if "session_charge" in structured_context else {}
                     ),
                     **(
                         {"output_directory": request["output_directory"]}
@@ -557,7 +566,7 @@ def _start_task_exclusive(
     context = _execution_context(request)
     workspace = context["workspace_path"]
     repository_backed = "repository" in (
-        request.get("context", {}).get("session_charge") or {}
+        _structured_context(request).get("session_charge") or {}
     )
     if repository_backed:
         work_area = None
@@ -1227,7 +1236,7 @@ def _finish_task_exclusive(
     request = record["order"]["request"]
     workspace = _workspace(request)
     repository_backed = "repository" in (
-        request.get("context", {}).get("session_charge") or {}
+        _structured_context(request).get("session_charge") or {}
     )
     if repository_backed:
         target = _repository_target(request)
@@ -1383,7 +1392,7 @@ def prepare_slice_note_request(request, planned_path):
         )
         tasks.resolve_derived_path(output_root, absolute)
     repository_backed = "repository" in (
-        (checked.get("context") or {}).get("session_charge") or {}
+        _structured_context(checked).get("session_charge") or {}
     )
     if not repository_backed:
         checked["request"] = (
@@ -1401,12 +1410,13 @@ def record_slice_note_handoff(unit, record, planned_path):
     accepted = (
         native.get("accepted_revision") if isinstance(native, dict) else None
     )
+    context = _structured_context(request)
     repository_backed = "repository" in (
-        (request.get("context") or {}).get("session_charge") or {}
+        context.get("session_charge") or {}
     )
     if repository_backed:
         valid_delivery = (
-            (request.get("context") or {}).get("planned_slice_note_path")
+            context.get("planned_slice_note_path")
             == planned_path
             and isinstance(accepted, str)
             and gitops.show_file_mode(

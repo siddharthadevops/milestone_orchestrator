@@ -254,6 +254,55 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         )
         self.assertIsNone(record["result"])
 
+    def test_direct_launch_preserves_text_context(self):
+        selection = {"session": None}
+        task_context = "Use only the named manuscript."
+        state = {}
+        record = adapter.admit_task(
+            state,
+            self.order(self.request(context=task_context)),
+            self.config,
+            self.workspace,
+            staffing_selection=selection,
+        )
+        with mock.patch.object(
+            adapter.lifecycle,
+            "create_resolved_session",
+            return_value={"id": "bs-direct", "state": {"status": "running"}},
+        ) as create:
+            created = adapter.start_task(
+                state,
+                record["id"],
+                self.config,
+                self.home,
+                staffing_selection=selection,
+            )
+
+        self.assertEqual(created["id"], "bs-direct")
+        body = create.call_args.args[1]
+        self.assertFalse(body["create_target_parents"])
+        self.assertEqual(
+            body["request"]["context"]["source_payload"]["task_context"],
+            task_context,
+        )
+        bs.validate_request(body["request"])
+        projection = self.projection(record["id"], status="failure")
+        projection["caller"] = (
+            lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX + record["id"]
+        )
+        with mock.patch.object(
+            adapter.lifecycle, "inspect_session", return_value=projection
+        ):
+            terminal = adapter.finish_task(
+                state,
+                record["id"],
+                self.home,
+                "bs-direct",
+                None,
+                effect_store=self.effect_store,
+            )
+        self.assertEqual(terminal["result"]["status"], "failure")
+
     def test_pre_cutover_task_charge_starts_without_carrying_old_material(self):
         record = adapter.admit_task(
             {}, self.order(), self.config, self.workspace
