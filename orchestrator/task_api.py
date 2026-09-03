@@ -740,6 +740,16 @@ class DirectTaskHost:
         with self._lock:
             return self._sessions.get(task_id)
 
+    def is_active(self, task_id):
+        """Whether this service currently owns the task's execution thread.
+
+        This is presentation-only liveness.  Durable task/lifecycle state
+        remains the execution authority; callers use this only to avoid
+        animating a stale in-flight marker after a service restart.
+        """
+        with self._lock:
+            return task_id in self._active
+
     @staticmethod
     def _runner(config, _workspace):
         return runners.SubprocessRunner(

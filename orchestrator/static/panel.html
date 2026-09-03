@@ -1413,6 +1413,7 @@ function openSession(id) {
   selectedSession = id;
   selected = null;
   selectedTask = null; taskPageRunId = null; lastTaskPage = null;
+  lastTaskDeep = null;
   runView = "main";
   sessionView = "main";
   goalOpen = false;
@@ -2748,6 +2749,7 @@ function select(id) {
   pendingLanding = "last-chip";
   selectedSession = null; lastSessionView = null;
   selectedTask = null; taskPageRunId = null; lastTaskPage = null;
+  lastTaskDeep = null;
   document.body.classList.add("m-detail");  // mobile: swap to the detail page
   refreshRuns(); refreshDetail();
 }
@@ -2826,6 +2828,7 @@ function mobileBack() {
   selected = null;
   selectedSession = null;
   selectedTask = null; taskPageRunId = null; lastTaskPage = null;
+  lastTaskDeep = null;
   lastSessionView = null;
   document.getElementById("detail").innerHTML =
     '<div class="empty">Nothing selected.</div>';
@@ -2843,13 +2846,17 @@ function fmtDur(secs) {
 }
 const DRAFT_SHORT = {draft_skeleton: "draft", draft_slice_note: "draft",
                      implement: "impl"};
-function draftChip(d, unitKey) {
+function evidenceTaskArg(taskId) {
+  return taskId ? `, '${esc(escJsSq(taskId))}'` : "";
+}
+function draftChip(d, unitKey, taskId = null) {
   if (!d) return "";
   const kind = DRAFT_SHORT[d.kind] || d.kind;
   const who = d.model ? `${esc(modelEffort(d.model, d.effort))} ` : "";
   const current = d.current !== false;
   const click = current
-    ? ` clicky" onclick="showStory('draft:${esc(unitKey)}')` : "";
+    ? ` clicky" onclick="showStory('draft:${esc(unitKey)}'${
+        evidenceTaskArg(taskId)})` : "";
   const titleText = [
     current ? "" : "historical implementation",
     d.task_id ? `task ${d.task_id}` : "",
@@ -2861,11 +2868,12 @@ const WORK_KINDS = {fix_findings: 1, verification: 1};
 function sevClass(sev) {
   return (sev === "P0" || sev === "P1") ? "sev01" : "sev23";
 }
-function roundChip(r) {
+function roundChip(r, taskId = null) {
   const kind = shortKind(r.kind);
   const who = r.model ? modelEffort(r.model, r.effort) : "";
   const actor = who ? `${esc(who)} ` : "";
-  const click = ` clicky" onclick="showStory('round:${esc(r.id)}')`;
+  const click = ` clicky" onclick="showStory('round:${esc(r.id)}'${
+    evidenceTaskArg(taskId)})`;
   const linked = r.task_id ? `task ${r.task_id}` : "";
   if (r.invalidated)
     return `<span class="chip fail${click}" title="${esc([r.invalidated, linked].filter(Boolean).join(" · "))}">${actor}${esc(kind)} · INVALID</span>`;
@@ -2875,9 +2883,10 @@ function roundChip(r) {
     : r.findings === 0 ? "clean" : sevClass(r.severity);
   return `<span class="chip ${cls}${click}"${linked ? ` title="${esc(linked)}"` : ""}>${actor}${esc(kind)} · F${r.findings}${fmtDur(r.duration_s)}</span>`;
 }
-function sealChip(s, unitKey) {
+function sealChip(s, unitKey, taskId = null) {
   const dur = fmtDur(s.duration_s);
-  const click = ` clicky" onclick="showStory('seal:${esc(unitKey)}:${s.attempt}')`;
+  const click = ` clicky" onclick="showStory('seal:${esc(unitKey)}:${
+    s.attempt}'${evidenceTaskArg(taskId)})`;
   if (s.passed && s.wave)
     // Wave provenance: the anchor's documentation wave requalified this unit.
     return `<span class="chip pass${click}" title="re-documentation wave ${esc(s.wave)}">Seal &#10003; wave${dur}</span>`;
@@ -2895,7 +2904,7 @@ function sealChip(s, unitKey) {
     .reduce((total, count) => total + (Number(count) || 0), 0);
   return `<span class="chip ${sevClass(s.severity)}${click}">historical seal · F${findings}${dur}</span>`;
 }
-function reclassifyChip(ev, unitKey) {
+function reclassifyChip(ev, unitKey, taskId = null) {
   // Decision only. Physical classification work has its own permanent chip.
   const risk = ev.drift_risk || "unrated";
   const two = ev.drift_damage != null;
@@ -2905,9 +2914,9 @@ function reclassifyChip(ev, unitKey) {
     ? `DEBT · ${two ? ev.drift_damage : risk}`
     : `kept · ${scale}`;
   const title = `${ev.finding_id || ""}${two ? ` · risk ${risk}` : ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}${ev.requeued ? " · later returned to fixing" : ""}`;
-  return `<span class="chip ${ev.defer_ok && !ev.requeued ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}</span>`;
+  return `<span class="chip ${ev.defer_ok && !ev.requeued ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}'${evidenceTaskArg(taskId)})">${esc(label)}</span>`;
 }
-function reclassifyWorkChip(events, unitKey) {
+function reclassifyWorkChip(events, unitKey, taskId = null) {
   const calls = (events || []).filter(item => item && (
     item.logical_duration_s != null || item.duration_s != null || item.model
   ));
@@ -2925,14 +2934,14 @@ function reclassifyWorkChip(events, unitKey) {
     ? durations.reduce((total, value) => total + value, 0) : null;
   const count = calls.length > 1 ? ` · F${calls.length}` : "";
   const title = `${calls.length} finding${calls.length === 1 ? "" : "s"} classified`;
-  return `<span class="chip work clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${actor ? `${esc(actor)} ` : ""}classify${count}${fmtDur(duration)}</span>`;
+  return `<span class="chip work clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}'${evidenceTaskArg(taskId)})">${actor ? `${esc(actor)} ` : ""}classify${count}${fmtDur(duration)}</span>`;
 }
-function reclassifyHistoryChips(events, unitKey) {
-  return [reclassifyWorkChip(events, unitKey)]
-    .concat((events || []).map(item => reclassifyChip(item, unitKey)))
+function reclassifyHistoryChips(events, unitKey, taskId = null) {
+  return [reclassifyWorkChip(events, unitKey, taskId)]
+    .concat((events || []).map(item => reclassifyChip(item, unitKey, taskId)))
     .filter(Boolean);
 }
-function verificationChip(ev) {
+function verificationChip(ev, taskId = null) {
   const stableUnknown = ev.ok && ev.stable == null;
   const passed = ev.ok && ev.stable === true;
   const cls = passed ? "pass" : stableUnknown ? "work" : "fail";
@@ -2943,18 +2952,18 @@ function verificationChip(ev) {
     : stableUnknown ? "passed · legacy stability unrecorded"
     : ev.ok ? "changed bytes" : "failed";
   return `<span class="chip ${cls} clicky"
-    onclick="showStory('verify:${esc(String(ev.seq))}')">suite · ${esc(status)}${fmtDur(ev.duration_s)}</span>`;
+    onclick="showStory('verify:${esc(String(ev.seq))}'${evidenceTaskArg(taskId)})">suite · ${esc(status)}${fmtDur(ev.duration_s)}</span>`;
 }
 function repairSourceLabel(unitKey) {
   const match = String(unitKey || "").match(/^slice_(?:doc|impl)-(\d+)(?:-([a-z]+))?$/);
   if (match) return `Slice ${match[1]}${match[2] ? `-${match[2]}` : ""}`;
   return unitKey === "skeleton" ? "Skeleton" : (unitKey || "downstream work");
 }
-function repairChip(repair, unitKey) {
+function repairChip(repair, unitKey, taskId = null) {
   const source = repairSourceLabel(repair.reported_by);
   const title = repair.plain || repair.forced_decision || "Downstream gap";
   return `<span class="chip sev23 clicky" title="${esc(title)}"
-    onclick="showStory('repair:${esc(unitKey)}:${esc(repair.seq)}')">Triggered by ${esc(source)}${fmtDur(repair.duration_s)}</span>`;
+    onclick="showStory('repair:${esc(unitKey)}:${esc(repair.seq)}'${evidenceTaskArg(taskId)})">Triggered by ${esc(source)}${fmtDur(repair.duration_s)}</span>`;
 }
 // How each attached session's result came back to the unit. "waiting" is
 // the live state: the unit is paused on the discussion right now.
@@ -2978,11 +2987,11 @@ function brainstormChip(b) {
   return `<span class="chip brainstorm clicky ${bad ? "fail" : ""}"
     title="${esc(title)}" onclick="openSession('${esc(escJsSq(b.session_id))}')">&#128161; brainstorming · ${esc(outcome)}${fmtDur(b.duration_s)}</span>`;
 }
-function unitHistory(u, activity, running) {
+function unitHistory(u, activity, running, taskId = null) {
   const drafts = Array.isArray(u.drafts) && u.drafts.length
     ? u.drafts : (u.draft ? [u.draft] : []);
-  const lead = drafts.map(draft => draftChip(draft, u.unit))
-    .concat([docChip(u)]).filter(Boolean);
+  const lead = drafts.map(draft => draftChip(draft, u.unit, taskId))
+    .concat([docChip(u, taskId)]).filter(Boolean);
   // Task chips per unit were dropped from the unit history: the draft, round,
   // verify, and Brainstorming chips already carry the same calls with more
   // detail, so the "Tasks" line only repeated them (operator, 2026-08-18).
@@ -3026,23 +3035,25 @@ function unitHistory(u, activity, running) {
       const family = event.item.family || "review";
       reviewCounts[family] = (reviewCounts[family] || 0) + 1;
       current = {type: "review", family, number: reviewCounts[family],
-                 chips: [roundChip(event.item)]};
+                 chips: [roundChip(event.item, taskId)]};
       groups.push(current);
       const linked = reclassByRound.get(event.item.id) || [];
       if (linked.length) {
-        current.chips.push(...reclassifyHistoryChips(linked, u.unit));
+        current.chips.push(...reclassifyHistoryChips(
+          linked, u.unit, taskId
+        ));
       }
     } else if (event.type === "seal") {
       current = {type: "seal", number: event.item.attempt,
                  deterministic: Object.keys(event.item.findings || {}).length === 0,
-                 chips: [sealChip(event.item, u.unit)]};
+                 chips: [sealChip(event.item, u.unit, taskId)]};
       groups.push(current);
     } else if (event.type === "verify") {
       current = {type: "verify", cadence: event.item.cadence,
-                 chips: [verificationChip(event.item)]};
+                 chips: [verificationChip(event.item, taskId)]};
       groups.push(current);
     } else if (event.type === "reclass") {
-      const chips = reclassifyHistoryChips([event.item], u.unit);
+      const chips = reclassifyHistoryChips([event.item], u.unit, taskId);
       if (current) current.chips.push(...chips);
       else lead.push(...chips);
     } else if (event.type === "repair") {
@@ -3058,22 +3069,29 @@ function unitHistory(u, activity, running) {
         (!repair.completed_at || at <= repair.completed_at);
       const work = [].concat(
         (u.rounds || []).filter(r => roundIds.has(r.id))
-          .map(r => ({at: r.at || "", chip: roundChip(r)})),
+          .map(r => ({at: r.at || "", chip: roundChip(r, taskId)})),
         (u.verifications || []).filter(item => inEpisode(item.at || ""))
-          .map(item => ({at: item.at || "", chip: verificationChip(item)})),
+          .map(item => ({
+            at: item.at || "", chip: verificationChip(item, taskId)
+          })),
         (u.seals || []).filter(s => sealAttempts.has(s.attempt))
-          .map(s => ({at: s.at || "", chip: sealChip(s, u.unit)})),
+          .map(s => ({
+            at: s.at || "", chip: sealChip(s, u.unit, taskId)
+          })),
         (u.reclassify || []).filter(item => inEpisode(item.at || ""))
-          .map(item => ({at: item.at || "", chip: reclassifyChip(item, u.unit)})),
+          .map(item => ({
+            at: item.at || "",
+            chip: reclassifyChip(item, u.unit, taskId)
+          })),
         (u.brainstormings || []).filter(b => inEpisode(b.at || ""))
           .map(b => ({at: b.at || "", chip: brainstormChip(b)}))
       ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
       current = {type: "repair", number: repairCount,
-                 chips: [repairChip(repair, u.unit)]
+                 chips: [repairChip(repair, u.unit, taskId)]
                    .concat(work.map(w => w.chip))};
       groups.push(current);
     } else if (event.type === "round") {
-      const chip = roundChip(event.item);
+      const chip = roundChip(event.item, taskId);
       if (current && (current.type === "review" || current.type === "work"))
         current.chips.push(chip);
       else {
@@ -3154,12 +3172,126 @@ function unitHistory(u, activity, running) {
     }</div>`;
   }).join("")}</div>`;
 }
-function docChip(u) {
+function docChip(u, taskId = null) {
   // Sealed doc units (skeleton, slice docs) record their markdown artifact;
   // surface it as a chip that opens the in-panel viewer.
   if (!u.artifact) return "";
   const name = String(u.artifact).split("/").pop();
-  return `<span class="chip doc clicky" title="${esc(u.artifact)}" onclick="showDoc('${esc(u.unit)}')">&#128196; ${esc(name)}</span>`;
+  return `<span class="chip doc clicky" title="${esc(u.artifact)}" onclick="showDoc('${esc(u.unit)}'${evidenceTaskArg(taskId)})">&#128196; ${esc(name)}</span>`;
+}
+
+/* One slice-shaped pipeline, shared verbatim by milestone slices and direct
+   deep tasks.  Callers supply canonical units plus their activity source;
+   this renderer owns the category totals, phase rows, ghosts, chips and
+   viewers for both surfaces. */
+function pipelineCategoryRow(label, title, stat, duration, tokens,
+                             tokenPartial, cls = "", cost = null,
+                             costPartial = false, scopeKey = label) {
+  const tokenLabel = (tokens || tokenPartial)
+    ? fmtTokenUsage(tokens, tokenPartial) : "";
+  let figure = tokenLabel ? ` · ${esc(tokenLabel)}` : "";
+  if (cost || costPartial)
+    figure = ` · ${costChip(`cat:${scopeKey}`, label, cost, costPartial,
+                            tokens, tokenPartial)}`;
+  return `<div class="pipe-cat ${esc(cls)}"><span>${esc(label)}${
+    title}</span>` +
+    (stat ? `<span class="st ${esc(stat)}">${esc(stat)}${
+      duration != null ? ` · ${fmtDHMS(duration)}` : ""}${figure}</span>` : "") +
+    `</div>`;
+}
+function pipelineGitLink(u, taskId = null) {
+  const sha = u.gate_sha || u.wip_sha;
+  if (!sha) return "";
+  const wip = !u.gate_sha;
+  return `<span class="gitlink ${wip ? "wip" : ""}"
+    title="${wip ? "view wip commit (amended as fixes land)" : "view gate commit"}"
+    onclick="showCommit('${esc(u.unit)}'${evidenceTaskArg(taskId)})">${
+      wip ? "wip " : ""}${esc(sha)}</span>`;
+}
+function pipelineUnitRow(u, activity, running, scopeKey) {
+  const time = u.work_duration_s != null
+    ? ` · ${fmtDHMS(u.work_duration_s)}` : "";
+  const tokens = fmtTokenUsage(
+    u.work_token_usage, u.work_token_usage_partial
+  );
+  const taskId = u.source_task_id || null;
+  const unitScope = taskId
+    ? `${scopeKey}:task:${taskId}:unit:${u.unit}`
+    : `${scopeKey}:unit:${u.unit}`;
+  const tokenText = (u.work_cost || u.work_cost_partial)
+    ? ` · ${costChip(unitScope, u.unit,
+        u.work_cost, u.work_cost_partial,
+        u.work_token_usage, u.work_token_usage_partial)}`
+    : (tokens ? ` · ${esc(tokens)}` : "");
+  const slicePhase = u.unit.match(/^slice_(doc|impl)-\d+(?:-[a-z]+)?$/);
+  const phase = u.unit === "skeleton" || slicePhase;
+  const label = u.unit === "skeleton"
+    ? "Milestone architecture"
+    : slicePhase
+      ? (slicePhase[1] === "doc" ? "Documentation"
+        : `Implementation${u.part ? ` ${u.part}` : ""}`)
+      : u.unit;
+  return `
+  <div class="unit${phase ? " phase" : ""}">
+    <div class="unit-head"><span class="unit-name">${esc(label)}</span>
+      <span class="unit-right">${pipelineGitLink(u, taskId)}<span class="st ${
+        esc(u.status)}">${esc(u.status)}${time}${tokenText}</span></span></div>
+    ${unitHistory(u, activity || {}, running, taskId)}
+  </div>`;
+}
+function pipelineGhostRow(key) {
+  const phase = key.match(/^slice_(doc|impl)-\d+$/);
+  const label = phase
+    ? (phase[1] === "doc" ? "Documentation" : "Implementation")
+    : key;
+  return `
+  <div class="unit ghost${phase ? " phase" : ""}">
+    <div class="unit-head"><span class="unit-name">${esc(label)}</span>
+      <span class="st">pending</span></div>
+  </div>`;
+}
+function renderSlicePipeline(slice, units, activity, running, options = {}) {
+  const pad = String(slice.id).padStart(2, "0");
+  const doc = (units || []).find(u => u.unit === `slice_doc-${pad}`);
+  const impls = (units || []).filter(u =>
+    u.unit === `slice_impl-${pad}` ||
+    u.unit.startsWith(`slice_impl-${pad}-`));
+  const impl = impls.length ? impls[impls.length - 1] : null;
+  const derivedStatus = impl ? impl.status
+    : (doc && doc.status !== "sealed") ? doc.status : "pending";
+  const status = options.status && options.status !== "open"
+    ? options.status : derivedStatus;
+  const present = [doc].concat(impls).filter(Boolean);
+  const duration = present.length
+    ? present.reduce((total, u) => total + (u.work_duration_s || 0), 0)
+    : null;
+  const tokens = sumTokenUsage(present.map(u => u.work_token_usage));
+  const tokenPartial = present.some(u => u.work_token_usage_partial);
+  const cost = sumCost(present.map(u => u.work_cost));
+  const costPartial = present.some(u => u.work_cost_partial);
+  const scopeKey = options.scopeKey || `run:${selected}:slice:${pad}`;
+  let html = pipelineCategoryRow(
+    options.label || `Slice ${pad}`, options.title || "", status,
+    duration, tokens, tokenPartial, "slice-cat", cost, costPartial, scopeKey
+  );
+  const started = Boolean(doc) || impls.length > 0;
+  if (doc) {
+    html += pipelineUnitRow(
+      doc, doc.activity || activity, doc.running ?? running, scopeKey
+    );
+  } else if (started) {
+    html += pipelineGhostRow(`slice_doc-${pad}`);
+  }
+  if (impls.length) {
+    impls.forEach(u => {
+      html += pipelineUnitRow(
+        u, u.activity || activity, u.running ?? running, scopeKey
+      );
+    });
+  } else if (started) {
+    html += pipelineGhostRow(`slice_impl-${pad}`);
+  }
+  return {html, units: present};
 }
 
 /* ---- markdown viewer (unit artifacts) ---- */
@@ -3651,11 +3783,14 @@ function diffHtml(text) {
   flush();
   return out.join("");
 }
-async function showCommit(unitKey) {
+async function showCommit(unitKey, taskId = null) {
   cvRaw = false;
   let d;
   try {
-    d = await api(`/api/runs/${selected}/commit?unit=${encodeURIComponent(unitKey)}`);
+    const base = taskId
+      ? `/api/tasks/${encodeURIComponent(taskId)}`
+      : `/api/runs/${selected}`;
+    d = await api(`${base}/commit?unit=${encodeURIComponent(unitKey)}`);
   } catch (e) { alert(e.message); return; }
   document.getElementById("cv_title").textContent =
     `${unitKey} — ${d.kind === "wip" ? "wip" : "gate"} commit ${d.sha}`;
@@ -3673,10 +3808,13 @@ async function showCommit(unitKey) {
 }
 
 let dvContent = "";
-async function showDoc(unitKey) {
+async function showDoc(unitKey, taskId = null) {
   let d;
   try {
-    d = await api(`/api/runs/${selected}/artifact?unit=${encodeURIComponent(unitKey)}`);
+    const base = taskId
+      ? `/api/tasks/${encodeURIComponent(taskId)}`
+      : `/api/runs/${selected}`;
+    d = await api(`${base}/artifact?unit=${encodeURIComponent(unitKey)}`);
   } catch (e) { alert(e.message); return; }
   dvContent = d.content || "";
   document.getElementById("dv_title").textContent = unitKey;
@@ -3845,88 +3983,22 @@ async function refreshDetail() {
           slicePlanSummary(sl.producer_task_executor)}
           <span class="slice-intent">${esc(sl.intent)}</span>` : "";
       };
-      const catRow = (label, title, stat, duration, tokens,
-                      tokenPartial, cls = "", cost = null,
-                      costPartial = false) => {
-        // Same rule as everywhere else: money if any was spent, otherwise
-        // the greyed equivalent, with the token detail as the tooltip.
-        const tokenLabel = (tokens || tokenPartial)
-          ? fmtTokenUsage(tokens, tokenPartial) : "";
-        let figure = tokenLabel ? ` · ${esc(tokenLabel)}` : "";
-        if (cost || costPartial)
-          figure = ` · ${costChip(`cat:${label}`, label, cost, costPartial,
-                                  tokens, tokenPartial)}`;
-        return `<div class="pipe-cat ${esc(cls)}"><span>${esc(label)}${
-          title}</span>` +
-          (stat ? `<span class="st ${esc(stat)}">${esc(stat)}${
-            duration != null ? ` · ${fmtDHMS(duration)}` : ""}${
-            figure}</span>` : "") +
-          `</div>`;
-      };
       lastWebBase = d.commit_web_base;
       lastBilling = sum.billing || null;
-      // Opens the LOCAL commit viewer (git show in the workspace): unlike
-      // a direct web link it never 404s on not-yet-pushed gate commits.
-      // Sealed units link their gate commit; the unit in flight links its
-      // current wip commit (dashed — amended as fixes land).
-      const gitLink = u => {
-        const sha = u.gate_sha || u.wip_sha;
-        if (!sha) return "";
-        const wip = !u.gate_sha;
-        return `<span class="gitlink ${wip ? "wip" : ""}"
-          title="${wip ? "view wip commit (amended as fixes land)" : "view gate commit"}"
-          onclick="showCommit('${esc(u.unit)}')">${wip ? "wip " : ""}${esc(sha)}</span>`;
-      };
-      const unitRow = u => {
-        const time = u.work_duration_s != null
-          ? ` · ${fmtDHMS(u.work_duration_s)}` : "";
-        const tokens = fmtTokenUsage(
-          u.work_token_usage, u.work_token_usage_partial
-        );
-        // Cost replaces tokens on the chip; tokens stay one hover away.
-        const tokenText = (u.work_cost || u.work_cost_partial)
-          ? ` · ${costChip(`unit:${u.unit}`, u.unit,
-              u.work_cost, u.work_cost_partial,
-              u.work_token_usage, u.work_token_usage_partial)}`
-          : (tokens ? ` · ${esc(tokens)}` : "");
-        const slicePhase = u.unit.match(/^slice_(doc|impl)-\d+(?:-[a-z]+)?$/);
-        const phase = u.unit === "skeleton" || slicePhase;
-        const label = u.unit === "skeleton"
-          ? "Milestone architecture"
-          : slicePhase
-            ? (slicePhase[1] === "doc" ? "Documentation"
-              : `Implementation${u.part ? ` ${u.part}` : ""}`)
-            : u.unit;
-        return `
-        <div class="unit${phase ? " phase" : ""}">
-          <div class="unit-head"><span class="unit-name">${esc(label)}</span>
-            <span class="unit-right">${gitLink(u)}<span class="st ${esc(u.status)}">${esc(u.status)}${time}${tokenText}</span></span></div>
-          ${unitHistory(u, s, running)}
-        </div>`;
-      };
-      const ghostRow = key => {
-        const phase = key.match(/^slice_(doc|impl)-\d+$/);
-        const label = phase
-          ? (phase[1] === "doc" ? "Documentation" : "Implementation")
-          : key;
-        return `
-        <div class="unit ghost${phase ? " phase" : ""}">
-          <div class="unit-head"><span class="unit-name">${esc(label)}</span>
-            <span class="st">pending</span></div>
-        </div>`;
-      };
       const verificationRow = u => {
         const task = u.task;
         const ordinal = u.part || String(u.unit).split("-").pop();
         const title = `<span class="unit-title">Complete repository verification</span>
           <span class="slice-intent">${esc(task.task_executor)} · ${esc(task.id)}</span>`;
-        return catRow(`Verification ${ordinal}`, title, task.status,
-                      task.duration_s, task.token_usage,
-                      task.token_usage_partial, "slice-cat",
-                      task.cost, task.cost_partial) + `
+        return pipelineCategoryRow(
+          `Verification ${ordinal}`, title, task.status,
+          task.duration_s, task.token_usage, task.token_usage_partial,
+          "slice-cat", task.cost, task.cost_partial,
+          `run:${runId}:verification:${ordinal}`
+        ) + `
           <div class="unit phase">
             <div class="unit-head"><span class="unit-name">Evidence</span>
-              <span class="unit-right">${gitLink(u)}
+              <span class="unit-right">${pipelineGitLink(u)}
                 <span class="chip work clicky" title="${esc(task.id)}"
                   onclick="openTaskDetail('${esc(escJsSq(task.id))}')">Open task</span>
               </span></div>
@@ -3938,13 +4010,16 @@ async function refreshDetail() {
       const seen = {};
       let rows = "";
       if (byKey.skeleton) {
-        rows += catRow("Skeleton", "", byKey.skeleton.status,
-                       byKey.skeleton.work_duration_s,
-                       byKey.skeleton.work_token_usage,
-                       byKey.skeleton.work_token_usage_partial, "slice-cat",
-                       byKey.skeleton.work_cost,
-                       byKey.skeleton.work_cost_partial)
-              + unitRow(byKey.skeleton);
+        rows += pipelineCategoryRow(
+          "Skeleton", "", byKey.skeleton.status,
+          byKey.skeleton.work_duration_s,
+          byKey.skeleton.work_token_usage,
+          byKey.skeleton.work_token_usage_partial, "slice-cat",
+          byKey.skeleton.work_cost, byKey.skeleton.work_cost_partial,
+          `run:${runId}:skeleton`
+        ) + pipelineUnitRow(
+          byKey.skeleton, s, running, `run:${runId}:skeleton`
+        );
         seen.skeleton = 1;
       }
       // Verification units are admitted between logical slices. Preserve that
@@ -3969,46 +4044,22 @@ async function refreshDetail() {
       // The state-backed array is the delivery order. Never reinterpret its
       // ids as a second ordering authority in the operator projection.
       (sum.slices || []).forEach(sl => {
-        const pad = String(sl.id).padStart(2, "0");
-        const doc = byKey[`slice_doc-${pad}`];
-        const impls = (sum.units || []).filter(u =>
-          u.unit === `slice_impl-${pad}` ||
-          u.unit.startsWith(`slice_impl-${pad}-`));
-        const impl = impls.length ? impls[impls.length - 1] : null;
-        const slStat = impl ? impl.status
-          : (doc && doc.status !== "sealed") ? doc.status : "pending";
-        const present = [doc].concat(impls).filter(Boolean);
-        const sliceDuration = present.length
-          ? present.reduce((total, u) => total + (u.work_duration_s || 0), 0)
-          : null;
-        const sliceTokens = sumTokenUsage(
-          present.map(u => u.work_token_usage)
+        const rendered = renderSlicePipeline(
+          sl, sum.units || [], s, running, {
+            label: `Slice ${String(sl.id).padStart(2, "0")}`,
+            title: sliceTitle(sl.id),
+            scopeKey: `run:${runId}:slice:${sl.id}`,
+          }
         );
-        const sliceTokensPartial = present.some(
-          u => u.work_token_usage_partial
-        );
-        const sliceCost = sumCost(present.map(u => u.work_cost));
-        const sliceCostPartial = present.some(u => u.work_cost_partial);
-        rows += catRow(`Slice ${pad}`, sliceTitle(sl.id), slStat,
-                       sliceDuration, sliceTokens, sliceTokensPartial,
-                       "slice-cat", sliceCost, sliceCostPartial);
-        const docKey = `slice_doc-${pad}`;
-        // A slice nobody has started yet is one line: its header. The
-        // Documentation / Implementation ghost rows only appear once the
-        // slice is active, where they show what is still to come.
-        const started = Boolean(doc) || impls.length > 0;
-        if (doc) { rows += unitRow(doc); seen[docKey] = 1; }
-        else if (started) rows += ghostRow(docKey);
-        if (impls.length) impls.forEach(u => {
-          rows += unitRow(u); seen[u.unit] = 1;
-        });
-        else if (started) rows += ghostRow(`slice_impl-${pad}`);
+        rows += rendered.html;
+        rendered.units.forEach(u => { seen[u.unit] = 1; });
         appendVerifications(sl.id);
       });
       (sum.units || []).forEach(u => {
         if (seen[u.unit]) return;
         rows += u.task && String(u.unit).startsWith("milestone_verification-")
-          ? verificationRow(u) : unitRow(u);
+          ? verificationRow(u)
+          : pipelineUnitRow(u, s, running, `run:${runId}:other`);
       });
       html += `<div class="card"><h3>Pipeline</h3>` + rows + `</div>`;
     } else if (runView !== "edit" && d.summary_error) {
@@ -4059,10 +4110,13 @@ async function refreshDetail() {
     banner.textContent = `refresh failed: ${e.message} — showing last known state, retrying`;
   }
 }
-async function showStory(item) {
+async function showStory(item, taskId = null) {
   let d;
   try {
-    d = await api(`/api/runs/${selected}/story?item=${encodeURIComponent(item)}`);
+    const base = taskId
+      ? `/api/tasks/${encodeURIComponent(taskId)}`
+      : `/api/runs/${selected}`;
+    d = await api(`${base}/story?item=${encodeURIComponent(item)}`);
   } catch (e) { alert(e.message); return; }
   const meta = [];
   if (d.family) meta.push(d.family);
@@ -4145,7 +4199,7 @@ async function showStory(item) {
   } else if (d.story === "draft") {
     title = `${d.unit} — ${esc(DRAFT_SHORT[d.kind] || d.kind)}`;
     const res = d.result || {};
-    if (d.artifact) body += `<div class="story-meta">artifact: <span class="morelink" onclick="showDoc('${esc(d.unit)}')">${esc(d.artifact)}</span></div>`;
+    if (d.artifact) body += `<div class="story-meta">artifact: <span class="morelink" onclick="showDoc('${esc(d.unit)}'${evidenceTaskArg(d.task_id)})">${esc(d.artifact)}</span></div>`;
     if (res.files_changed && res.files_changed.length)
       body += `<div class="story-note">files_changed (${res.files_changed.length}):\n${esc(res.files_changed.join("\n"))}</div>`;
     if (res.suite_command)
@@ -5270,6 +5324,7 @@ function launchBinding() {
 let selectedTask = null;
 let taskPageRunId = null;
 let lastTaskPage = null;
+let lastTaskDeep = null;
 let lastTaskPageSession = null;
 let taskPageSeq = 0;
 let taskStopping = false;
@@ -5313,12 +5368,51 @@ function taskSessionId(record) {
   }
   return null;
 }
-function renderTaskPage(record, admittedAt) {
+function deepTaskPipeline(view) {
+  if (!view) return "";
+  lastBilling = view.billing || null;
+  lastWebBase = view.commit_web_base || null;
+  const units = (view.children || []).map(child => {
+    const activity = child.activity || null;
+    const fallbackStatus = child.status === "failure" ? "failure"
+      : child.status === "success" ? "sealed" : "pending";
+    const unit = activity && activity.unit
+      ? {...activity.unit}
+      : {
+          unit: child.phase === "documentation"
+            ? "slice_doc-01" : "slice_impl-01",
+          part: child.part,
+          status: fallbackStatus,
+          work_duration_s: null,
+          work_token_usage: null,
+          work_token_usage_partial: false,
+          work_cost: null,
+          work_cost_partial: false,
+          drafts: [], rounds: [], seals: [], verifications: [],
+          debt: [], reclassify: [], repairs: [], brainstormings: [],
+        };
+    unit.part = child.part;
+    unit.source_task_id = child.id;
+    unit.activity = activity || {};
+    unit.running = !!activity && activity.process === "running";
+    return unit;
+  });
+  const rendered = renderSlicePipeline(
+    {id: 1}, units, {}, false, {
+      label: "Deep task",
+      status: view.status,
+      scopeKey: `task:${selectedTask}:deep`,
+    }
+  );
+  return `<div class="card"><h3>Pipeline</h3>${rendered.html}</div>`;
+}
+function renderTaskPage(record, admittedAt, deepTask = null) {
   const result = record.result;
   const running = result === null || result === undefined;
   const executor = taskExecutor(record);
   const area = taskWorkArea(record);
   const request = (record.order || {}).request || {};
+  fullRequestText = String(request.request || "");
   const context = request.context || {};
   const configuration = (record.order || {}).configuration || {};
   const state = running ? "running" : result.status;
@@ -5341,7 +5435,7 @@ function renderTaskPage(record, admittedAt) {
   </div>` : "";
   html += `<div class="page-title-row"><div class="proj-title">${
     esc(area.project || "")}</div>${menu}</div>`;
-  html += `<div class="run-title-row"><h2>${esc(taskTitle(record))}</h2>` +
+  html += `<div class="run-title-row"><h2>${requestTitle(fullRequestText)}</h2>` +
     `<span class="chip ${stateCls}">${esc(state)}</span></div>`;
   const bits = [
     executor.replace(/_/g, " "),
@@ -5375,8 +5469,7 @@ function renderTaskPage(record, admittedAt) {
     html += `<div class="failure">${esc(taskStopNotice)}</div>`;
   if (!running && result.reason)
     html += `<div class="failure">${esc(result.reason)}</div>`;
-  html += `<div class="card"><h3>Request</h3>
-    <div class="mdbody flow" style="white-space:pre-wrap">${esc(String(request.request || ""))}</div></div>`;
+  if (executor === "deep_task") html += deepTaskPipeline(deepTask);
   const ctxRows = [];
   if (context.brief) ctxRows.push(["brief", context.brief]);
   if (context.task_kind) ctxRows.push(["kind", context.task_kind]);
@@ -5406,39 +5499,49 @@ function renderTaskPage(record, admittedAt) {
   }
   return html;
 }
+function paintTaskPage() {
+  if (!lastTaskPage) return;
+  const listed = lastTaskRows.find(
+    row => row.record && row.record.id === selectedTask
+  );
+  const det = document.getElementById("detail");
+  const wasOpen = Array.from(det.querySelectorAll("details"))
+    .map(node => node.open);
+  det.innerHTML = renderTaskPage(
+    lastTaskPage, listed ? listed.admitted_at : null, lastTaskDeep
+  );
+  Array.from(det.querySelectorAll("details")).forEach((node, i) => {
+    if (wasOpen[i]) node.open = true;
+  });
+  syncRequestMore(det);
+  requestAnimationFrame(() => {
+    syncRequestMore(det);
+    updateBottomJump();
+  });
+}
 function toggleTaskMenu(event) {
   event.stopPropagation();
   taskMenuOpen = !taskMenuOpen;
-  const listed = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
-  if (lastTaskPage) document.getElementById("detail").innerHTML =
-    renderTaskPage(lastTaskPage, listed ? listed.admitted_at : null);
+  paintTaskPage();
 }
 function closeTaskMenu() {
   if (!taskMenuOpen) return;
   taskMenuOpen = false;
-  if (selectedTask && lastTaskPage) {
-    const listed = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
-    document.getElementById("detail").innerHTML =
-      renderTaskPage(lastTaskPage, listed ? listed.admitted_at : null);
-  }
+  if (selectedTask) paintTaskPage();
 }
 document.addEventListener("click", closeTaskMenu);
 async function deleteSelectedTask(event) {
   if (event) event.stopPropagation();
   // Close (and repaint) the menu before asking: a cancelled confirm must
   // not leave a popover on screen that the state already thinks is closed.
-  const listedRow = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
   taskMenuOpen = false;
-  if (lastTaskPage) document.getElementById("detail").innerHTML =
-    renderTaskPage(lastTaskPage, listedRow ? listedRow.admitted_at : null);
+  paintTaskPage();
   if (!selectedTask || taskDeleting || !lastTaskPage) return;
   if (!confirm(`Delete task “${taskTitle(lastTaskPage)}”? This removes its `
       + "record and private discussion state; repository files are untouched."))
     return;
   taskDeleting = true;
-  const listed = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
-  document.getElementById("detail").innerHTML =
-    renderTaskPage(lastTaskPage, listed ? listed.admitted_at : null);
+  paintTaskPage();
   try {
     await api("/api/tasks/" + encodeURIComponent(selectedTask), {method: "DELETE"});
   } catch (e) {
@@ -5448,6 +5551,7 @@ async function deleteSelectedTask(event) {
   }
   taskDeleting = false;
   selectedTask = null; taskPageRunId = null; lastTaskPage = null;
+  lastTaskDeep = null;
   document.body.classList.remove("m-detail");
   document.getElementById("detail").innerHTML =
     '<div class="empty">Nothing selected.</div>';
@@ -5463,17 +5567,12 @@ async function refreshTaskPage() {
     const data = await api("/api/tasks/" + encodeURIComponent(id) +
       (runId ? "?run_id=" + encodeURIComponent(runId) : ""));
     if (seq !== taskPageSeq || id !== selectedTask) return;
-    const listed = lastTaskRows.find(row => row.record && row.record.id === id);
     lastTaskPage = data.task;
+    lastTaskDeep = data.deep_task || null;
     if (data.session_id) lastTaskPageSession = data.session_id;
     if (data.task.result !== null) taskStopping = false;
     const det = document.getElementById("detail");
-    const wasOpen = Array.from(det.querySelectorAll("details"))
-      .map(node => node.open);
-    det.innerHTML = renderTaskPage(data.task, listed ? listed.admitted_at : null);
-    Array.from(det.querySelectorAll("details")).forEach((node, i) => {
-      if (wasOpen[i]) node.open = true;
-    });
+    paintTaskPage();
     if (pendingLanding === "top") {
       pendingLanding = null;
       det.scrollTop = 0;
@@ -5490,6 +5589,7 @@ function openTask(taskId, runId) {
   selectedTask = taskId;
   taskPageRunId = runId || null;
   lastTaskPage = null;
+  lastTaskDeep = null;
   lastTaskPageSession = null;
   taskStopping = false;
   taskStopNotice = "";
@@ -5511,9 +5611,7 @@ async function stopSelectedTask() {
   if (!selectedTask || taskStopping) return;
   taskStopping = true;
   taskStopNotice = "";
-  const listed = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
-  if (lastTaskPage) document.getElementById("detail").innerHTML =
-    renderTaskPage(lastTaskPage, listed ? listed.admitted_at : null);
+  paintTaskPage();
   try {
     const answer = await postJSON(
       "/api/tasks/" + encodeURIComponent(selectedTask) + "/stop", {});

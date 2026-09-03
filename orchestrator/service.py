@@ -3029,19 +3029,36 @@ def set_profile_swap(home, run_id, body):
 MALFORMED_RAW_CLIP = 20000
 
 
-def run_story(home, run_id, item):
+def _load_pipeline_state(home, run_id=None, state_path=None):
+    """Load one reviewed-work state for the shared pipeline viewers.
+
+    Run routes resolve through the registry.  Task routes first authorize a
+    canonical reviewed-task record, then pass its private state path here.
+    Keeping the state reader shared means the two panel surfaces cannot drift
+    into different interpretations of a draft, review, seal, artifact, or
+    commit.
+    """
+    entry = None
+    if state_path is None:
+        reg = registry.load(home)
+        entry = registry.get(reg, run_id)
+        if entry is None:
+            raise ApiError(404, "unknown run %r" % run_id)
+        state_path = entry["state_path"]
+    try:
+        return st.load(state_path), entry
+    except Exception as exc:
+        raise ApiError(409, "state unreadable: %s" % exc)
+
+
+def run_story(home, run_id, item, state_path=None):
     """The full record behind one pipeline chip — fetched on click, so
     the 2s-poll summary stays lean. item forms: round:<round_id>,
     seal:<unit>:<attempt>, draft:<unit>, repair:<unit>:<event seq>,
     verify:<event seq>, debt:<unit>, malformed:<event seq>."""
-    reg = registry.load(home)
-    entry = registry.get(reg, run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    try:
-        state = st.load(entry["state_path"])
-    except Exception as exc:
-        raise ApiError(409, "state unreadable: %s" % exc)
+    state, _entry = _load_pipeline_state(
+        home, run_id=run_id, state_path=state_path
+    )
     kind, _, ref = (item or "").partition(":")
     if kind == "repair":
         unit_key, _, seq = ref.rpartition(":")
@@ -3365,19 +3382,14 @@ def commit_web_base(workspace):
     return base
 
 
-def run_artifact(home, run_id, unit_key):
+def run_artifact(home, run_id, unit_key, state_path=None):
     """The markdown artifact recorded on one unit (skeleton doc, slice
     doc), fetched on demand for the panel's doc viewer. The client names
     a UNIT, never a filesystem path: only paths the run's own state
     recorded are ever read."""
-    reg = registry.load(home)
-    entry = registry.get(reg, run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    try:
-        state = st.load(entry["state_path"])
-    except Exception as exc:
-        raise ApiError(409, "state unreadable: %s" % exc)
+    state, entry = _load_pipeline_state(
+        home, run_id=run_id, state_path=state_path
+    )
     unit = next(
         (u for u in state["units"] if st.unit_key(u) == unit_key), None
     )
@@ -3386,9 +3398,8 @@ def run_artifact(home, run_id, unit_key):
     rel = unit.get("artifact")
     if not rel:
         raise ApiError(404, "unit %r has no artifact" % unit_key)
-    path = rel if os.path.isabs(rel) else os.path.join(
-        state.get("workspace") or entry["workspace"], rel
-    )
+    workspace = state.get("workspace") or (entry or {}).get("workspace")
+    path = rel if os.path.isabs(rel) else os.path.join(workspace, rel)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             content = fh.read(ARTIFACT_MAX + 1)
@@ -3406,7 +3417,7 @@ def run_artifact(home, run_id, unit_key):
 COMMIT_MAX = 512 * 1024  # bytes of `git show` served per fetch
 
 
-def run_commit(home, run_id, unit_key):
+def run_commit(home, run_id, unit_key, state_path=None):
     """The unit's commit as `git show` text (message + stat + patch), for
     the panel's local commit viewer. Like run_artifact, the client names a
     UNIT; the sha comes from the run's own state, and the diff is read
@@ -3414,14 +3425,9 @@ def run_commit(home, run_id, unit_key):
     pushed to a web remote. A sealed unit serves its gate commit; a unit
     still in flight serves its current working commit (the wip commit the
     fix loop amends), so the operator can inspect work as it lands."""
-    reg = registry.load(home)
-    entry = registry.get(reg, run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    try:
-        state = st.load(entry["state_path"])
-    except Exception as exc:
-        raise ApiError(409, "state unreadable: %s" % exc)
+    state, entry = _load_pipeline_state(
+        home, run_id=run_id, state_path=state_path
+    )
     unit = next(
         (u for u in state["units"] if st.unit_key(u) == unit_key), None
     )
@@ -3436,7 +3442,7 @@ def run_commit(home, run_id, unit_key):
                 sha = e.get("sha")  # amends replace it; keep the latest
     if not sha:
         raise ApiError(404, "unit %r has no commit yet" % unit_key)
-    workspace = state.get("workspace") or entry["workspace"]
+    workspace = state.get("workspace") or (entry or {}).get("workspace")
     try:
         proc = subprocess.run(
             ["git", "-C", workspace, "show", "--stat", "--patch",
@@ -4836,6 +4842,151 @@ def read_task(home, who, task_id, run_id=None):
     raise ApiError(404, "not found")
 
 
+def _task_host_active(host, task_id):
+    active = getattr(host, "is_active", None)
+    if not callable(active):
+        return False
+    try:
+        return bool(active(task_id))
+    except Exception:
+        return False
+
+
+def direct_deep_task_view(home, who, parent, host=None):
+    """Best-effort reviewed-child activity for one direct deep task.
+
+    The task records and their parent relations stay authoritative.  This
+    disposable view merely feeds those same reviewed units to the renderer
+    already used for milestone slices; a missing/corrupt child lifecycle
+    never makes the canonical parent unreadable.
+    """
+    parent_id = parent["id"]
+    parent_project = _task_project(parent)
+    allowed_projects = _allowed_task_projects(home, who)
+    children = []
+    billing = {}
+    workspace = None
+    try:
+        workspace = task_api._workspace(parent)
+    except Exception:
+        pass
+    for document in task_api.StandaloneTaskStore(home).documents():
+        child = document["record"]
+        relation = child.get("parent") or {}
+        if relation.get("task_id") != parent_id:
+            continue
+        child_project = _task_project(child)
+        if child_project != parent_project or (
+            allowed_projects is not None
+            and child_project not in allowed_projects
+        ):
+            continue
+        phase = relation.get("phase")
+        if phase not in ("documentation", "implementation"):
+            continue
+        result = child.get("result")
+        view = {
+            "id": child["id"],
+            "admitted_at": document["admitted_at"],
+            "phase": phase,
+            "part": relation.get("part"),
+            "status": "open" if result is None else result.get("status"),
+            "activity": None,
+        }
+        state_path = task_api.reviewed_state_path(home, child["id"])
+        try:
+            lifecycle = st.load(state_path)
+            target_unit = (lifecycle.get("reviewed_task") or {}).get("unit")
+            if not isinstance(target_unit, str) or not target_unit:
+                raise ValueError("reviewed task target unit is unavailable")
+            summary = load_summary(state_path, model_profiles_home=home)
+            unit = next(
+                item for item in summary.get("units") or []
+                if item.get("unit") == target_unit
+            )
+            unit = copy.deepcopy(unit)
+            if result is not None:
+                unit["status"] = (
+                    "sealed" if result.get("status") == "success"
+                    else "failure"
+                )
+            unit["part"] = relation.get("part")
+            unit["source_task_id"] = child["id"]
+            active = _task_host_active(host, child["id"])
+            in_flight = read_in_flight(
+                {"state_path": state_path}, active
+            )
+            if (
+                in_flight
+                and not in_flight.get("model")
+                and in_flight.get("family")
+            ):
+                defaults = summary.get("model_defaults") or {}
+                in_flight["model"] = (
+                    defaults.get(in_flight["family"]) or {}
+                ).get("model")
+            view["activity"] = {
+                "process": "running" if active else "stopped",
+                "current_unit": summary.get("current_unit"),
+                "current_unit_status": summary.get("current_unit_status"),
+                "current_family": summary.get("current_family"),
+                "current_model": summary.get("current_model"),
+                "in_flight": in_flight,
+                "unit": unit,
+            }
+            billing.update(summary.get("billing") or {})
+            workspace = workspace or summary.get("workspace")
+        except Exception:
+            # Presentation is explicitly best-effort.  Keep the canonical
+            # child in the sequence and let the panel show a pending row.
+            pass
+        children.append(view)
+    children.sort(key=lambda child: (
+        0 if child["phase"] == "documentation" else 1,
+        child["admitted_at"],
+        child["id"],
+    ))
+    return {
+        "status": (
+            "open" if parent.get("result") is None
+            else parent["result"].get("status")
+        ),
+        "children": children,
+        "billing": billing,
+        "commit_web_base": commit_web_base(workspace) if workspace else None,
+    }
+
+
+def _direct_reviewed_state(home, who, task_id):
+    record = read_task(home, who, task_id)
+    if tasks.stored_task_executor(
+        (record.get("order") or {}).get("task_executor")
+    ) != "reviewed_task":
+        raise ApiError(404, "task has no reviewed activity")
+    path = task_api.reviewed_state_path(home, task_id)
+    if not os.path.isfile(path):
+        raise ApiError(404, "task activity is unavailable")
+    return record, path
+
+
+def direct_task_story(home, who, task_id, item):
+    _record, path = _direct_reviewed_state(home, who, task_id)
+    return {
+        **run_story(home, None, item, state_path=path),
+        "task_id": task_id,
+    }
+
+
+def direct_task_artifact(home, who, task_id, unit_key):
+    _record, path = _direct_reviewed_state(home, who, task_id)
+    return run_artifact(home, None, unit_key, state_path=path)
+
+
+def direct_task_commit(home, who, task_id, unit_key):
+    _record, path = _direct_reviewed_state(home, who, task_id)
+    return run_commit(home, None, unit_key, state_path=path)
+
+
 # ---------------------------------------------------------------------------
 # HTTP layer
 
@@ -4935,12 +5086,41 @@ def make_handler(home, task_host=None):
                         )
                         payload = {"ok": True, "task": record}
                         if query.get("run_id") is None:
+                            if tasks.stored_task_executor(
+                                (record.get("order") or {}).get(
+                                    "task_executor"
+                                )
+                            ) == "deep_task":
+                                payload["deep_task"] = direct_deep_task_view(
+                                    home, who, record, task_host
+                                )
                             session_id = task_api.task_session_id(
                                 home, record, task_host
                             )
                             if session_id:
                                 payload["session_id"] = session_id
                         self._json(200, payload)
+                    elif len(parts) == 5 and parts[3] and parts[4] == "story":
+                        self._json(200, {
+                            "ok": True,
+                            **direct_task_story(
+                                home, who, parts[3], query.get("item", "")
+                            ),
+                        })
+                    elif len(parts) == 5 and parts[3] and parts[4] == "artifact":
+                        self._json(200, {
+                            "ok": True,
+                            **direct_task_artifact(
+                                home, who, parts[3], query.get("unit", "")
+                            ),
+                        })
+                    elif len(parts) == 5 and parts[3] and parts[4] == "commit":
+                        self._json(200, {
+                            "ok": True,
+                            **direct_task_commit(
+                                home, who, parts[3], query.get("unit", "")
+                            ),
+                        })
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 elif route == "/api/runs":

@@ -233,6 +233,31 @@ class DeepTaskDocumentationTest(unittest.TestCase):
         status, projected = self.request("GET", "/api/tasks/%s" % child["id"])
         self.assertEqual(status, 200, projected)
         self.assertEqual(projected["task"]["parent"], child["parent"])
+        status, parent_view = self.request(
+            "GET", "/api/tasks/%s" % parent["id"]
+        )
+        self.assertEqual(status, 200, parent_view)
+        self.assertEqual(
+            [(row["phase"], row["part"]) for row in
+             parent_view["deep_task"]["children"]],
+            [("documentation", None), ("implementation", "a")],
+        )
+        self.assertEqual(
+            parent_view["deep_task"]["children"][0]["activity"]
+            ["unit"]["unit"],
+            "slice_doc-01",
+        )
+        for endpoint, query in (
+            ("story", "item=draft%3Aslice_doc-01"),
+            ("artifact", "unit=slice_doc-01"),
+            ("commit", "unit=slice_doc-01"),
+        ):
+            status, evidence = self.request(
+                "GET", "/api/tasks/%s/%s?%s" % (
+                    child["id"], endpoint, query
+                )
+            )
+            self.assertEqual(status, 200, evidence)
         self.assertEqual(parent["result"]["status"], "success")
         self.assertEqual(parent["order"]["configuration"]["implementation"]
                          ["max_fix_loops"], 9)

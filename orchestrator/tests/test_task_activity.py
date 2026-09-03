@@ -221,6 +221,152 @@ class TaskActivityProjectionTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.status, 404)
 
+    def test_direct_deep_task_projects_ordered_reviewed_child_activity(self):
+        parent_order = self.order(executor="deep_task")
+        parent_order["configuration"] = tasks.resolve_deep_task_configuration(
+            {}, defaults={}
+        )
+        parent_order["staffing_session"] = None
+        store = task_api.StandaloneTaskStore(self.home)
+        parent = store.admit(parent_order, {}, self.workspace)
+        documentation = store.admit_related_locked(
+            parent["id"], "documentation", None,
+            tasks.deep_documentation_order(parent), {}, self.workspace,
+        )
+        implementation_order = tasks.deep_implementation_order(
+            parent, os.path.join(self.workspace, "slice.md")
+        )
+        implementation_a = store.admit_related_locked(
+            parent["id"], "implementation", "a",
+            implementation_order, {}, self.workspace,
+        )
+        implementation_b = store.admit_related_locked(
+            parent["id"], "implementation", "b",
+            implementation_order, {}, self.workspace,
+        )
+        implementation_z = store.admit_related_locked(
+            parent["id"], "implementation", "z",
+            implementation_order, {}, self.workspace,
+        )
+        implementation_aa = store.admit_related_locked(
+            parent["id"], "implementation", "aa",
+            implementation_order, {}, self.workspace,
+        )
+        foreign_order = copy.deepcopy(implementation_order)
+        foreign_order["request"]["work_area"] = {
+            "project": "foreign", "work_area": "main",
+        }
+        store.admit_related_locked(
+            parent["id"], "implementation", "foreign",
+            foreign_order, {}, self.workspace,
+        )
+        config = {
+            "families_order": ["codex", "claude"],
+            "model_defaults": {},
+            "billing": {"codex": "subscription"},
+        }
+        for child in (documentation, implementation_a, implementation_b):
+            task_api.ensure_reviewed_state(self.home, child, config)
+        store.record_result(documentation["id"], self.terminal("failure"))
+        for child, note in (
+            (implementation_a, "part a evidence"),
+            (implementation_b, "part b evidence"),
+        ):
+            path = task_api.reviewed_state_path(self.home, child["id"])
+            lifecycle = st.load(path)
+            target = next(
+                unit for unit in lifecycle["units"]
+                if st.unit_key(unit) == lifecycle["reviewed_task"]["unit"]
+            )
+            st.record_draft(
+                lifecycle, target, contracts.KIND_IMPLEMENT,
+                {
+                    "status": "ok",
+                    "kind": contracts.KIND_IMPLEMENT,
+                    "files_changed": [],
+                    "suite_command": "true",
+                    "notes": note,
+                },
+                family="codex",
+            )
+            st.save(path, lifecycle)
+        corrupt_path = task_api.reviewed_state_path(
+            self.home, implementation_z["id"]
+        )
+        os.makedirs(os.path.dirname(corrupt_path), exist_ok=True)
+        with open(corrupt_path, "w", encoding="utf-8") as handle:
+            handle.write("{not-json")
+
+        class Host:
+            @staticmethod
+            def is_active(task_id):
+                return task_id == implementation_a["id"]
+
+        before = copy.deepcopy(store.records())
+        real_load_summary = service.load_summary
+
+        def summary_with_decoy(path, model_profiles_home=None):
+            summary = copy.deepcopy(real_load_summary(
+                path, model_profiles_home=model_profiles_home
+            ))
+            if documentation["id"] in path:
+                target = next(
+                    unit for unit in summary["units"]
+                    if unit["unit"] == "slice_doc-01"
+                )
+                decoy = copy.deepcopy(target)
+                decoy["unit"] = "slice_doc-99"
+                summary["units"].insert(0, decoy)
+            return summary
+
+        with mock.patch.object(
+            service, "load_summary", side_effect=summary_with_decoy
+        ):
+            view = service.direct_deep_task_view(
+                self.home, {"admin": True}, parent, Host()
+            )
+        self.assertEqual(store.records(), before)
+        self.assertEqual(
+            [(child["phase"], child["part"]) for child in view["children"]],
+            [("documentation", None), ("implementation", "a"),
+             ("implementation", "b"), ("implementation", "z"),
+             ("implementation", "aa")],
+        )
+        by_id = {child["id"]: child for child in view["children"]}
+        doc_activity = by_id[documentation["id"]]["activity"]
+        self.assertEqual(doc_activity["unit"]["unit"], "slice_doc-01")
+        self.assertEqual(doc_activity["unit"]["status"], "failure")
+        self.assertEqual(by_id[documentation["id"]]["status"], "failure")
+        self.assertEqual(
+            doc_activity["unit"]["source_task_id"], documentation["id"]
+        )
+        self.assertEqual(
+            by_id[implementation_a["id"]]["activity"]["process"],
+            "running",
+        )
+        self.assertEqual(
+            by_id[implementation_b["id"]]["activity"]["unit"]["part"], "b"
+        )
+        self.assertIsNone(by_id[implementation_z["id"]]["activity"])
+        self.assertIsNone(by_id[implementation_aa["id"]]["activity"])
+        for child, note in (
+            (implementation_a, "part a evidence"),
+            (implementation_b, "part b evidence"),
+        ):
+            story = service.direct_task_story(
+                self.home, {"admin": True}, child["id"],
+                "draft:slice_impl-01",
+            )
+            self.assertEqual(story["task_id"], child["id"])
+            self.assertEqual(story["result"]["notes"], note)
+        with self.assertRaises(service.ApiError) as raised:
+            service.direct_task_story(
+                self.home, {"admin": True}, parent["id"], "draft:skeleton"
+            )
+        self.assertEqual(raised.exception.status, 404)
+        for forbidden in ("goal", "events", "order", "result", "native_result"):
+            self.assertNotIn(forbidden, doc_activity)
+
     def test_internal_call_activity_has_evidence_without_task_chips(self):
         state = self.state()
         unit = state["units"][0]

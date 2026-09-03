@@ -360,7 +360,9 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('addLine("Verify", label, group.chips)', text)
         self.assertNotIn('addLine("Reclassify", "Decision", group.chips)', text)
         self.assertIn(
-            "current.chips.push(...reclassifyHistoryChips(linked, u.unit))",
+            "current.chips.push(...reclassifyHistoryChips(\n"
+            "          linked, u.unit, taskId\n"
+            "        ))",
             text,
         )
         self.assertIn('d.story === "verify"', text)
@@ -401,7 +403,7 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('class="run-name-row"', text)
         self.assertIn('class="run-info-row"', text)
         self.assertIn("activeRunClockInput(running, s.in_flight)", text)
-        self.assertIn("const sliceDuration = present.length", text)
+        self.assertIn("const duration = present.length", text)
         self.assertIn("u.work_duration_s != null", text)
         self.assertNotIn("sum.last_event_epoch - sum.created_epoch", text)
 

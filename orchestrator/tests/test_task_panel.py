@@ -293,7 +293,12 @@ class TaskPanelTests(unittest.TestCase):
         page = self.panel.split("async function refreshTaskPage() {", 1)[1]
         page = page.split("\n}\n", 1)[0]
         self.assertIn("lastTaskPage.result !== null && !taskStopping) return", page)
-        self.assertIn("wasOpen", page)
+        self.assertIn("paintTaskPage()", page)
+        painter = re.search(
+            r"function paintTaskPage\(\) \{(.*?)\n\}", self.panel, re.S
+        ).group(1)
+        self.assertIn("wasOpen", painter)
+        self.assertIn("syncRequestMore(det)", painter)
 
     def test_milestone_verification_renders_as_task_backed_peer(self):
         row = re.search(
@@ -307,9 +312,9 @@ class TaskPanelTests(unittest.TestCase):
             "task.cost_partial",
         ):
             self.assertIn(field, row)
-        self.assertIn("catRow(`Verification ${ordinal}`", row)
+        self.assertIn("pipelineCategoryRow(", row)
         self.assertIn("unitHistory(u, s, running)", row)
-        self.assertIn("gitLink(u)", row)
+        self.assertIn("pipelineGitLink(u)", row)
         self.assertIn("openTaskDetail", row)
         self.assertNotIn("native_result", row)
 
@@ -323,7 +328,8 @@ class TaskPanelTests(unittest.TestCase):
         )
 
         detail = re.search(
-            r"function renderTaskPage\(record, admittedAt\) \{(.*?)\n\}",
+            r"function renderTaskPage\(record, admittedAt, deepTask = null\) "
+            r"\{(.*?)\n\}",
             self.panel,
             re.S,
         ).group(1)
@@ -335,7 +341,8 @@ class TaskPanelTests(unittest.TestCase):
 
     def test_task_detail_preserves_native_result_and_accounting(self):
         detail = re.search(
-            r"function renderTaskPage\(record, admittedAt\) \{(.*?)\n\}",
+            r"function renderTaskPage\(record, admittedAt, deepTask = null\) "
+            r"\{(.*?)\n\}",
             self.panel,
             re.S,
         ).group(1)
@@ -353,6 +360,68 @@ class TaskPanelTests(unittest.TestCase):
         )
         self.assertIn("opaque TaskExecutor output", detail)
         self.assertNotIn("actual staffing", detail.lower())
+
+    def test_task_request_and_deep_task_reuse_existing_presenters(self):
+        self.assertIn("-webkit-line-clamp: 2", self.panel)
+        self.assertIn("clamp.scrollHeight > clamp.clientHeight + 1", self.panel)
+        self.assertIn('onclick="openRequest()"', self.panel)
+        self.assertIn("mdRender(fullRequestText)", self.panel)
+        detail = re.search(
+            r"function renderTaskPage\(record, admittedAt, deepTask = null\) "
+            r"\{(.*?)\n\}",
+            self.panel,
+            re.S,
+        ).group(1)
+        self.assertIn('fullRequestText = String(request.request || "")', detail)
+        self.assertIn("requestTitle(fullRequestText)", detail)
+        self.assertNotIn('<div class="card"><h3>Request</h3>', detail)
+        self.assertIn('executor === "deep_task"', detail)
+        self.assertIn("deepTaskPipeline(deepTask)", detail)
+
+        shared = re.search(
+            r"function renderSlicePipeline\(slice, units, activity, running, "
+            r"options = \{\}\) \{(.*?)\n\}",
+            self.panel,
+            re.S,
+        ).group(1)
+        self.assertIn("pipelineCategoryRow", shared)
+        self.assertIn("pipelineUnitRow", shared)
+        self.assertIn("pipelineGhostRow", shared)
+        self.assertEqual(self.panel.count("renderSlicePipeline("), 3)
+
+        deep = re.search(
+            r"function deepTaskPipeline\(view\) \{(.*?)\n\}",
+            self.panel,
+            re.S,
+        ).group(1)
+        self.assertIn("view.children", deep)
+        self.assertIn("source_task_id", deep)
+        self.assertIn("unit.part = child.part", deep)
+        self.assertIn('label: "Deep task"', deep)
+        self.assertIn("renderSlicePipeline(", deep)
+        self.assertIn("lastTaskDeep", self.panel)
+        self.assertIn("data.deep_task || null", self.panel)
+
+        unit_row = re.search(
+            r"function pipelineUnitRow\(u, activity, running, scopeKey\) "
+            r"\{(.*?)\n\}",
+            self.panel,
+            re.S,
+        ).group(1)
+        self.assertIn("u.source_task_id", unit_row)
+        self.assertIn('`Implementation${u.part ? ` ${u.part}` : ""}`', unit_row)
+        self.assertIn("pipelineGitLink(u, taskId)", unit_row)
+        self.assertIn("unitHistory(u, activity || {}, running, taskId)", unit_row)
+        self.assertIn("task:${taskId}:unit:${u.unit}", unit_row)
+        self.assertGreaterEqual(self.panel.count("evidenceTaskArg(taskId)"), 8)
+
+        for viewer in ("showStory", "showDoc", "showCommit"):
+            body = re.search(
+                rf"async function {viewer}\(.*?\) \{{(.*?)\n\}}",
+                self.panel,
+                re.S,
+            ).group(1)
+            self.assertIn("/api/tasks/${encodeURIComponent(taskId)}", body)
 
     def test_failed_and_successor_tasks_are_not_collapsed(self):
         row = re.search(
