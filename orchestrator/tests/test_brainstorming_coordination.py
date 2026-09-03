@@ -518,6 +518,12 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         discussion_prompt, critic_prompt, proposal_prompt, vote_prompt = (
             prompts_under_test
         )
+        better_alternative = (
+            "Look for a materially better alternative to the same actual "
+            "problem. If evidence supports one, offer it in the chat"
+        )
+        self.assertNotIn(better_alternative, discussion_prompt)
+        self.assertIn(better_alternative, critic_prompt)
         self.assertIn("final agreement", proposal_prompt)
         self.assertIn(
             "Adopt the bounded result and leave no question open.",

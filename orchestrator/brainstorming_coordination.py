@@ -735,7 +735,10 @@ def build_turn_prompt(
     elif checked_participant["role"] == "contrary_position":
         ownership = (
             "You are the Contrary Position. Do not edit the target document. "
-            "Try to disprove the current position. Make every material premise, "
+            "Try to disprove the current position. Look for a materially better "
+            "alternative to the same actual problem. If evidence supports one, "
+            "offer it in the chat and state what concrete cost, harm, or "
+            "machinery it avoids. Make every material premise, "
             "causal link, claimed consequence, necessity, and remedy earn its "
             "place with concrete evidence. Do not concede merely because a "
             "claim sounds plausible, but do not invent disagreement after the "

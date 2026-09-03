@@ -360,6 +360,15 @@ class PromptRouterTest(unittest.TestCase):
                     expected_questions[role],
                 )
                 text = self.text(prompt)
+                better_alternative = (
+                    "Look for a materially better alternative to the same "
+                    "actual problem. If evidence supports one, offer it in "
+                    "the chat"
+                )
+                if role == "contrary_position":
+                    self.assertIn(better_alternative, text)
+                else:
+                    self.assertNotIn(better_alternative, text)
                 self.assertNotIn("TWO-REGISTER DOCUMENT", text)
                 self.assertNotIn("IMPLEMENTATION RULES", text)
                 if role != "common_sense":
