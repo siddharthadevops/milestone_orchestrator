@@ -21,7 +21,7 @@ demuestra por sí sola una regresión funcional.
 Sí aparece una mejora plausible y acotada: `review_round.human_scale` repite
 controles que ya impone la rúbrica montada y dedica su respuesta a explicar
 cómo se comprobó el conjunto, en vez de a **comparar la intención humana, los
-hallazgos y la sobreactuación literal que se descartó**. Probar esa sustitución
+hallazgos y el efecto de esa comparación sobre ellos**. Probar esa sustitución
 no requiere ids, rutas ni baterías nuevas, y este informe no modifica el set
 instalado.
 
@@ -79,7 +79,7 @@ especial en `discussion_turn`, `draft_skeleton`, `draft_slice_note`,
 
 | Superficie | Limitación posible | Sustitución que probar |
 | --- | --- | --- |
-| `review_round.human_scale` | Su cuerpo repite obligaciones de `judgment_rubric`, montada en la misma ruta: estándar, pasaje, consecuencia material, alternativa proporcionada y alcance. Lo distintivo que podría aportar la autoauditoría es la perspectiva de quien encargó la revisión. | «Pon los hallazgos junto al encargo y al manuscrito: ¿reconocería quien pidió la revisión el grano y las prioridades buscadas, o una aplicación literal de una lente convirtió variaciones inocuas en trabajo? Responde con un pasaje localizado, la consecuencia material y cualquier exceso retirado.» |
+| `review_round.human_scale` | Su cuerpo repite obligaciones de `judgment_rubric`, montada en la misma ruta: estándar, pasaje, consecuencia material, alternativa proporcionada y alcance. Lo distintivo que podría aportar la autoauditoría es la perspectiva de quien encargó la revisión. | «Pon los hallazgos junto al encargo y al manuscrito: ¿reconocería quien pidió la revisión el grano y las prioridades buscadas, o una aplicación literal de una lente convirtió variaciones inocuas en trabajo? Responde describiendo brevemente el grano y las prioridades que pidió, y si esa comparación te hizo mantener, reformular o retirar algún hallazgo.» |
 
 Esta es la única sustitución concreta recomendada. El ejemplo de los saltos
 temporales de `default` también puede reutilizarse si la formulación abstracta
