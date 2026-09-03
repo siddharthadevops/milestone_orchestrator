@@ -26,6 +26,9 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn("Object.entries(schema)", self.task_ui)
         self.assertIn('definition.type === "integer"', self.task_ui)
         self.assertIn('min="${esc(definition.minimum)}"', self.task_ui)
+        self.assertIn('onTaskConfigurationChange(this)', self.task_ui)
+        self.assertIn('Number(control.value) < Number(control.min)',
+                      self.task_ui)
         self.assertIn("definition.default", self.task_ui)
         self.assertIn('definition.type === "choice"', self.task_ui)
         self.assertIn("definition.choices || []", self.task_ui)
@@ -70,7 +73,6 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn("reference_documents: taskReferences.slice()", self.task_ui)
         self.assertIn("function moveTaskReference", self.task_ui)
         self.assertIn('path = "/api/tasks"', self.task_ui)
-        self.assertIn("`Task accepted · ${data.task.id}`", self.task_ui)
         self.assertEqual(self.task_ui.count("await postJSON(path, payload)"), 1)
 
     def test_slice_plan_values_are_visible_and_read_only(self):
@@ -105,7 +107,7 @@ class TaskPanelTests(unittest.TestCase):
         self.assertNotIn("setTimeout", self.task_ui)
         self.assertNotIn("setInterval", self.task_ui)
 
-    def test_direct_acknowledgement_cannot_be_dismissed_while_pending(self):
+    def test_direct_order_cannot_close_while_pending_and_closes_on_success(self):
         task_dialog = re.search(
             r'<dialog id="taskform"(.*?)</dialog>', self.panel, re.S
         ).group(1)
@@ -130,15 +132,16 @@ class TaskPanelTests(unittest.TestCase):
         self.assertLess(
             self.task_ui.index("await postJSON(path, payload)"),
             self.task_ui.index(
-                'setTaskMessage("task_accepted", `Task accepted'
+                'document.getElementById("taskform").close()'
             ),
         )
         self.assertLess(
             self.task_ui.index(
-                'setTaskMessage("task_accepted", `Task accepted'
+                'document.getElementById("taskform").close()'
             ),
             self.task_ui.rindex("taskSubmitPending = false"),
         )
+        self.assertNotIn("task_accepted", self.panel)
 
     def test_task_history_and_chips_use_only_canonical_records(self):
         self.assertIn('onclick="newTask(event,', self.panel)

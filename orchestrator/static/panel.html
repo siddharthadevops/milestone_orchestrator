@@ -378,7 +378,6 @@
   .executor-config-group > .executor-config { margin-top: 7px; }
   .executor-config-note { grid-column: 1 / -1; color: var(--dim);
     font-size: 11px; }
-  .task-accepted { color: var(--ok); font-size: 12px; margin-bottom: 10px; }
   .plan-values { display: inline-flex; flex-wrap: wrap; gap: 5px;
     margin-left: 10px; vertical-align: middle; }
   .plan-value { border: 1px solid var(--line); border-radius: 9px;
@@ -830,7 +829,6 @@
     </div>
     <div class="hint" id="t_prompt_set_hint">Names only; prompt contents are checked per call.</div></div>
   <div id="task_catalogue_error" class="failure" style="display:none"></div>
-  <div id="task_accepted" class="task-accepted" style="display:none"></div>
   <div class="formrow">
     <span id="task_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
     <button class="btn" id="task_close"
@@ -5601,7 +5599,6 @@ function resetTaskDialog() {
   taskExecutorSelected = "";
   document.getElementById("task_error").textContent = "";
   document.getElementById("task_error").style.display = "";
-  setTaskMessage("task_accepted", "");
   setTaskMessage("task_catalogue_error", "");
   document.getElementById("task_direct_fields").style.display = "";
   document.getElementById("task_staffing").style.display = "";
@@ -5786,7 +5783,12 @@ function onTaskExecutorChange() {
   taskExecutorSelected = document.getElementById("t_executor").value;
   renderTaskExecutorEditor();
 }
-function onTaskConfigurationChange() {
+function onTaskConfigurationChange(control) {
+  if (control && (control.dataset.taskConfigType === "integer"
+      || control.dataset.taskConfigType === "number")
+      && control.min !== "" && control.value !== ""
+      && Number(control.value) < Number(control.min))
+    control.value = control.min;
   snapshotTaskExecutorConfiguration(taskExecutorSelected);
   renderTaskExecutorEditor();
 }
@@ -5815,7 +5817,7 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
     const value = taskConfigurationValue(draft, path, definition);
     const optional = definition.optional
       ? 'data-task-config-optional="true"' : "";
-    const change = 'onchange="onTaskConfigurationChange()"';
+    const change = 'onchange="onTaskConfigurationChange(this)"';
     if (definition.type === "integer" || definition.type === "number") {
       const minimum = definition.minimum === undefined
         ? "" : `min="${esc(definition.minimum)}"`;
@@ -5978,7 +5980,6 @@ async function submitTaskForm() {
   const error = document.getElementById("task_error");
   error.textContent = "";
   error.style.display = "";
-  setTaskMessage("task_accepted", "");
   let resolved;
   try { resolved = currentTaskConfiguration(); }
   catch (e) { error.textContent = e.message; return; }
@@ -6012,10 +6013,9 @@ async function submitTaskForm() {
     // is never sent, including when its staffing session cannot be read.
     payload.staffing_session = await standaloneStaffingSession(
       "task", binding, families);
-    const data = await postJSON(path, payload);
-    if (dialogSeq === taskDialogSeq) {
-      setTaskMessage("task_accepted", `Task accepted · ${data.task.id}`);
-    }
+    await postJSON(path, payload);
+    if (dialogSeq === taskDialogSeq)
+      document.getElementById("taskform").close();
   } catch (e) {
     if (dialogSeq === taskDialogSeq) error.textContent = e.message;
   } finally {
