@@ -17,7 +17,7 @@ Covers here:
       registry entry -> a valid `contests` re-raise reaches
       the fixer with the contests visible in the prompt;
   (k) acts resolution: "opposite" / literal / "self" fixer and delta
-      families, plus the ban on worker-dispatched model calls.
+      families, with retired worker-dispatch prose absent.
 
 All git activity happens inside tempfile.TemporaryDirectory workspaces —
 NEVER against the canon repository.
@@ -583,7 +583,7 @@ class TestActsResolution(DriverTestCase):
             fix_prompts = [c[2] for c in mock.calls
                            if c[1] == "fix_findings"]
             for prompt in fix_prompts:
-                self.assertIn(
+                self.assertNotIn(
                     "Never invoke, spawn, or consult another LLM", prompt
                 )
                 self.assertNotIn("CONSULTATION PROTOCOL", prompt)
@@ -614,11 +614,11 @@ class TestActsResolution(DriverTestCase):
             )
             fix_prompt = [c[2] for c in mock.calls
                           if c[1] == "fix_findings"][0]
-            self.assertIn("Never invoke, spawn, or consult another LLM",
-                          fix_prompt)
+            self.assertNotIn("Never invoke, spawn, or consult another LLM",
+                             fix_prompt)
             self.assertNotIn("CONSULTATION PROTOCOL", fix_prompt)
 
-    def test_fix_prompt_forbids_worker_dispatched_model_calls(self):
+    def test_fix_prompt_omits_retired_worker_dispatch_rule(self):
         acts = {"fixer": "claude", "skeletoner": "claude",
                 "delta_review": "self"}
         config = make_config(
@@ -649,10 +649,10 @@ class TestActsResolution(DriverTestCase):
             fix_prompt = [c[2] for c in mock.calls
                           if c[1] == "fix_findings"][0]
             normalized_prompt = " ".join(fix_prompt.split())
-            self.assertIn("Never invoke, spawn, or consult another LLM",
-                          fix_prompt)
-            self.assertIn("deterministic driver dispatches model calls",
-                          normalized_prompt)
+            self.assertNotIn("Never invoke, spawn, or consult another LLM",
+                             fix_prompt)
+            self.assertNotIn("deterministic driver dispatches model calls",
+                             normalized_prompt)
             self.assertNotIn("CONSULTATION PROTOCOL", fix_prompt)
             self.assertNotIn("current_model_call.py", fix_prompt)
             self.assertNotIn("Command (prompt on stdin)", fix_prompt)

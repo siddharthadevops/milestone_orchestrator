@@ -1565,8 +1565,8 @@ class TestFixerProtocolFailures(DriverTestCase):
             self.assertEqual(st.registry_ids(state), {"skeleton-codex-r1/F1"})
             fix_prompt = next(c[2] for c in mock.calls
                               if c[1] == "fix_findings")
-            self.assertIn("Never invoke, spawn, or consult another LLM",
-                          fix_prompt)
+            self.assertNotIn("Never invoke, spawn, or consult another LLM",
+                             fix_prompt)
 
     def test_rejected_adjudicated_with_unknown_ref_fails_run(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

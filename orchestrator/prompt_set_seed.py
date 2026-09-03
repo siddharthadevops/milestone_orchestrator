@@ -436,14 +436,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                  'directory: they do '
                                                                  'not govern this',
                                                                  '  run and are not '
-                                                                 'yours to edit.',
-                                                                 '- Never invoke, '
-                                                                 'spawn, or consult '
-                                                                 'another LLM or '
-                                                                 'agent. Only the',
-                                                                 '  deterministic '
-                                                                 'driver dispatches '
-                                                                 'model calls.'],
+                                                                 'yours to edit.'],
                                                         'variables': []},
                                   'bs_sources': {'text': ['SOURCES',
                                                           '- Brainstorming chat: '
@@ -3420,15 +3413,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'new evidence',
                                                                       '  directly if '
                                                                       'rejecting.',
-                                                                      '- Never invoke, '
-                                                                      'spawn, or '
-                                                                      'consult another '
-                                                                      'LLM or agent; '
-                                                                      'only the',
-                                                                      '  deterministic '
-                                                                      'driver '
-                                                                      'dispatches '
-                                                                      'model calls.',
                                                                       '- confirmed and '
                                                                       'impossible -> '
                                                                       'per-finding '
@@ -3719,19 +3703,11 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'duplicate '
                                                                             'them in '
                                                                             'the '
-                                                                            'reply. A '
-                                                                            'fixer '
-                                                                            'never '
-                                                                            'invokes, '
-                                                                            'spawns,',
-                                                                            'or '
-                                                                            'consults '
-                                                                            'another '
-                                                                            'LLM or '
-                                                                            'agent; '
-                                                                            'rejection '
-                                                                            'is its '
-                                                                            'own '
+                                                                            'reply. '
+                                                                            'Rejection '
+                                                                            'is the '
+                                                                            "fixer's "
+                                                                            'own',
                                                                             'evidence-backed '
                                                                             'judgment.',
                                                                             'When the '

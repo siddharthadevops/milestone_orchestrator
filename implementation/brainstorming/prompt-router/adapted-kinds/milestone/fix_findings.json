@@ -78,8 +78,6 @@
           "- settled duplicate without new evidence -> `rejected_adjudicated`",
           "  with adjudication_ref. CONTESTS means reassess the new evidence",
           "  directly if rejecting.",
-          "- Never invoke, spawn, or consult another LLM or agent; only the",
-          "  deterministic driver dispatches model calls.",
           "- confirmed and impossible -> per-finding `blocked`."
         ],
         "variables": []
@@ -196,8 +194,8 @@
           "both rejection dispositions require exceeds_baseline=false. Include any extra",
           "field explicitly required by an active project-safeguard or",
           "active project block above. Plan edits live only in the canonical skeleton",
-          "block; never duplicate them in the reply. A fixer never invokes, spawns,",
-          "or consults another LLM or agent; rejection is its own evidence-backed judgment.",
+          "block; never duplicate them in the reply. Rejection is the fixer's own",
+          "evidence-backed judgment.",
           "When the prompt supplies a FULL-SUITE REPAIR block, `status: \"ok\"` also",
           "certifies that its complete command list passed on the final workspace bytes."
         ],

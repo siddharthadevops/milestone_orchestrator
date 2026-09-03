@@ -367,12 +367,6 @@ def _questioner_readiness(obj, bound, options, ctx):
     _require(obj, "ready", bool, ctx)
 
 
-def _binding_agreement(obj, bound, options, ctx):
-    """Bind the versioned agreement prose only to session-turn kinds."""
-    del obj, options, ctx
-    _kind(bound, ("discussion_turn", "questioner_turn"))
-
-
 def _commands(value, ctx):
     return _paths(value, ctx)
 
@@ -534,7 +528,6 @@ def _merge_repair(obj, bound, options, ctx):
 
 
 REGISTERED_SECTIONS = {
-    "binding_agreement": _binding_agreement,
     "common_fields": _common,
     "draft_skeleton_result": _author_result("draft_skeleton", "artifact"),
     "draft_slice_note_result": _author_result("draft_slice_note", "artifact"),

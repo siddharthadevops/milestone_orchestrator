@@ -42,27 +42,10 @@ PreparedSessionCall = collections.namedtuple(
 )
 
 QUESTIONER_READINESS_SECTION_ID = "questioner_readiness"
-BINDING_AGREEMENT_SECTION_ID = "binding_agreement"
-
-
-def binding_agreement_section():
-    """Override older stored prompts with the persisted v2 voting rule."""
-    return {
-        "id": BINDING_AGREEMENT_SECTION_ID,
-        "text": [
-            "BINDING AGREEMENT PROTOCOL VERSION 2",
-            "- Every roster seat gates repository agreement, including Dante.",
-            "- Every ready must anchor to the same current Git revision; a",
-            "  later commit voids earlier readiness.",
-            "- This rule supersedes any earlier statement that the questioner",
-            "  never readies or that only discussion positions gate closure.",
-        ],
-        "variables": [],
-    }
 
 
 def questioner_readiness_instruction():
-    """The versioned session rule that makes Dante's judgment binding."""
+    """The session rule that makes Dante's judgment binding."""
     return {
         "text": [
             "BINDING COMMON-SENSE JUDGMENT",
@@ -81,10 +64,8 @@ def questioner_readiness_section():
     return {
         "id": QUESTIONER_READINESS_SECTION_ID,
         "text": [
-            "SESSION CONTROL OVERRIDE",
-            "The binding session protocol requires a top-level boolean ready.",
-            "For ready only, this rule supersedes any earlier instruction to",
-            "add no other fields.",
+            "SESSION CONTROL",
+            "In addition to the fields above, return a top-level boolean ready.",
         ],
         "variables": [],
     }
@@ -453,7 +434,7 @@ def prepare(
         )
     if require_questioner_readiness and not binding_agreement:
         raise prompt_router.PromptRouterError(
-            "binding questioner readiness requires agreement protocol v2"
+            "binding questioner readiness requires binding agreement"
         )
     if job != "rethink" and "rethink_problem" in values:
         raise prompt_router.PromptRouterError(
@@ -505,18 +486,9 @@ def prepare(
         (questioner_readiness_instruction(),)
         if require_questioner_readiness else ()
     )
-    consumer_sections = tuple(
-        item for item in (
-            (
-                binding_agreement_section()
-                if binding_agreement else None
-            ),
-            (
-                questioner_readiness_section()
-                if require_questioner_readiness else None
-            ),
-        )
-        if item is not None
+    consumer_sections = (
+        (questioner_readiness_section(),)
+        if require_questioner_readiness else ()
     )
 
     def validate_selected(prompt, _defaulted_variables):

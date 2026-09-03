@@ -527,7 +527,8 @@ class SessionCallCutoverTest(unittest.TestCase):
             binding_agreement=True,
             require_questioner_readiness=True,
         )
-        self.assertIn("SESSION CONTROL OVERRIDE", prepared.prompt)
+        self.assertIn("SESSION CONTROL", prepared.prompt)
+        self.assertNotIn("supersedes any earlier instruction", prepared.prompt)
         reply = {
             "kind": "questioner_turn",
             "markdown": "No further questions.",
@@ -537,7 +538,7 @@ class SessionCallCutoverTest(unittest.TestCase):
             prepared.validate(reply)
         prepared.validate(dict(reply, ready=True))
 
-    def test_binding_agreement_overrides_an_older_stored_discussion_prompt(self):
+    def test_binding_agreement_does_not_rewrite_a_stored_discussion_prompt(self):
         documents = copy.deepcopy(prompt_sets.default_seed().documents)
         discussion = documents["brainstorming/discussion_turn.json"]
         discussion["output_contract"]["sections"][0]["text"] = [
@@ -552,12 +553,8 @@ class SessionCallCutoverTest(unittest.TestCase):
             binding_agreement=True,
         )
         self.assertIn("the questioner never readies", prepared.prompt)
-        self.assertIn("BINDING AGREEMENT PROTOCOL VERSION 2", prepared.prompt)
-        self.assertIn("Every roster seat gates", prepared.prompt)
-        self.assertGreater(
-            prepared.prompt.index("BINDING AGREEMENT PROTOCOL VERSION 2"),
-            prepared.prompt.index("the questioner never readies"),
-        )
+        self.assertNotIn("BINDING AGREEMENT PROTOCOL", prepared.prompt)
+        self.assertNotIn("binding_agreement", prepared.bound.registered_section_ids)
 
     def test_session_project_extension_joins_the_bound_envelope(self):
         policy = {

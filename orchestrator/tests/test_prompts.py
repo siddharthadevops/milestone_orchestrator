@@ -14,8 +14,8 @@ every one of the 7 prompt builders inherits. These tests pin:
       phrases and contain NO instruction to record verdicts in repo
       logs — the only VERDICT mention is the bookkeeping BAN;
   (4) existing invariants: the adjudicated-rejections registry block is
-      injected in review/delta/fix only, and every worker is forbidden
-      from dispatching another model call.
+      injected in review/delta/fix only, while retired nested-call prose
+      remains absent.
 """
 
 import json
@@ -180,9 +180,24 @@ class TestNaturalRethinkExit(unittest.TestCase):
         self.assertNotIn("It is a proposal, not approval", continuation)
 
         self.assertIn("`need_rethink` or `gap` is inapplicable", continuation)
+        retired_nested_call = (
+            r"(?i)(invoke|spawn|consult).{0,80}\b(llm|agent)\b"
+        )
+        self.assertNotRegex(normalized(continuation), retired_nested_call)
 
         ordinary_fixer = self.fixer(gap_enabled=False)
         self.assertNotIn('"brainstorming_application"', ordinary_fixer)
+        attached = prompts.attach_brainstorming_application_order(
+            ordinary_fixer,
+            {
+                "session_id": "brainstorming-2",
+                "accepted_target_revision": 3,
+                "result": {"outcome": "success"},
+                "source_finding": {"id": "F1"},
+                "retained_target": {"content": "accepted resolution"},
+            },
+        )
+        self.assertNotRegex(normalized(attached), retired_nested_call)
 
     def test_accepted_amendment_paths_flow_through_ordinary_reviews(self):
         paths = ["docs/skeleton.md", "docs/slice-01.md"]
@@ -449,8 +464,8 @@ class TestReviewOverridesVendoredCanonBookkeeping(unittest.TestCase):
 
 class TestExistingPromptInvariants(unittest.TestCase):
     """(4) Pre-fix invariants that must survive: the registry block is
-    injected in review/delta/fix prompts only, while model dispatch remains
-    exclusively driver-owned."""
+    injected in review/delta/fix prompts only, while retired prompt machinery
+    remains absent."""
 
     # CONTRACT_TEXT (appended to every prompt) also says "ADJUDICATED
     # REJECTIONS" when describing the output rules, so presence/absence
@@ -461,7 +476,6 @@ class TestExistingPromptInvariants(unittest.TestCase):
     NONEMPTY_REGISTRY_MARKER = (
         "ADJUDICATED REJECTIONS (milestone-wide; settled unless NEW evidence)"
     )
-    NESTED_CALL_BAN = "Never invoke, spawn, or consult another LLM or agent"
     RETIRED_CONSULTATION_MARKER = "CONSULTATION PROTOCOL"
 
     def test_registry_block_in_review_delta_fix(self):
@@ -477,15 +491,16 @@ class TestExistingPromptInvariants(unittest.TestCase):
                 self.assertNotIn(self.EMPTY_REGISTRY_MARKER, built[name])
                 self.assertNotIn(self.NONEMPTY_REGISTRY_MARKER, built[name])
 
-    def test_every_worker_forbids_nested_model_calls(self):
+    def test_worker_prompts_do_not_carry_retired_nested_call_rules(self):
         built = build_all()
         for name, prompt in built.items():
             with self.subTest(builder=name):
-                self.assertIn(self.NESTED_CALL_BAN, prompt)
-                self.assertIn(
-                    "Only the deterministic driver dispatches model calls",
-                    normalized(prompt),
+                text = normalized(prompt)
+                self.assertNotRegex(
+                    text,
+                    r"(?i)(invoke|spawn|consult).{0,80}\b(llm|agent)\b",
                 )
+                self.assertNotIn("dispatches model calls", text.lower())
 
     def test_retired_consultation_protocol_is_absent_everywhere(self):
         for name, prompt in build_all().items():
@@ -1029,12 +1044,14 @@ class TestPortedCanonContentRules(unittest.TestCase):
                       "additional harm", prompt)
         self.assertIn("claim survives falsification, fix it", prompt)
 
-    def test_fixer_forbids_nested_model_calls(self):
+    def test_fixer_omits_retired_nested_model_call_rule(self):
         prompt = self.fix("slice_impl")
-        self.assertIn(
-            "Never invoke, spawn, or consult another LLM or agent", prompt
+        text = normalized(prompt)
+        self.assertNotRegex(
+            text,
+            r"(?i)(invoke|spawn|consult).{0,80}\b(llm|agent)\b",
         )
-        self.assertIn("only the driver dispatches model calls", prompt)
+        self.assertNotIn("dispatches model calls", text.lower())
         self.assertIn("invalid -> `rejected` directly", prompt)
         self.assertNotIn("Run at most five dialogue rounds", prompt)
         self.assertNotIn("Never reject P0/P1 without a clear resolution", prompt)

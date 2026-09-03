@@ -1186,8 +1186,8 @@ Kind fix_findings adds:
   (or `rejected_adjudicated` for a settled duplicate). `fixed`
   and `blocked` require `validity.exceeds_baseline: true`; `rejected` and
   `rejected_adjudicated` require false. "rejected"
-  is the fixer's direct evidence-backed decision; do not invoke, spawn, or
-  consult another LLM or agent. When the target was correct but misreadable,
+  is the fixer's direct evidence-backed decision. When the target was correct
+  but misreadable,
   ALSO make the minimal clarifying edit and record it in `prevention` so the
   finding cannot keep being reborn. "rejected_adjudicated" is for
   findings duplicating an entry of the ADJUDICATED REJECTIONS list without
@@ -1248,8 +1248,8 @@ observable damage, and violated guarantee, plus exceeds_baseline=true. If any
 cannot be demonstrated, the finding is invalid: use `rejected`
 (`rejected_adjudicated` remains the settled-duplicate path), and
 both rejection dispositions require exceeds_baseline=false. Include extra
-fields required by an active block. A fixer never invokes, spawns, or consults
-another LLM or agent; rejection is its own evidence-backed judgment.
+fields required by an active block. Rejection is the fixer's own
+evidence-backed judgment.
 When the prompt supplies a FULL-SUITE REPAIR block, `status: "ok"` also
 certifies that its complete command list passed on the final workspace bytes.
 

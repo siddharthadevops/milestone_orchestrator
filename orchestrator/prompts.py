@@ -161,8 +161,6 @@ def _access_block(edit_allowed):
         "- A completed review cycle does NOT grant permanent ownership of",
         "  files or code. Later in-goal work may change earlier code; the",
         "  historical unit's record is preserved and is not rerun.",
-        "- Never invoke, spawn, or consult another LLM or agent. Only the",
-        "  deterministic driver dispatches model calls.",
         '- Missing or stale process records are NEVER grounds for "blocked".',
         "  Block only when your own task is truly impossible, never for",
         "  process-state concerns. In fix calls the per-finding \"blocked\"",
@@ -580,8 +578,7 @@ FIX_VERDICT_ACCOUNT_BLOCK = (
     "If no exact violated guarantee exists, no concrete party suffers\n"
     "observable damage, or the harm does not exceed the baseline, the finding\n"
     "is invalid: use `rejected` directly, or `rejected_adjudicated` for a\n"
-    "settled duplicate. Never invoke, spawn, or consult another LLM or\n"
-    "agent; only the driver dispatches model calls.\n"
+    "settled duplicate.\n"
 )
 
 FIX_SELF_CHECK_BLOCK = (
@@ -1668,8 +1665,7 @@ def _brainstorming_application_order(fixer=False):
         "Use `fixed` when the finding is valid but the agreed outcome needs no\n"
         "workspace change. Use ordinary `rejected` when the agreement instead\n"
         "establishes that the finding was wrong or already satisfied. Decide\n"
-        "that disposition directly from the accepted result; do not invoke\n"
-        "another LLM or agent.\n"
+        "that disposition directly from the accepted result.\n"
         if fixer else ""
     )
     return (
@@ -1689,20 +1685,13 @@ def _brainstorming_application_order(fixer=False):
     )
 
 
-def _brainstorming_application_override(fixer=False):
-    nested_call_rule = (
-        " Do not invoke another LLM or agent; the driver alone dispatches "
-        "model calls."
-        if fixer else ""
-    )
+def _brainstorming_application_override():
     return (
         "\nPOST-BRAINSTORMING APPLICATION OVERRIDE\n"
         "For this call, any generic output-contract invitation to return\n"
         "`need_rethink` or `gap` is inapplicable. Finish the accepted result\n"
         "now; if it truly cannot be applied, return `blocked` rather than\n"
-        "starting or routing another design process."
-        + nested_call_rule
-        + "\n"
+        "starting or routing another design process.\n"
     )
 
 
@@ -1871,9 +1860,7 @@ def build_rethink_continuation(
             if battery and original_request is None else ""
         )
         + output_contract
-        + _brainstorming_application_override(
-            fixer=finding_application
-        )
+        + _brainstorming_application_override()
     )
 
 
@@ -1906,7 +1893,7 @@ def attach_brainstorming_application_order(prompt, handoff):
             indent=2,
         )
         + "\n\n"
-        + _brainstorming_application_override(fixer=True)
+        + _brainstorming_application_override()
     )
 
 
@@ -2611,8 +2598,6 @@ def build_fix_findings(
         "- settled duplicate without new evidence -> `rejected_adjudicated`\n"
         "  with adjudication_ref. CONTESTS means reassess the new evidence\n"
         "  directly if rejecting.\n"
-        "- Never invoke, spawn, or consult another LLM or agent; only the\n"
-        "  driver dispatches model calls.\n"
         "- confirmed and impossible -> per-finding `blocked`.\n\n"
     )
     quality_block = _fix_quality_block(unit_kind)

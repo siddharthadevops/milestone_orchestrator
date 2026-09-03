@@ -86,7 +86,6 @@ class PromptContractsTest(unittest.TestCase):
         self.assertNotIn(prompt_contracts.NEED_RETHINK_SECTION_ID, shipped)
         self.assertEqual(
             shipped | {
-                "binding_agreement",
                 prompt_contracts.NEED_RETHINK_SECTION_ID,
                 "questioner_readiness",
             },
@@ -108,13 +107,6 @@ class PromptContractsTest(unittest.TestCase):
                 "markdown": "Position.",
                 "ready": True,
             })
-
-        bound = prompt_contracts.bind(
-            prompt("implement", ()),
-            consumer_sections=(section("binding_agreement"),),
-        )
-        with self.assertRaisesRegex(contracts.ContractError, "prompt kind"):
-            prompt_contracts.validate(bound, {})
 
     def test_registered_contract_examples(self):
         rethink = {
