@@ -5,35 +5,36 @@ Estado: **brainstorming no canónico — análisis de posibilidades
 
 ## Dictamen
 
+El operador ya ha definido «rendir mejor»: las preguntas deben ampliar el
+contexto considerado, reducir el literalismo y aportar sentido común. Su
+consumidor es el propio agente durante el turno y la persona afectada es quien
+recibe una entrega demasiado literal. Que las respuestas estructuradas no se
+reutilicen después no vuelve ceremonial esa función.
+
 `literature` ya obliga a leer el texto, separar defecto de gusto, proteger voz
-y ambigüedad, limitar el alcance y aportar evidencia textual. No hay
-ejecuciones registradas que hayan seleccionado este set ni una entrega
-literaria fallida que permita atribuir daño a sus preguntas.
+y ambigüedad, limitar el alcance y aportar evidencia textual. Sus nueve
+preguntas `human_scale` conservan alguna barrera de proporcionalidad adaptada a
+la ruta: grano y tamaño, cambio mínimo, efecto directo, coste real o rechazo de
+una auditoría exhaustiva. Por eso la ausencia de las palabras de `default` no
+demuestra por sí sola una regresión funcional.
 
-El supuesto hueco principal tampoco está demostrado: `implement` ya ordena
-crear o revisar directamente el material pedido y compara la entrega con el
-brief y el efecto buscado; planificación parte del mandato; revisión exige
-estándar, pasaje y consecuencia material. Que ninguna pregunta diga
-literalmente «escoge» no prueba que el sistema permita incumplir un encargo de
-elección.
-
-Por tanto, la respuesta proporcionada al encargo es **no cambiar ahora el set**.
-Sí quedan dos tipos de fallo que observar: una entrega de autor que compare sin
-tomar la decisión pedida y un hallazgo de revisión que no sobreviva a una
-contralectura plausible. No se elige ahora su punto de montaje: el primer caso
-real debe identificar la ruta y la entrega afectadas; solo entonces se elige el
-mecanismo mínimo que permita probar la cláusula sin alterar otras superficies.
+Sí aparece una mejora plausible y acotada: las preguntas que aún tienen forma
+de lista de conformidad pueden obligar a **comparar la intención humana, el
+trabajo realizado y la sobreactuación literal que se descartó**. Los dos
+candidatos concretos son `review_round.human_scale` y
+`questioner_turn.turn_human_scale`; se probarían de uno en uno. No hacen falta
+ids, rutas ni baterías nuevas, y este informe no modifica el set instalado.
 
 ## Qué hacen —y qué no hacen— las preguntas de salida
 
-El contrato solo comprueba que cada id montado tenga una respuesta no vacía.
-En Brainstorming, el turno siguiente y el chat compartido reciben el Markdown,
-no esas respuestas estructuradas. Su consumidor posible es el propio modelo
-como autoconsulta; no son por sí mismas evidencia ni una garantía de calidad.
+La arquitectura las diseñó como trabajo cognitivo obligatorio: describir
+fuerza a comprobar y responder fuerza a decidir. La validación mecánica solo
+comprueba ids y respuestas no vacías porque no puede juzgar sentido común; ese
+límite de verificación no reduce la pregunta a transporte de datos.
 
-La mejora debe juzgarse en el manuscrito, documento o Markdown final. Optimizar
-la apariencia de las autoauditorías sin mejorar esa entrega sería añadir
-ceremonia.
+Por tanto hay dos resultados que observar: que la respuesta muestre una
+comparación real, y que esa ampliación mejore el manuscrito, documento o
+Markdown final. Una respuesta más larga o con las palabras esperadas no basta.
 
 ## Evidencia revisada
 
@@ -47,17 +48,48 @@ ceremonia.
 - El intro de `literature` ya pide evidencia textual o editorial. Las 222
   respuestas históricas citadas pertenecen a `default` y a trabajo sobre
   código: no miden esta redacción ni una entrega literaria.
+- En las 24 preguntas principales, `default` usa un ejemplo trabajado en 20 y
+  `literature` en ninguna; las nueve `human_scale` de `default` nombran el
+  literalismo y las nueve de `literature` no. Es una diferencia de redacción,
+  no una medida de rendimiento. La comparación útil es semántica: varias
+  sustituciones literarias ya expresan el mismo freno con «cambio mínimo»,
+  «grano y tamaño» o «auditoría exhaustiva».
+- `default` es el corpus semilla y el fallback revisado, pero un set nombrado
+  es un corpus completo e independiente: no existe herencia que convierta cada
+  frase de `default` en obligatoria. Sirve como comparador y fuente reutilizable,
+  no como canon léxico para `literature`. El acuerdo que creó el set permitía
+  conservar los ejemplos genéricos de proporcionalidad que ya funcionaran a
+  escala de manuscrito; reutilizar uno respeta esa autorización, no la amplía.
 - `review_round` y `delta_review` ya exigen distinguir defecto de gusto y
   demostrar daño por encima del baseline permitido. `fix_findings` ya contiene
   una pasada explícita de falsificación que puede reutilizarse si aparece el
   problema.
 - Las tres preguntas de Dante protegen cosas distintas: voz y forma, relevancia
-  decisoria con fundamento, y deriva respecto del encargo. Sustituirlas perdería
-  cobertura.
+  decisoria con fundamento, y deriva respecto del encargo. No se elimina ni se
+  fusiona ninguna; una reescritura conserva el id y la cobertura.
 - No apareció otro sistema de prompts literarios en los repositorios
   concedidos que deba conectarse o extenderse.
 
-## Hipótesis y criterio para localizar la ruta
+## Cambio de preguntas con mejor fundamento
+
+No se propone restaurar transversalmente tres expresiones por conteo. Se
+conserva el vocabulario literario donde ya provoca la comparación correcta, en
+especial en `discussion_turn`, `draft_skeleton`, `draft_slice_note`,
+`implement`, `delta_review`, `fix_findings` y `reclassify`.
+
+| Superficie | Limitación posible | Sustitución que probar |
+| --- | --- | --- |
+| `review_round.human_scale` | «¿Cumple cada hallazgo A, B y C?» puede resolverse como checklist sin reconstruir qué grano quería quien encargó la revisión. | «Pon los hallazgos junto al encargo y al manuscrito: ¿reconocería quien pidió la revisión el grano y las prioridades buscadas, o una aplicación literal de una lente convirtió variaciones inocuas en trabajo? Responde con un pasaje localizado, la consecuencia material y cualquier exceso retirado.» |
+| `questioner_turn.turn_human_scale` | Ya exige preguntas decisorias y fundadas, pero permite certificarlo sin adoptar la perspectiva de quien debe contestarlas. | «Pon tus preguntas junto a la decisión que la persona aún debe tomar: ¿cambiaría cada respuesta esa decisión, o estás inventariando ambigüedades solo porque existen? Nombra la decisión que cambia cada pregunta y retira las demás.» |
+
+La primera sustitución es la candidata principal porque la revisión puede
+fabricar trabajo hallazgo a hallazgo. La segunda queda condicionada a observar
+preguntas innecesarias: la redacción actual ya contiene una salvaguarda fuerte.
+El ejemplo de los saltos temporales de `default` también puede reutilizarse si
+la formulación abstracta no basta; copiarlo en las nueve rutas antes de probar
+una sola no aportaría nueve funciones distintas.
+
+## Otras hipótesis y criterio para localizar la ruta
 
 | Superficie | Cobertura actual | Señal que justificaría actuar | Cambio mínimo que probar |
 | --- | --- | --- | --- |
@@ -67,11 +99,13 @@ ceremonia.
 | `draft_skeleton`, `draft_slice_note`, `reclassify`, `fix_findings` | Sus preguntas homónimas gobiernan planificación, tamaño, rating o resolución de una cola. | Ninguna señal actual. | Ningún cambio: no extender a ellas una recomendación por compartir id. |
 | Dante | Tres controles complementarios sobre adecuación, preguntas decisorias y foco. | Ninguna señal actual. | Mantener `turn_environment_fit`, `turn_human_scale` y `request_focus`. |
 
-La tabla localiza solo las dos hipótesis del informe; no inventaría todas las
-rutas. Incluir `standalone@*` en la primera fila evita prejuzgar dónde estaría
-un fallo futuro, no convierte su batería de dos preguntas en una carencia. Sus
-preguntas de turno son compartidas y hoy no permiten aislarla; resolver esa
-topología antes de observar el caso sería especificar maquinaria sin víctima.
+La tabla localiza solo esas dos hipótesis; no inventaría todas las rutas.
+Incluir `standalone@*` en la primera fila evita prejuzgar dónde estaría un
+fallo futuro, no convierte su batería de dos preguntas en una carencia. Sus
+preguntas de turno son compartidas y no permiten aislarla; resolver esa
+topología sin un fallo localizado seguiría siendo maquinaria innecesaria. Esa
+restricción no aplica a mejorar la función transversal de `human_scale`, cuyo
+usuario y propósito el operador ya ha identificado.
 
 La contralectura no debe colgar de `environment_fit`: esa pregunta preserva
 audiencia, etapa, voz, ambigüedad y forma frente a la convencionalización. El
@@ -95,21 +129,19 @@ nuevos: sus objetivos ya están cubiertos o no tienen víctima demostrada.
 
 ## Validación proporcionada
 
-Las primeras ejecuciones reales de `literature` deben conservar el encargo, la
-ruta y la entrega final. Si aparece uno de los fallos anteriores, se compara el
-prompt actual con **una sola cláusula candidata**, manteniendo iguales modelo,
-texto y contexto. La persona que pidió el trabajo valora si la entrega resolvió
-el acto exacto, fundamentó sus afirmaciones y conservó el efecto o la voz que
-debía permanecer.
+En una primera revisión literaria real, se puede comparar la pregunta actual
+con **solo la sustitución de `review_round`**, manteniendo iguales modelo, texto
+y contexto. Se conservan tanto la autoauditoría como la entrega. La persona que
+pidió el trabajo valora si el agente reconstruyó mejor su intención, retiró
+trabajo nacido de una lectura literal y mantuvo los hallazgos materiales.
 
-No hace falta ahora un piloto ciego, un evaluador ni una métrica de respuestas
-estructuradas. Solo se conserva un cambio si mejora la entrega sin añadir
-verbosidad, hallazgos de gusto o trabajo ajeno al encargo.
+No hace falta un evaluador ni una métrica léxica. Solo se conserva el cambio si
+mejora la entrega sin añadir verbosidad, hallazgos de gusto o trabajo ajeno al
+encargo.
 
 ## Fuera de alcance
 
 - No modificar el set instalado ni crear rutas o baterías nuevas.
 - No almacenar autoauditorías como una nueva autoridad.
 - No presentar el corpus de `default` como validación literaria.
-- No convertir posibilidades de este informe en requisitos sin una ejecución
-  afectada.
+- No convertir la redacción exacta de `default` en requisito de todos los sets.
