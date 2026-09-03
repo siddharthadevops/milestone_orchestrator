@@ -365,6 +365,25 @@ class TaskContractsTest(unittest.TestCase):
         self.assertEqual(
             inherited["implementation_size_control"]["soft_lines"], 40
         )
+        profiled = tasks.resolve_configuration(
+            "reviewed_task",
+            {"task_kind": "implement"},
+            reviewed_defaults={"review_breadth": "single"},
+        )
+        self.assertEqual(profiled["review_breadth"], "single")
+        overridden = tasks.resolve_configuration(
+            "reviewed_task",
+            {"task_kind": "implement", "review_breadth": "double"},
+            reviewed_defaults={"review_breadth": "single"},
+        )
+        self.assertEqual(overridden["review_breadth"], "double")
+        deep = tasks.resolve_configuration(
+            "deep_task",
+            {"documentation": {"review_breadth": "double"}},
+            reviewed_defaults={"review_breadth": "single"},
+        )
+        self.assertEqual(deep["documentation"]["review_breadth"], "double")
+        self.assertEqual(deep["implementation"]["review_breadth"], "single")
         for configuration, code in (
             ({}, tasks.INVALID_TASK_REQUEST),
             ({"task_kind": "draft_skeleton", "producer": {

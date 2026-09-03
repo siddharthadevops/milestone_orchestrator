@@ -9,7 +9,7 @@ from unittest import mock
 
 from orchestrator import brainstorming_milestone, brainstorming_tasks
 from orchestrator import canonical_plan, contracts
-from orchestrator import driver as drv, gitops
+from orchestrator import driver as drv, gitops, profiles
 from orchestrator import runners, state as st, tasks
 from orchestrator.tests import test_driver_mock as base
 from orchestrator.tests.test_worker_tasks import _created, _rethink
@@ -224,6 +224,36 @@ class MilestoneDeepSliceCompositionTest(base.DriverTestCase):
             self.assertEqual(tasks.task_records(subject.state), [])
             self.assertNotIn(
                 "reviewed_task_id", st.current_unit(subject.state)
+            )
+
+    def test_light_profile_defaults_both_deep_policies_to_single_review(self):
+        with tempfile.TemporaryDirectory(
+            prefix="milestone-deep-light-"
+        ) as workspace:
+            path = self._fixture(workspace)
+            state = st.load(path)
+            content = copy.deepcopy(profiles.SEEDS["light"]["profile"])
+            state["config"]["profile"] = content
+            state["config"]["profile_ref"] = {
+                "name": "light",
+                "version": profiles.SEEDS["light"]["version"],
+                "hash": profiles.semantic_hash(content),
+            }
+            st.save(path, state)
+
+            subject = drv.Driver(path, runner=runners.MockRunner([]))
+            parent = subject._admit_milestone_deep_parent(
+                st.current_unit(subject.state)
+            )
+            self.assertEqual(
+                parent["order"]["configuration"]["documentation"]
+                ["review_breadth"],
+                "single",
+            )
+            self.assertEqual(
+                parent["order"]["configuration"]["implementation"]
+                ["review_breadth"],
+                "single",
             )
 
     def test_brainstorming_production_counts_in_child_and_parent(self):

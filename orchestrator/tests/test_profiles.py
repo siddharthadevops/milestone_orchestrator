@@ -240,7 +240,9 @@ class TestValidationAndSeeds(ProfilesCase):
 
     def test_seeds_written_once_and_never_overwritten(self):
         created = pr.ensure_seeds(self.home)
-        self.assertEqual(sorted(created), ["legacy", "light", "strict"])
+        self.assertEqual(
+            sorted(created), ["legacy", "light", "medium", "strict"]
+        )
         # Operator edits a seed; re-ensuring must not clobber it.
         light = pr.load(self.home, "light")
         light["profile"]["p3_defer_max_risk"] = "low"
@@ -262,6 +264,22 @@ class TestValidationAndSeeds(ProfilesCase):
             "medium",
         )
         self.assertEqual(
+            pr.load(self.home, "medium")["profile"]["p3_defer_max_risk"],
+            "medium",
+        )
+        self.assertEqual(
+            pr.load(self.home, "strict")["profile"]["review_breadth"],
+            "double",
+        )
+        self.assertEqual(
+            pr.load(self.home, "medium")["profile"]["review_breadth"],
+            "double",
+        )
+        self.assertEqual(
+            pr.load(self.home, "light")["profile"]["review_breadth"],
+            "single",
+        )
+        self.assertEqual(
             pr.load(self.home, "strict")["profile"]["fuser_discard"],
             "evidence+concur",
         )
@@ -271,6 +289,8 @@ class StrategyDecisionCatalogueTest(ProfilesCase):
     EXPECTED = [
         {"key": "stages[0].loop", "status": "active",
          "values": ["family_until_clean"]},
+        {"key": "review_breadth", "status": "active",
+         "values": ["single", "double"]},
         {"key": "doc_reclassify_from", "status": "active",
          "values": ["disabled", "P3", "P2", "P1", "P0"]},
         {"key": "impl_reclassify_from", "status": "active",
@@ -290,9 +310,9 @@ class StrategyDecisionCatalogueTest(ProfilesCase):
     def test_exact_decision_keys_statuses_and_values(self):
         self.assertEqual(pr.decision_catalogue(), self.EXPECTED)
 
-    def test_strict_and_light_decision_round_trip_is_semantically_exact(self):
+    def test_composable_seeds_round_trip_semantically_exact(self):
         keys = [item["key"] for item in pr.decision_catalogue()]
-        for name in ("strict", "light"):
+        for name in ("strict", "medium", "light"):
             source = pr.SEEDS[name]["profile"]
             rebuilt = {}
             for key in keys:
@@ -310,8 +330,15 @@ class StrategyDecisionCatalogueTest(ProfilesCase):
             self.assertEqual(pr.semantic_hash(rebuilt), pr.semantic_hash(source))
             self.assertIn("non-operative", pr.SEEDS[name]["description"])
 
+    def test_medium_is_old_light_and_new_light_only_changes_breadth(self):
+        medium = json.loads(json.dumps(pr.SEEDS["medium"]["profile"]))
+        light = json.loads(json.dumps(pr.SEEDS["light"]["profile"]))
+        self.assertEqual(medium.pop("review_breadth"), "double")
+        self.assertEqual(light.pop("review_breadth"), "single")
+        self.assertEqual(light, medium)
+
     def test_seed_classification_floors_match_operator_defaults(self):
-        for name in ("strict", "light"):
+        for name in ("strict", "medium", "light"):
             content = pr.SEEDS[name]["profile"]
             self.assertEqual(content["doc_reclassify_from"], "P2")
             self.assertEqual(content["impl_reclassify_from"], "P1")
@@ -354,6 +381,7 @@ class StrategyDecisionValidationTest(ProfilesCase):
             prior_bytes = fh.read()
         invalid = [
             {"unknown": True},
+            {"review_breadth": "triple"},
             {"doc_register": "brief"},
             {"doc_reclassify_from": "P4"},
             {"impl_reclassify_from": False},

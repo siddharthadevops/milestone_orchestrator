@@ -612,7 +612,8 @@
     <p><b>Goal doc</b> — when a description doc path is set, the file's
       content becomes the goal, snapshotted at launch.</p>
     <p><b>Strategy profile</b> — governs the run's review depth.
-      <b>strict</b> / <b>light</b> set separate
+      <b>strict</b> / <b>medium</b> use two full-review families; <b>light</b>
+      uses one. Fix and delta-review routing is unchanged. They also set separate
       documentation/implementation classification floors and the risk
       threshold that chooses fixing versus tracked debt. Every profile uses
       the same deterministic seal. No seed is pre-selected on purpose — the

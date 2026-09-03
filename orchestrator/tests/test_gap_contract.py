@@ -261,7 +261,7 @@ class GapPromptGatingTest(unittest.TestCase):
         self.assertFalse(it.gap_semantics({"config": {}}))
         legacy = {"config": {"profile": profiles.SEEDS["legacy"]["profile"]}}
         self.assertFalse(it.gap_semantics(legacy))
-        for name in ("strict", "light"):
+        for name in ("strict", "medium", "light"):
             st = {"config": {"profile": profiles.SEEDS[name]["profile"]}}
             self.assertTrue(it.gap_semantics(st))
 

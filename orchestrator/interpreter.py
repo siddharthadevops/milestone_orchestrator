@@ -27,6 +27,7 @@ FAMILY_UNTIL_CLEAN = profiles.FAMILY_UNTIL_CLEAN
 # profile keys (stages, compat, fuser_*, doc_register, final_open_pass) are
 # NOT dials and never merge into the config namespace.
 PROFILE_DIALS = (
+    "review_breadth",
     "doc_reclassify_from",
     "impl_reclassify_from",
     "p3_defer_max_risk",
@@ -73,9 +74,9 @@ def rounds_loop(state):
 def effective_config(state):
     """The run config with the governing profile's recognized dials merged
     OVER it (spec §5: profiles decompose into config dials). This is how a
-    profile changes a run's behavior — a `strict` run and a `light` run
-    read different `p3_defer_max_risk` thresholds without any read-site in
-    the driver changing.
+    profile changes a run's behavior — `strict`, `medium`, and `light`
+    runs read their own policy thresholds without any read-site in the
+    driver changing.
 
     Profile-less runs, and profiles that declare no dials (the `legacy`
     compatibility artifact carries none), get the raw config object back
@@ -133,7 +134,7 @@ def gap_semantics(state):
 def battery_questions(state, unit_kind):
     """The required question-battery ids for a unit of `unit_kind`, or
     None (no battery). The battery is NOT a dial — every reform profile
-    carries it, `strict` and `light` alike (spec §4); implementation
+    carries it, `strict`, `medium`, and `light` alike (spec §4); implementation
     units have no battery (it is a DOC gate). Legacy and profile-less
     runs get None everywhere, keeping their prompts and validation
     byte-identical to the pre-reform driver."""

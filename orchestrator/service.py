@@ -5735,7 +5735,7 @@ def start_guard(home, interval=GUARD_INTERVAL_S, task_host=None):
 
 
 def make_server(home, port, task_host=None):
-    # Seed the two starter strategy profiles (strict, light) when missing,
+    # Seed the three starter strategy profiles (strict, medium, light) when missing,
     # so the panel's new-run selector always has something to offer.
     # Idempotent and best-effort: a seed-write fault must never stop the
     # service from serving.

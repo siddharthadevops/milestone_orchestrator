@@ -859,7 +859,9 @@ def reviewed_policy_defaults(task_kind, config):
         else "doc_reclassify_from"
     )
     defaults = {
-        "review_breadth": "double",
+        "review_breadth": config.get(
+            "review_breadth", _REVIEWED_POLICY_DEFAULTS["review_breadth"]
+        ),
         "same_family_second_look": False,
         floor: config.get(floor, _REVIEWED_POLICY_DEFAULTS[floor]),
         "p3_reclassify_debt": config.get(

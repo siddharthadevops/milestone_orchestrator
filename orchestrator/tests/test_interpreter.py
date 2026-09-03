@@ -57,9 +57,9 @@ class RoundsLoopTest(unittest.TestCase):
             it.rounds_loop(_state({"profile": legacy})),
             it.FAMILY_UNTIL_CLEAN)
 
-    def test_seed_strict_and_light_are_family_until_clean(self):
+    def test_composable_seeds_are_family_until_clean(self):
         # In phase 2 every seed's rounds loop is the canonical flow.
-        for name in ("strict", "light"):
+        for name in ("strict", "medium", "light"):
             self.assertEqual(
                 it.rounds_loop(_state({"profile": profiles.SEEDS[name]["profile"]})),
                 it.FAMILY_UNTIL_CLEAN)
@@ -94,15 +94,28 @@ class EffectiveConfigTest(unittest.TestCase):
         # legacy declares no dial keys → identical object back.
         self.assertIs(it.effective_config(st), st["config"])
 
-    def test_strict_and_light_thresholds_win(self):
+    def test_composable_seed_thresholds_win(self):
         base = {"p3_defer_max_risk": "high", "other": 7}
-        for name, expected in (("strict", "low"), ("light", "medium")):
+        for name, expected in (
+            ("strict", "low"), ("medium", "medium"), ("light", "medium")
+        ):
             st = _state(dict(base))
             st["config"]["profile"] = profiles.SEEDS[name]["profile"]
             eff = it.effective_config(st)
             self.assertEqual(eff["p3_defer_max_risk"], expected)
             self.assertEqual(eff["other"], 7)          # untouched keys ride
             self.assertEqual(st["config"]["p3_defer_max_risk"], "high")  # no mutation
+
+    def test_profile_review_breadth_wins_without_mutating_config(self):
+        for name, expected in (
+            ("strict", "double"), ("medium", "double"), ("light", "single")
+        ):
+            state = _state({"review_breadth": "double", "other": 7})
+            state["config"]["profile"] = profiles.SEEDS[name]["profile"]
+            effective = it.effective_config(state)
+            self.assertEqual(effective["review_breadth"], expected)
+            self.assertEqual(effective["other"], 7)
+            self.assertEqual(state["config"]["review_breadth"], "double")
 
     def test_only_known_dials_merge_not_structural_keys(self):
         st = _state({"a": 1})
@@ -156,7 +169,7 @@ class VerifyEmbeddedTest(unittest.TestCase):
     def test_consistent_transition_chain_passes(self):
         base = profiles.SEEDS["light"]["profile"]
         changed = profiles.SEEDS["strict"]["profile"]
-        base_ref = {"name": "light", "version": 1,
+        base_ref = {"name": "light", "version": profiles.SEEDS["light"]["version"],
                     "hash": profiles.semantic_hash(base)}
         changed_ref = {"name": "strict", "version": 1,
                        "hash": profiles.semantic_hash(changed)}
@@ -169,7 +182,7 @@ class VerifyEmbeddedTest(unittest.TestCase):
 
     def test_transition_with_mismatched_content_fails_loudly(self):
         base = profiles.SEEDS["light"]["profile"]
-        base_ref = {"name": "light", "version": 1,
+        base_ref = {"name": "light", "version": profiles.SEEDS["light"]["version"],
                     "hash": profiles.semantic_hash(base)}
         wrong_ref = {"name": "strict", "version": 1,
                      "hash": "deadbeef"}
@@ -187,7 +200,7 @@ class DocDeferScopeTest(unittest.TestCase):
 
     def test_default_and_seed_profiles_classify_p2_and_p3(self):
         self.assertEqual(it.doc_defer_scope(_state({})), ("P2", "P3"))
-        for name in ("strict", "light", "legacy"):
+        for name in ("strict", "medium", "light", "legacy"):
             state = _state({"profile": profiles.SEEDS[name]["profile"]})
             self.assertEqual(it.doc_defer_scope(state), ("P2", "P3"))
 
@@ -231,7 +244,7 @@ class ImplDeferScopeTest(unittest.TestCase):
         self.assertEqual(
             it.impl_defer_scope(_state({})), ("P1", "P2", "P3")
         )
-        for name in ("legacy", "strict", "light"):
+        for name in ("legacy", "strict", "medium", "light"):
             state = _state({"profile": profiles.SEEDS[name]["profile"]})
             self.assertEqual(
                 it.impl_defer_scope(state), ("P1", "P2", "P3")
@@ -265,7 +278,7 @@ class ReformActiveTest(unittest.TestCase):
     the `legacy` compatibility artifact and for profile-less runs."""
 
     def test_reform_profiles_are_active(self):
-        for name in ("strict", "light"):
+        for name in ("strict", "medium", "light"):
             state = _state({"profile": profiles.SEEDS[name]["profile"]})
             self.assertTrue(it.reform_active(state))
 
@@ -280,6 +293,7 @@ class ReformActiveTest(unittest.TestCase):
         for cfg in ({},
                     {"profile": profiles.SEEDS["legacy"]["profile"]},
                     {"profile": profiles.SEEDS["strict"]["profile"]},
+                    {"profile": profiles.SEEDS["medium"]["profile"]},
                     {"profile": profiles.SEEDS["light"]["profile"]}):
             state = _state(cfg)
             self.assertEqual(it.gap_semantics(state),
@@ -288,11 +302,11 @@ class ReformActiveTest(unittest.TestCase):
 
 class BatteryQuestionsTest(unittest.TestCase):
     """The question battery (spec §4) is a DOC gate every reform profile
-    carries — not a dial: strict and light ask the same questions;
+    carries — not a dial: strict, medium, and light ask the same questions;
     implementation units and non-reform runs carry none."""
 
     def test_reform_doc_units_carry_the_battery(self):
-        for name in ("strict", "light"):
+        for name in ("strict", "medium", "light"):
             state = _state({"profile": profiles.SEEDS[name]["profile"]})
             self.assertEqual(it.battery_questions(state, "skeleton"),
                              contracts.BATTERY_QUESTIONS_SKELETON)

@@ -23,10 +23,10 @@ Identity and run retention:
   ordinary save normalizes it away; selecting a profile never mutates the
   reusable source.
 
-The two composable seeds (`strict`, `light`) use the complete eight-decision
-catalogue.  Their fixed open-action envelope is structural seed content, not
-an operator decision.  The `legacy` seed is an exact compatibility fence and
-is never composable.
+The three composable seeds (`strict`, `medium`, `light`) use the complete
+nine-decision catalogue.  Their fixed open-action envelope is structural seed
+content, not an operator decision.  The `legacy` seed is an exact compatibility
+fence and is never composable.
 """
 
 import hashlib
@@ -43,6 +43,7 @@ _FIXED_ACTION_SCOPE = "open"
 
 _DECISION_SPECS = (
     ("stages[0].loop", "active", (FAMILY_UNTIL_CLEAN,)),
+    ("review_breadth", "active", ("single", "double")),
     ("doc_reclassify_from", "active", contracts.RECLASSIFY_FROM_LEVELS),
     ("impl_reclassify_from", "active", contracts.RECLASSIFY_FROM_LEVELS),
     ("p3_defer_max_risk", "active", contracts.DRIFT_RISK_LEVELS),
@@ -329,7 +330,7 @@ def verify_retained(ref, content):
 
 
 # ---------------------------------------------------------------------------
-# Seed profiles (spec decision 5: two hardcoded seeds; the constructor UI
+# Seed profiles (spec decision 5: three composable seeds; the constructor UI
 # lands in a later phase over this same store).
 
 SEEDS = {
@@ -339,12 +340,13 @@ SEEDS = {
         "sealed": False,
         "description": (
             "Cost-of-being-wrong: high (storage/contract work; the canon "
-            "itself). Documentation classifies from P2, implementation from "
-            "P1, and only low-rated findings defer; dense contract register. "
-            "Reserved fuser-discard and final-pass choices are retained but "
-            "non-operative."
+            "itself). Two review families; documentation classifies from P2, "
+            "implementation from P1, and only low-rated findings defer; dense "
+            "contract register. Reserved fuser-discard and final-pass choices "
+            "are retained but non-operative."
         ),
         "profile": {
+            "review_breadth": "double",
             "doc_reclassify_from": "P2",
             "impl_reclassify_from": "P1",
             "p3_defer_max_risk": "low",
@@ -358,18 +360,46 @@ SEEDS = {
             ],
         },
     },
-    "light": {
-        "name": "light",
+    "medium": {
+        "name": "medium",
         "version": 1,
         "sealed": False,
         "description": (
-            "Cost-of-being-wrong: low (UI shell work). Findings rated "
-            "at-or-below medium record as debt; documentation classifies "
-            "from P2 and implementation from P1; lay register + hard table. "
-            "Reserved fuser-discard and final-pass choices are retained but "
-            "non-operative."
+            "Cost-of-being-wrong: medium (ordinary product work). Two review "
+            "families; findings rated at-or-below medium record as debt; "
+            "documentation classifies from P2 and implementation from P1; "
+            "lay register + hard table. Reserved fuser-discard and final-pass "
+            "choices are retained but non-operative."
         ),
         "profile": {
+            "review_breadth": "double",
+            "doc_reclassify_from": "P2",
+            "impl_reclassify_from": "P1",
+            "p3_defer_max_risk": "medium",
+            "p3_reclassify_debt": True,
+            "doc_register": "lay+hard-table",
+            "fuser_discard": "evidence",
+            "final_open_pass": False,
+            "stages": [
+                {"loop": "family_until_clean",
+                 "actions": [{"scope": "open"}]},
+            ],
+        },
+    },
+    "light": {
+        "name": "light",
+        "version": 2,
+        "sealed": False,
+        "description": (
+            "Cost-of-being-wrong: low (UI shell work). One full-review family; "
+            "fix and delta-review routing stays unchanged, and findings are "
+            "fixed rather than deferred without an explicit same-family second "
+            "look. Documentation classifies from P2 and implementation from "
+            "P1; lay register + hard table. Reserved fuser-discard and "
+            "final-pass choices are retained but non-operative."
+        ),
+        "profile": {
+            "review_breadth": "single",
             "doc_reclassify_from": "P2",
             "impl_reclassify_from": "P1",
             "p3_defer_max_risk": "medium",

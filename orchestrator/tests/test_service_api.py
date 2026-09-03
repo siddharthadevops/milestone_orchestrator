@@ -1727,7 +1727,9 @@ class ProfilesApiTest(ServiceApiTest):
         status, body = self.request_json("GET", "/api/profiles")
         self.assertEqual(status, 200)
         names = {p["name"]: p for p in body["profiles"]}
-        self.assertEqual(sorted(names), ["legacy", "light", "strict"])
+        self.assertEqual(
+            sorted(names), ["legacy", "light", "medium", "strict"]
+        )
         strict = names["strict"]
         self.assertEqual(
             strict["hash"], profiles.semantic_hash(strict["profile"]))
@@ -2586,10 +2588,10 @@ class StrategyConfiguratorPanelTest(ServiceApiTest):
             "descriptionText === strategyEditor.descriptionText", save)
         self.assertIn("? strategyEditor.description : descriptionText", save)
 
-    def test_configurator_strict_and_light_round_trip_exactly(self):
+    def test_configurator_composable_seeds_round_trip_exactly(self):
         _, listed = self.request_json("GET", "/api/profiles")
         views = {p["name"]: p for p in listed["profiles"]}
-        for name in ("strict", "light"):
+        for name in ("strict", "medium", "light"):
             before = views[name]
             status, saved = self.request_json(
                 "POST", "/api/profiles", self.editable(before))

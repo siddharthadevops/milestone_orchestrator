@@ -367,6 +367,10 @@ class TaskApiTest(unittest.TestCase):
                     policy["p3_defer_max_risk"] == "medium"
                     for policy in policies
                 ))
+                self.assertTrue(all(
+                    policy["review_breadth"] == "single"
+                    for policy in policies
+                ))
 
                 if executor == "reviewed_task":
                     path = task_api.ensure_reviewed_state(
