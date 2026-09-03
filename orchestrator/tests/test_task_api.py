@@ -555,6 +555,7 @@ class TaskApiTest(unittest.TestCase):
         self.start_server(host)
         order = self.order("brainstorming")
         order["configuration"] = {"max_rounds": 24, "closure_policy": "majority"}
+        order["prompt_set"] = "operator"
         with mock.patch.object(brainstorming_tasks, "resolve_staffing", return_value=pins), \
                 mock.patch.object(brainstorming_tasks, "start_task", side_effect=start), \
                 mock.patch.object(brainstorming_tasks, "finish_task", side_effect=finish), \
@@ -565,6 +566,7 @@ class TaskApiTest(unittest.TestCase):
             task_id = body["task"]["id"]
             self.assertEqual(body["task"]["order"]["configuration"],
                              {"max_rounds": 24, "closure_policy": "majority"})
+            self.assertEqual(body["task"]["order"]["prompt_set"], "operator")
             self.assertEqual(body["task"]["resolved_staffing"], pins)
             self.assertTrue(effect_started.wait(2))
             self.assertIsNone(task_api.StandaloneTaskStore(self.home).record(task_id)

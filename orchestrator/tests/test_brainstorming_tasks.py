@@ -202,9 +202,13 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         state = {}
         selection = {"session": "staffing-session-1"}
         request = self.request(output_directory="out")
+        order = self.order(
+            request, max_rounds=24, closure_policy="majority"
+        )
+        order["prompt_set"] = "operator"
         record = adapter.admit_task(
             state,
-            self.order(request, max_rounds=24, closure_policy="majority"),
+            order,
             self.config,
             self.workspace,
             staffing_selection=selection,
@@ -226,6 +230,16 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         body = create.call_args.args[1]
         self.assertEqual(body["request"]["max_rounds"], 24)
         self.assertEqual(body["closure_policy"], "majority")
+        self.assertEqual(body["prompt_set"], "operator")
+        historical = copy.deepcopy(record)
+        historical["order"].pop("prompt_set")
+        historical_body = adapter._creation_body(
+            historical,
+            body["participants"],
+            "/private/agreement.md",
+            self.workspace,
+        )
+        self.assertEqual(historical_body["prompt_set"], "default")
         # Nothing about the intelligence is frozen here: every seat resolves
         # through the owner's session immediately before its own call.
         for seat in body["participants"]:
@@ -304,17 +318,11 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.assertEqual(terminal["result"]["status"], "failure")
 
     def test_pre_cutover_task_charge_starts_without_carrying_old_material(self):
-        record = adapter.admit_task(
-            {}, self.order(), self.config, self.workspace
-        )
-        legacy = copy.deepcopy(record)
-        legacy["order"]["staffing_material"] = "analysis"
-        legacy["order"]["request"]["context"] = {
+        request = self.request(context={
             "task_kind": "implement",
             "session_charge": {
                 "job": "implement@slice_impl",
-                "material": "code",
-                "prompt_set": "default",
+                "prompt_set": "operator",
                 "values": {},
                 "amendments_path": os.path.join(
                     self.workspace, "amendments.json"
@@ -326,7 +334,19 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
                     "pre_session_commit": "0" * 40,
                 },
             },
-        }
+        })
+        order = self.order(request)
+        order["prompt_set"] = "default"
+        record = adapter.admit_task(
+            {}, order, self.config, self.workspace
+        )
+        self.assertEqual(record["order"]["prompt_set"], "operator")
+        legacy = copy.deepcopy(record)
+        legacy["order"]["prompt_set"] = "default"
+        legacy["order"]["staffing_material"] = "analysis"
+        legacy["order"]["request"]["context"]["session_charge"][
+            "material"
+        ] = "code"
 
         body = adapter._creation_body(
             legacy,
@@ -338,6 +358,7 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         charge = body["request"]["context"]["source_payload"][
             "session_charge"
         ]
+        self.assertEqual(body["prompt_set"], "operator")
         self.assertNotIn("material", charge)
         self.assertEqual(
             legacy["order"]["request"]["context"]["session_charge"][

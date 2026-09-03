@@ -18,6 +18,7 @@ from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import brainstorming_milestone as milestone
 from orchestrator import gitops
 from orchestrator import kvstore
+from orchestrator import prompt_sets
 from orchestrator import session_calls
 from orchestrator import session_repository
 from orchestrator import state as st
@@ -182,6 +183,7 @@ def admit_task(
     charge = context.get("session_charge")
     if charge is not None:
         checked_charge = session_calls.validate_charge(charge)
+        checked["prompt_set"] = checked_charge["prompt_set"]
         task_kind = context.get("task_kind")
         expected_job = {
             "draft_slice_note": "draft_slice_note@slice_doc",
@@ -292,6 +294,11 @@ def _creation_body(record, participants, target, workspace):
     repository_backed = "repository" in (
         structured_context.get("session_charge") or {}
     )
+    prompt_set = (
+        structured_context["session_charge"]["prompt_set"]
+        if repository_backed else
+        order.get("prompt_set", prompt_sets.DEFAULT_SET_NAME)
+    )
     brief = (
         "Work directly in the shared project repository. Initial Position "
         "implements the requested task there; the other seats inspect it "
@@ -341,6 +348,7 @@ def _creation_body(record, participants, target, workspace):
         },
         "participants": copy.deepcopy(participants),
         "closure_policy": configuration["closure_policy"],
+        "prompt_set": prompt_set,
     }
 
 

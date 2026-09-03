@@ -286,6 +286,7 @@ class PromptSetBindingTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('id="f_prompt_set"', panel)
         self.assertIn('id="b_prompt_set"', panel)
+        self.assertIn('id="t_prompt_set"', panel)
         self.assertEqual(panel.count('api("/api/prompt-sets")'), 1)
         self.assertIn(
             'payload.prompt_set = document.getElementById("f_prompt_set").value',
@@ -302,6 +303,15 @@ class PromptSetBindingTests(unittest.TestCase):
         )
         self.assertIn(
             'loadPromptSetSelect("b_prompt_set", "b_prompt_set_hint", true)',
+            panel,
+        )
+        self.assertIn(
+            'loadPromptSetSelect("t_prompt_set", "t_prompt_set_hint", true)',
+            panel,
+        )
+        self.assertIn(
+            'payload.prompt_set = document.getElementById("t_prompt_set").value '
+            '|| "default"',
             panel,
         )
         self.assertIn(

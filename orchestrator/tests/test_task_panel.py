@@ -40,9 +40,15 @@ class TaskPanelTests(unittest.TestCase):
         self.assertNotIn("JSON.parse(value)", self.task_ui)
         self.assertIn('value === ""', self.task_ui)
         for copied_constant in (
-            '"agent_call"', '"brainstorming"', "max_rounds", "closure_policy",
+            '"agent_call"', "max_rounds", "closure_policy",
         ):
             self.assertNotIn(copied_constant, self.task_ui)
+        self.assertIn('id="t_prompt_set"', self.panel)
+        self.assertIn('entry.id === "brainstorming"', self.task_ui)
+        self.assertIn(
+            'payload.prompt_set = document.getElementById("t_prompt_set")',
+            self.task_ui,
+        )
 
     def test_direct_order_preserves_closed_project_bound_request(self):
         body = re.search(

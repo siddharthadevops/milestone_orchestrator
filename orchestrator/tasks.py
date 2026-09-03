@@ -1020,7 +1020,7 @@ def validate_order(order, reviewed_defaults=None):
         _exact_keys(
             order,
             ("task_executor", "request"),
-            ("configuration", "staffing_session"),
+            ("configuration", "staffing_session", "prompt_set"),
             "task order",
         )
         task_executor = order["task_executor"]
@@ -1030,6 +1030,10 @@ def validate_order(order, reviewed_defaults=None):
             raise TaskRequestError(
                 UNKNOWN_TASK_EXECUTOR,
                 "unknown TaskExecutor %r" % task_executor,
+            )
+        if "prompt_set" in order and task_executor != "brainstorming":
+            raise ContractError(
+                "task order.prompt_set is only available for Brainstorming"
             )
         checked = {
             "task_executor": task_executor,
@@ -1043,6 +1047,13 @@ def validate_order(order, reviewed_defaults=None):
                 order.get("staffing_session")
             ),
         }
+        if task_executor == "brainstorming":
+            try:
+                checked["prompt_set"] = prompt_sets.validate_name(
+                    order.get("prompt_set", prompt_sets.DEFAULT_SET_NAME)
+                )
+            except prompt_sets.PromptSetError as exc:
+                raise ContractError("task order.prompt_set is invalid") from exc
         return _json_copy(checked, "task order")
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)

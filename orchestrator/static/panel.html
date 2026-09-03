@@ -821,6 +821,11 @@
   </div>
   <div class="field"><label>TaskExecutor *</label>
     <select id="t_executor" onchange="onTaskExecutorChange()"></select></div>
+  <div class="field" id="t_prompt_set_field" style="display:none"><label>Prompt set</label>
+    <div class="pathrow">
+      <select id="t_prompt_set"><option value="default">default</option></select>
+    </div>
+    <div class="hint" id="t_prompt_set_hint">Names only; prompt contents are checked per call.</div></div>
   <div id="task_executor_details"></div>
   <div id="task_configuration"></div>
   <div class="field" id="task_staffing"></div>
@@ -5421,6 +5426,8 @@ function renderTaskPage(record, admittedAt) {
   if (Object.keys(configuration).length)
     ctxRows.push(["configuration", Object.entries(configuration)
       .map(([k, v]) => `${k}: ${v}`).join(" · ")]);
+  if ((record.order || {}).prompt_set)
+    ctxRows.push(["prompt set", record.order.prompt_set]);
   const staffing = taskStaffingLine(record);
   if (staffing) ctxRows.push(["staffing", staffing]);
   if (ctxRows.length) {
@@ -5612,6 +5619,7 @@ function openDirectTaskForm(preselect) {
   loadTaskProjects(preselect);
   loadTaskExecutorCatalogue();
   loadStandaloneStaffing("task");
+  loadPromptSetSelect("t_prompt_set", "t_prompt_set_hint", true);
 }
 async function loadTaskProjects(preselect) {
   const dialogSeq = taskDialogSeq;
@@ -5882,6 +5890,8 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
 }
 function renderTaskExecutorEditor() {
   const entry = taskExecutorEntry(taskExecutorSelected);
+  document.getElementById("t_prompt_set_field").style.display =
+    entry && entry.id === "brainstorming" ? "" : "none";
   const details = document.getElementById("task_executor_details");
   const controls = document.getElementById("task_configuration");
   if (!entry) { details.innerHTML = ""; controls.innerHTML = ""; return; }
@@ -5974,6 +5984,8 @@ async function submitTaskForm() {
   catch (e) { error.textContent = e.message; return; }
   const payload = {task_executor: taskExecutorSelected};
   if (resolved.present) payload.configuration = resolved.configuration;
+  if (taskExecutorSelected === "brainstorming")
+    payload.prompt_set = document.getElementById("t_prompt_set").value || "default";
   const binding = taskBinding();
   if (!binding) {
     error.textContent = "choose a project and work area";

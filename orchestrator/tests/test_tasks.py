@@ -435,6 +435,33 @@ class TaskContractsTest(unittest.TestCase):
             brainstorming_order["configuration"],
             {"max_rounds": 20, "closure_policy": "unanimity"},  # raised
         )
+        self.assertEqual(brainstorming_order["prompt_set"], "default")
+        selected_prompt_set = tasks.validate_order({
+            "task_executor": "brainstorming",
+            "request": task_request(),
+            "prompt_set": "operator",
+        })
+        self.assertEqual(selected_prompt_set["prompt_set"], "operator")
+        for invalid_prompt_set in ("", "bad/name", None, 7):
+            with self.subTest(prompt_set=invalid_prompt_set):
+                self.assert_request_error(
+                    tasks.INVALID_TASK_REQUEST,
+                    tasks.validate_order,
+                    {
+                        "task_executor": "brainstorming",
+                        "request": task_request(),
+                        "prompt_set": invalid_prompt_set,
+                    },
+                )
+        self.assert_request_error(
+            tasks.INVALID_TASK_REQUEST,
+            tasks.validate_order,
+            {
+                "task_executor": "agent_call",
+                "request": task_request(),
+                "prompt_set": "operator",
+            },
+        )
         production_order = tasks.producer_order(
             {"id": 1, "title": "one", "material": "analysis"},
             contracts.KIND_IMPLEMENT,
