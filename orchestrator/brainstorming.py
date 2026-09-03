@@ -46,6 +46,10 @@ TRANSCRIPT_EVENT_KINDS = (
     "floor_intervention",
 )
 TRANSCRIPT_FORMAT_VERSION = 1
+TARGET_FREE_REPOSITORY_JOBS = frozenset((
+    "rethink",
+    "standalone@repository",
+))
 
 # Out-of-turn interventions arrive from outside the roster. Their author ids
 # must be label_hex32-shaped (the agent_99 entity contract), so they can never
@@ -466,7 +470,7 @@ def validate_coordination_revision_id(revision):
 
 
 def repository_session(state):
-    """Whether this immutable request carries the milestone Git boundary."""
+    """Whether this immutable request carries a repository Git boundary."""
     try:
         repository = state["request"]["context"]["source_payload"][
             "session_charge"
@@ -476,6 +480,28 @@ def repository_session(state):
     return isinstance(repository, dict)
 
 
+def target_free_repository_request(request):
+    """Whether one request is a repository session without a target artifact."""
+    try:
+        charge = request["context"]["source_payload"]["session_charge"]
+    except (KeyError, TypeError):
+        return False
+    return (
+        isinstance(charge, dict)
+        and charge.get("job") in TARGET_FREE_REPOSITORY_JOBS
+        and isinstance(charge.get("repository"), dict)
+    )
+
+
+def target_free_repository_session(state):
+    """Whether durable state carries a target-free repository request."""
+    try:
+        request = state["request"]
+    except (KeyError, TypeError):
+        return False
+    return target_free_repository_request(request)
+
+
 def repository_rethink_request(request):
     """Whether one request is the target-free milestone rethink variant."""
     try:
@@ -483,9 +509,8 @@ def repository_rethink_request(request):
     except (KeyError, TypeError):
         return False
     return (
-        isinstance(charge, dict)
+        target_free_repository_request(request)
         and charge.get("job") == "rethink"
-        and isinstance(charge.get("repository"), dict)
     )
 
 
@@ -663,7 +688,7 @@ def validate_external_intervention(intervention):
     checked["created_at"] = float(checked["created_at"])
 
     supplied = intervention["input"]
-    target_free_rethink = repository_rethink_request(supplied)
+    target_free_repository = target_free_repository_request(supplied)
     repository_backed = repository_session({"request": supplied})
     _exact_keys(
         supplied,
@@ -671,7 +696,7 @@ def validate_external_intervention(intervention):
             (
                 "request", "context", "workspace_path", "transcript_ref",
             )
-            if target_free_rethink else
+            if target_free_repository else
             (
                 "request", "context", "workspace_path", "target_path",
                 "transcript_ref",
@@ -695,7 +720,7 @@ def validate_external_intervention(intervention):
             supplied["transcript_ref"]
         ),
     }
-    if not target_free_rethink:
+    if not target_free_repository:
         checked["input"]["target_path"] = _text(
             supplied["target_path"],
             "external_intervention.input.target_path",
@@ -1352,12 +1377,12 @@ def _validate_participant(participant, ctx):
 
 def _validate_request(request, *, legacy_charge):
     """Validate one request, optionally reading a pre-cutover charge."""
-    target_free_rethink = repository_rethink_request(request)
+    target_free_repository = target_free_repository_request(request)
     _exact_keys(
         request,
         (
             ("workspace_path", "request", "context", "max_rounds")
-            if target_free_rethink else
+            if target_free_repository else
             (
                 "workspace_path", "target_path", "request", "context",
                 "max_rounds",
@@ -1368,7 +1393,7 @@ def _validate_request(request, *, legacy_charge):
     )
     for key in (
         ("workspace_path", "request")
-        if target_free_rethink else
+        if target_free_repository else
         ("workspace_path", "target_path", "request")
     ):
         _text(request[key], "request.%s" % key)
@@ -1376,9 +1401,9 @@ def _validate_request(request, *, legacy_charge):
         raise ContractError("request.max_rounds must be a positive integer")
     if "deliver_chat" in request and type(request["deliver_chat"]) is not bool:
         raise ContractError("request.deliver_chat must be a boolean")
-    if target_free_rethink and request.get("deliver_chat", False):
+    if target_free_repository and request.get("deliver_chat", False):
         raise ContractError(
-            "repository rethink requests cannot deliver chat beside a target"
+            "target-free repository requests cannot deliver chat beside a target"
         )
 
     context = request["context"]
@@ -1399,7 +1424,7 @@ def _validate_request(request, *, legacy_charge):
         _json_copy(context["source_payload"], "request.context.source_payload")
         payload = context["source_payload"]
         if isinstance(payload, dict) and "session_charge" in payload:
-            # Admission may omit a target only after the complete milestone
+            # Admission may omit a target only after the complete repository
             # charge has passed its own closed validator. Import lazily to
             # avoid a prompt-router import cycle at module load time.
             try:
@@ -1412,13 +1437,16 @@ def _validate_request(request, *, legacy_charge):
                 charge = validator(payload["session_charge"])
             except (TypeError, ValueError, RuntimeError) as exc:
                 raise ContractError(
-                    "request carries an invalid milestone session charge"
+                    "request carries an invalid repository session charge"
                 ) from exc
-            validated_target_free = (
-                charge["job"] == "rethink"
+            validated_target_free_repository = (
+                charge["job"] in TARGET_FREE_REPOSITORY_JOBS
                 and isinstance(charge.get("repository"), dict)
             )
-            if validated_target_free is not target_free_rethink:
+            if (
+                validated_target_free_repository
+                is not target_free_repository
+            ):
                 raise ContractError(
                     "request target scope does not match its session charge"
                 )
@@ -1750,7 +1778,7 @@ def _validate_coordination(state, request, run_config, status):
 
 
 def repository_positions_ready(state, coordination=None):
-    """Whether every persisted voting seat readied at the current Git SHA."""
+    """Apply the persisted closure policy to readiness at the current SHA."""
     if not repository_session(state):
         raise ContractError("repository readiness requires a repository session")
     coordination = coordination or coordination_projection(state)
@@ -1778,10 +1806,23 @@ def repository_positions_ready(state, coordination=None):
         for item in state["run_config"]["participants"]
         if item["role"] in voting_roles
     ]
-    return bool(discussion_ids) and all(
-        latest.get(participant_id) is True
+    if not discussion_ids or any(
+        participant_id not in latest for participant_id in discussion_ids
+    ):
+        return False
+    votes = [
+        {
+            "participant_id": participant_id,
+            "vote": "accept" if latest[participant_id] else "object",
+        }
         for participant_id in discussion_ids
-    )
+    ]
+    try:
+        return evaluate_closure(state["run_config"], votes)
+    except ContractError:
+        # Initial Position may not close a repository candidate it marks
+        # incomplete, even under a majority policy.
+        return False
 
 
 def _validate_eligible_participants(eligible_participants):
@@ -2202,11 +2243,11 @@ def closing_summary_with_ballot_facts(summary, ballot, run_config):
 def validate_result(result, terminal_status, request, transcript_ref):
     """Validate the retained representation of a terminal outcome."""
     checked_request = read_request(request)
-    target_free_rethink = repository_rethink_request(checked_request)
+    target_free_repository = target_free_repository_request(checked_request)
     _object(result, "result")
     outcome = result.get("outcome")
     required = {"outcome", "transcript_ref", "rounds_used"}
-    if not target_free_rethink:
+    if not target_free_repository:
         required.add("target_ref")
     if outcome == "failure":
         required.add("reason")
@@ -2215,7 +2256,7 @@ def validate_result(result, terminal_status, request, transcript_ref):
         raise ContractError("result.outcome must match the terminal status")
     if outcome not in TERMINAL_STATUSES:
         raise ContractError("result.outcome must be success or failure")
-    if not target_free_rethink:
+    if not target_free_repository:
         target_ref = _text(result["target_ref"], "result.target_ref")
         if target_ref != checked_request["target_path"]:
             raise ContractError(
@@ -2262,8 +2303,8 @@ def _validate_closure_lifecycle(
             or not repository_positions_ready(state, coordination)
         ):
             raise ContractError(
-                "repository success requires every voting seat ready on the "
-                "current Git revision"
+                "repository success requires the configured voting threshold "
+                "on the current Git revision"
             )
         if (
             status == "running"
@@ -2895,7 +2936,10 @@ def repository_completed_turn_successor(
         successor, coordination_projection(successor)
     ):
         outcome = "success"
-        reason = "All voting seats are ready on the current Git revision."
+        reason = (
+            "The configured voting threshold is ready on the current Git "
+            "revision."
+        )
     elif (
         full_pass
         and successor["rounds_used"] == successor["request"]["max_rounds"]
@@ -2912,7 +2956,7 @@ def repository_completed_turn_successor(
         "rounds_used": successor["rounds_used"],
         **({"reason": reason} if outcome == "failure" else {}),
     }
-    if not repository_rethink_session(successor):
+    if not target_free_repository_session(successor):
         result["target_ref"] = successor["request"]["target_path"]
     summary = _repository_closing_summary(outcome, reason)
     successor["status"] = outcome
@@ -3187,7 +3231,7 @@ def _field(label, value):
     return "**%s**\n\n%s" % (label, value)
 
 
-def _repository_rethink_authority(state):
+def _repository_authority(state):
     charge = state["request"]["context"]["source_payload"][
         "session_charge"
     ]
@@ -3196,13 +3240,13 @@ def _repository_rethink_authority(state):
     return base, accepted
 
 
-def _render_repository_rethink_opening(state, labels):
+def _render_repository_opening(state, labels):
     roster = []
     voting_roles = agreement_roles(state["run_config"])
     for participant in state["run_config"]["participants"]:
         label = labels[participant["id"]]
         if participant["role"] == "initial_position":
-            role = "resolves the problem by editing the project repository"
+            role = "advances the requested outcome in the project repository"
         elif participant["role"] == "contrary_position":
             role = (
                 "reviews the repository read-only and challenges the resolution"
@@ -3216,20 +3260,29 @@ def _render_repository_rethink_opening(state, labels):
             )
         roster.append("- **%s** — %s." % (label, role))
     rounds = state["request"]["max_rounds"]
-    base, _accepted = _repository_rethink_authority(state)
-    problem = state["request"]["context"]["source_payload"][
-        "session_charge"
-    ]["values"]["rethink_problem"]
+    base, _accepted = _repository_authority(state)
+    request_context = (
+        _field(
+            "Problem to resolve",
+            _quoted_markdown(
+                state["request"]["context"]["source_payload"][
+                    "session_charge"
+                ]["values"]["rethink_problem"]
+            ),
+        )
+        if repository_rethink_session(state) else
+        _field(
+            "Why this discussion is needed",
+            _quoted_markdown(state["request"]["context"]["brief"]),
+        )
+    )
     return _entry(
         "Opening",
         _field(
             "Requested outcome",
             _quoted_markdown(state["request"]["request"]),
         ),
-        _field(
-            "Problem to resolve",
-            _quoted_markdown(problem),
-        ),
+        request_context,
         _field("Repository base revision", _quoted_markdown(base)),
         _field("Participants", "\n".join(roster)),
         _field(
@@ -3245,8 +3298,8 @@ def _render_repository_rethink_opening(state, labels):
 
 
 def _render_opening(state, labels):
-    if repository_rethink_session(state):
-        return _render_repository_rethink_opening(state, labels)
+    if target_free_repository_session(state):
+        return _render_repository_opening(state, labels)
     roster = []
     voting_roles = agreement_roles(state["run_config"])
     for participant in state["run_config"]["participants"]:
@@ -3368,10 +3421,10 @@ def _render_transcript_event(event, state, labels):
 
 
 def _render_closing(state):
-    if repository_rethink_session(state):
+    if target_free_repository_session(state):
         summary = state["closing_summary"]
         result = state["result"]
-        base, accepted = _repository_rethink_authority(state)
+        base, accepted = _repository_authority(state)
         objections = summary["unresolved_objections"]
         objections_text = (
             "No unresolved objections were recorded."
@@ -3611,9 +3664,9 @@ class SessionStore:
         """Return the final chat artifact placed beside the target."""
         session_id = kvstore.validate_fragment(session_id, "session_id")
         checked = read_request(request)
-        if repository_rethink_request(checked):
+        if target_free_repository_request(checked):
             raise ContractError(
-                "repository rethink transcripts have no delivered target path"
+                "target-free repository transcripts have no delivered target path"
             )
         target = checked["target_path"]
         if not os.path.isabs(target):
@@ -3735,7 +3788,7 @@ class SessionStore:
         the panel always shows it.
         """
         if (
-            repository_rethink_session(state)
+            target_free_repository_session(state)
             or not delivers_chat(state["request"])
         ):
             return None
@@ -3858,7 +3911,7 @@ class SessionStore:
             "workspace_path": request["workspace_path"],
             "transcript_ref": snapshot.state["transcript_ref"],
         }
-        if not repository_rethink_request(request):
+        if not target_free_repository_request(request):
             expected_input["target_path"] = request["target_path"]
         if (
             not valid_action
@@ -4879,11 +4932,11 @@ class SessionStore:
         if not _same_json_value(checked_config, resolved_config):
             raise ContractError("run_config does not match roster resolution")
         checked_request = validate_request(request)
-        target_free_rethink = repository_rethink_request(checked_request)
+        target_free_repository = target_free_repository_request(checked_request)
         state = new_session_state(
             checked_request, resolved_config, self.transcript_ref(session_id)
         )
-        if not target_free_rethink:
+        if not target_free_repository:
             target_path = checked_request["target_path"]
             if not os.path.isabs(target_path):
                 target_path = os.path.join(

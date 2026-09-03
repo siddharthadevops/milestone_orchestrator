@@ -624,6 +624,12 @@ class StandaloneStaffingHandoff(PanelSourceMixin, StaffingApiTestCase):
         member = self.member()
         self.expect(200, "POST", "/api/staffing/documents", house_doc())
         work = self.workspace("ws-standalone")
+        subprocess.run([
+            "git", "-C", work,
+            "-c", "user.name=Test",
+            "-c", "user.email=test@example.com",
+            "commit", "--allow-empty", "-qm", "baseline",
+        ], check=True)
         align = self.workspace("ws-align")
         self.declare(AREA, work)
         self.declare(self.GS_AREA, align)

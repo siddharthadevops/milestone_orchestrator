@@ -1,4 +1,4 @@
-"""Ordered turns, target-only accepted revisions, and revision-bound closure."""
+"""Ordered turns, accepted revisions, and revision-bound closure."""
 
 from __future__ import annotations
 
@@ -1062,11 +1062,97 @@ class BrainstormingCoordinator:
     def _repository_session(state):
         return session_repository.context_from_state(state) is not None
 
+    def _fail_lost_repository_turn(self, session_id, snapshot, attempt):
+        """Fail closed when a quiet turn lost its reply/revision envelope."""
+        reason = (
+            "The discussion stopped because a completed repository turn "
+            "could not be reconciled after restart."
+        )
+        result = {
+            "outcome": "failure",
+            "transcript_ref": snapshot.state["transcript_ref"],
+            "rounds_used": snapshot.state["rounds_used"],
+            "reason": reason,
+        }
+        if not brainstorming.target_free_repository_session(snapshot.state):
+            result["target_ref"] = snapshot.state["request"]["target_path"]
+        summary = {
+            "reason": reason,
+            "unresolved_objections": [
+                "The repository may contain unaccepted participant work; "
+                "inspect it before starting another discussion."
+            ],
+            "affected_parties": "The operator and downstream repository users.",
+            "damage_altitude": "The unaccepted repository turn only.",
+            "proportionality": (
+                "The repository is left intact and the turn is not repeated "
+                "or represented as reviewed."
+            ),
+            "escalation_evidence": None,
+        }
+        interruption = {
+            "after_completed_turns": len(snapshot.state["completed_turns"]),
+            "plain": reason,
+        }
+        try:
+            closed = self.store.close_with_interruption(
+                session_id,
+                snapshot.revision,
+                interruption,
+                result,
+                summary,
+                failure_origin="operational",
+            )
+        except brainstorming.RevisionConflict:
+            current = self.store.read(session_id)
+            if (
+                current is None
+                or current.state["status"] not in brainstorming.TERMINAL_STATUSES
+            ):
+                raise
+            closed = current
+        self.store.finish_turn_attempt(session_id, attempt["token"])
+        return closed
+
     def _prepare_repository_session(self, session_id):
         while True:
             snapshot = self._require_running(self.store.read(session_id))
             if brainstorming.coordination_projection(snapshot.state) is not None:
-                if self.store.read_turn_attempt(session_id) is not None:
+                attempt = self.store.read_turn_attempt(session_id)
+                if (
+                    attempt is not None
+                    and attempt["quiescent"]
+                    and attempt.get("operational_retry") is None
+                    and not attempt.get("retry_pending", False)
+                    and not attempt.get(
+                        "target_mutation_failure_pending", False
+                    )
+                    and attempt.get("classifier_call") is None
+                ):
+                    completed_turn_count = attempt["completed_turn_count"]
+                    turns = snapshot.state["completed_turns"]
+                    if (
+                        len(turns) == completed_turn_count + 1
+                        and turns[completed_turn_count]["participant_id"]
+                        == attempt["participant_id"]
+                    ):
+                        # The accepted-turn CAS won and only deletion of its
+                        # control record was interrupted.  The state contains
+                        # the reply, revision and exact roster position, so
+                        # retiring this already-accounted attempt loses no
+                        # authority.
+                        self.store.finish_turn_attempt(
+                            session_id, attempt["token"]
+                        )
+                        continue
+                    # Completion can commit before its reply and revision are
+                    # durably recorded.  The surviving attempt cannot prove
+                    # whether current Git is accepted work or unrelated drift,
+                    # so neither adoption nor repetition is safe.
+                    return self._fail_lost_repository_turn(
+                        session_id, snapshot, attempt
+                    )
+                if attempt is not None:
                     raise CoordinationRejected(
                         "repository session has an incomplete prior attempt"
                     )
@@ -1098,7 +1184,7 @@ class BrainstormingCoordinator:
             "workspace_path": request["workspace_path"],
             "transcript_ref": state["transcript_ref"],
         }
-        if not brainstorming.repository_rethink_request(request):
+        if not brainstorming.target_free_repository_request(request):
             supplied["target_path"] = request["target_path"]
         return supplied
 
@@ -1914,6 +2000,8 @@ class BrainstormingCoordinator:
 
     def _run_next_repository_turn(self, session_id, execution_context):
         starting = self._prepare_repository_session(session_id)
+        if starting.state["status"] in brainstorming.TERMINAL_STATUSES:
+            return starting
         state = starting.state
         if self._clear_consumed_external_turn(session_id, state):
             starting = self._require_running(self.store.read(session_id))

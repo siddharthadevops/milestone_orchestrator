@@ -1601,6 +1601,22 @@ class BrainstormingCutoverTest(unittest.TestCase):
         # router-backed holding no session of its own, so it freezes no
         # family, model or effort at admission and nothing distinguishes
         # it from an attached task except which session answers it.
+        subprocess.run(["git", "init", "-q", self.workspace], check=True)
+        subprocess.run(
+            ["git", "-C", self.workspace, "config", "user.email",
+             "test@example.com"], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "config", "user.name", "Test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "add", "-A"], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "commit", "-qm", "baseline"],
+            check=True,
+        )
         with mock.patch.object(
             service.driver, "load_config",
             side_effect=lambda _path=None: copy.deepcopy(CONFIG),

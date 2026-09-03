@@ -141,7 +141,7 @@ class TestAutoResumeGuard(ServiceFixesTestCase):
         calls = []
         real = service.resume_run
 
-        def stub(home, run_id):
+        def stub(home, run_id, task_host=None):
             calls.append(run_id)
             # clear the failure like the real one, but spawn nothing
             reg = registry.load(home)
@@ -168,6 +168,35 @@ class TestAutoResumeGuard(ServiceFixesTestCase):
         self.assertEqual(
             registry.get(reg, entry["id"])["auto_resumes"], {"quota": 1}
         )
+
+    def test_busy_direct_task_defers_resume_without_clearing_failure(self):
+        entry = self._failed_run(
+            "ws-guard-task-owned", "quota",
+            resume_at="2026-07-05T00:00:00+0000",
+        )
+
+        class BusyTaskHost:
+            @staticmethod
+            def owns_workspace(_workspace):
+                return True
+
+        with mock.patch.object(
+            service,
+            "_spawn_run_locked",
+            side_effect=AssertionError(
+                "the guard must not spawn into a task-owned workspace"
+            ),
+        ):
+            actions = service.guard_scan(
+                self.home, task_host=BusyTaskHost()
+            )
+
+        self.assertEqual(
+            actions, [(entry["id"], "error:%s" % service.WORK_AREA_BUSY)]
+        )
+        retained = st.load(entry["state_path"])
+        self.assertEqual(retained["failure"]["type"], "quota")
+        self.assertEqual(retained["failure"]["reason"], "boom (quota)")
 
     def test_future_resume_at_waits(self):
         entry = self._failed_run(

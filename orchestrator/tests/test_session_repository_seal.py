@@ -99,12 +99,12 @@ class RepositorySealTest(unittest.TestCase):
             "max_rounds": max_rounds,
         }
 
-    def running(self, max_rounds=2):
+    def running(self, max_rounds=2, closure_policy="unanimity"):
         created = self.store.create(
             "session",
             self.request(max_rounds),
             brainstorming.resolve_run_config(
-                self.participants, "unanimity", self.participants
+                self.participants, closure_policy, self.participants
             ),
             self.participants,
         )
@@ -312,6 +312,22 @@ class RepositorySealTest(unittest.TestCase):
         self.assertEqual(failed.state["status"], "failure")
         self.assertEqual(failed.state["transcript_events"], [])
         self.assertIn("Voting seats did not reach", failed.state["result"]["reason"])
+
+    def test_repository_readiness_honors_majority_policy(self):
+        snapshot = self.running(closure_policy="majority")
+        snapshot = self.append(snapshot, "lead", self.base, True)
+        snapshot = self.append(snapshot, "contrary", self.base, False)
+        sealed = self.append(snapshot, "dante", self.base, True)
+
+        self.assertEqual(sealed.state["status"], "success")
+
+    def test_majority_cannot_close_over_an_unready_initial_position(self):
+        snapshot = self.running(max_rounds=1, closure_policy="majority")
+        snapshot = self.append(snapshot, "lead", self.base, False)
+        snapshot = self.append(snapshot, "contrary", self.base, True)
+        failed = self.append(snapshot, "dante", self.base, True)
+
+        self.assertEqual(failed.state["status"], "failure")
 
     def test_terminal_handoff_is_exact_repository_range(self):
         snapshot = self.running()

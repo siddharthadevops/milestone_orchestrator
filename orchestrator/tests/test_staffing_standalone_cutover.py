@@ -111,6 +111,21 @@ class StandaloneCutoverTestCase(unittest.TestCase):
         self.home = os.path.join(self.tmp.name, "home")
         self.workspace = self.directory("workspace")
         self.additional = self.directory("additional")
+        subprocess.run(["git", "init", "-q", self.workspace], check=True)
+        subprocess.run(
+            ["git", "-C", self.workspace, "config", "user.email",
+             "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "config", "user.name", "Test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "commit", "--allow-empty", "-qm",
+             "baseline"],
+            check=True,
+        )
         self.calls = []
         self.runner = RecordingRunner(self.calls)
         self.config = service.driver.load_config(None)
@@ -1199,23 +1214,35 @@ class TaskCompatibilityBoundaryTest(StandaloneCutoverTestCase):
         }
 
     def run_discussion(self, record, session_id):
-        """Drive the host's Brainstorming branch through start and effect.
+        """Drive the host's Brainstorming branch through start and finish.
 
-        Only the two boundaries this row is about are stood in for: the
-        session the launch creates, and the agreed production effect. What
-        reaches each of them is the host's own wiring.
+        Current panel tasks finish on their reviewed repository revision;
+        pre-cutover static tasks retain their historical production effect.
         """
         created, effects = [], []
+        current_repository = (
+            record["order"].get("brainstorming_mode")
+            == "repository_review"
+        )
 
         def create(_home, body, _caller, _context, _config, **kwargs):
             created.append((body, kwargs))
-            return {"id": session_id, "state": {"status": "running"}}
+            return {
+                "id": session_id,
+                "state": {
+                    "status": "running",
+                    "request": copy.deepcopy(body["request"]),
+                },
+            }
 
         def finish(state, task_id, _home, _session, apply_effects):
-            self.assertTrue(apply_effects({
-                "request": {"request": "Produce the agreed effects."},
-                "agreement": {},
-            })["completed"])
+            if current_repository:
+                self.assertIsNone(apply_effects)
+            else:
+                self.assertTrue(apply_effects({
+                    "request": {"request": "Produce the agreed effects."},
+                    "agreement": {},
+                })["completed"])
             return tasks.record_task_result(
                 state, task_id, self.terminal_result()
             )
@@ -1227,6 +1254,13 @@ class TaskCompatibilityBoundaryTest(StandaloneCutoverTestCase):
         with mock.patch.object(
             bs_tasks.lifecycle, "create_resolved_session", side_effect=create
         ), mock.patch.object(
+            bs_tasks.session_repository,
+            "checkpoint_standalone_task_context",
+            return_value={
+                "mode": "standalone_task",
+                "pre_session_commit": "0" * 40,
+            },
+        ), mock.patch.object(
             bs_tasks, "finish_task", side_effect=finish
         ), mock.patch.object(
             bs_tasks, "apply_agreed_effects", side_effect=effect
@@ -1235,8 +1269,8 @@ class TaskCompatibilityBoundaryTest(StandaloneCutoverTestCase):
                 record, lambda: copy.deepcopy(self.config)
             )
         self.assertEqual(len(created), 1)
-        self.assertEqual(len(effects), 1)
-        return created[0], effects[0]
+        self.assertEqual(len(effects), 0 if current_repository else 1)
+        return created[0], (None if current_repository else effects[0])
 
     def restart_session(self, task_id, session_id, caller_prefix):
         """Explicitly restart the discussion one open task owns."""
@@ -1312,17 +1346,21 @@ class TaskCompatibilityBoundaryTest(StandaloneCutoverTestCase):
                     {"staffing_selection": {"session": expected}},
                 )
 
-                # Initial start, and the agreed production effect.
+                # Initial start: the discussion itself owns production and
+                # closes on the reviewed repository revision.
                 (_body, launch), effect = self.run_discussion(
                     stored, "session-%s" % label.replace(" ", "-")
                 )
                 self.assertEqual(launch["staffing_selection"],
                                  {"session": expected})
                 self.assertNotIn("static_binding", launch)
-                self.assertEqual(effect["staffing_selection"],
-                                 {"session": expected})
-                self.assertEqual(effect["dispatch_authority"],
-                                 "current_profile")
+                self.assertIsNone(effect)
+                self.assertNotIn("target_path", _body["request"])
+                self.assertEqual(
+                    _body["request"]["context"]["source_payload"]
+                    ["session_charge"]["job"],
+                    bs_tasks.prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+                )
                 self.assertEqual(
                     self.store().record(task["id"])["result"]["native_result"],
                     {"agreement": "kept opaque"},

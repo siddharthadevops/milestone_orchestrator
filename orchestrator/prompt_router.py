@@ -43,6 +43,7 @@ DIRECT_ROUTES = {
     "merge_repair@workspace": ("merge_repair", None),
 }
 STANDALONE_SESSION_JOB = "standalone@document"
+STANDALONE_REPOSITORY_SESSION_JOB = "standalone@repository"
 STANDALONE_WORKAREA_BOUNDARY = (
     "TARGET ONLY — the Initial Position may edit only the primary target "
     "named in TURN; this is not a repository-wide edit grant. The driver "
@@ -59,6 +60,7 @@ _PRODUCER_SESSION_JOBS = frozenset((
 ))
 SESSION_JOBS = {
     STANDALONE_SESSION_JOB: None,
+    STANDALONE_REPOSITORY_SESSION_JOB: None,
     "draft_slice_note@slice_doc": "document",
     "implement@slice_impl": "implementation",
     "rethink": None,
@@ -137,9 +139,15 @@ def _route(job, executor, material, role, lead, artifact_type):
     tags = {"role:%s" % role}
     if target_type is not None:
         tags.add("target:%s" % target_type)
-    if job == STANDALONE_SESSION_JOB:
-        # Standalone discussions are target-backed like producer sessions,
-        # but they borrow no producer-kind questions or artifact craft law.
+    if job in (
+        STANDALONE_SESSION_JOB,
+        STANDALONE_REPOSITORY_SESSION_JOB,
+    ):
+        # Standalone discussions reuse the producer conversation surface but
+        # borrow no producer-kind questions or artifact craft law.  The
+        # repository variant deliberately carries no target tag, so existing
+        # named prompt sets keep their prose while the router supplies the
+        # repository editing boundary.
         tags.add("job:producer")
     else:
         tags.add(

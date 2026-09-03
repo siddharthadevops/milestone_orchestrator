@@ -231,6 +231,18 @@ def ignore_lines(extra_dirs=None):
     return lines
 
 
+def ensure_commit_identity(workspace):
+    """Install the same local fallback identity used by milestone gates."""
+    _assert_workspace_root(workspace)
+    for key, value in (
+        ("user.name", "impl-roadmap-orchestrator"),
+        ("user.email", "orchestrator@impl-roadmap.local"),
+    ):
+        probe = _run(workspace, "config", "--get", key, check=False)
+        if probe.returncode != 0 or not probe.stdout.strip():
+            _run(workspace, "config", key, value)
+
+
 def ensure_repo(workspace, extra_ignore_dirs=None):
     """Idempotently make the workspace a usable gate repo.
 
@@ -273,13 +285,7 @@ def ensure_repo(workspace, extra_ignore_dirs=None):
         )
     _assert_workspace_root(workspace)
     _assert_no_embedded_repos(workspace)
-    for key, value in (
-        ("user.name", "impl-roadmap-orchestrator"),
-        ("user.email", "orchestrator@impl-roadmap.local"),
-    ):
-        probe = _run(workspace, "config", "--get", key, check=False)
-        if probe.returncode != 0 or not probe.stdout.strip():
-            _run(workspace, "config", key, value)
+    ensure_commit_identity(workspace)
     gitignore = os.path.join(workspace, ".gitignore")
     try:
         with open(gitignore, "r", encoding="utf-8") as fh:

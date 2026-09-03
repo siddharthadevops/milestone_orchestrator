@@ -380,6 +380,74 @@ class PromptRouterTest(unittest.TestCase):
                         prompt_router.REPOSITORY_WORKAREA_BOUNDARY, text
                     )
 
+    def test_standalone_repository_brainstorming_reuses_named_set(self):
+        job = prompt_router.STANDALONE_REPOSITORY_SESSION_JOB
+        values = self.values(job)
+        expected_questions = {
+            "initial_position": [
+                "turn_environment_fit", "turn_human_scale",
+            ],
+            "contrary_position": [
+                "turn_environment_fit", "turn_human_scale",
+                "turn_better_alternative",
+            ],
+            "common_sense": [
+                "turn_environment_fit", "turn_human_scale", "request_focus",
+            ],
+        }
+        route = prompt_router._route(
+            job, "brainstorming", "default", "initial_position", True, None
+        )
+        self.assertEqual(
+            route.mount_tags,
+            frozenset(("job:producer", "role:initial_position")),
+        )
+        for (role, lead), kind in prompt_router.SEATS.items():
+            with self.subTest(role=role):
+                prompt = prompt_router.assemble(
+                    self.prompt_set,
+                    job=job,
+                    executor="brainstorming",
+                    material="default",
+                    values=values,
+                    role=role,
+                    lead=lead,
+                )
+                self.assertEqual(prompt["kind"], kind)
+                self.assertEqual(
+                    [item["id"] for item in prompt["questions"]["items"]],
+                    expected_questions[role],
+                )
+                text = self.text(prompt)
+                self.assertNotIn("\nPROBLEM\n", text)
+                self.assertNotIn("TWO-REGISTER DOCUMENT", text)
+                self.assertNotIn("IMPLEMENTATION RULES", text)
+                if role != "common_sense":
+                    self.assertIn(
+                        prompt_router.REPOSITORY_WORKAREA_BOUNDARY, text
+                    )
+                    self.assertNotIn(
+                        prompt_router.STANDALONE_WORKAREA_BOUNDARY, text
+                    )
+
+        with tempfile.TemporaryDirectory(
+            prefix="orch-repository-prompt-set-"
+        ) as home:
+            marker = "LITERATURE CUSTOM GUIDANCE"
+            self.write_set(home, "literature", self.marked_documents(marker))
+            resolution = prompt_router.resolve(
+                home,
+                job=job,
+                executor="brainstorming",
+                material="default",
+                values=values,
+                prompt_set="literature",
+                role="initial_position",
+                lead=True,
+            )
+            self.assertIsNone(resolution.prompt_set_fallback)
+            self.assert_prompt_marked(resolution.prompt, marker)
+
     def test_invalid_charge_coordinates_and_raw_selectors_are_rejected(self):
         job = "implement@slice_impl"
         valid = {
@@ -488,6 +556,7 @@ class PromptRouterTest(unittest.TestCase):
     def test_all_session_seats_and_artifact_coordinates_are_closed(self):
         session_targets = (
             (prompt_router.STANDALONE_SESSION_JOB, None),
+            (prompt_router.STANDALONE_REPOSITORY_SESSION_JOB, None),
             ("draft_slice_note@slice_doc", None),
             ("implement@slice_impl", None),
             ("rethink", "document"),

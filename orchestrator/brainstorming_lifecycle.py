@@ -363,7 +363,7 @@ def validate_create_body(body):
         request = brainstorming.validate_request(body["request"])
         for field in (
             ("workspace_path",)
-            if brainstorming.repository_rethink_request(request) else
+            if brainstorming.target_free_repository_request(request) else
             ("workspace_path", "target_path")
         ):
             if "\x00" in request[field]:
@@ -497,11 +497,11 @@ def validate_create_body(body):
                 "create_target_parents must be a boolean"
             )
         if (
-            brainstorming.repository_rethink_request(request)
+            brainstorming.target_free_repository_request(request)
             and create_parents
         ):
             raise brainstorming.ContractError(
-                "repository rethink requests cannot create target parents"
+                "target-free repository requests cannot create target parents"
             )
         staffing_session = body.get("staffing_session")
         if staffing_session is not None:
@@ -1936,6 +1936,22 @@ def _create_session(
     Prompt Router selection is independent and applies to every turn.
     """
     checked = validate_create_body(body)
+    source_payload = (
+        (checked["request"].get("context") or {}).get("source_payload") or {}
+    )
+    session_charge = (
+        source_payload.get("session_charge")
+        if isinstance(source_payload, dict) else None
+    )
+    if (
+        isinstance(session_charge, dict)
+        and session_charge.get("job")
+        == prompt_router.STANDALONE_REPOSITORY_SESSION_JOB
+    ):
+        # This charge grants an editing seat the whole repository.  Only the
+        # task adapter may mint it after task admission and a real Git
+        # checkpoint; accepting caller-authored copies would bypass both.
+        raise PublicLifecycleError(400, INVALID_REQUEST)
     try:
         caller = brainstorming._text(caller, "caller")
     except brainstorming.ContractError as exc:
@@ -2087,14 +2103,14 @@ def _create_session_with_context(
         staffing_binding=staffing_binding,
     )
     store = brainstorming.SessionStore(state_directory(home))
-    target_free_rethink = brainstorming.repository_rethink_request(
+    target_free_repository = brainstorming.target_free_repository_request(
         checked["request"]
     )
-    if target_free_rethink and owned_target_path is not None:
+    if target_free_repository and owned_target_path is not None:
         raise PublicLifecycleError(400, INVALID_REQUEST)
     target_path = (
         None
-        if target_free_rethink else
+        if target_free_repository else
         _resolved_target_path(
             checked["request"], context,
             owned_target_path=owned_target_path,
@@ -2103,11 +2119,11 @@ def _create_session_with_context(
     repository = session_repository.context_from_state(
         {"request": checked["request"]}
     )
-    if target_free_rethink and repository is None:
+    if target_free_repository and repository is None:
         raise PublicLifecycleError(400, INVALID_REQUEST)
-    if not target_free_rethink:
+    if not target_free_repository:
         _reject_authority_overlap(home, store, target_path)
-    if not target_free_rethink and not checked["create_target_parents"]:
+    if not target_free_repository and not checked["create_target_parents"]:
         # Historical fail-fast: without the opt-in, a target whose parent
         # is missing (or otherwise uncapturable) refuses before anything
         # is spawned or written.
@@ -2123,13 +2139,14 @@ def _create_session_with_context(
         reap_children(home)
         with _locked_registry(home):
             document = _load_registry(home)
-            if not target_free_rethink and checked["create_target_parents"]:
+            if not target_free_repository and checked["create_target_parents"]:
                 # Under the registry lock, after every pure validation: a
                 # concurrent create of the same fresh folder serializes
                 # here, so cleanup can never remove a sibling's folder.
                 created_dirs = _ensure_target_parents(target_path)
             identity = (
-                None if target_free_rethink else _target_identity(target_path)
+                None
+                if target_free_repository else _target_identity(target_path)
             )
             for record in document["sessions"]:
                 if not _target_is_active(store, record):
@@ -2138,19 +2155,19 @@ def _create_session_with_context(
                 overlaps_repository_scope = (
                     isinstance(recorded_scope, str)
                     and (
-                        target_free_rethink
+                        target_free_repository
                         or "target_path" not in record
                     )
                     and _paths_overlap(
                         (
                             context["workspace_path"]
-                            if target_free_rethink else target_path
+                            if target_free_repository else target_path
                         ),
                         recorded_scope,
                     )
                 )
                 if overlaps_repository_scope or (
-                    not target_free_rethink
+                    not target_free_repository
                     and _same_target(record, target_path, identity)
                 ):
                     raise PublicLifecycleError(409, TARGET_IN_USE)
@@ -2208,7 +2225,7 @@ def _create_session_with_context(
                 "runtime": runtime,
                 "execution_context": context,
             }
-            if not target_free_rethink:
+            if not target_free_repository:
                 record["target_path"] = target_path
                 record["target_identity"] = identity
             if staffing_binding is not None:
@@ -2668,10 +2685,12 @@ def view_session(
             raise RuntimeError("Brainstorming session state is unavailable")
         state = snapshot.state
         progress = brainstorming.coordination_projection(state)
-        target_free_rethink = brainstorming.repository_rethink_session(state)
+        target_free_repository = (
+            brainstorming.target_free_repository_session(state)
+        )
         target = (
             None
-            if target_free_rethink else
+            if target_free_repository else
             {
                 "ref": state["request"]["target_path"],
                 "revision": None,
@@ -2682,7 +2701,7 @@ def view_session(
             }
         )
         repository_authority = None
-        if target_free_rethink:
+        if target_free_repository:
             repository = session_repository.context_from_state(state)
             accepted = (
                 None
@@ -2698,7 +2717,7 @@ def view_session(
                 ),
             }
         if (
-            not target_free_rethink
+            not target_free_repository
             and target is not None
             and progress is not None
             and progress["accepted_target_revision"] is not None
@@ -2875,7 +2894,7 @@ def _failure_result(state, reason):
         "rounds_used": 0 if projection is None else projection["rounds_used"],
         "reason": reason,
     }
-    if not brainstorming.repository_rethink_session(state):
+    if not brainstorming.target_free_repository_session(state):
         result["target_ref"] = state["request"]["target_path"]
     return result
 

@@ -15,7 +15,7 @@ import uuid
 
 from orchestrator import brainstorming, brainstorming_tasks, contracts, driver, gitsync
 from orchestrator import kvstore, pricing
-from orchestrator import registry, runners, staffing, tasks
+from orchestrator import registry, runners, session_repository, staffing, tasks
 from orchestrator import state as st
 
 
@@ -845,6 +845,15 @@ class DirectTaskHost:
             active = list(self._active.values())
         return any(gitsync.paths_overlap(path, workspace) for path in active)
 
+    def owns_workspace_except(self, workspace, task_id):
+        """Whether another execution thread owns an overlapping tree."""
+        with self._lock:
+            active = [
+                path for active_id, path in self._active.items()
+                if active_id != task_id
+            ]
+        return any(gitsync.paths_overlap(path, workspace) for path in active)
+
     def _run(self, task_id, config_resolver):
         try:
             record = self.store.record(task_id)
@@ -1347,6 +1356,9 @@ class DirectTaskHost:
             if projection is None:
                 return
             session_id = projection["id"]
+            repository_backed = session_repository.context_from_state(
+                projection["state"]
+            ) is not None
             with self._lock:
                 self._sessions[task_id] = session_id
             authority = record["resolved_staffing"]["dispatch_authority"]
@@ -1374,11 +1386,9 @@ class DirectTaskHost:
                     stopped(stop_reason)
                     return
                 state = {"tasks": self.store.records()}
-                terminal = brainstorming_tasks.finish_task(
-                    state,
-                    task_id,
-                    self.home,
-                    session_id,
+                effect = (
+                    None
+                    if repository_backed else
                     lambda effect_request: (
                         brainstorming_tasks.apply_agreed_effects(
                             self.home,
@@ -1392,7 +1402,14 @@ class DirectTaskHost:
                                 )
                             ),
                         )
-                    ),
+                    )
+                )
+                terminal = brainstorming_tasks.finish_task(
+                    state,
+                    task_id,
+                    self.home,
+                    session_id,
+                    effect,
                 )
                 if terminal is not None:
                     stop_reason = self._stop_reason(task_id)

@@ -3,6 +3,7 @@
 import copy
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -76,6 +77,23 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.home = os.path.join(self.tmp.name, "home")
         os.makedirs(os.path.join(self.workspace, "out"))
         os.makedirs(self.home)
+        subprocess.run(["git", "init", "-q", self.workspace], check=True)
+        subprocess.run(
+            ["git", "-C", self.workspace, "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "config", "user.name", "Test"],
+            check=True,
+        )
+        seed = os.path.join(self.workspace, "seed.txt")
+        with open(seed, "w", encoding="utf-8") as handle:
+            handle.write("seed\n")
+        subprocess.run(["git", "-C", self.workspace, "add", "seed.txt"], check=True)
+        subprocess.run(
+            ["git", "-C", self.workspace, "commit", "-qm", "seed"],
+            check=True,
+        )
         self.effect_store = EffectStore()
         self.config = {
             "families_order": ["codex", "claude"],
@@ -231,6 +249,9 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.assertEqual(body["request"]["max_rounds"], 24)
         self.assertEqual(body["closure_policy"], "majority")
         self.assertEqual(body["prompt_set"], "operator")
+        self.assertEqual(
+            record["order"]["brainstorming_mode"], "repository_review"
+        )
         historical = copy.deepcopy(record)
         historical["order"].pop("prompt_set")
         historical_body = adapter._creation_body(
@@ -257,11 +278,14 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
             lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX + record["id"],
         )
         self.assertNotIn("target_path", record["order"]["request"])
-        self.assertFalse(
-            os.path.commonpath(
-                [self.workspace, body["request"]["target_path"]]
-            ) == self.workspace
+        self.assertNotIn("target_path", body["request"])
+        charge = body["request"]["context"]["source_payload"][
+            "session_charge"
+        ]
+        self.assertEqual(
+            charge["job"], adapter.prompt_router.STANDALONE_REPOSITORY_SESSION_JOB
         )
+        self.assertEqual(charge["repository"]["mode"], "standalone_task")
         self.assertEqual(
             body["request"]["context"]["source_payload"]["output_directory"],
             os.path.realpath(os.path.join(self.workspace, "out")),
@@ -316,6 +340,182 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
                 effect_store=self.effect_store,
             )
         self.assertEqual(terminal["result"]["status"], "failure")
+
+    def test_direct_launch_does_not_trust_caller_named_session_charge(self):
+        selection = {"session": None}
+        supplied = {
+            "session_charge": {
+                "job": "implement@slice_impl",
+                "repository": {"pre_session_commit": "0" * 40},
+            }
+        }
+        state = {}
+        order = self.order(self.request(context=copy.deepcopy(supplied)))
+        order["brainstorming_mode"] = "repository_review"
+        record = tasks.admit_task(
+            state,
+            order,
+            adapter.resolve_staffing(
+                self.config, self.workspace, staffing_selection=selection
+            ),
+            primary_workspace=self.workspace,
+        )
+        with mock.patch.object(
+            adapter.lifecycle,
+            "create_resolved_session",
+            return_value={"id": "bs-direct", "state": {"status": "running"}},
+        ) as create:
+            adapter.start_task(
+                state,
+                record["id"],
+                self.config,
+                self.home,
+                staffing_selection=selection,
+            )
+
+        source = create.call_args.args[1]["request"]["context"]["source_payload"]
+        self.assertEqual(source["task_context"], supplied)
+        self.assertEqual(
+            source["session_charge"]["job"],
+            adapter.prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+        )
+        self.assertNotEqual(
+            source["session_charge"]["repository"]["pre_session_commit"],
+            "0" * 40,
+        )
+
+    def test_direct_repository_success_is_the_reviewed_result(self):
+        state = {}
+        record = adapter.admit_task(
+            state, self.order(), self.config, self.workspace
+        )
+        base = subprocess.run(
+            ["git", "-C", self.workspace, "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        native = {
+            "outcome": "success",
+            "transcript_ref": "/private/chat.md",
+            "rounds_used": 2,
+        }
+        projection = {
+            "caller": "task:" + record["id"],
+            "process": "stopped",
+            "state": {
+                "status": "success",
+                "result": native,
+                "accepted_target_revision": base,
+                "request": {
+                    "workspace_path": self.workspace,
+                    "context": {
+                        "source_payload": {
+                            "session_charge": {
+                                "repository": {
+                                    "mode": "standalone_task",
+                                    "pre_session_commit": base,
+                                }
+                            }
+                        }
+                    },
+                },
+            },
+            "work_duration_s": 2.0,
+            "work_token_usage": usage(2),
+            "work_token_usage_partial": False,
+            "work_cost": {"api_usd": 0.2, "real_usd": 0.0},
+            "work_cost_partial": False,
+        }
+        apply_effects = mock.Mock(
+            side_effect=AssertionError("reviewed repository work must not rerun")
+        )
+        with mock.patch.object(
+            adapter.lifecycle, "inspect_session", return_value=projection
+        ):
+            terminal = adapter.finish_task(
+                state,
+                record["id"],
+                self.home,
+                "bs-reviewed-direct",
+                apply_effects,
+            )
+
+        apply_effects.assert_not_called()
+        result = terminal["result"]
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["native_result"]["session_id"], "bs-reviewed-direct")
+        self.assertEqual(result["native_result"]["source_base_revision"], base)
+        self.assertEqual(result["native_result"]["accepted_revision"], base)
+
+    def test_repository_delivery_drift_fails_the_task_without_rerunning_work(self):
+        state = {}
+        record = adapter.admit_task(
+            state, self.order(), self.config, self.workspace
+        )
+        accepted = subprocess.run(
+            ["git", "-C", self.workspace, "rev-parse", "HEAD"],
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.strip()
+        with open(
+            os.path.join(self.workspace, "after-session.txt"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write("later work\n")
+        subprocess.run(
+            ["git", "-C", self.workspace, "add", "after-session.txt"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.workspace, "commit", "-qm", "later work"],
+            check=True,
+        )
+        projection = {
+            "caller": "task:" + record["id"],
+            "process": "stopped",
+            "state": {
+                "status": "success",
+                "result": {
+                    "outcome": "success",
+                    "transcript_ref": "/private/chat.md",
+                    "rounds_used": 1,
+                },
+                "accepted_target_revision": accepted,
+                "request": {
+                    "workspace_path": self.workspace,
+                    "context": {"source_payload": {"session_charge": {
+                        "repository": {
+                            "mode": "standalone_task",
+                            "pre_session_commit": accepted,
+                        }
+                    }}},
+                },
+            },
+            "work_duration_s": 1.0,
+            "work_token_usage": None,
+            "work_token_usage_partial": True,
+            "work_cost": None,
+            "work_cost_partial": True,
+        }
+        effect = mock.Mock(
+            side_effect=AssertionError("drift must not rerun repository work")
+        )
+        with mock.patch.object(
+            adapter.lifecycle, "inspect_session", return_value=projection
+        ):
+            terminal = adapter.finish_task(
+                state, record["id"], self.home, "bs-drifted", effect
+            )
+
+        effect.assert_not_called()
+        self.assertEqual(terminal["result"]["status"], "failure")
+        self.assertIn("HEAD no longer equals", terminal["result"]["reason"])
+        self.assertEqual(
+            terminal["result"]["native_result"]["session_id"], "bs-drifted"
+        )
 
     def test_pre_cutover_task_charge_starts_without_carrying_old_material(self):
         request = self.request(context={

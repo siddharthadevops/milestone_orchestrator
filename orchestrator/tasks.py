@@ -1020,7 +1020,10 @@ def validate_order(order, reviewed_defaults=None):
         _exact_keys(
             order,
             ("task_executor", "request"),
-            ("configuration", "staffing_session", "prompt_set"),
+            (
+                "configuration", "staffing_session", "prompt_set",
+                "brainstorming_mode",
+            ),
             "task order",
         )
         task_executor = order["task_executor"]
@@ -1034,6 +1037,14 @@ def validate_order(order, reviewed_defaults=None):
         if "prompt_set" in order and task_executor != "brainstorming":
             raise ContractError(
                 "task order.prompt_set is only available for Brainstorming"
+            )
+        if "brainstorming_mode" in order and (
+            task_executor != "brainstorming"
+            or order["brainstorming_mode"] != "repository_review"
+        ):
+            raise ContractError(
+                "task order.brainstorming_mode must be repository_review "
+                "for Brainstorming"
             )
         checked = {
             "task_executor": task_executor,
@@ -1054,6 +1065,8 @@ def validate_order(order, reviewed_defaults=None):
                 )
             except prompt_sets.PromptSetError as exc:
                 raise ContractError("task order.prompt_set is invalid") from exc
+            if "brainstorming_mode" in order:
+                checked["brainstorming_mode"] = order["brainstorming_mode"]
         return _json_copy(checked, "task order")
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)

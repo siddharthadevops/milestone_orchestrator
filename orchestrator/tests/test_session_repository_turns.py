@@ -236,6 +236,66 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
             state.load(self.state_path)["milestone"],
         )
 
+    def test_standalone_task_turns_need_no_synthetic_milestone_state(self):
+        git(self.workspace, "config", "user.name", "")
+        git(self.workspace, "config", "user.email", "")
+        repository = session_repository.checkpoint_standalone_task_context(
+            self.workspace,
+            "Prepare direct Brainstorming task",
+        )
+        self.assertEqual(
+            git(self.workspace, "config", "--local", "--get", "user.name"),
+            "impl-roadmap-orchestrator",
+        )
+        self.assertEqual(
+            git(self.workspace, "config", "--local", "--get", "user.email"),
+            "orchestrator@impl-roadmap.local",
+        )
+        self.assertEqual(
+            repository,
+            {
+                "mode": "standalone_task",
+                "pre_session_commit": gitops.head_full_sha(self.workspace),
+            },
+        )
+        charge = {"repository": repository}
+        session = {"request": {"workspace_path": self.workspace}}
+
+        with mock.patch.object(
+            session_repository.st,
+            "load",
+            side_effect=AssertionError("direct task must not load run state"),
+        ):
+            attempt = session_repository.begin_attempt(
+                session, charge, "initial_position"
+            )
+        Path(self.workspace, self.target_path).write_text(
+            "direct task implementation\n", encoding="utf-8"
+        )
+        authored = session_repository.complete_attempt(attempt, "lead", 1)
+        self.assertTrue(authored["accept_reply"])
+        self.assertTrue(authored["committed"])
+        self.assertEqual(
+            authored["revision"], gitops.head_full_sha(self.workspace)
+        )
+
+        reviewer = session_repository.begin_attempt(
+            session, charge, "contrary_position"
+        )
+        Path(self.workspace, self.target_path).write_text(
+            "forbidden reviewer edit\n", encoding="utf-8"
+        )
+        reviewed = session_repository.complete_attempt(
+            reviewer, "contrary", 1
+        )
+        self.assertFalse(reviewed["accept_reply"])
+        self.assertFalse(reviewed["committed"])
+        self.assertEqual(reviewed["revision"], authored["revision"])
+        self.assertEqual(
+            Path(self.workspace, self.target_path).read_text(encoding="utf-8"),
+            "direct task implementation\n",
+        )
+
     def test_editor_turn_ignores_unknown_plan_fields(self):
         attempt = self.begin("initial_position")
         updated = copy.deepcopy(PLAN)
@@ -651,6 +711,102 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
             "repository-session", created.revision, "running"
         )
         return store
+
+    def test_quiescent_repository_attempt_fails_without_adopting_or_retrying(self):
+        participants = [
+            {
+                "id": "lead", "role": "initial_position", "delivery": "llm",
+                "executor_ref": "lead-executor", "model_family": "codex",
+            },
+            {
+                "id": "contrary", "role": "contrary_position",
+                "delivery": "llm", "executor_ref": "contrary-executor",
+                "model_family": "codex",
+            },
+        ]
+        store = self._store(participants)
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            store, object()
+        )
+        initialized = coordinator.prepare("repository-session")
+        workspace_stat = os.stat(self.workspace)
+        attempt = store.begin_turn_attempt("repository-session", {
+            "token": "crashed-after-quiescence",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "target_revision": None,
+            "quiescent": False,
+            "target_parent": {
+                "path": os.path.realpath(self.workspace),
+                "device": workspace_stat.st_dev,
+                "inode": workspace_stat.st_ino,
+            },
+        })
+        store.mark_turn_attempt_quiescent(
+            "repository-session", attempt["token"]
+        )
+
+        recovered = coordinator.prepare("repository-session")
+
+        self.assertEqual(recovered.state["status"], "failure")
+        self.assertEqual(recovered.state["failure_origin"], "operational")
+        self.assertIn(
+            "could not be reconciled",
+            recovered.state["result"]["reason"],
+        )
+        self.assertEqual(
+            recovered.state["accepted_target_revision"],
+            initialized.state["accepted_target_revision"],
+        )
+        self.assertIsNone(store.read_turn_attempt("repository-session"))
+
+    def test_quiescent_attempt_after_accepted_turn_only_clears_control(self):
+        participants = [
+            {
+                "id": "lead", "role": "initial_position", "delivery": "llm",
+                "executor_ref": "lead-executor", "model_family": "codex",
+            },
+            {
+                "id": "contrary", "role": "contrary_position",
+                "delivery": "llm", "executor_ref": "contrary-executor",
+                "model_family": "codex",
+            },
+        ]
+        store = self._store(participants)
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            store, object()
+        )
+        initialized = coordinator.prepare("repository-session")
+        workspace_stat = os.stat(self.workspace)
+        attempt = store.begin_turn_attempt("repository-session", {
+            "token": "crashed-after-accepted-cas",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "target_revision": None,
+            "quiescent": False,
+            "target_parent": {
+                "path": os.path.realpath(self.workspace),
+                "device": workspace_stat.st_dev,
+                "inode": workspace_stat.st_ino,
+            },
+        })
+        store.mark_turn_attempt_quiescent(
+            "repository-session", attempt["token"]
+        )
+        accepted = store.record_repository_turn(
+            "repository-session",
+            initialized.revision,
+            "lead",
+            "Implemented the requested change.",
+            self.repository["pre_session_commit"],
+            False,
+        )
+
+        recovered = coordinator.prepare("repository-session")
+
+        self.assertEqual(recovered.state, accepted.state)
+        self.assertEqual(recovered.state["status"], "running")
+        self.assertIsNone(store.read_turn_attempt("repository-session"))
 
     def test_contract_correction_has_a_fresh_repository_snapshot(self):
         participant = {

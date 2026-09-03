@@ -239,6 +239,7 @@ INVALID_META = "invalid_meta"
 PROJECT_IN_USE = "project_in_use"
 PROJECTION_TOMBSTONE_FAILED = "projection_tombstone_failed"
 PRIMARY_NOT_REPO_ROOT = "primary_not_repo_root"
+PRIMARY_HAS_NO_COMMIT = "primary_has_no_commit"
 # A work area whose milestone driver is alive is never handed to a
 # git-sync agent: the driver owns that worktree.
 WORK_AREA_BUSY = "work_area_busy"
@@ -1874,7 +1875,30 @@ def _record_launch_roots(home, slug, area):
     )
 
 
-def _create_bound_run(home, payload, workspace, prompt_set):
+def _bound_launch_record(home, payload):
+    """Resolve a project work area without creating milestone state."""
+    try:
+        slug = workareas.validate_project_slug(payload.get("project"))
+        area = workareas.validate_name(payload.get("work_area"))
+    except workareas.WorkAreaValidationError as exc:
+        raise ApiError(400, exc.reason)
+    rec = registry.load_projects_record(home)
+    project = registry.get_project(rec, slug)
+    if project is None or not os.path.isfile(_store_file(home, slug)):
+        raise ApiError(400, workareas.UNKNOWN)
+    store = _work_area_store(home, slug)
+    try:
+        record = store.read(area)
+    except (RuntimeError, OSError) as exc:
+        _raise_store_error(exc)
+    if not record.ok:
+        raise ApiError(400, record.reason)
+    return slug, area, project, record.value
+
+
+def _create_bound_run(
+    home, payload, workspace, prompt_set, run_creation_token=None
+):
     """POST /api/runs {project, work_area}: launch against a declared
     project instead of a bare path. Observable order: (1) addressing —
     declared project, live stored record of ANY status (readiness is
@@ -1887,29 +1911,17 @@ def _create_bound_run(home, payload, workspace, prompt_set):
     describes the descriptor's roots, not this launch's requirements).
 
     Returns (primary_path, state_path, goal_doc)."""
-    try:
-        slug = workareas.validate_project_slug(payload.get("project"))
-        area = workareas.validate_name(payload.get("work_area"))
-    except workareas.WorkAreaValidationError as exc:
-        raise ApiError(400, exc.reason)
-
     # Addressing. An undeclared project (or a declared one whose store is
     # lost) is the sealed launch seam's no-store posture: unknown_work_area,
     # 400-class, no store opened, nothing created. This launch-seam mapping
     # is deliberately distinct from the CRUD routes' 404/5xx mapping.
-    rec = registry.load_projects_record(home)
-    project = registry.get_project(rec, slug)
-    if project is None or not os.path.isfile(_store_file(home, slug)):
-        raise ApiError(400, workareas.UNKNOWN)
-    store = _work_area_store(home, slug)
-    try:
-        record = store.read(area)
-    except (RuntimeError, OSError) as exc:
-        _raise_store_error(exc)
-    if not record.ok:
-        raise ApiError(400, record.reason)
-    primary = record.value["primary"]
-    additional = record.value["additional"]
+    slug, area, project, selected = _bound_launch_record(home, payload)
+    primary = selected["primary"]
+    additional = selected["additional"]
+    if not _workspace_lease_matches(
+        run_creation_token, primary["path"]
+    ):
+        raise ApiError(409, WORK_AREA_BUSY)
 
     goal, goal_doc = _launch_goal(payload)
     user_cfg = payload.get("config")
@@ -2304,7 +2316,7 @@ def resolve_staffing_request(home, record, body):
     return resolution.answer
 
 
-def create_run(home, payload):
+def create_run(home, payload, task_host=None, _run_creation_token=None):
     attach = bool(payload.get("attach"))
     prompt_set_supplied = "prompt_set" in payload
     if attach and prompt_set_supplied:
@@ -2369,6 +2381,41 @@ def create_run(home, payload):
         payload.get("staffing"), supplied=staffing_supplied
     )
 
+    if attach:
+        # Resolve this contradiction before deriving a project workspace for
+        # the temporary creation lease. Attach adopts existing authority and
+        # therefore cannot carry any launch-time authority beside it.
+        for key in (
+            "goal", "goal_doc", "config", "project", "work_area",
+            "profile", "staffing",
+        ):
+            if payload.get(key) is not None:
+                raise ApiError(
+                    400,
+                    "attach adopts the existing state as-is; %r cannot be "
+                    "combined with it" % key,
+                )
+
+    if _run_creation_token is None:
+        ownership_workspace = workspace
+        if bound:
+            _slug, _area, _project, selected = _bound_launch_record(
+                home, payload
+            )
+            ownership_workspace = selected["primary"]["path"]
+        with _git_sync_lease(
+            home,
+            ownership_workspace,
+            task_host=task_host,
+            live_sessions_only=True,
+        ) as token:
+            return create_run(
+                home,
+                payload,
+                task_host=task_host,
+                _run_creation_token=token,
+            )
+
     goal_doc = None
     if attach:
         # Attach adopts the on-disk state exactly as it is; a supplied
@@ -2377,14 +2424,6 @@ def create_run(home, payload):
         # ignored: reject instead of pretending it was honored. Adopts the
         # legacy workspace-root state, or an explicit `state_path` for a
         # per-milestone run.
-        for key in ("goal", "goal_doc", "config", "project", "work_area",
-                    "profile", "staffing"):
-            if payload.get(key) is not None:
-                raise ApiError(
-                    400,
-                    "attach adopts the existing state as-is; %r cannot be "
-                    "combined with it" % key,
-                )
         state_path = payload.get("state_path")
         if state_path:
             state_path = os.path.abspath(os.path.expanduser(state_path))
@@ -2410,9 +2449,17 @@ def create_run(home, payload):
                 "state at %s belongs to workspace %r, not %r"
                 % (state_path, adopted_ws, workspace),
             )
+        if not _workspace_lease_matches(
+            _run_creation_token, workspace
+        ):
+            raise ApiError(409, WORK_AREA_BUSY)
     elif bound:
         workspace, state_path, goal_doc = _create_bound_run(
-            home, payload, workspace, prompt_set
+            home,
+            payload,
+            workspace,
+            prompt_set,
+            run_creation_token=_run_creation_token,
         )
     else:
         goal, goal_doc = _launch_goal(payload)
@@ -2458,6 +2505,10 @@ def create_run(home, payload):
             or os.path.basename(workspace.rstrip("/"))
             or "run"
         )
+        if not _workspace_lease_matches(
+            _run_creation_token, workspace
+        ):
+            raise ApiError(409, WORK_AREA_BUSY)
         try:
             # init_run resolves the (uniquified) milestone dir and returns
             # the real state path — for a per-milestone docs_dir that is
@@ -2530,11 +2581,73 @@ def create_run(home, payload):
     if goal_doc:
         registry.remember_recent(home, "goal_docs", goal_doc)
     if payload.get("autostart", True):
-        entry = start_run(home, run_id)
+        entry = start_run(
+            home,
+            run_id,
+            task_host=task_host,
+            run_creation_token=_run_creation_token,
+        )
     return entry
 
 
-def start_run(home, run_id):
+def _startable_run_locked(
+    home, reg, run_id, task_host=None, run_creation_token=None
+):
+    """Return one run that may claim its workspace while the lock is held."""
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    if driver_alive(entry):
+        raise ApiError(
+            409, "run %s is already running (pid %s)" % (run_id, entry["pid"])
+        )
+    info = run_status(entry)
+    if info["milestone_status"] == "closed":
+        raise ApiError(409, "run %s is already closed" % run_id)
+    if info["state_error"]:
+        raise ApiError(409, "state unreadable: %s" % info["state_error"])
+    if run_creation_token is not None and not _workspace_lease_matches(
+        run_creation_token, entry.get("workspace")
+    ):
+        raise ApiError(409, WORK_AREA_BUSY)
+    # The task host and Brainstorming registry record their claims while
+    # holding this same registry lock.  Keep the complete ownership check
+    # beside spawn so either start ordering has one winner.
+    _require_startable_workspace_locked(
+        home,
+        entry.get("workspace"),
+        task_host=task_host,
+        workspace_lease_token=run_creation_token,
+    )
+    return entry
+
+
+def _spawn_run_locked(home, reg, entry):
+    """Spawn and record a previously checked run under the registry lock."""
+    run_id = entry["id"]
+    log_file = open(registry.log_path(home, run_id), "a")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-u", "-m", "orchestrator.driver", "run",
+             "--state", entry["state_path"],
+             "--model-profiles-home", os.path.abspath(home)],
+            cwd=REPO_ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    finally:
+        log_file.close()
+    with _CHILDREN_LOCK:
+        _CHILDREN[proc.pid] = (run_id, proc)
+    entry["pid"] = proc.pid
+    entry["last_spawn_at"] = registry.now_iso()
+    registry.save(home, reg)
+    return entry
+
+
+def start_run(home, run_id, task_host=None, run_creation_token=None):
     reap_exited_drivers(home)
     os.makedirs(registry.logs_dir(home), exist_ok=True)
     # Check-spawn-record is one atomic section under the registry lock:
@@ -2544,42 +2657,14 @@ def start_run(home, run_id):
     # unregistered driver and 500 on the update).
     with registry.locked(home):
         reg = registry.load(home)
-        entry = registry.get(reg, run_id)
-        if entry is None:
-            raise ApiError(404, "unknown run %r" % run_id)
-        if driver_alive(entry):
-            raise ApiError(
-                409, "run %s is already running (pid %s)" % (run_id, entry["pid"])
-            )
-        info = run_status(entry)
-        if info["milestone_status"] == "closed":
-            raise ApiError(409, "run %s is already closed" % run_id)
-        if info["state_error"]:
-            raise ApiError(409, "state unreadable: %s" % info["state_error"])
-        # A git sync is merging this tree right now: starting a driver into
-        # it is the same collision the sync route refuses in reverse.
-        if workspace_sync_in_flight(entry.get("workspace")):
-            raise ApiError(409, WORK_AREA_BUSY)
-        log_file = open(registry.log_path(home, run_id), "a")
-        try:
-            proc = subprocess.Popen(
-                [sys.executable, "-u", "-m", "orchestrator.driver", "run",
-                 "--state", entry["state_path"],
-                 "--model-profiles-home", os.path.abspath(home)],
-                cwd=REPO_ROOT,
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-        finally:
-            log_file.close()
-        with _CHILDREN_LOCK:
-            _CHILDREN[proc.pid] = (run_id, proc)
-        entry["pid"] = proc.pid
-        entry["last_spawn_at"] = registry.now_iso()
-        registry.save(home, reg)
-        return entry
+        entry = _startable_run_locked(
+            home,
+            reg,
+            run_id,
+            task_host=task_host,
+            run_creation_token=run_creation_token,
+        )
+        return _spawn_run_locked(home, reg, entry)
 
 
 def stop_run(home, run_id):
@@ -2622,27 +2707,30 @@ def _wait_driver_exit(entry, timeout_s):
     return not driver_alive(entry)
 
 
-def resume_run(home, run_id):
+def resume_run(home, run_id, task_host=None):
     """Revive a failed run (clears the failure, restores unit status) and
     start its driver again."""
     reap_exited_drivers(home)
-    reg = registry.load(home)
-    entry = registry.get(reg, run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    if driver_alive(entry):
-        raise ApiError(409, "run %s is already running" % run_id)
-    try:
-        state = st.load(entry["state_path"])
-    except Exception as exc:
-        raise ApiError(409, "state unreadable: %s" % exc)
-    try:
-        st.resume_run(state)
-    except ValueError as exc:
-        raise ApiError(409, str(exc))
-    st.save(entry["state_path"], state)
-    _evict_summary(entry["state_path"])
-    return start_run(home, run_id)
+    os.makedirs(registry.logs_dir(home), exist_ok=True)
+    # Ownership, state transition and spawn are one critical section. If a
+    # direct task owns the tree, the failed state stays failed and the guard
+    # can retry after that task releases it.
+    with registry.locked(home):
+        reg = registry.load(home)
+        entry = _startable_run_locked(
+            home, reg, run_id, task_host=task_host
+        )
+        try:
+            state = st.load(entry["state_path"])
+        except Exception as exc:
+            raise ApiError(409, "state unreadable: %s" % exc)
+        try:
+            st.resume_run(state)
+        except ValueError as exc:
+            raise ApiError(409, str(exc))
+        st.save(entry["state_path"], state)
+        _evict_summary(entry["state_path"])
+        return _spawn_run_locked(home, reg, entry)
 
 
 def delete_run(home, run_id, purge=False):
@@ -3501,25 +3589,34 @@ def require_project_admin(home, who, slug):
     return project
 
 
-_GIT_SYNC_LEASES = set()
-_GIT_SYNC_LEASES_GUARD = threading.Lock()
+_WORKSPACE_MUTATION_LEASES = {}
+_WORKSPACE_MUTATION_LEASES_GUARD = threading.Lock()
 
 
-def workspace_sync_in_flight(workspace):
-    """Whether a git sync currently holds this tree (or one containing it).
+def workspace_sync_in_flight(workspace, own_token=None):
+    """Whether another service mutation temporarily reserves this tree."""
+    key = os.path.realpath(workspace)
+    with _WORKSPACE_MUTATION_LEASES_GUARD:
+        held = list(_WORKSPACE_MUTATION_LEASES.items())
+    return any(
+        token is not own_token and gitsync.paths_overlap(path, key)
+        for token, path in held
+    )
 
-    The launch paths consult this so the exclusion runs BOTH ways: without
-    it the lease only stopped a second sync, while a run or a discussion
-    started mid-sync walked straight into the merge it was meant to avoid.
-    """
-    with _GIT_SYNC_LEASES_GUARD:
-        held = list(_GIT_SYNC_LEASES)
-    return any(gitsync.paths_overlap(path, workspace) for path in held)
+
+def _workspace_lease_matches(token, workspace):
+    if token is None:
+        return False
+    key = os.path.realpath(workspace)
+    with _WORKSPACE_MUTATION_LEASES_GUARD:
+        return _WORKSPACE_MUTATION_LEASES.get(token) == key
 
 
 @contextlib.contextmanager
-def _git_sync_lease(home, workspace):
-    """Exclude concurrent syncs, and runs starting, in this work area.
+def _git_sync_lease(
+    home, workspace, task_host=None, live_sessions_only=False
+):
+    """Reserve a work area for one sync or run-creation mutation.
 
     The lease is TAKEN under the registry lock — the same lock start_run
     holds across its own check-and-spawn — so the two decisions are
@@ -3532,27 +3629,31 @@ def _git_sync_lease(home, workspace):
     orchestrator on the same home is already outside the model.
     """
     key = os.path.realpath(workspace)
+    token = object()
     with registry.locked(home):
-        with _GIT_SYNC_LEASES_GUARD:
-            # Overlap, not equality: two syncs of a tree and a subtree of
-            # it are the same collision as two syncs of one directory.
-            if any(
-                gitsync.paths_overlap(held, key) for held in _GIT_SYNC_LEASES
-            ):
-                raise ApiError(409, WORK_AREA_BUSY)
-            _GIT_SYNC_LEASES.add(key)
+        _require_unowned_workspace(
+            home,
+            key,
+            task_host=task_host,
+            reap=False,
+            live_sessions_only=live_sessions_only,
+        )
+        with _WORKSPACE_MUTATION_LEASES_GUARD:
+            _WORKSPACE_MUTATION_LEASES[token] = key
     try:
-        yield
+        yield token
     finally:
         # Released on every exit, including a watchdog kill or the
         # re-check refusing: a leaked lease would wedge every later sync
         # AND every run start in this tree.
-        with _GIT_SYNC_LEASES_GUARD:
-            _GIT_SYNC_LEASES.discard(key)
+        with _WORKSPACE_MUTATION_LEASES_GUARD:
+            _WORKSPACE_MUTATION_LEASES.pop(token, None)
 
 
 def _require_unowned_workspace(
-    home, workspace, task_host=None, reap=True, live_sessions_only=False
+    home, workspace, task_host=None, reap=True, live_sessions_only=False,
+    workspace_lease_token=None, excluded_task_id=None, excluded_run_id=None,
+    check_sessions=True,
 ):
     """Refuse while any orchestrator work owns this worktree.
 
@@ -3570,16 +3671,27 @@ def _require_unowned_workspace(
     """
     if reap:
         reap_exited_drivers(home)
+    if workspace_sync_in_flight(workspace, own_token=workspace_lease_token):
+        raise ApiError(409, WORK_AREA_BUSY)
     runs = [
         {"workspace": entry.get("workspace"), "alive": driver_alive(entry),
          "id": entry["id"], "name": entry.get("name")}
         for entry in registry.load(home)["runs"]
+        if entry.get("id") != excluded_run_id
     ]
     if gitsync.active_run_blocking(runs, workspace) is not None:
         raise ApiError(409, WORK_AREA_BUSY)
     owns_workspace = getattr(task_host, "owns_workspace", None)
-    if callable(owns_workspace) and owns_workspace(workspace):
+    owns_args = (workspace,)
+    if excluded_task_id is not None:
+        owns_except = getattr(task_host, "owns_workspace_except", None)
+        if callable(owns_except):
+            owns_workspace = owns_except
+            owns_args = (workspace, excluded_task_id)
+    if callable(owns_workspace) and owns_workspace(*owns_args):
         raise ApiError(409, WORK_AREA_BUSY)
+    if not check_sessions:
+        return
     try:
         sessions = brainstorming_lifecycle.list_sessions(
             home, lambda _record: True
@@ -3603,6 +3715,28 @@ def _require_unowned_workspace(
             and gitsync.paths_overlap(mutation_path, workspace)
         ):
             raise ApiError(409, WORK_AREA_BUSY)
+
+
+def _require_startable_workspace_locked(
+    home, workspace, task_host=None, workspace_lease_token=None,
+    excluded_task_id=None, excluded_run_id=None, check_sessions=True,
+):
+    """Refuse a new worker while any other service owner holds its tree."""
+    if workspace_sync_in_flight(
+        workspace, own_token=workspace_lease_token
+    ):
+        raise ApiError(409, WORK_AREA_BUSY)
+    _require_unowned_workspace(
+        home,
+        workspace,
+        task_host=task_host,
+        reap=False,
+        live_sessions_only=True,
+        workspace_lease_token=workspace_lease_token,
+        excluded_task_id=excluded_task_id,
+        excluded_run_id=excluded_run_id,
+        check_sessions=check_sessions,
+    )
 
 
 def sync_project_git(home, slug, body, task_host=None, who=None):
@@ -3657,8 +3791,7 @@ def sync_project_git(home, slug, body, task_host=None, who=None):
     # under the lease: without it two POSTs both passed a check taken
     # before either agent started, and a run could be launched into the
     # window between the check and the call.
-    with _git_sync_lease(home, workspace):
-        _require_unowned_workspace(home, workspace, task_host=task_host)
+    with _git_sync_lease(home, workspace, task_host=task_host):
         # Live, immediately before the one physical call: an edit to the
         # session or to the document it names reaches this alignment.
         try:
@@ -3824,6 +3957,7 @@ def _brainstorming_task_attachment(home, record, allow_missing=False):
         if len(owned) == 1:
             matches.append({
                 "standalone": False,
+                "run_id": entry["id"],
                 "state_path": os.path.abspath(entry["state_path"]),
                 "task_id": task_id,
                 "dispatch_authority": authority,
@@ -3923,6 +4057,14 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
         session_id,
         lambda current: require_brainstorming_access(home, who, current),
     )
+    if projection.get("process") == "running":
+        # Preserve lifecycle's stop-vs-start precedence.  This remains a
+        # no-op for an ordinary live child and needs no attachment lookup.
+        return brainstorming_lifecycle.start_session(
+            home,
+            session_id,
+            lambda current: require_brainstorming_access(home, who, current),
+        )
     terminal = (
         projection["state"]["status"] in brainstorming.TERMINAL_STATUSES
     )
@@ -3936,20 +4078,30 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
             lambda current: require_brainstorming_access(home, who, current),
         )
     if attachment is None:
-        return brainstorming_lifecycle.start_session(
-            home,
-            session_id,
-            lambda current: require_brainstorming_access(home, who, current),
-            resolve_staffing_session=(
-                lambda current: (
-                    _attached_brainstorming_staffing_session(
-                        home,
-                        session_id,
-                        record=current,
+        workspace = projection["state"]["request"]["workspace_path"]
+        with registry.locked(home):
+            _require_startable_workspace_locked(
+                home,
+                workspace,
+                task_host=task_host,
+                check_sessions=False,
+            )
+            return brainstorming_lifecycle.start_session(
+                home,
+                session_id,
+                lambda current: require_brainstorming_access(
+                    home, who, current
+                ),
+                resolve_staffing_session=(
+                    lambda current: (
+                        _attached_brainstorming_staffing_session(
+                            home,
+                            session_id,
+                            record=current,
+                        )
                     )
-                )
-            ),
-        )
+                ),
+            )
     if attachment["terminal"]:
         projection = brainstorming_lifecycle.inspect_session(
             home,
@@ -3967,8 +4119,12 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
             store = task_api.StandaloneTaskStore(home)
             state = {"tasks": store.records()}
             task = tasks.task_record(state, attachment["task_id"])
-            if workspace_sync_in_flight(task_api._workspace(task)):
-                raise ApiError(409, WORK_AREA_BUSY)
+            _require_startable_workspace_locked(
+                home,
+                task_api._workspace(task),
+                task_host=task_host,
+                excluded_task_id=attachment["task_id"],
+            )
             # The restart carries the SAME reference the order was admitted
             # with, read from the order itself: a pre-cutover record has no
             # such key and keeps its static pins.
@@ -4012,14 +4168,21 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
         else None
     )
     try:
-        projection, task = brainstorming_tasks.start_persisted_task(
-            attachment["state_path"],
-            attachment["task_id"],
-            {},
-            home,
-            staffing_selection=staffing_selection,
-            session_id=session_id,
-        )
+        with registry.locked(home):
+            _require_startable_workspace_locked(
+                home,
+                projection["state"]["request"]["workspace_path"],
+                task_host=task_host,
+                excluded_run_id=attachment["run_id"],
+            )
+            projection, task = brainstorming_tasks.start_persisted_task(
+                attachment["state_path"],
+                attachment["task_id"],
+                {},
+                home,
+                staffing_selection=staffing_selection,
+                session_id=session_id,
+            )
     except st.ConcurrentStateMutation as exc:
         raise ApiError(409, WORK_AREA_BUSY) from exc
     except brainstorming_tasks.AdapterError as exc:
@@ -4192,6 +4355,11 @@ def _validate_task_references(order):
 
 def _resolve_direct_task_order(home, who, body):
     try:
+        if isinstance(body, dict) and "brainstorming_mode" in body:
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "brainstorming_mode is service-owned",
+            )
         # A deep order's implementation thresholds can be a partial override
         # of the bound project's values. Validate the common envelope first,
         # then freeze the actual two policies once that project is known.
@@ -4253,13 +4421,21 @@ def _resolve_direct_task_order(home, who, body):
         primary = _validate_task_references(order)
         order = tasks._canonical_output_directory(order, primary)
         if (
-            order["task_executor"] in ("reviewed_task", "deep_task")
+            order["task_executor"] in (
+                "brainstorming", "reviewed_task", "deep_task"
+            )
             and not gitops.is_repo_root(primary)
         ):
             raise ApiError(400, PRIMARY_NOT_REPO_ROOT)
+        if order["task_executor"] == "brainstorming":
+            try:
+                gitops.head_full_sha(primary)
+            except gitops.GitError as exc:
+                raise ApiError(400, PRIMARY_HAS_NO_COMMIT) from exc
         if order["task_executor"] == "agent_call":
             staffing = task_api.worker_staffing(config)
         elif order["task_executor"] == "brainstorming":
+            order["brainstorming_mode"] = "repository_review"
             staffing = brainstorming_tasks.resolve_staffing(
                 config,
                 os.path.realpath(primary),
@@ -4952,6 +5128,14 @@ def make_handler(home, task_host=None):
                             (body.get("request") or {}).get("workspace_path")
                         ):
                             raise ApiError(409, WORK_AREA_BUSY)
+                        _require_unowned_workspace(
+                            home,
+                            checked["request"]["workspace_path"],
+                            task_host=task_host,
+                            reap=False,
+                            live_sessions_only=True,
+                            check_sessions=False,
+                        )
                         # A discussion verifies the same roots a milestone
                         # does — and records the same finding. What it does
                         # NOT verify is the milestone's git repository
@@ -5045,7 +5229,7 @@ def make_handler(home, task_host=None):
                         self._require_admin(who)
                     elif not who.get("admin"):
                         require_project_access(home, who, body.get("project"))
-                    entry = create_run(home, body)
+                    entry = create_run(home, body, task_host=task_host)
                     self._json(201, {"ok": True, "run": run_status(entry, home=home)})
                 elif route == "/api/ui-state":
                     self._json(
@@ -5113,7 +5297,9 @@ def make_handler(home, task_host=None):
                     if len(parts) >= 4:
                         require_run_access(home, who, parts[3])
                     if len(parts) == 5 and parts[4] == "start":
-                        entry = start_run(home, parts[3])
+                        entry = start_run(
+                            home, parts[3], task_host=task_host
+                        )
                         self._json(200, {"ok": True, "run": run_status(entry, home=home)})
                     elif len(parts) == 5 and parts[4] == "stop":
                         self._json(200, {"ok": True, **stop_run(home, parts[3])})
@@ -5121,7 +5307,9 @@ def make_handler(home, task_host=None):
                         entry = rename_run(home, parts[3], self._body())
                         self._json(200, {"ok": True, "run": entry})
                     elif len(parts) == 5 and parts[4] == "resume":
-                        entry = resume_run(home, parts[3])
+                        entry = resume_run(
+                            home, parts[3], task_host=task_host
+                        )
                         self._json(200, {"ok": True, "run": run_status(entry, home=home)})
                     elif len(parts) == 5 and parts[4] == "pause-after-seal":
                         self._json(200, {
@@ -5346,7 +5534,7 @@ def append_log(home, run_id, text):
         pass
 
 
-def guard_scan(home):
+def guard_scan(home, task_host=None):
     """One pass: auto-resume every failed run whose typed failure is due.
     Never raises. Returns a list of (run_id, action) for logging/tests.
 
@@ -5407,7 +5595,7 @@ def guard_scan(home):
                 if now - last < EMERGENCY_RESUME_S:
                     actions.append((run_id, "emergency-spaced"))
                     continue
-                resume_run(home, run_id)
+                resume_run(home, run_id, task_host=task_host)
                 registry.update(home, run_id, last_emergency_resume_at=now)
                 append_log(
                     home, run_id,
@@ -5442,7 +5630,7 @@ def guard_scan(home):
             if used and now - last < gap:
                 actions.append((run_id, "spaced:%s" % ftype))
                 continue
-            resume_run(home, run_id)
+            resume_run(home, run_id, task_host=task_host)
             counts[ftype] = used + 1
             registry.update(
                 home, run_id,
@@ -5466,13 +5654,13 @@ def guard_scan(home):
     return actions
 
 
-def start_guard(home, interval=GUARD_INTERVAL_S):
+def start_guard(home, interval=GUARD_INTERVAL_S, task_host=None):
     """Daemon thread: periodic guard_scan for as long as the service
     lives."""
     def loop():
         while True:
             time.sleep(interval)
-            guard_scan(home)
+            guard_scan(home, task_host=task_host)
 
     t = threading.Thread(target=loop, name="auto-resume-guard", daemon=True)
     t.start()
@@ -5527,14 +5715,16 @@ def make_server(home, port, task_host=None):
             )
     except Exception as exc:  # startup must not die on bookkeeping
         print("standalone task adoption failed: %s" % exc, file=sys.stderr)
-    return ThreadingHTTPServer(
+    server = ThreadingHTTPServer(
         ("127.0.0.1", port), make_handler(home, task_host=task_host)
     )
+    server.task_host = task_host
+    return server
 
 
 def serve(home, port, open_browser=False):
     server = make_server(home, port)
-    start_guard(home)
+    start_guard(home, task_host=server.task_host)
     actual_port = server.server_address[1]
     url = "http://127.0.0.1:%d" % actual_port
     print("impl_roadmap local service: %s  (home: %s)" % (url, home))

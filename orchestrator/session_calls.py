@@ -27,6 +27,7 @@ SESSION_JOBS = frozenset((
 ))
 ROUTED_SESSION_JOBS = SESSION_JOBS | frozenset((
     prompt_router.STANDALONE_SESSION_JOB,
+    prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
 ))
 _CHARGE_REQUIRED = frozenset((
     "job", "prompt_set", "values", "amendments_path",
@@ -35,6 +36,13 @@ _CHARGE_REQUIRED = frozenset((
 _CHARGE_OPTIONAL = frozenset((
     "artifact_type", "project_context",
 ))
+_STANDALONE_REPOSITORY_CHARGE_REQUIRED = frozenset((
+    "job", "prompt_set", "values", "repository",
+))
+_STANDALONE_REPOSITORY_CHARGE_OPTIONAL = frozenset(("project_context",))
+_REPOSITORY_REVIEW_SCOPE = (
+    "no target selected; review the repository named by WORKSPACE"
+)
 
 PreparedSessionCall = collections.namedtuple(
     "PreparedSessionCall",
@@ -131,6 +139,38 @@ def _validate_charge(charge, *, legacy_material):
         raise prompt_router.PromptRouterError(
             "milestone session charge must be an object"
         )
+    if charge.get("job") == prompt_router.STANDALONE_REPOSITORY_SESSION_JOB:
+        keys = set(charge)
+        missing = sorted(_STANDALONE_REPOSITORY_CHARGE_REQUIRED - keys)
+        unexpected = sorted(
+            keys
+            - _STANDALONE_REPOSITORY_CHARGE_REQUIRED
+            - _STANDALONE_REPOSITORY_CHARGE_OPTIONAL
+        )
+        if missing or unexpected:
+            detail = (
+                "missing %r" % missing[0]
+                if missing else "unexpected %r" % unexpected[0]
+            )
+            raise prompt_router.PromptRouterError(
+                "standalone repository session charge is invalid: %s"
+                % detail
+            )
+        if (
+            not isinstance(charge["prompt_set"], str)
+            or not charge["prompt_set"].strip()
+        ):
+            raise prompt_router.PromptRouterError(
+                "standalone repository session charge.prompt_set must be "
+                "non-empty"
+            )
+        if not isinstance(charge["values"], dict):
+            raise prompt_router.PromptRouterError(
+                "standalone repository session charge.values must be an "
+                "object"
+            )
+        session_repository.validate_context(charge["repository"])
+        return copy.deepcopy(charge)
     keys = set(charge)
     missing = sorted(_CHARGE_REQUIRED - keys)
     optional = _CHARGE_OPTIONAL | ({"material"} if legacy_material else set())
@@ -299,6 +339,9 @@ def prepare_turn(
         ) == brainstorming.CURRENT_AGREEMENT_VERSION
     )
     repository_backed = "repository" in charge
+    standalone_repository = (
+        charge["job"] == prompt_router.STANDALONE_REPOSITORY_SESSION_JOB
+    )
     if repository_backed:
         if (
             not isinstance(target_revision, str)
@@ -317,8 +360,17 @@ def prepare_turn(
         )
     values = dict(charge["values"])
     values.update(common_values)
-    if charge["job"] == "rethink":
+    if charge["job"] in (
+        "rethink",
+        prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+    ):
         values["repository_authority"] = "Git commit %s" % target_revision
+        if standalone_repository:
+            values.update({
+                "target_path": _REPOSITORY_REVIEW_SCOPE,
+                "target_authority": "Git commit %s" % target_revision,
+                "target_state": "current checkout",
+            })
     else:
         authority, target_state, _repository = (
             session_repository.live_target_authority(state, charge)
@@ -328,9 +380,23 @@ def prepare_turn(
             "target_authority": authority,
             "target_state": target_state,
         })
-    operator = prompt_authority.read_mutable_amendments(
-        charge["amendments_path"]
-    )
+    if standalone_repository:
+        operator = ()
+        accepted_amendments = ()
+        prior_decisions = copy.deepcopy(
+            state["request"]["context"].get("amendments") or []
+        )
+        routed_project_context = (
+            charge.get("project_context")
+            if "project_context" in charge else project_context
+        )
+    else:
+        operator = prompt_authority.read_mutable_amendments(
+            charge["amendments_path"]
+        )
+        accepted_amendments = charge["accepted_amendments"]
+        prior_decisions = ()
+        routed_project_context = charge.get("project_context")
     prepared = prepare(
         home,
         job=charge["job"],
@@ -341,8 +407,9 @@ def prepare_turn(
         prompt_set=charge["prompt_set"],
         artifact_type=charge.get("artifact_type"),
         operator_amendments=operator,
-        accepted_amendments=charge["accepted_amendments"],
-        project_context=charge.get("project_context"),
+        accepted_amendments=accepted_amendments,
+        prior_decisions=prior_decisions,
+        project_context=routed_project_context,
         workspace=state["request"]["workspace_path"],
         correction=correction,
         require_questioner_readiness=(
@@ -450,7 +517,11 @@ def prepare(
             "session-owned value %r was supplied by its caller" % collision[0]
         )
     charge_values = dict(values)
-    standalone = job == prompt_router.STANDALONE_SESSION_JOB
+    standalone = job in (
+        prompt_router.STANDALONE_SESSION_JOB,
+        prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+    )
+    repository_backed = job != prompt_router.STANDALONE_SESSION_JOB
     rendered_prior_decisions = None
     if standalone:
         if operator_amendments or accepted_amendments:
@@ -471,7 +542,7 @@ def prepare(
             )
         )
     authority_body, extensions, roots = _project_authority(
-        project_context, repository_backed=not standalone
+        project_context, repository_backed=repository_backed
     )
     if authority_body is not None:
         charge_values["ecosystem_map"] = authority_body
@@ -539,17 +610,22 @@ def prepare(
                     "%r exactly once" % variable
                 )
         rendered_prompt = prompt_router.render(bound.prompt, charge_values)
-        if (
-            standalone
-            and role != "common_sense"
-            and rendered_prompt.count(
+        if standalone and role != "common_sense":
+            boundary = (
                 prompt_router.STANDALONE_WORKAREA_BOUNDARY
-            ) != 1
-        ):
-            raise prompt_sets.PromptSetError(
-                "standalone discussion prompt must carry its target-only "
-                "editing boundary exactly once"
+                if job == prompt_router.STANDALONE_SESSION_JOB else
+                prompt_router.REPOSITORY_WORKAREA_BOUNDARY
             )
+            if rendered_prompt.count(boundary) != 1:
+                scope = (
+                    "target-only"
+                    if job == prompt_router.STANDALONE_SESSION_JOB else
+                    "repository-charge"
+                )
+                raise prompt_sets.PromptSetError(
+                    "standalone discussion prompt must carry its %s editing "
+                    "boundary exactly once" % scope
+                )
 
     resolution = prompt_router.resolve(
         home,

@@ -19,6 +19,7 @@ from orchestrator import brainstorming_milestone as milestone
 from orchestrator import gitops
 from orchestrator import kvstore
 from orchestrator import prompt_sets
+from orchestrator import prompt_router
 from orchestrator import session_calls
 from orchestrator import session_repository
 from orchestrator import state as st
@@ -27,6 +28,7 @@ from orchestrator import tasks
 
 _PROFILE_AUTHORITY = "current_profile"
 _STATIC_AUTHORITY = "static"
+_REPOSITORY_REVIEW_MODE = "repository_review"
 # A Brainstorming ordered outside a milestone has no profile to consult, so
 # until the staffing router lets the caller choose, every seat runs at the
 # top effort (operator, 2026-08-19): a direct discussion is ordered because
@@ -194,6 +196,10 @@ def admit_task(
                 tasks.INVALID_TASK_REQUEST,
                 "Brainstorming producer charge does not match its task kind",
             )
+    elif staffing_selection is not None:
+        # Prospective cutover marker: an admitted-but-not-yet-started task must
+        # not change execution semantics merely because the service restarted.
+        checked["brainstorming_mode"] = _REPOSITORY_REVIEW_MODE
     staffing = resolve_staffing(
         config, os.path.realpath(primary_workspace), staffing_selection
     )
@@ -279,7 +285,21 @@ def _repository_target(request):
         return None
 
 
-def _creation_body(record, participants, target, workspace):
+def _direct_repository_charge(record, repository):
+    """Bind an ordinary panel task to the shared Git review lifecycle."""
+    return {
+        "job": prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+        "prompt_set": record["order"].get(
+            "prompt_set", prompt_sets.DEFAULT_SET_NAME
+        ),
+        "values": {},
+        "repository": copy.deepcopy(repository),
+    }
+
+
+def _creation_body(
+    record, participants, target, workspace, direct_repository=None
+):
     order = record["order"]
     request = order["request"]
     configuration = order["configuration"]
@@ -287,15 +307,17 @@ def _creation_body(record, participants, target, workspace):
     structured_context = (
         task_context if isinstance(task_context, dict) else {}
     )
-    if "session_charge" in structured_context:
-        task_context["session_charge"] = session_calls.read_charge(
-            task_context["session_charge"]
-        )
-    repository_backed = "repository" in (
-        structured_context.get("session_charge") or {}
-    )
+    session_charge = structured_context.get("session_charge")
+    if direct_repository is not None:
+        # A direct task's repository authority is minted by this adapter.
+        # Same-named caller context remains background and cannot replace it.
+        session_charge = _direct_repository_charge(record, direct_repository)
+    elif session_charge is not None:
+        session_charge = session_calls.read_charge(session_charge)
+        task_context["session_charge"] = session_charge
+    repository_backed = "repository" in (session_charge or {})
     prompt_set = (
-        structured_context["session_charge"]["prompt_set"]
+        session_charge["prompt_set"]
         if repository_backed else
         order.get("prompt_set", prompt_sets.DEFAULT_SET_NAME)
     )
@@ -310,10 +332,10 @@ def _creation_body(record, participants, target, workspace):
         "applies every requested effect only after agreement."
     )
     return {
-        "create_target_parents": repository_backed,
+        "create_target_parents": bool(repository_backed and target is not None),
         "request": {
             "workspace_path": workspace,
-            "target_path": target,
+            **({"target_path": target} if target is not None else {}),
             "request": request["request"],
             "context": {
                 "brief": (
@@ -331,12 +353,8 @@ def _creation_body(record, participants, target, workspace):
                     "task_context": copy.deepcopy(task_context),
                     "work_area": copy.deepcopy(request["work_area"]),
                     **(
-                        {
-                            "session_charge": copy.deepcopy(
-                                structured_context["session_charge"]
-                            )
-                        }
-                        if "session_charge" in structured_context else {}
+                        {"session_charge": copy.deepcopy(session_charge)}
+                        if session_charge is not None else {}
                     ),
                     **(
                         {"output_directory": request["output_directory"]}
@@ -441,9 +459,12 @@ def _retained_projection(home, session_id, caller, target_path):
     snapshot = store.read(session_id)
     if snapshot is None:
         return None
-    retained_target = os.path.abspath(snapshot.state["request"]["target_path"])
-    if retained_target != target_path:
-        raise AdapterError("retained Brainstorming session/task mismatch")
+    if not brainstorming.repository_session(snapshot.state):
+        retained_target = os.path.abspath(
+            snapshot.state["request"]["target_path"]
+        )
+        if retained_target != target_path:
+            raise AdapterError("retained Brainstorming session/task mismatch")
     record = {
         "id": session_id,
         "caller": caller,
@@ -547,7 +568,7 @@ def _start_task_exclusive(
     session_id=None,
     pre_session_failure_reason=None,
 ):
-    """Launch, or resume, the one private session owned by an open task."""
+    """Launch, or resume, the one session owned by an open task."""
     record = _task_record(state, task_id)
     staffing = record["resolved_staffing"]
     authority = staffing.get("dispatch_authority")
@@ -573,20 +594,19 @@ def _start_task_exclusive(
     request = record["order"]["request"]
     context = _execution_context(request)
     workspace = context["workspace_path"]
-    repository_backed = "repository" in (
-        _structured_context(request).get("session_charge") or {}
+    direct_repository_mode = (
+        record["order"].get("brainstorming_mode")
+        == _REPOSITORY_REVIEW_MODE
     )
-    if repository_backed:
-        work_area = None
-        target = _repository_target(request)
-        if target is None:
-            raise AdapterError(
-                "repository-backed task has no primary repository target"
-            )
-    else:
-        work_area, _target_parent, target = _private_target_paths(
-            workspace, home, task_id
+    attached_repository = (
+        not direct_repository_mode
+        and "repository" in (
+            _structured_context(request).get("session_charge") or {}
         )
+    )
+    work_area, _target_parent, private_target = _private_target_paths(
+        workspace, home, task_id
+    )
     if session_id is not None:
         try:
             projection = lifecycle.inspect_session(
@@ -595,9 +615,8 @@ def _start_task_exclusive(
         except lifecycle.PublicLifecycleError as exc:
             if exc.code != lifecycle.UNKNOWN_SESSION:
                 raise
-            retained = (
-                None if repository_backed else
-                _retained_projection(home, session_id, caller, target)
+            retained = _retained_projection(
+                home, session_id, caller, private_target
             )
             _fail_lost_session(state, task_id, retained)
             return None
@@ -612,9 +631,10 @@ def _start_task_exclusive(
             authority_failure_reason,
         )
 
-    owned = (
-        None if repository_backed else _owned_projection(home, caller, target)
-    )
+    # Both historical private-target sessions and current repository sessions
+    # are owned by this caller identity.  Looking them up before selecting a
+    # creation mode lets an in-flight pre-cutover task finish as admitted.
+    owned = _owned_projection(home, caller, private_target)
     if owned is not None:
         recovered_id, projection, registered = owned
         if not registered:
@@ -631,16 +651,13 @@ def _start_task_exclusive(
             authority_failure_reason,
         )
 
-    retained = (
-        None if repository_backed else
-        _retained_owned_projection(home, caller, target)
-    )
+    retained = _retained_owned_projection(home, caller, private_target)
     if retained is not None:
         _session_id, projection = retained
         _fail_lost_session(state, task_id, projection)
         return None
 
-    if work_area is not None and os.path.lexists(work_area):
+    if not attached_repository and os.path.lexists(work_area):
         _fail_lost_session(state, task_id)
         return None
 
@@ -658,18 +675,43 @@ def _start_task_exclusive(
             if staffing_selection is not None
             else _frozen_participants(record)
         )
-        if repository_backed:
-            created_work_area = None
-        else:
+        direct_repository = None
+        legacy_private = not attached_repository and not direct_repository_mode
+        if attached_repository:
+            target = _repository_target(request)
+            if target is None:
+                raise AdapterError(
+                    "repository-backed task has no primary repository target"
+                )
+        elif legacy_private:
             created_work_area, target = _private_target(
                 workspace, home, task_id
             )
-        body = _creation_body(record, participants, target, workspace)
+        else:
+            # The marker makes loss of the registry record fail closed instead
+            # of silently creating a second repository-writing discussion.
+            os.makedirs(os.path.dirname(work_area), exist_ok=True)
+            os.makedirs(work_area)
+            created_work_area = work_area
+            target = None
+            direct_repository = (
+                session_repository.checkpoint_standalone_task_context(
+                    workspace,
+                    "Prepare Brainstorming task %s" % task_id,
+                )
+            )
+        body = _creation_body(
+            record,
+            participants,
+            target,
+            workspace,
+            direct_repository=direct_repository,
+        )
         if context["project"] is not None:
             body["project"] = context["project"]
             body["work_area"] = context["work_area"]
         kwargs = (
-            {} if repository_backed else {"owned_target_path": target}
+            {"owned_target_path": target} if legacy_private else {}
         )
         if launcher is not None:
             kwargs["launcher"] = launcher
@@ -683,12 +725,14 @@ def _start_task_exclusive(
     except (
         AdapterError,
         lifecycle.PublicLifecycleError,
+        session_repository.SessionRepositoryError,
+        gitops.GitError,
         tasks.TaskRequestError,
         OSError,
     ) as exc:
         code = getattr(exc, "code", lifecycle.UNAVAILABLE)
         if code == lifecycle.TARGET_IN_USE:
-            owned = _owned_projection(home, caller, target)
+            owned = _owned_projection(home, caller, private_target)
             if owned is not None:
                 recovered_id, projection, registered = owned
                 if not registered:
@@ -1243,19 +1287,9 @@ def _finish_task_exclusive(
     caller = _task_caller(record, task_id)
     request = record["order"]["request"]
     workspace = _workspace(request)
-    repository_backed = "repository" in (
-        _structured_context(request).get("session_charge") or {}
+    _work_area, _target_parent, private_target = _private_target_paths(
+        workspace, home, task_id
     )
-    if repository_backed:
-        target = _repository_target(request)
-        if target is None:
-            raise AdapterError(
-                "repository-backed task has no primary repository target"
-            )
-    else:
-        _work_area, _target_parent, target = _private_target_paths(
-            workspace, home, task_id
-        )
     try:
         projection = lifecycle.inspect_session(
             home, session_id, _authorize_caller(caller)
@@ -1263,15 +1297,19 @@ def _finish_task_exclusive(
     except lifecycle.PublicLifecycleError as exc:
         if exc.code != lifecycle.UNKNOWN_SESSION:
             raise
-        retained = (
-            None if repository_backed else
-            _retained_projection(home, session_id, caller, target)
+        retained = _retained_projection(
+            home, session_id, caller, private_target
         )
         return _fail_lost_session(state, task_id, retained)
     session_state = projection["state"]
+    repository_backed = session_repository.context_from_state(
+        session_state
+    ) is not None
     if session_state["status"] not in brainstorming.TERMINAL_STATUSES:
         return None
     native_result = copy.deepcopy(session_state["result"])
+    if repository_backed:
+        native_result["session_id"] = session_id
     accounting = _projection_accounting(projection)
     if session_state["status"] == "failure":
         reason = native_result.get("reason") or "Brainstorming did not agree."
@@ -1282,7 +1320,23 @@ def _finish_task_exclusive(
             "native_result": native_result,
         })
     if repository_backed:
-        native_result.update(session_repository.sealed_range(session_state))
+        try:
+            native_result.update(
+                session_repository.sealed_range(session_state)
+            )
+        except (
+            session_repository.SessionRepositoryError,
+            gitops.GitError,
+        ) as exc:
+            return tasks.record_task_result(state, task_id, {
+                "status": "failure",
+                "reason": (
+                    "Brainstorming repository delivery is unavailable: %s"
+                    % exc
+                ),
+                **accounting,
+                "native_result": native_result,
+            })
         return tasks.record_task_result(state, task_id, {
             "status": "success",
             **accounting,
@@ -1356,7 +1410,7 @@ def finish_task(
     apply_effects=None,
     effect_store=None,
 ):
-    """Terminalize repository work directly; standalone retains its effect."""
+    """Terminalize reviewed repository work; preserve legacy target effects."""
     record = _task_record(state, task_id)
     workspace = _workspace(record["order"]["request"])
     durable_store = brainstorming.SessionStore(lifecycle.state_directory(home))

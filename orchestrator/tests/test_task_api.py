@@ -3,7 +3,9 @@
 import copy
 import json
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -12,7 +14,8 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from orchestrator import access, brainstorming_tasks, registry, runners, service
+from orchestrator import access, brainstorming_lifecycle, brainstorming_tasks
+from orchestrator import registry, runners, service
 from orchestrator import staffing
 from orchestrator import state as st
 from orchestrator import task_api, tasks
@@ -33,6 +36,19 @@ class TaskApiTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.home = os.path.join(self.tmp.name, "home")
         self.primary = self.directory("primary")
+        subprocess.run(["git", "init", "-q", self.primary], check=True)
+        subprocess.run(
+            ["git", "-C", self.primary, "config", "user.email",
+             "test@example.com"], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.primary, "config", "user.name", "Test"],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", self.primary, "commit", "--allow-empty", "-qm",
+             "baseline"], check=True,
+        )
         self.additional = self.directory("additional")
         self.outside = self.directory("outside")
         self.start_server(NoopHost())
@@ -100,6 +116,24 @@ class TaskApiTest(unittest.TestCase):
         return {"task_executor": executor, "request": request}
 
     def project(self, slug, primary, users=()):
+        subprocess.run(["git", "init", "-q", primary], check=True)
+        subprocess.run(
+            ["git", "-C", primary, "config", "user.email",
+             "test@example.com"], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", primary, "config", "user.name", "Test"],
+            check=True,
+        )
+        if subprocess.run(
+            ["git", "-C", primary, "rev-parse", "--verify", "HEAD"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode != 0:
+            subprocess.run(
+                ["git", "-C", primary, "commit", "--allow-empty", "-qm",
+                 "baseline"], check=True,
+            )
         self.assertEqual(self.request("POST", "/api/projects", {"slug": slug})[0], 201)
         path = "/api/projects/%s/work-areas" % slug
         payload = {"name": "main", "primary_path": primary}
@@ -125,6 +159,85 @@ class TaskApiTest(unittest.TestCase):
             time.sleep(0.01)
         self.fail("task %s did not reach expected state" % task_id)
 
+    def _sleeper(self):
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(120)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+        def stop():
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+
+        self.addCleanup(stop)
+        return process
+
+    def _manual_brainstorming(self, name):
+        docs = os.path.join(self.primary, "docs")
+        os.makedirs(docs, exist_ok=True)
+        with open(os.path.join(docs, name), "w", encoding="utf-8") as handle:
+            handle.write("initial\n")
+        processes = []
+
+        def launch(*_args, **_kwargs):
+            process = self._sleeper()
+            processes.append(process)
+            return brainstorming_lifecycle.GatedLaunch(
+                process, lambda: None, process.terminate
+            )
+
+        payload = {
+            "request": {
+                "workspace_path": self.primary,
+                "target_path": "docs/%s" % name,
+                "request": "Reach one bounded decision.",
+                "context": {"brief": "Test workspace ownership."},
+                "max_rounds": 20,
+            },
+            "participants": [
+                {
+                    "id": "lead", "role": "initial_position",
+                    "delivery": "llm",
+                },
+                {
+                    "id": "critic", "role": "contrary_position",
+                    "delivery": "llm",
+                },
+            ],
+            "closure_policy": "unanimity",
+        }
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=launch,
+        ):
+            status, body = self.request(
+                "POST", "/api/brainstorming/sessions", payload
+            )
+        self.assertEqual(status, 201, body)
+        self.assertEqual(len(processes), 1)
+        return body["session"]["id"], processes[0]
+
+    def _pause_manual_brainstorming(self, name):
+        session_id, process = self._manual_brainstorming(name)
+        process.terminate()
+        process.wait(timeout=5)
+        brainstorming_lifecycle.reap_children(self.home)
+        session = brainstorming_lifecycle.inspect_session(
+            self.home, session_id, lambda _record: None
+        )
+        self.assertEqual(session["process"], "stopped")
+        self.assertEqual(session["state"]["status"], "running")
+        return session_id
+
     def test_catalogue_route_reuses_shared_schema(self):
         status, body = self.request("GET", "/api/task-executors")
         self.assertEqual(status, 200)
@@ -140,6 +253,39 @@ class TaskApiTest(unittest.TestCase):
                              ["max_rounds"]["default"], 27)
             self.assertEqual(tasks.resolve_configuration("brainstorming")
                              ["max_rounds"], 27)
+
+    def test_direct_brainstorming_requires_git_and_service_owns_its_mode(self):
+        nonrepo = self.directory("brainstorming-nonrepo")
+        order = self.order(
+            "brainstorming",
+            work_area={
+                "workspace_path": nonrepo,
+                "primary": nonrepo,
+                "additional": [],
+            },
+        )
+        status, body = self.request("POST", "/api/tasks", order)
+        self.assertEqual((status, body["error"]), (400, service.PRIMARY_NOT_REPO_ROOT))
+
+        empty = self.directory("brainstorming-empty-repo")
+        subprocess.run(["git", "init", "-q", empty], check=True)
+        order = self.order(
+            "brainstorming",
+            work_area={
+                "workspace_path": empty,
+                "primary": empty,
+                "additional": [],
+            },
+        )
+        status, body = self.request("POST", "/api/tasks", order)
+        self.assertEqual(
+            (status, body["error"]), (400, service.PRIMARY_HAS_NO_COMMIT)
+        )
+
+        forced = self.order("brainstorming")
+        forced["brainstorming_mode"] = "repository_review"
+        status, body = self.request("POST", "/api/tasks", forced)
+        self.assertEqual((status, body["error"]), (400, tasks.INVALID_TASK_REQUEST))
 
     def test_reviewed_task_resolves_before_admission_and_reaches_its_gate(self):
         subprocess.run(["git", "init", "-q", self.primary], check=True)
@@ -530,7 +676,7 @@ class TaskApiTest(unittest.TestCase):
         self.assertTrue(marker["cost_partial"])
 
     def test_direct_brainstorming_freezes_and_runs_static_order(self):
-        effect_started, effect_release = threading.Event(), threading.Event()
+        finish_started, finish_release = threading.Event(), threading.Event()
         pins = {"dispatch_authority": "static", "participants": [{"id": "lead"}]}
         captured = []
 
@@ -538,12 +684,25 @@ class TaskApiTest(unittest.TestCase):
             captured.append(
                 (tasks.task_record(state, task_id), config, home, options)
             )
-            return {"id": "session-one"}
+            return {
+                "id": "session-one",
+                "state": {
+                    "status": "success",
+                    "request": {
+                        "context": {"source_payload": {"session_charge": {
+                            "repository": {
+                                "mode": "standalone_task",
+                                "pre_session_commit": "0" * 40,
+                            }
+                        }}},
+                    },
+                },
+            }
 
         def finish(state, task_id, _home, _session_id, apply_effects):
-            effect_started.set()
-            effect_release.wait(5)
-            self.assertTrue(apply_effects({"request": {}, "agreement": {}})["completed"])
+            finish_started.set()
+            finish_release.wait(5)
+            self.assertIsNone(apply_effects)
             return tasks.record_task_result(state, task_id, {
                 "status": "success", "duration_s": 1.0,
                 "token_usage": None, "token_usage_partial": True,
@@ -559,19 +718,26 @@ class TaskApiTest(unittest.TestCase):
         with mock.patch.object(brainstorming_tasks, "resolve_staffing", return_value=pins), \
                 mock.patch.object(brainstorming_tasks, "start_task", side_effect=start), \
                 mock.patch.object(brainstorming_tasks, "finish_task", side_effect=finish), \
-                mock.patch.object(brainstorming_tasks, "apply_agreed_effects",
-                                  return_value={"completed": True}):
+                mock.patch.object(
+                    brainstorming_tasks,
+                    "apply_agreed_effects",
+                    side_effect=AssertionError("repository work must not rerun"),
+                ):
             status, body = self.request("POST", "/api/tasks", order)
             self.assertEqual(status, 201)
             task_id = body["task"]["id"]
             self.assertEqual(body["task"]["order"]["configuration"],
                              {"max_rounds": 24, "closure_policy": "majority"})
             self.assertEqual(body["task"]["order"]["prompt_set"], "operator")
+            self.assertEqual(
+                body["task"]["order"]["brainstorming_mode"],
+                "repository_review",
+            )
             self.assertEqual(body["task"]["resolved_staffing"], pins)
-            self.assertTrue(effect_started.wait(2))
+            self.assertTrue(finish_started.wait(2))
             self.assertIsNone(task_api.StandaloneTaskStore(self.home).record(task_id)
                               ["result"])
-            effect_release.set()
+            finish_release.set()
             self.assertEqual(self.wait_record(task_id)["result"]["native_result"],
                              {"agreement": "kept opaque"})
         # The direct host carries a standalone order's staffing selection —
@@ -735,7 +901,7 @@ class TaskApiTest(unittest.TestCase):
             record = self.request(
                 "POST", "/api/tasks", self.order("brainstorming")
             )[1]["task"]
-        os.rmdir(self.primary)
+        shutil.rmtree(self.primary)
 
         server = service.make_server(self.home, 0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1113,6 +1279,222 @@ class TaskApiTest(unittest.TestCase):
                 )
             self.assertEqual(
                 (status, body["error"]), (409, service.WORK_AREA_BUSY)
+            )
+        finally:
+            release.set()
+        self.assertEqual(
+            self.wait_record(record["id"])["result"]["status"], "success"
+        )
+
+    def test_direct_brainstorming_owns_workspace_against_every_run_start(self):
+        entered, release = threading.Event(), threading.Event()
+
+        status, body = self.request("POST", "/api/runs", {
+            "workspace": self.primary,
+            "goal": "ownership race",
+            "autostart": False,
+            "config": {"docs_dir": "docs"},
+        })
+        self.assertEqual(status, 201, body)
+        entry = registry.load(self.home)["runs"][0]
+
+        def hold_session(*_args, **_kwargs):
+            entered.set()
+            release.wait(5)
+            return None
+
+        store = task_api.StandaloneTaskStore(self.home)
+        record = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        host = task_api.DirectTaskHost(self.home)
+        self.start_server(host)
+        with mock.patch.object(
+            task_api.brainstorming_tasks,
+            "start_task",
+            side_effect=hold_session,
+        ):
+            thread = host.start(record, lambda: {})
+            self.assertTrue(entered.wait(2))
+            try:
+                with mock.patch.object(
+                    service,
+                    "_spawn_run_locked",
+                    side_effect=AssertionError(
+                        "a driver must not start in an owned workspace"
+                    ),
+                ):
+                    status, body = self.request("POST", "/api/runs", {
+                        "workspace": self.primary,
+                        "goal": "second ownership race",
+                        "autostart": True,
+                        "config": {"docs_dir": "other-docs"},
+                    })
+                    self.assertEqual(
+                        (status, body["error"]),
+                        (409, service.WORK_AREA_BUSY),
+                    )
+                    self.assertEqual(
+                        [item["id"] for item in registry.load(self.home)["runs"]],
+                        [entry["id"]],
+                    )
+
+                    status, body = self.request(
+                        "POST", "/api/runs/%s/start" % entry["id"], {}
+                    )
+                    self.assertEqual(
+                        (status, body["error"]),
+                        (409, service.WORK_AREA_BUSY),
+                    )
+
+                    run_state = st.load(entry["state_path"])
+                    st.fail_run(run_state, "retry later", type_="quota")
+                    st.save(entry["state_path"], run_state)
+                    status, body = self.request(
+                        "POST", "/api/runs/%s/resume" % entry["id"], {}
+                    )
+                    self.assertEqual(
+                        (status, body["error"]),
+                        (409, service.WORK_AREA_BUSY),
+                    )
+                    self.assertEqual(
+                        st.load(entry["state_path"])["failure"]["reason"],
+                        "retry later",
+                    )
+            finally:
+                release.set()
+                thread.join(timeout=5)
+
+    def test_live_manual_brainstorming_blocks_every_run_start_without_ghosts(self):
+        entries = []
+        for name in ("start-later", "resume-later"):
+            status, body = self.request("POST", "/api/runs", {
+                "workspace": self.primary,
+                "name": name,
+                "goal": "ownership test",
+                "autostart": False,
+                "config": {"docs_dir": "milestones-%s" % name},
+            })
+            self.assertEqual(status, 201, body)
+            entries.append(
+                registry.get(registry.load(self.home), body["run"]["id"])
+            )
+        failed = st.load(entries[1]["state_path"])
+        st.fail_run(failed, "retry later", type_="quota")
+        st.save(entries[1]["state_path"], failed)
+
+        self._manual_brainstorming("live-owner.md")
+        before_registry = registry.load(self.home)
+        before_tree = {
+            os.path.relpath(os.path.join(root, name), self.primary)
+            for root, _dirs, files in os.walk(self.primary)
+            for name in files
+        }
+        with mock.patch.object(
+            service,
+            "_spawn_run_locked",
+            side_effect=AssertionError("busy workspace must not spawn"),
+        ):
+            status, body = self.request("POST", "/api/runs", {
+                "workspace": self.primary,
+                "name": "blocked-create",
+                "goal": "must leave no state",
+                "autostart": True,
+                "config": {"docs_dir": "blocked"},
+            })
+            self.assertEqual(
+                (status, body["error"]), (409, service.WORK_AREA_BUSY)
+            )
+            status, body = self.request(
+                "POST", "/api/runs/%s/start" % entries[0]["id"], {}
+            )
+            self.assertEqual(
+                (status, body["error"]), (409, service.WORK_AREA_BUSY)
+            )
+            status, body = self.request(
+                "POST", "/api/runs/%s/resume" % entries[1]["id"], {}
+            )
+            self.assertEqual(
+                (status, body["error"]), (409, service.WORK_AREA_BUSY)
+            )
+
+        self.assertEqual(registry.load(self.home), before_registry)
+        self.assertEqual(
+            {
+                os.path.relpath(os.path.join(root, name), self.primary)
+                for root, _dirs, files in os.walk(self.primary)
+                for name in files
+            },
+            before_tree,
+        )
+        self.assertEqual(
+            st.load(entries[1]["state_path"])["failure"]["reason"],
+            "retry later",
+        )
+
+    def test_live_run_blocks_starting_a_paused_manual_brainstorming(self):
+        session_id = self._pause_manual_brainstorming("paused-for-run.md")
+        status, body = self.request("POST", "/api/runs", {
+            "workspace": self.primary,
+            "goal": "hold workspace",
+            "autostart": False,
+            "config": {"docs_dir": "milestones"},
+        })
+        self.assertEqual(status, 201, body)
+        run_id = body["run"]["id"]
+        process = self._sleeper()
+
+        def spawn(home, document, entry):
+            entry["pid"] = process.pid
+            registry.save(home, document)
+            return entry
+
+        with mock.patch.object(service, "_spawn_run_locked", side_effect=spawn):
+            status, body = self.request(
+                "POST", "/api/runs/%s/start" % run_id, {}
+            )
+        self.assertEqual(status, 200, body)
+        status, body = self.request(
+            "POST", "/api/brainstorming/sessions/%s/start" % session_id, {}
+        )
+        self.assertEqual(
+            (status, body["error"]), (409, service.WORK_AREA_BUSY)
+        )
+        self.assertIsNone(
+            brainstorming_lifecycle._record_by_id(self.home, session_id)["pid"]
+        )
+
+    def test_live_direct_task_blocks_starting_a_paused_manual_brainstorming(self):
+        session_id = self._pause_manual_brainstorming("paused-for-task.md")
+        entered, release = threading.Event(), threading.Event()
+
+        class Runner:
+            def call(_self, *_args, **_kwargs):
+                entered.set()
+                release.wait(5)
+                return runners.RunnerResult("done", 0, 0.1)
+
+        host = task_api.DirectTaskHost(
+            self.home, runner_factory=lambda _config, _workspace: Runner()
+        )
+        self.start_server(host)
+        record = self.request("POST", "/api/tasks", self.order())[1]["task"]
+        self.assertTrue(entered.wait(2))
+        try:
+            status, body = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % session_id,
+                {},
+            )
+            self.assertEqual(
+                (status, body["error"]), (409, service.WORK_AREA_BUSY)
+            )
+            self.assertIsNone(
+                brainstorming_lifecycle._record_by_id(
+                    self.home, session_id
+                )["pid"]
             )
         finally:
             release.set()

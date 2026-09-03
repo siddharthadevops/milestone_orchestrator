@@ -33,6 +33,13 @@ def repository_context(workspace):
     }
 
 
+def standalone_repository_context():
+    return {
+        "mode": "standalone_task",
+        "pre_session_commit": "0" * 40,
+    }
+
+
 def turn_values(workspace, role):
     return {
         "workspace": workspace,
@@ -190,6 +197,115 @@ class SessionCallCutoverTest(unittest.TestCase):
             self.prepare(
                 "review_round@slice_impl", "initial_position", True
             )
+
+    def test_standalone_repository_charge_is_small_and_closed(self):
+        charge = {
+            "job": prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+            "prompt_set": "literature",
+            "values": {},
+            "repository": standalone_repository_context(),
+        }
+        self.assertEqual(session_calls.validate_charge(charge), charge)
+        self.assertEqual(session_calls.read_charge(charge), charge)
+        state = {
+            "request": {
+                "context": {"source_payload": {"session_charge": charge}}
+            }
+        }
+        self.assertEqual(session_calls.charge_from_state(state), charge)
+        for field, value in (
+            ("amendments_path", "/tmp/amendments.json"),
+            ("accepted_amendments", []),
+            ("artifact_type", "document"),
+            ("material", "document"),
+        ):
+            with self.subTest(field=field), self.assertRaises(
+                prompt_router.PromptRouterError
+            ):
+                session_calls.validate_charge(dict(charge, **{field: value}))
+
+    def test_standalone_repository_turn_reviews_git_with_named_set(self):
+        marker = "LITERATURE CUSTOM INITIAL POSITION"
+        documents = copy.deepcopy(prompt_sets.default_seed().documents)
+        documents["brainstorming/discussion_turn.json"]["variants"][
+            "role_stance"
+        ]["initial_position"]["text"].append(marker)
+        self.write_set("literature", documents)
+        charge = {
+            "job": prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+            "prompt_set": "literature",
+            "values": {},
+            "repository": standalone_repository_context(),
+        }
+        session_state = {
+            "request": {
+                "workspace_path": self.workspace,
+                "request": "Apply the requested work in this repository.",
+                "context": {
+                    "references": ["docs/reference.md"],
+                    "source_payload": {"session_charge": charge},
+                },
+            },
+            "transcript_ref": "%s/chat.md" % self.workspace,
+            "accepted_target_revision": "0" * 40,
+            "recovery_baseline_revision": "0" * 40,
+        }
+        project_context = {
+            "project": "orchestrator",
+            "work_area": "implementation",
+            "primary": {"path": self.workspace},
+            "additional": [],
+            "reuse_sources": [],
+            "safeguards": [],
+        }
+        boundary = {
+            "accept_reply": True,
+            "committed": True,
+            "plan_changed": False,
+            "revision": "1" * 40,
+            "anchor": "0" * 40,
+        }
+        with (
+            mock.patch.object(
+                session_repository,
+                "begin_attempt",
+                return_value=types.SimpleNamespace(),
+            ),
+            mock.patch.object(
+                session_repository,
+                "complete_attempt",
+                return_value=boundary,
+            ),
+            mock.patch.object(
+                prompt_router, "resolve", wraps=prompt_router.resolve
+            ) as routed,
+        ):
+            prepared = session_calls.prepare_turn(
+                self.workspace,
+                session_state,
+                {"id": "initial-position", "role": "initial_position"},
+                1,
+                "0" * 40,
+                prompt_set="default",
+                project_context=project_context,
+            )
+            completed = prepared.complete()
+        self.assertIsNone(prepared.prompt_set_fallback)
+        self.assertIn(marker, prepared.prompt)
+        self.assertIn("REPOSITORY CHARGE", prepared.prompt)
+        self.assertNotIn("TARGET ONLY", prepared.prompt)
+        self.assertNotIn("\nPROBLEM\n", prepared.prompt)
+        self.assertIn(session_calls._REPOSITORY_REVIEW_SCOPE, prepared.prompt)
+        self.assertIn("Git commit %s" % ("0" * 40), prepared.prompt)
+        self.assertIn("current checkout", prepared.prompt)
+        self.assertNotIn("docs/decision.md", prepared.prompt)
+        self.assertIn("the repo you execute in", prepared.prompt)
+        self.assertEqual(
+            routed.call_args.kwargs["job"],
+            prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+        )
+        self.assertEqual(routed.call_args.kwargs["prompt_set"], "literature")
+        self.assertEqual(completed, boundary)
 
     def test_milestone_session_admission_is_closed(self):
         amendments = Path(self.workspace) / "amendments.json"
