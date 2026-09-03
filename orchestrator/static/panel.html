@@ -1292,6 +1292,7 @@ function taskRow(row) {
   const state = taskState(record);
   const when = row.admitted_at ? fmtAdmitted(row.admitted_at) : "";
   const bits = [executor, state, when].filter(Boolean).join(" · ");
+  const total = taskStatusClock(row);
   const icon = executor === "brainstorming" ? ICONS.brainstorm : ICONS.task;
   return `
       <div class="run ${record.result !== null ? "closed " : ""}${record.id === selectedTask ? "sel" : ""}" onclick="openTask('${esc(escJsSq(record.id))}')">
@@ -1299,8 +1300,11 @@ function taskRow(row) {
         <div class="run-copy">
           <div class="run-name-row">
             <span class="name" title="${esc(brief)}">${esc(brief || record.id)}</span>
+            ${total}
           </div>
-          <div class="run-info-row">${esc(bits)}</div>
+          <div class="run-info-row"><div class="activity-line sidebar">
+            <span>${esc(bits)}</span>
+          </div></div>
         </div>
       </div>`;
 }
@@ -2172,7 +2176,8 @@ function sidebarItems(runs, taskRows) {
       project,
       created_at: row.admitted_at,
       last_action_epoch: null,
-      running: record.result === null,
+      running: row.process
+        ? row.process === "running" : record.result === null,
       closed: record.result !== null,
       data: row,
     });
@@ -2618,6 +2623,19 @@ function runStatusClock(r) {
   return liveClock(r.work_duration_s,
     activeRunClockInput(r.process === "running", r.in_flight),
     "run-total", "");
+}
+function taskStatusClock(row) {
+  if (!row) return "";
+  const record = row.record || {};
+  const running = row.process
+    ? row.process === "running" : record.result === null;
+  const inFlight = running ? row.in_flight : null;
+  if (row.work_duration_s == null &&
+      !(inFlight && Number(inFlight.started_at) > 0)) return "";
+  return liveClock(
+    row.work_duration_s == null ? 0 : row.work_duration_s, inFlight,
+    "run-total", "total task work"
+  );
 }
 function runStatusTokens(r) {
   if (!r) return "";

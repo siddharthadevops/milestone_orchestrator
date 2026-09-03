@@ -248,6 +248,12 @@ class DeepTaskDocumentationTest(unittest.TestCase):
             [row["record"]["id"] for row in sidebar["rows"]],
             [parent["id"]],
         )
+        self.assertEqual(sidebar["rows"][0]["process"], "stopped")
+        self.assertEqual(
+            sidebar["rows"][0]["work_duration_s"],
+            parent["result"]["duration_s"],
+        )
+        self.assertIsNone(sidebar["rows"][0]["in_flight"])
         status, parent_view = self.request(
             "GET", "/api/tasks/%s" % parent["id"]
         )

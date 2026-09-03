@@ -179,6 +179,7 @@ import argparse
 import copy
 import contextlib
 import json
+import math
 import os
 import re
 import shutil
@@ -4744,9 +4745,10 @@ def _is_deep_reviewed_child(record):
     )
 
 
-def _sidebar_task_row(row):
+def _sidebar_task_row(row, timing=None):
     """A light row for the sidebar: never the native result (which can be
     hundreds of kilobytes of raw agent output) nor the full request."""
+    timing = timing or {}
     record = row["record"]
     order = record.get("order") or {}
     request = order.get("request") or {}
@@ -4754,6 +4756,9 @@ def _sidebar_task_row(row):
     text = str(request.get("request") or "").strip()
     return {
         "admitted_at": row["admitted_at"],
+        "process": timing.get("process", "stopped"),
+        "work_duration_s": timing.get("work_duration_s"),
+        "in_flight": timing.get("in_flight"),
         "record": {
             "id": record.get("id"),
             "order": {
@@ -4871,6 +4876,74 @@ def _task_host_active(host, task_id):
         return False
 
 
+def _task_work_seconds(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        value = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return value
+
+
+def _task_timing(duration, in_flight=None, process="stopped"):
+    """Compact shared-clock input; never expose the worker marker itself."""
+    started_at = (
+        in_flight.get("started_at") if isinstance(in_flight, dict) else None
+    )
+    started_at = _task_work_seconds(started_at)
+    if started_at is not None and started_at <= 0:
+        started_at = None
+    return {
+        "process": "running" if process == "running" else "stopped",
+        "work_duration_s": _task_work_seconds(duration),
+        "in_flight": (
+            {"started_at": float(started_at)}
+            if started_at is not None else None
+        ),
+    }
+
+
+def _reviewed_activity_timing(home, activity):
+    """Use one reviewed unit's existing accounting, including its live
+    Brainstorming producer only until that producer is recorded on the unit."""
+    if not isinstance(activity, dict) or not isinstance(
+        activity.get("unit"), dict
+    ):
+        return _task_timing(None)
+    unit = activity["unit"]
+    duration = _task_work_seconds(unit.get("work_duration_s"))
+    process = activity.get("process")
+    in_flight = activity.get("in_flight") if process == "running" else None
+    brainstormings = unit.get("brainstormings")
+    if not isinstance(brainstormings, list):
+        brainstormings = []
+    waiting = next((
+        item for item in reversed(brainstormings)
+        if isinstance(item, dict) and item.get("outcome") == "waiting"
+    ), None)
+    if waiting is not None and waiting.get("duration_s") is None:
+        try:
+            session = brainstorming_lifecycle.inspect_session(
+                home, waiting["session_id"], lambda _record: None
+            )
+            session_duration = _task_work_seconds(
+                session.get("work_duration_s")
+            )
+            if duration is not None and session_duration is not None:
+                duration += session_duration
+            if session.get("process") == "running":
+                process = "running"
+                in_flight = session.get("in_flight")
+        except Exception:
+            # The reviewed unit's durable work remains valid even when its
+            # optional attached session cannot currently be inspected.
+            pass
+    return _task_timing(duration, in_flight, process)
+
+
 def direct_reviewed_task_view(home, record, host=None):
     """Best-effort pipeline activity for one authorized reviewed task."""
     if tasks.stored_task_executor(
@@ -4959,6 +5032,10 @@ def direct_deep_task_view(home, who, parent, host=None):
     allowed_projects = _allowed_task_projects(home, who)
     children = []
     billing = {}
+    work_duration_s = 0.0
+    timing_known = True
+    in_flight = None
+    process = "running" if _task_host_active(host, parent_id) else "stopped"
     workspace = None
     try:
         workspace = task_api._workspace(parent)
@@ -4991,6 +5068,21 @@ def direct_deep_task_view(home, who, parent, host=None):
                 "billing": {},
                 "commit_web_base": None,
             }
+        result = child.get("result")
+        timing = (
+            _task_timing(result.get("duration_s"))
+            if result is not None else
+            _reviewed_activity_timing(home, reviewed["activity"])
+        )
+        child_duration = timing["work_duration_s"]
+        if child_duration is None:
+            timing_known = False
+        else:
+            work_duration_s += child_duration
+        if timing["process"] == "running":
+            process = "running"
+        if timing["in_flight"] is not None:
+            in_flight = timing["in_flight"]
         view = {
             "id": child["id"],
             "admitted_at": document["admitted_at"],
@@ -5013,9 +5105,71 @@ def direct_deep_task_view(home, who, parent, host=None):
             else parent["result"].get("status")
         ),
         "children": children,
+        "process": process,
+        "work_duration_s": work_duration_s if timing_known else None,
+        "in_flight": in_flight,
         "billing": billing,
         "commit_web_base": web_base,
     }
+
+
+def _direct_task_sidebar_timing(home, who, record, host=None):
+    """Project existing task accounting into the shared live-clock shape."""
+    result = record.get("result")
+    if result is not None:
+        # Every TaskExecutor's terminal envelope already owns the exact total;
+        # consulting child state or stale markers here would count it twice.
+        return _task_timing(result.get("duration_s"))
+
+    executor = tasks.stored_task_executor(
+        (record.get("order") or {}).get("task_executor")
+    )
+    active = _task_host_active(host, record["id"])
+    try:
+        if executor == "reviewed_task":
+            view = direct_reviewed_task_view(home, record, host)
+            timing = _reviewed_activity_timing(home, view["activity"])
+            if active:
+                timing["process"] = "running"
+            return timing
+        if executor == "deep_task":
+            view = direct_deep_task_view(home, who, record, host)
+            return _task_timing(
+                view["work_duration_s"], view["in_flight"], view["process"]
+            )
+        if executor == "brainstorming":
+            session_id = task_api.task_session_id(home, record, host)
+            if not session_id:
+                return _task_timing(
+                    None, process="running" if active else "stopped"
+                )
+            session = brainstorming_lifecycle.inspect_session(
+                home,
+                session_id,
+                lambda current: require_brainstorming_access(
+                    home, who, current
+                ),
+            )
+            session_running = session.get("process") == "running"
+            return _task_timing(
+                session.get("work_duration_s"),
+                session.get("in_flight") if session_running else None,
+                "running" if active or session_running else "stopped",
+            )
+        if executor == "agent_call":
+            if not active:
+                return _task_timing(None)
+            marker = task_api.read_worker_marker(home, record["id"])
+            if marker.get("task_id") != record["id"]:
+                return _task_timing(None, process="running")
+            if marker.get("completed"):
+                return _task_timing(
+                    marker.get("duration_s"), process="running"
+                )
+            return _task_timing(0.0, marker, "running")
+    except Exception:
+        pass
+    return _task_timing(None, process="running" if active else "stopped")
 
 
 def _direct_reviewed_state(home, who, task_id):
@@ -5123,7 +5277,12 @@ def make_handler(home, task_host=None):
                         self._json(200, {
                             "ok": True,
                             "rows": [
-                                _sidebar_task_row(row) for row in
+                                _sidebar_task_row(
+                                    row,
+                                    _direct_task_sidebar_timing(
+                                        home, who, row["record"], task_host
+                                    ),
+                                ) for row in
                                 visible_direct_task_rows(home, who, limit)
                             ],
                         })

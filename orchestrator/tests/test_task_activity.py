@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from orchestrator import contracts, registry, service
+from orchestrator import brainstorming_lifecycle, contracts, registry, service
 from orchestrator import state as st
 from orchestrator import task_api, tasks
 
@@ -253,6 +253,17 @@ class TaskActivityProjectionTests(unittest.TestCase):
             [row["record"]["id"] for row in limited],
             [direct_review["id"]],
         )
+        with mock.patch.object(
+            service, "direct_reviewed_task_view",
+            side_effect=AssertionError("terminal timing consulted activity"),
+        ):
+            timing = service._direct_task_sidebar_timing(
+                self.home, {"admin": True}, limited[0]["record"]
+            )
+        sidebar_row = service._sidebar_task_row(limited[0], timing)
+        self.assertEqual(sidebar_row["process"], "stopped")
+        self.assertEqual(sidebar_row["work_duration_s"], 1.0)
+        self.assertIsNone(sidebar_row["in_flight"])
         self.assertEqual(
             {record["id"] for record in service.visible_tasks(
                 self.home, {"admin": True}
@@ -282,19 +293,242 @@ class TaskActivityProjectionTests(unittest.TestCase):
             unit for unit in lifecycle["units"]
             if st.unit_key(unit) == lifecycle["reviewed_task"]["unit"]
         )
-        target["implementation_cut"] = {
-            "part": "a", "next_part": "b",
-            "cut_scope": "coherent first part",
-            "remaining_scope": "remaining second part",
-        }
+        st.record_draft(
+            lifecycle, target, contracts.KIND_IMPLEMENT,
+            {
+                "status": "ok",
+                "kind": contracts.KIND_IMPLEMENT,
+                "files_changed": [],
+                "suite_command": "true",
+                "notes": "first coherent part",
+                "implementation_cut": {
+                    "cut_scope": "coherent first part",
+                    "remaining_scope": "remaining second part",
+                },
+            },
+            family="codex",
+            duration=5.0,
+        )
         lifecycle["config"]["billing"] = True
         st.save(path, lifecycle)
 
-        view = service.direct_reviewed_task_view(
-            self.home, store.record(record["id"])
-        )
+        class Host:
+            @staticmethod
+            def is_active(task_id):
+                return task_id == record["id"]
+
+        with mock.patch.object(
+            service, "read_in_flight",
+            return_value={"started_at": 200.0, "kind": "implement"},
+        ):
+            view = service.direct_reviewed_task_view(
+                self.home, store.record(record["id"]), Host()
+            )
+            timing = service._direct_task_sidebar_timing(
+                self.home, {"admin": True},
+                store.record(record["id"]), Host(),
+            )
         self.assertEqual(view["activity"]["unit"]["part"], "a")
         self.assertEqual(view["billing"], {})
+        self.assertEqual(timing, {
+            "process": "running",
+            "work_duration_s": 5.0,
+            "in_flight": {"started_at": 200.0},
+        })
+
+        with mock.patch.object(
+            service, "direct_reviewed_task_view",
+            return_value={"activity": None},
+        ):
+            unavailable = service._direct_task_sidebar_timing(
+                self.home, {"admin": True},
+                store.record(record["id"]), Host(),
+            )
+        self.assertEqual(unavailable, {
+            "process": "running",
+            "work_duration_s": None,
+            "in_flight": None,
+        })
+
+    def test_sidebar_agent_call_clock_uses_only_a_live_worker_marker(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        record = store.admit(self.order(), {}, self.workspace)
+
+        class Host:
+            active = True
+
+            @classmethod
+            def is_active(cls, task_id):
+                return cls.active and task_id == record["id"]
+
+        marker = {
+            "task_id": record["id"],
+            "started_at": 123.5,
+        }
+        task_api._write_worker_marker(self.home, record["id"], marker)
+        timing = service._direct_task_sidebar_timing(
+            self.home, {"admin": True}, record, Host()
+        )
+        self.assertEqual(timing, {
+            "process": "running",
+            "work_duration_s": 0.0,
+            "in_flight": {"started_at": 123.5},
+        })
+
+        Host.active = False
+        stale = service._direct_task_sidebar_timing(
+            self.home, {"admin": True}, record, Host()
+        )
+        self.assertEqual(stale, {
+            "process": "stopped",
+            "work_duration_s": None,
+            "in_flight": None,
+        })
+
+        Host.active = True
+        task_api._write_worker_marker(self.home, record["id"], {
+            **marker, "completed": True, "duration_s": 7.0,
+        })
+        settled = service._direct_task_sidebar_timing(
+            self.home, {"admin": True}, record, Host()
+        )
+        self.assertEqual(settled, {
+            "process": "running",
+            "work_duration_s": 7.0,
+            "in_flight": None,
+        })
+
+        store.record_result(record["id"], self.terminal(duration_s=9.0))
+        terminal = store.record(record["id"])
+        with mock.patch.object(
+            task_api, "read_worker_marker",
+            side_effect=AssertionError("terminal timing read stale marker"),
+        ):
+            timing = service._direct_task_sidebar_timing(
+                self.home, {"admin": True}, terminal, Host()
+            )
+        self.assertEqual(timing, {
+            "process": "stopped",
+            "work_duration_s": 9.0,
+            "in_flight": None,
+        })
+
+    def test_sidebar_brainstorming_clocks_reuse_session_accounting_once(self):
+        record = {
+            "id": "brainstorming-task",
+            "order": {"task_executor": "brainstorming"},
+            "result": None,
+        }
+
+        class Host:
+            @staticmethod
+            def is_active(task_id):
+                return task_id == record["id"]
+
+        session = {
+            "process": "running",
+            "work_duration_s": 6.0,
+            "in_flight": {"started_at": 400.0, "kind": "discussion_turn"},
+        }
+        with mock.patch.object(
+            task_api, "task_session_id", return_value="bs-timing"
+        ), mock.patch.object(
+            brainstorming_lifecycle, "inspect_session", return_value=session
+        ):
+            timing = service._direct_task_sidebar_timing(
+                self.home, {"admin": True}, record, Host()
+            )
+        self.assertEqual(timing, {
+            "process": "running",
+            "work_duration_s": 6.0,
+            "in_flight": {"started_at": 400.0},
+        })
+
+        with mock.patch.object(
+            task_api, "task_session_id", return_value="bs-timing"
+        ), mock.patch.object(
+            brainstorming_lifecycle, "inspect_session",
+            return_value={
+                "process": "stopped",
+                "work_duration_s": 6.0,
+                "in_flight": {"started_at": 400.0},
+            },
+        ):
+            settling = service._direct_task_sidebar_timing(
+                self.home, {"admin": True}, record, Host()
+            )
+        self.assertEqual(settling, {
+            "process": "running",
+            "work_duration_s": 6.0,
+            "in_flight": None,
+        })
+
+        waiting_activity = {
+            "process": "running",
+            "in_flight": None,
+            "unit": {
+                "work_duration_s": 4.0,
+                "brainstormings": [{
+                    "outcome": "waiting", "session_id": "bs-timing",
+                    "duration_s": None,
+                }],
+            },
+        }
+        with mock.patch.object(
+            brainstorming_lifecycle, "inspect_session", return_value=session
+        ):
+            waiting = service._reviewed_activity_timing(
+                self.home, waiting_activity
+            )
+        self.assertEqual(waiting, {
+            "process": "running",
+            "work_duration_s": 10.0,
+            "in_flight": {"started_at": 400.0},
+        })
+
+        recorded_activity = copy.deepcopy(waiting_activity)
+        recorded_activity["unit"]["work_duration_s"] = 10.0
+        recorded_activity["unit"]["brainstormings"][0]["duration_s"] = 6.0
+        with mock.patch.object(
+            brainstorming_lifecycle, "inspect_session",
+            side_effect=AssertionError("recorded session was counted twice"),
+        ):
+            recorded = service._reviewed_activity_timing(
+                self.home, recorded_activity
+            )
+        self.assertEqual(recorded["work_duration_s"], 10.0)
+
+        with mock.patch.object(
+            brainstorming_lifecycle, "inspect_session",
+            side_effect=RuntimeError("session temporarily unreadable"),
+        ):
+            unavailable = service._reviewed_activity_timing(
+                self.home, waiting_activity
+            )
+        self.assertEqual(unavailable, {
+            "process": "running",
+            "work_duration_s": 4.0,
+            "in_flight": None,
+        })
+
+    def test_sidebar_clock_rejects_extreme_corrupt_numbers(self):
+        huge = 10 ** 400
+        self.assertEqual(service._task_timing(huge, {"started_at": huge}), {
+            "process": "stopped",
+            "work_duration_s": None,
+            "in_flight": None,
+        })
+
+        record = {
+            "id": "terminal-corrupt-duration",
+            "order": {"task_executor": "agent_call"},
+            "result": {"status": "failure", "duration_s": huge},
+        }
+        timing = service._direct_task_sidebar_timing(
+            self.home, {"admin": True}, record
+        )
+        self.assertIsNone(timing["work_duration_s"])
+        self.assertIsNone(timing["in_flight"])
 
     def test_direct_deep_task_projects_ordered_reviewed_child_activity(self):
         parent_order = self.order(executor="deep_task")
@@ -343,9 +577,9 @@ class TaskActivityProjectionTests(unittest.TestCase):
         for child in (documentation, implementation_a, implementation_b):
             task_api.ensure_reviewed_state(self.home, child, config)
         store.record_result(documentation["id"], self.terminal("failure"))
-        for child, note in (
-            (implementation_a, "part a evidence"),
-            (implementation_b, "part b evidence"),
+        for child, note, duration in (
+            (implementation_a, "part a evidence", 2.0),
+            (implementation_b, "part b evidence", 3.0),
         ):
             path = task_api.reviewed_state_path(self.home, child["id"])
             lifecycle = st.load(path)
@@ -363,8 +597,15 @@ class TaskActivityProjectionTests(unittest.TestCase):
                     "notes": note,
                 },
                 family="codex",
+                duration=duration,
             )
             st.save(path, lifecycle)
+        store.record_result(
+            implementation_z["id"], self.terminal(duration_s=4.0)
+        )
+        store.record_result(
+            implementation_aa["id"], self.terminal(duration_s=5.0)
+        )
         corrupt_path = task_api.reviewed_state_path(
             self.home, implementation_z["id"]
         )
@@ -398,6 +639,12 @@ class TaskActivityProjectionTests(unittest.TestCase):
 
         with mock.patch.object(
             service, "load_summary", side_effect=summary_with_decoy
+        ), mock.patch.object(
+            service, "read_in_flight",
+            side_effect=lambda _entry, active: (
+                {"started_at": 300.0, "kind": "implement"}
+                if active else None
+            ),
         ):
             view = service.direct_deep_task_view(
                 self.home, {"admin": True}, parent, Host()
@@ -407,6 +654,9 @@ class TaskActivityProjectionTests(unittest.TestCase):
             )
             corrupt_view = service.direct_reviewed_task_view(
                 self.home, store.record(implementation_z["id"]), Host()
+            )
+            sidebar_timing = service._direct_task_sidebar_timing(
+                self.home, {"admin": True}, parent, Host()
             )
         self.assertEqual(store.records(), before)
         self.assertEqual(
@@ -440,6 +690,13 @@ class TaskActivityProjectionTests(unittest.TestCase):
         self.assertEqual(reviewed_view["activity"]["process"], "running")
         self.assertIsNone(corrupt_view["activity"])
         self.assertIsInstance(view["billing"], dict)
+        self.assertEqual(view["work_duration_s"], 15.0)
+        self.assertEqual(view["in_flight"], {"started_at": 300.0})
+        self.assertEqual(sidebar_timing, {
+            "process": "running",
+            "work_duration_s": 15.0,
+            "in_flight": {"started_at": 300.0},
+        })
         for forbidden in ("goal", "events", "order", "result", "native_result"):
             self.assertNotIn(forbidden, reviewed_view)
         for child, note in (

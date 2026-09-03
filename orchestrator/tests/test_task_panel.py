@@ -449,6 +449,36 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn("record.id", row)
         self.assertIn("taskState(record)", row)
         self.assertIn("task_executor", row)
+        self.assertIn("const total = taskStatusClock(row)", row)
+        self.assertIn("${total}", row)
+        self.assertIn(
+            '<div class="run-info-row"><div class="activity-line sidebar">',
+            row,
+        )
+        self.assertIn("<span>${esc(bits)}</span>", row)
+        secondary = re.search(
+            r"\n  \.activity-line\.sidebar \{(.*?)\}", self.panel, re.S
+        ).group(1)
+        self.assertIn("font-size: 10.5px", secondary)
+        self.assertIn("white-space: nowrap", secondary)
+        clock = re.search(
+            r"function taskStatusClock\(row\) \{(.*?)\n\}",
+            self.panel,
+            re.S,
+        ).group(1)
+        self.assertIn("row.work_duration_s == null &&", clock)
+        self.assertIn("Number(inFlight.started_at) > 0", clock)
+        self.assertIn("row.work_duration_s == null ? 0", clock)
+        self.assertIn('row.process === "running"', clock)
+        self.assertIn("const inFlight = running ? row.in_flight : null", clock)
+        self.assertIn('"run-total", "total task work"', clock)
+        sidebar_items = re.search(
+            r"function sidebarItems\(runs, taskRows\) \{(.*?)\n\}",
+            self.panel,
+            re.S,
+        ).group(1)
+        self.assertIn('row.process === "running"', sidebar_items)
+        self.assertIn(": record.result === null", sidebar_items)
         for forbidden in ("predecessor", "successor", "review number"):
             self.assertNotIn(forbidden, self.task_ui.lower())
 
