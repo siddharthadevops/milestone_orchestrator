@@ -1,151 +1,160 @@
-# Informe: posibles mejoras del prompt set `literature`
+# Report: possible improvements to the `literature` prompt set
 
-Estado: **brainstorming no canónico — análisis de posibilidades
-(2026-09-03)**. Este documento no autoriza cambios en el set instalado.
+Status: **non-canonical brainstorming — analysis of possibilities
+(2026-09-03)**. This document does not authorize changes to the installed set.
 
-## Dictamen
+## Verdict
 
-El operador ya ha definido «rendir mejor»: las preguntas deben ampliar el
-contexto considerado, reducir el literalismo y aportar sentido común. Su
-consumidor es el propio agente durante el turno y la persona afectada es quien
-recibe una entrega demasiado literal. Que las respuestas estructuradas no se
-reutilicen después no vuelve ceremonial esa función.
+The operator has now defined “perform better”: the questions should broaden
+the context considered, reduce literalism, and contribute common sense. Their
+consumer is the agent reasoning during the turn, and the affected person is
+the one who receives an overly literal delivery. The fact that structured
+answers are not reused later does not make that function ceremonial.
 
-`literature` ya obliga a leer el texto, separar defecto de gusto, proteger voz
-y ambigüedad, limitar el alcance y aportar evidencia textual. Sus nueve
-preguntas `human_scale` conservan alguna barrera de proporcionalidad adaptada a
-la ruta: grano y tamaño, cambio mínimo, efecto directo, coste real o rechazo de
-una auditoría exhaustiva. Por eso la ausencia de las palabras de `default` no
-demuestra por sí sola una regresión funcional.
+`literature` already requires the agent to read the text, distinguish defect
+from taste, protect voice and ambiguity, limit scope, and provide textual
+evidence. Each of its nine `human_scale` questions retains a route-specific
+proportionality check: grain and size, smallest change, direct effect, real
+cost, or rejection of an exhaustive audit. The absence of `default`'s exact
+wording therefore does not by itself demonstrate a functional regression.
 
-Sí aparece una mejora plausible y acotada: `review_round.human_scale` repite
-controles que ya impone la rúbrica montada y dedica su respuesta a explicar
-cómo se comprobó el conjunto, en vez de a **comparar la intención humana, los
-hallazgos y el efecto de esa comparación sobre ellos**. Probar esa sustitución
-no requiere ids, rutas ni baterías nuevas, y este informe no modifica el set
-instalado.
+One bounded improvement is plausible: `review_round.human_scale` repeats
+controls already imposed by the mounted rubric and spends its answer on how
+the set was checked instead of **comparing the reviewer's findings with the
+requester's intent and showing what that comparison changed**. Testing that
+replacement requires no new ids, routes, or batteries, and this report does
+not modify the installed set.
 
-## Qué hacen —y qué no hacen— las preguntas de salida
+## What output questions do — and do not do
 
-La arquitectura las diseñó como trabajo cognitivo obligatorio: describir
-fuerza a comprobar y responder fuerza a decidir. La validación mecánica solo
-comprueba ids y respuestas no vacías porque no puede juzgar sentido común; ese
-límite de verificación no reduce la pregunta a transporte de datos.
+The architecture treats them as mandatory cognitive work: describing
+something forces inspection, and answering forces a judgment. Mechanical
+validation checks only ids and non-empty answers because it cannot judge
+common sense; that verification limit does not reduce the questions to data
+transport.
 
-Por tanto hay dos resultados que observar: que la respuesta muestre una
-comparación real, y que esa ampliación mejore el manuscrito, documento o
-Markdown final. Una respuesta más larga o con las palabras esperadas no basta.
+There are therefore two outcomes to observe: whether the answer shows a real
+comparison and whether that broader consideration improves the final
+manuscript, document, or Markdown. A longer answer, or one containing the
+expected words, is not enough.
 
-## Evidencia revisada
+## Evidence reviewed
 
-- Los 12 documentos canónicos cargan y sus 15 rutas directas y 18 rutas de
-  sesión ensamblan sin recurrir a `default`.
-- Planificación responde cuatro preguntas, implementación tres, revisión dos y
-  Dante tres; una sesión productora puede heredar además las de su tarea.
-  `standalone@*` no hereda preguntas y su autor responde solo las dos del turno,
-  igual que en `default`; su rol ya ordena realizar el trabajo y no hay una
-  entrega fallida que convierta esa delgadez en defecto.
-- El intro de `literature` ya pide evidencia textual o editorial. Las 222
-  respuestas históricas citadas pertenecen a `default` y a trabajo sobre
-  código: no miden esta redacción ni una entrega literaria.
-- En las 24 preguntas principales, `default` usa un ejemplo trabajado en 20 y
-  `literature` en ninguna; las nueve `human_scale` de `default` nombran el
-  literalismo y las nueve de `literature` no. Es una diferencia de redacción,
-  no una medida de rendimiento. La comparación útil es semántica: varias
-  sustituciones literarias ya expresan el mismo freno con «cambio mínimo»,
-  «grano y tamaño» o «auditoría exhaustiva».
-- `default` es el corpus semilla y el fallback revisado, pero un set nombrado
-  es un corpus completo e independiente: no existe herencia que convierta cada
-  frase de `default` en obligatoria. Sirve como comparador y fuente reutilizable,
-  no como canon léxico para `literature`. El acuerdo que creó el set permitía
-  conservar los ejemplos genéricos de proporcionalidad que ya funcionaran a
-  escala de manuscrito; reutilizar uno respeta esa autorización, no la amplía.
-- `review_round` y `delta_review` ya exigen distinguir defecto de gusto y
-  demostrar daño por encima del baseline permitido. `fix_findings` ya contiene
-  una pasada explícita de falsificación que puede reutilizarse si aparece el
-  problema.
-- Las tres preguntas de Dante protegen cosas distintas: voz y forma, relevancia
-  decisoria con cinco posibles fundamentos, y deriva respecto del encargo. No
-  hay una señal que justifique eliminar, fusionar o estrechar ninguna.
-- No apareció otro sistema de prompts literarios en los repositorios
-  concedidos que deba conectarse o extenderse.
+- All 12 canonical documents load, and their 15 direct routes and 18 session
+  routes assemble without falling back to `default`.
+- Planning answers four questions, implementation three, review two, and Dante
+  three; a producer session may also inherit those of its task.
+  `standalone@*` inherits no questions and its author answers only the two turn
+  questions, as in `default`; its role already requires doing the work, and no
+  failed delivery turns that thinness into a defect.
+- The `literature` question introduction already requires textual or editorial
+  evidence. The cited 222 historical answers come from `default` and code work:
+  they do not measure this wording or a literary delivery.
+- Across the 24 main questions, `default` uses a worked example in 20 and
+  `literature` in none; all nine `default` `human_scale` questions name
+  literalism, while none of the nine in `literature` do. That is a wording
+  difference, not a performance measure. The useful comparison is semantic:
+  several literary replacements already express the same restraint through
+  “smallest change,” “grain and size,” or rejection of an “exhaustive audit.”
+- `default` is the seed corpus and reviewed fallback, but a named set is a
+  complete, independent corpus: no inheritance makes every sentence in
+  `default` mandatory. It is a comparator and reusable source, not a lexical
+  canon for `literature`. The agreement that created the set allowed generic
+  proportionality examples that already worked at manuscript scale to be
+  retained; reusing one respects that authority rather than expanding it.
+- `review_round` and `delta_review` already require distinguishing defect from
+  taste and demonstrating harm beyond the permitted baseline. `fix_findings`
+  already contains an explicit falsification pass that can be reused if the
+  problem appears.
+- Dante's three questions protect different things: voice and form,
+  decision-relevant questions grounded in five possible sources, and drift
+  from the request. There is no signal justifying the removal, merger, or
+  narrowing of any of them.
+- No other literary prompt system appeared in the granted repositories that
+  should be connected or extended.
 
-## Cambio de preguntas con mejor fundamento
+## Best-supported question change
 
-No se propone restaurar transversalmente tres expresiones por conteo. Se
-conserva el vocabulario literario donde ya provoca la comparación correcta, en
-especial en `discussion_turn`, `draft_skeleton`, `draft_slice_note`,
-`implement`, `delta_review`, `fix_findings` y `reclassify`.
+This report does not propose restoring three expressions across the set based
+on counts. It preserves the literary vocabulary where it already triggers the
+right comparison, especially in `discussion_turn`, `draft_skeleton`,
+`draft_slice_note`, `implement`, `delta_review`, `fix_findings`, and
+`reclassify`.
 
-| Superficie | Limitación posible | Sustitución que probar |
+| Surface | Possible limitation | Replacement to test |
 | --- | --- | --- |
-| `review_round.human_scale` | Su cuerpo repite obligaciones de `judgment_rubric`, montada en la misma ruta: estándar, pasaje, consecuencia material, alternativa proporcionada y alcance. Lo distintivo que podría aportar la autoauditoría es la perspectiva de quien encargó la revisión. | «Pon los hallazgos junto al encargo y al manuscrito: ¿reconocería quien pidió la revisión el grano y las prioridades buscadas, o una aplicación literal de una lente convirtió variaciones inocuas en trabajo? Responde describiendo brevemente el grano y las prioridades que pidió, y si esa comparación te hizo mantener, reformular o retirar algún hallazgo.» |
+| `review_round.human_scale` | Its body repeats obligations from `judgment_rubric`, mounted on the same route: standard, passage, material consequence, proportionate alternative, and scope. The distinctive contribution of this self-audit could be the perspective of the person who requested the review. | “Put your findings next to the mandate and the manuscript: would the person who asked for this review recognize the grain and priorities they meant, or did a literal application of one lens turn harmless variation into work? Answer with a brief description of the grain and priorities they asked for, and whether that comparison made you keep, reword, or withdraw a finding.” |
 
-Esta es la única sustitución concreta recomendada. El ejemplo de los saltos
-temporales de `default` también puede reutilizarse si la formulación abstracta
-no basta; copiarlo en las nueve rutas antes de probar una sola no aportaría
-nueve funciones distintas.
+This is the only concrete replacement recommended. The `default` example
+about cataloguing time skips can also be reused if the abstract formulation is
+not enough; copying it into all nine routes before testing one would not add
+nine distinct functions.
 
-Que `review_round`, `delta_review` y `fix_findings` compartan la cola «explica
-cómo comprobaste» no demuestra que las tres preguntas hagan el mismo trabajo.
-En las dos últimas, el cuerpo conserva obligaciones propias sobre el delta o la
-cola completa, y el prompt ya las enfrenta al mandato, al contexto y al efecto
-lector. Sin respuestas que muestren autocertificación en esas rutas, la cola es
-una observación para vigilar, no fundamento para tres cambios.
+The fact that `review_round`, `delta_review`, and `fix_findings` share the
+“explain how you checked” answer tail does not demonstrate that all three
+questions do the same work. In the latter two, the body retains unique duties
+about the delta or the full queue, and the prompt already puts them against the
+mandate, context, and reader effect. Without answers showing self-certification
+on those routes, the shared tail is something to watch, not grounds for three
+changes.
 
-## Otras hipótesis y criterio para localizar la ruta
+## Other hypotheses and the criterion for locating a route
 
-| Superficie | Cobertura actual | Señal que justificaría actuar | Cambio mínimo que probar |
+| Surface | Current coverage | Signal that would justify action | Smallest change to test |
 | --- | --- | --- | --- |
-| Entrega de autor (`standalone@*` o `implement`) | Ambos ordenan realizar el trabajo; `implement` además contrasta la entrega con el brief y el efecto buscado. | Un encargo exige escoger, priorizar o dictaminar y la entrega real solo compara opciones. | Probar «¿La entrega ejecuta el acto pedido o solo describe opciones? Señala dónde lo resuelve» únicamente sobre la entrega afectada; decidir el montaje después de localizar el caso. |
-| `review_round` | Cada hallazgo necesita estándar, pasaje, daño material y alternativa proporcionada. | Un hallazgo de gusto sobrevive porque el revisor no probó una lectura plausible del pasaje. | Añadir la contralectura al `human_scale` de esta ruta, reutilizando la falsificación ya usada por el fixer. |
-| `delta_review` | Igual que revisión, pero limitado al cambio y sus efectos directos. | El mismo fallo aparece específicamente al revisar un delta. | Aplicar allí la misma cláusula; no tocar la revisión completa por anticipado. |
-| `draft_skeleton`, `draft_slice_note`, `reclassify`, `fix_findings` | Sus preguntas homónimas gobiernan planificación, tamaño, rating o resolución de una cola. | Ninguna señal actual. | Ningún cambio: no extender a ellas una recomendación por compartir id. |
-| Dante | Tres controles complementarios sobre adecuación, preguntas decisorias y foco. | Ninguna señal actual. | Mantener `turn_environment_fit`, `turn_human_scale` y `request_focus`. |
+| Author delivery (`standalone@*` or `implement`) | Both require doing the work; `implement` also compares the delivery with the brief and intended effect. | A request requires choosing, prioritizing, or deciding, but the actual delivery only compares options. | Test “Does the delivery perform the requested act, or only describe options? Point to where it resolves the request” only on the affected delivery; choose the mounting point after locating the case. |
+| `review_round` | Every finding needs a standard, passage, material harm, and proportionate alternative. | A taste-based finding survives because the reviewer did not test a plausible reading of the passage. | Add counter-reading to this route's `human_scale`, reusing the falsification already used by the fixer. |
+| `delta_review` | The same review coverage, but limited to the change and its direct effects. | The same failure appears specifically while reviewing a delta. | Apply the same clause there; do not change full review in advance. |
+| `draft_skeleton`, `draft_slice_note`, `reclassify`, `fix_findings` | Their namesake questions govern planning, size, rating, or resolution of a queue. | No current signal. | No change: do not extend a recommendation to them merely because they share an id. |
+| Dante | Three complementary checks on fit, decision-relevant questions, and focus. | No current signal. | Keep `turn_environment_fit`, `turn_human_scale`, and `request_focus`. |
 
-La tabla localiza solo esas dos hipótesis; no inventaría todas las rutas.
-Incluir `standalone@*` en la primera fila evita prejuzgar dónde estaría un
-fallo futuro, no convierte su batería de dos preguntas en una carencia. Sus
-preguntas de turno son compartidas y no permiten aislarla; resolver esa
-topología sin un fallo localizado seguiría siendo maquinaria innecesaria. Esa
-restricción no aplica a mejorar la función transversal de `human_scale`, cuyo
-usuario y propósito el operador ya ha identificado.
+The table locates only these two hypotheses; it does not inventory every route.
+Including `standalone@*` in the first row avoids prejudging where a future
+failure would occur, but does not turn its two-question battery into a
+deficiency. Its turn questions are shared and cannot isolate it; resolving
+that topology without a located failure would still be unnecessary machinery.
+That constraint does not apply to improving the cross-cutting function of
+`human_scale`, whose user and purpose the operator has identified.
 
-La contralectura no debe colgar de `environment_fit`: esa pregunta preserva
-audiencia, etapa, voz, ambigüedad y forma frente a la convencionalización. El
-objeto que se intenta refutar es el hallazgo, ya gobernado por `human_scale`.
+Counter-reading should not be attached to `environment_fit`: that question
+protects audience, stage, voice, ambiguity, and form against conventionalizing
+pressure. The object to falsify is the finding, already governed by
+`human_scale`.
 
-## Otras posibilidades, aún sin caso
+## Other possibilities without a case yet
 
-- **Creación desde cero.** `implement` ya dice «crear o revisar». Solo si una
-  ejecución se bloquea por no haber manuscrito previo tendría sentido aclarar
-  en esa ruta que el mandato y las fuentes disponibles son la autoridad.
-- **Fidelidad lingüística.** Voz y dicción ya están protegidas, y Dante sigue el
-  idioma del encargo. Solo una traducción o neutralización no pedida de variedad,
-  dialecto o alternancia de lenguas justificaría reforzar esa regla.
-- **Conclusión pedida.** Antes de tocar una pregunta, debe existir una entrega
-  que incumpla el acto solicitado pese a las instrucciones actuales. Sin ella,
-  `task_outcome` sería una segunda formulación del contrato, no una solución.
+- **Creation from scratch.** `implement` already says “create or revise.” Only
+  if a run stalls because no prior manuscript exists would it make sense to
+  clarify on that route that the mandate and available sources are the
+  authority.
+- **Language fidelity.** Voice and diction are already protected, and Dante
+  follows the language of the request. Only an unrequested translation or
+  neutralization of variety, dialect, or code-switching would justify
+  strengthening that rule.
+- **Requested conclusion.** Before changing a question, there must be a
+  delivery that fails to perform the requested act despite the current
+  instructions. Without one, `task_outcome` would be a second statement of the
+  contract rather than a solution.
 
-No se recomiendan `textual_fidelity`, `editorial_priority`,
-`downstream_decision`, `question_leverage` ni `missing_evidence` como ids
-nuevos: sus objetivos ya están cubiertos o no tienen víctima demostrada.
+This report does not recommend `textual_fidelity`, `editorial_priority`,
+`downstream_decision`, `question_leverage`, or `missing_evidence` as new ids:
+their outcomes are already covered or lack a demonstrated victim.
 
-## Validación proporcionada
+## Proportionate validation
 
-En una primera revisión literaria real, se puede comparar la pregunta actual
-con **solo la sustitución de `review_round`**, manteniendo iguales modelo, texto
-y contexto. Se conservan tanto la autoauditoría como la entrega. La persona que
-pidió el trabajo valora si el agente reconstruyó mejor su intención, retiró
-trabajo nacido de una lectura literal y mantuvo los hallazgos materiales.
+During the first real literary review, compare the current question with
+**only the `review_round` replacement**, keeping model, text, and context the
+same. Preserve both the self-audit and the delivery. The person who requested
+the work judges whether the agent reconstructed their intent more accurately,
+removed work caused by a literal reading, and retained material findings.
 
-No hace falta un evaluador ni una métrica léxica. Solo se conserva el cambio si
-mejora la entrega sin añadir verbosidad, hallazgos de gusto o trabajo ajeno al
-encargo.
+No evaluator or lexical metric is needed. Retain the change only if it improves
+the delivery without adding verbosity, taste-based findings, or work outside
+the request.
 
-## Fuera de alcance
+## Out of scope
 
-- No modificar el set instalado ni crear rutas o baterías nuevas.
-- No almacenar autoauditorías como una nueva autoridad.
-- No presentar el corpus de `default` como validación literaria.
-- No convertir la redacción exacta de `default` en requisito de todos los sets.
+- Modifying the installed set or creating new routes or batteries.
+- Storing self-audits as a new authority.
+- Presenting the `default` corpus as literary validation.
+- Turning the exact wording of `default` into a requirement for every set.
