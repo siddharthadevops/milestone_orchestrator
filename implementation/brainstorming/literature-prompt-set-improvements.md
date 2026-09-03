@@ -3,131 +3,142 @@
 Estado: **brainstorming no canónico — análisis de posibles mejoras
 (2026-09-03)**. Este documento no autoriza cambios en el set instalado.
 
-## Conclusión
+## Dictamen
 
-`literature` ya tiene una base sólida: lee el texto antes de juzgar, separa
-defecto de gusto, protege voz y ambigüedad, limita el alcance y pide evidencia
-textual. No conviene añadir más listas de lentes ni crear rutas específicas
-para título, voz, personajes, ritmo, etc. Eso haría el set más largo y más
-mecánico sin una necesidad demostrada.
+`literature` ya tiene una base sólida: obliga a leer el texto, separa defecto
+de gusto, protege voz y ambigüedad, limita el alcance y pide evidencia
+textual. No hay ejecuciones registradas que hayan seleccionado este set, así
+que hoy no existe evidencia de un fallo de rendimiento literario ni base para
+declarar que una redacción nueva rendirá mejor.
 
-La mejora con más probabilidad de elevar la calidad es **sustituir preguntas
-genéricas de autocertificación por pocas preguntas que obliguen a mostrar el
-resultado literario concreto**. En particular faltan cuatro comprobaciones:
+El encargo pide un informe de posibilidades, no elegir ni desplegar un
+rediseño. La dirección más proporcionada es **afinar preguntas e instrucciones
+existentes sin aumentar su número**. En concreto, merece probarse que el autor
+demuestre el resultado pedido y que el revisor intente una lectura alternativa.
+La fidelidad lingüística y la creación desde cero pueden aclararse con una
+línea cada una dentro de reglas ya montadas. No hacen falta rutas, unidades,
+campos de salida ni evaluadores nuevos.
 
-1. que la salida resuelva la decisión exacta pedida, no solo que respete el
-   proceso;
-2. que identifique qué funciona ya y debe conservarse;
-3. que pruebe una lectura alternativa antes de declarar un defecto;
-4. que preserve el idioma, variedad y alternancia de lenguas del texto.
+## Qué hacen —y qué no hacen— las preguntas de salida
 
-No hay todavía base para afirmar una mejora de rendimiento real: el registro
-de tareas actual no contiene ejecuciones que hayan seleccionado `literature`. Las
-propuestas siguientes son hipótesis razonadas y deben probarse con casos
-literarios reales antes de aceptarse.
+Las preguntas son una autoconsulta obligatoria: el contrato comprueba que
+cada id montado tenga una respuesta no vacía. En Brainstorming, sin embargo,
+la siguiente intervención y el chat compartido reciben el Markdown, no esas
+respuestas estructuradas. Estas pueden ayudar al modelo a revisar su trabajo
+antes de entregarlo, pero no son por sí mismas información consumida por el
+siguiente participante ni una prueba de calidad.
+
+Por tanto, una mejora debe juzgarse por el manuscrito, documento o Markdown
+final. La tasa de respuestas con anclaje solo es un diagnóstico secundario;
+optimizarla sin mejorar la entrega engordaría la autocertificación.
 
 ## Evidencia revisada
 
-- El set instalado contiene los 12 documentos canónicos y carga correctamente.
-- Las 33 combinaciones de ruta actualmente disponibles ensamblan y renderizan
-  sin fallback. Sus prompts van de 279 a 1.131 palabras, con una media de 748;
-  son, de media, 71 palabras más breves que los equivalentes de `default`.
-  La longitud global no es, por tanto, el primer problema que resolver.
-- Las preguntas actuales se concentran en adecuación al entorno, escala humana,
-  reutilización y ausencia de invención. Son buenas barreras contra la deriva,
-  pero permiten respuestas formularias del tipo «sí, se respetó la voz».
-- Una producción de nota mediante Brainstorming puede acumular seis preguntas
-  obligatorias al heredar las del autor directo. Añadir más preguntas globales
-  empeoraría la relación señal/ruido.
-- Solo Dante recibe una regla explícita sobre el idioma de respuesta. El autor,
-  revisor y corrector reciben reglas generales de voz, pero ninguna prohibición
-  clara de traducir, neutralizar dialecto o borrar alternancias lingüísticas no
-  pedidas.
-- La crítica está orientada a hallazgos. Se ordena preservar los aciertos, pero
-  ninguna pregunta obliga a localizar el efecto que ya funciona y que una
-  revisión podría destruir.
+- Los 12 documentos canónicos de `literature` cargan y sus 15 rutas directas
+  y 18 rutas de sesión ensamblan sin recurrir a `default`.
+- El set no presenta una crisis general de longitud frente a `default`. El
+  riesgo local está en la batería: planificación ya responde cuatro preguntas,
+  implementación tres, revisión dos y Dante tres; el autor de una sesión de
+  producción hereda además las preguntas de su tarea.
+- Las preguntas literarias actuales ya piden pasajes, estándares o una
+  comparación concreta en la mayoría de superficies. No está demostrado que
+  les falte una obligación general de anclaje.
+- Ninguna pregunta comprueba explícitamente que la entrega haya tomado la
+  decisión pedida. Las instrucciones tampoco aclaran que comparar opciones no
+  basta cuando el encargo exige escoger, priorizar o dictaminar.
+- La rúbrica de revisión separa defecto y gusto, pero no exige formular la
+  lectura alternativa más fuerte antes de mantener un hallazgo.
+- La protección de dicción, voz, ambigüedad, ritmo y forma ya cubre buena parte
+  de la fidelidad. Solo Dante tiene una regla explícita de idioma; además,
+  algunas instrucciones dicen a la vez «crear o revisar» y presuponen un
+  manuscrito previo.
+- Las tres preguntas actuales de Dante no son equivalentes: una protege voz y
+  forma, otra exige relevancia decisoria y fundamento, y otra detecta deriva.
+  Sustituirlas perdería cobertura.
+- Las 222 respuestas históricas citadas en la discusión pertenecen a `default`
+  y a trabajos sobre código, con preguntas distintas. Muestran que una
+  autoconsulta puede contestarse de forma formularia, pero no permiten decidir
+  una modificación de `literature` ni medir calidad literaria.
+- No apareció otro sistema de prompts literarios en los repositorios concedidos.
+  Las mejoras candidatas deben reutilizar las preguntas y reglas compartidas
+  que ya existen.
 
-## Cambio recomendado en las preguntas de salida
+## Preguntas de salida candidatas
 
-La regla debe ser **reemplazar, no acumular**. Cada llamada debería contestar
-como máximo dos o tres preguntas distintas de su contrato principal.
+### 1. Autor: incorporar resultado a `human_scale`
 
-| Superficie | Preguntas propuestas | Qué mejora |
-| --- | --- | --- |
-| Autor inicial, implementación y corrector | **`task_outcome`**: «¿Qué decisión o entrega literaria pidió exactamente el encargo y qué fragmento concreto de la salida demuestra que se resolvió con la intervención mínima?» | Evita entregar un análisis correcto pero no elegir, revisar, crear o dictaminar lo pedido. |
-| Autor inicial, implementación y corrector | **`textual_fidelity`**: «¿Qué efecto valioso, rasgo de voz, hecho, ambigüedad o forma del texto corría riesgo de perderse, y qué comparación muestra que se conservó o cambió deliberadamente? Si no existía texto previo, ¿qué libertad creativa quedó abierta?» | Reduce homogeneización, sobreexplicación y falsos bloqueos en creación desde cero. |
-| Revisión y delta review | **`strongest_counterreading`**: «¿Cuál es la lectura alternativa plausible más fuerte del pasaje y hace desaparecer o rebaja algún hallazgo? Explica la decisión con el texto.» | Obliga a intentar refutar el hallazgo y separa mejor defecto de preferencia. |
-| Revisión y delta review | **`editorial_priority`**: «Si solo pudiera hacerse un cambio, ¿cuál alteraría más el efecto solicitado sobre el lector? Si ninguno es material, di que no cambiarías el texto.» | Produce una conclusión accionable y permite una revisión limpia sin fabricar trabajo. |
-| Skeleton y nota de slice | **`downstream_decision`**: «¿Qué decisión material tendrá que tomar el próximo autor o editor, y dónde encuentra orientación suficiente sin quedar atado a una técnica o redacción?» | Prueba la utilidad real del documento para su consumidor. |
-| Dante | **`question_leverage`**: «¿Qué decisión concreta podría cambiar cada pregunta que hiciste?» y **`missing_evidence`**: «¿Qué pasaje o contexto ausente justificó preguntar en vez de concluir?» | Sustituye tres autoauditorías solapadas por dos controles directos sobre la calidad de sus preguntas. |
+No añadir `task_outcome` ni sustituir el control específico de cada superficie.
+Anteponer a la pregunta `human_scale` existente esta cláusula:
 
-Conviene mantener las preguntas actuales de `reclassify`: ya separan
-probabilidad de desvío y coste de corrección, que son decisiones distintas. Los
-checkpoints técnicos y la reparación Git tampoco necesitan preguntas
-literarias añadidas.
+> ¿Qué resultado o decisión pidió exactamente el encargo y qué parte concreta
+> de la entrega demuestra que se resolvió?
 
-### Preguntas por tipo de encargo, sin nuevas rutas
+Después se mantiene la comparación actual sobre grano, tamaño, intervención
+mínima y trabajo adyacente. Así se añade el único hueco claro sin perder
+cobertura ni pasar de tres a cinco preguntas en implementación o de seis a más
+preguntas en una sesión productora.
 
-El prompt general debería indicar que el autor formule internamente un criterio
-de éxito específico a partir del encargo. Puede ofrecer ejemplos, no una nueva
-taxonomía obligatoria:
+### 2. Revisión: probar una lectura alternativa dentro de la pregunta actual
 
-- **Títulos:** «¿Qué promesa de tono, género o tema hace cada finalista, qué
-  parte del manuscrito la sostiene y cuál opción gana por encaje y recuerdo sin
-  explicar demasiado?» Si se pide elegir, una lista sin elección no completa
-  la tarea.
-- **Voz o estilo:** «¿Qué señales observables —dicción, sintaxis, ritmo, punto
-  de vista o distancia— definen la voz aquí, y qué cambia sin neutralizarlas?»
-- **Personaje o continuidad:** «¿Qué sabe, quiere y puede saber el personaje en
-  este punto, y qué pasaje anterior o posterior limita la revisión?»
-- **Preparación editorial:** «¿Cuál es el obstáculo decisivo para enviar, si
-  existe, y qué evidencia sostiene un veredicto claro de listo, no listo o
-  listo con condiciones?»
+No añadir `strongest_counterreading`. Si casos literarios reales muestran
+hallazgos que confunden gusto y defecto, añadir al final de
+`environment_fit`:
 
-Estas preguntas no deben montarse en todas las tareas. Solo deben orientar la
-pregunta `task_outcome` cuando el encargo correspondiente las haga relevantes.
+> ¿Qué lectura alternativa plausible del pasaje probaste y por qué no elimina
+> o rebaja el hallazgo?
 
-## Mejoras de redacción de los prompts
+La cláusula conserva audiencia, género, forma y etapa editorial, y hace
+observable el intento de refutación sin crear otra respuesta obligatoria.
 
-1. **Añadir una regla de fidelidad lingüística compartida.** Responder en el
-   idioma pedido; al editar, conservar idioma, variedad, dialecto y alternancia
-   de lenguas del texto; no traducir ni normalizar salvo petición expresa.
-2. **Distinguir revisión de creación desde cero.** Si existe texto previo, se
-   exige lectura y continuidad. Si no existe, el mandato y las fuentes son la
-   autoridad; no se inventan citas ni se trata la ausencia de manuscrito como
-   bloqueo. Las decisiones creativas nuevas se presentan como elecciones, no
-   como hechos heredados.
-3. **Pedir una conclusión cuando el encargo la exige.** Comparar opciones no
-   sustituye a escoger, priorizar o emitir un veredicto.
-4. **Eliminar repeticiones al cambiar preguntas.** `environment_fit`,
-   `human_scale` y `machinery_trust` repiten varias veces audiencia, etapa,
-   voz, invención y alcance. Sus protecciones deben conservarse en la guía,
-   mientras las preguntas de salida se dedican a evidencia de resultado,
-   fidelidad y decisión.
+### 3. Dante: mantener las tres preguntas
 
-## Qué no cambiar todavía
+`turn_environment_fit`, `turn_human_scale` y `request_focus` deben permanecer.
+La segunda ya exige preguntas capaces de cambiar la decisión y fundadas en un
+pasaje, fuente, continuidad, proporcionalidad o contexto ausente. Separar
+`question_leverage` y `missing_evidence` duplicaría esa función y borraría las
+guardas de voz y deriva.
 
-- No crear rutas o materiales separados para cada lente literaria.
-- No ampliar el esquema de salida ni construir un evaluador automático de
-  calidad literaria: ninguna regla puede verificar mecánicamente esa calidad.
-- No añadir terminología crítica especializada por defecto. Debe usarse solo
-  cuando aclare una decisión para el autor, no como exhibición de análisis.
-- No convertir «identificar un acierto» en elogio obligatorio. Solo debe
-  localizar un efecto relevante que una intervención podría dañar.
+No se recomienda añadir `textual_fidelity`, `editorial_priority` ni
+`downstream_decision`: sus objetivos ya están repartidos entre fidelidad,
+rúbrica de juicio, altitud editorial y resultado pedido. Convertirlos en ids
+independientes aumentaría la batería sin un consumidor o fallo demostrado.
 
-## Verificación propuesta
+## Mejoras candidatas en las instrucciones
 
-Antes de modificar el set, guardar cuatro salidas base y repetir los mismos
-encargos con la revisión candidata, manteniendo modelo, material y contexto:
+1. **Conclusión pedida.** Añadir a la instrucción existente del autor: «Si el
+   encargo exige escoger, priorizar o dictaminar, comparar opciones no completa
+   la entrega».
+2. **Creación desde cero.** Añadir a la regla de lectura y reutilización: «Si
+   no existe texto previo porque el encargo es creativo, el mandato y las
+   fuentes disponibles son la autoridad; no inventes citas ni trates esa
+   ausencia como bloqueo».
+3. **Fidelidad lingüística, solo si aparece el caso.** Reutilizar la regla de
+   Dante sobre seguir el idioma del encargo y precisar en la regla de fidelidad
+   que no se traduzcan ni neutralicen variedad, dialecto o alternancia de
+   lenguas sin petición expresa. La protección actual de voz y dicción hace de
+   esto una aclaración, no una nueva garantía.
+4. **Contralectura.** Si se adopta la cláusula de revisión, reflejarla en la
+   rúbrica existente; no crear una unidad paralela.
 
-1. escoger y justificar títulos;
-2. revisar un pasaje de voz marcada;
-3. hacer una crítica estructural;
-4. dictaminar preparación para envío editorial.
+## Validación proporcionada
 
-Una comparación humana ciega debe valorar cinco aspectos: cumplimiento exacto
-del encargo, evidencia textual, preservación de voz, utilidad de la conclusión
-y fidelidad lingüística. También debe registrar verbosidad y afirmaciones sin
-apoyo. Solo se adopta cada cambio si mejora esos resultados sin aumentar la
-deriva ni las respuestas formularias. Este piloto usa la selección y validación
-existentes; no necesita infraestructura nueva.
+No hace falta lanzar ahora un piloto ciego de ocho ejecuciones ni construir un
+evaluador. Cuando existan dos o más encargos literarios representativos,
+comparar el prompt actual con **un solo cambio cada vez**, manteniendo iguales
+modelo, texto y contexto. La persona que pidió el trabajo debe valorar la
+entrega final en tres aspectos: resolvió la decisión exacta, fundamentó sus
+afirmaciones en el texto y conservó el efecto o la voz que debía permanecer.
+
+La presencia de anclajes en las respuestas estructuradas puede registrarse,
+pero no decide la adopción. Solo se conserva un cambio si mejora la entrega sin
+añadir verbosidad, hallazgos de gusto o trabajo ajeno al encargo. Hasta entonces,
+las propuestas anteriores siguen siendo hipótesis y el set instalado no cambia.
+
+## Fuera de alcance
+
+- No crear rutas por título, voz, personaje, continuidad, ritmo o preparación
+  editorial.
+- No ampliar el esquema de salida ni almacenar las autoauditorías como nueva
+  autoridad.
+- No modificar ahora las preguntas de Dante ni las baterías de planificación.
+- No presentar el corpus de código de `default` como validación literaria.
