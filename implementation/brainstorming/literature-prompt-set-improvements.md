@@ -18,12 +18,12 @@ la ruta: grano y tamaño, cambio mínimo, efecto directo, coste real o rechazo d
 una auditoría exhaustiva. Por eso la ausencia de las palabras de `default` no
 demuestra por sí sola una regresión funcional.
 
-Sí aparece una mejora plausible y acotada: las preguntas que aún tienen forma
-de lista de conformidad pueden obligar a **comparar la intención humana, el
-trabajo realizado y la sobreactuación literal que se descartó**. Los dos
-candidatos concretos son `review_round.human_scale` y
-`questioner_turn.turn_human_scale`; se probarían de uno en uno. No hacen falta
-ids, rutas ni baterías nuevas, y este informe no modifica el set instalado.
+Sí aparece una mejora plausible y acotada: `review_round.human_scale` repite
+controles que ya impone la rúbrica montada y dedica su respuesta a explicar
+cómo se comprobó el conjunto, en vez de a **comparar la intención humana, los
+hallazgos y la sobreactuación literal que se descartó**. Probar esa sustitución
+no requiere ids, rutas ni baterías nuevas, y este informe no modifica el set
+instalado.
 
 ## Qué hacen —y qué no hacen— las preguntas de salida
 
@@ -65,8 +65,8 @@ Markdown final. Una respuesta más larga o con las palabras esperadas no basta.
   una pasada explícita de falsificación que puede reutilizarse si aparece el
   problema.
 - Las tres preguntas de Dante protegen cosas distintas: voz y forma, relevancia
-  decisoria con fundamento, y deriva respecto del encargo. No se elimina ni se
-  fusiona ninguna; una reescritura conserva el id y la cobertura.
+  decisoria con cinco posibles fundamentos, y deriva respecto del encargo. No
+  hay una señal que justifique eliminar, fusionar o estrechar ninguna.
 - No apareció otro sistema de prompts literarios en los repositorios
   concedidos que deba conectarse o extenderse.
 
@@ -79,15 +79,19 @@ especial en `discussion_turn`, `draft_skeleton`, `draft_slice_note`,
 
 | Superficie | Limitación posible | Sustitución que probar |
 | --- | --- | --- |
-| `review_round.human_scale` | «¿Cumple cada hallazgo A, B y C?» puede resolverse como checklist sin reconstruir qué grano quería quien encargó la revisión. | «Pon los hallazgos junto al encargo y al manuscrito: ¿reconocería quien pidió la revisión el grano y las prioridades buscadas, o una aplicación literal de una lente convirtió variaciones inocuas en trabajo? Responde con un pasaje localizado, la consecuencia material y cualquier exceso retirado.» |
-| `questioner_turn.turn_human_scale` | Ya exige preguntas decisorias y fundadas, pero permite certificarlo sin adoptar la perspectiva de quien debe contestarlas. | «Pon tus preguntas junto a la decisión que la persona aún debe tomar: ¿cambiaría cada respuesta esa decisión, o estás inventariando ambigüedades solo porque existen? Nombra la decisión que cambia cada pregunta y retira las demás.» |
+| `review_round.human_scale` | Su cuerpo repite obligaciones de `judgment_rubric`, montada en la misma ruta: estándar, pasaje, consecuencia material, alternativa proporcionada y alcance. Lo distintivo que podría aportar la autoauditoría es la perspectiva de quien encargó la revisión. | «Pon los hallazgos junto al encargo y al manuscrito: ¿reconocería quien pidió la revisión el grano y las prioridades buscadas, o una aplicación literal de una lente convirtió variaciones inocuas en trabajo? Responde con un pasaje localizado, la consecuencia material y cualquier exceso retirado.» |
 
-La primera sustitución es la candidata principal porque la revisión puede
-fabricar trabajo hallazgo a hallazgo. La segunda queda condicionada a observar
-preguntas innecesarias: la redacción actual ya contiene una salvaguarda fuerte.
-El ejemplo de los saltos temporales de `default` también puede reutilizarse si
-la formulación abstracta no basta; copiarlo en las nueve rutas antes de probar
-una sola no aportaría nueve funciones distintas.
+Esta es la única sustitución concreta recomendada. El ejemplo de los saltos
+temporales de `default` también puede reutilizarse si la formulación abstracta
+no basta; copiarlo en las nueve rutas antes de probar una sola no aportaría
+nueve funciones distintas.
+
+Que `review_round`, `delta_review` y `fix_findings` compartan la cola «explica
+cómo comprobaste» no demuestra que las tres preguntas hagan el mismo trabajo.
+En las dos últimas, el cuerpo conserva obligaciones propias sobre el delta o la
+cola completa, y el prompt ya las enfrenta al mandato, al contexto y al efecto
+lector. Sin respuestas que muestren autocertificación en esas rutas, la cola es
+una observación para vigilar, no fundamento para tres cambios.
 
 ## Otras hipótesis y criterio para localizar la ruta
 
