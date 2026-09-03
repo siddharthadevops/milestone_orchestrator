@@ -4976,7 +4976,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                     "Dante's "
                                                                                                     'questions.'],
                                                                                            'variables': [],
-                                                                                           'questions': []}}},
+                                                                                           'questions': [{'id': 'turn_better_alternative',
+                                                                                                          'text': 'Did you look for a materially better alternative to the same actual problem? If one was evidence-supported, include it in the chat (`markdown`) and answer here with its name and the concrete cost, harm, or machinery it avoids; otherwise say briefly that none was supported.'}]}}},
                                         'questions': {'intro': ['QUESTIONS (answer '
                                                                 'each in output, '
                                                                 'backed by an '

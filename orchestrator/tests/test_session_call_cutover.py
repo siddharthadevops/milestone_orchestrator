@@ -893,7 +893,10 @@ class SessionCallCutoverTest(unittest.TestCase):
             ),
             "contrary_position": (
                 "discussion_turn",
-                ["turn_environment_fit", "turn_human_scale"],
+                [
+                    "turn_environment_fit", "turn_human_scale",
+                    "turn_better_alternative",
+                ],
             ),
             "common_sense": (
                 "questioner_turn",

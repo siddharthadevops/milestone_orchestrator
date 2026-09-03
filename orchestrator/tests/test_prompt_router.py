@@ -338,6 +338,7 @@ class PromptRouterTest(unittest.TestCase):
             ],
             "contrary_position": [
                 "turn_environment_fit", "turn_human_scale",
+                "turn_better_alternative",
             ],
             "common_sense": [
                 "turn_environment_fit", "turn_human_scale", "request_focus",

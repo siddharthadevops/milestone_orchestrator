@@ -82,6 +82,7 @@ ALTITUDE (documentation discipline)
 QUESTIONS (answer each in output, backed by an explanation)
 - turn_environment_fit: What standard does the surrounding work live at, and does your intervention push beyond it anywhere the request did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found.
 - turn_human_scale: Put your intervention next to the request: would the human who asked see the grain and size they meant — or literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
+- turn_better_alternative: Did you look for a materially better alternative to the same actual problem? If one was evidence-supported, include it in the chat (`markdown`) and answer here with its name and the concrete cost, harm, or machinery it avoids; otherwise say briefly that none was supported.
 
 OUTPUT CONTRACT
 Return exactly one JSON object with kind "discussion_turn", one non-empty
