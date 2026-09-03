@@ -14,7 +14,7 @@ import time
 import uuid
 
 from orchestrator import brainstorming, brainstorming_tasks, contracts, driver, gitsync
-from orchestrator import kvstore, pricing
+from orchestrator import kvstore, pricing, profiles, prompt_sets
 from orchestrator import registry, runners, session_repository, staffing, tasks
 from orchestrator import state as st
 
@@ -574,6 +574,13 @@ def ensure_reviewed_state(home, record, config, implementation_scope=None):
     request = record["order"]["request"]
     workspace = _workspace(record)
     effective = copy.deepcopy(config)
+    strategy_profile = record["order"].get("strategy_profile")
+    if strategy_profile is not None:
+        profiles.verify_retained(
+            strategy_profile["ref"], strategy_profile["profile"]
+        )
+        effective["profile_ref"] = copy.deepcopy(strategy_profile["ref"])
+        effective["profile"] = copy.deepcopy(strategy_profile["profile"])
     output = request.get("output_directory")
     if output is not None:
         relative = os.path.relpath(output, os.path.realpath(workspace))
@@ -593,6 +600,9 @@ def ensure_reviewed_state(home, record, config, implementation_scope=None):
         name="reviewed task %s" % record["id"],
         slug="reviewed-task-%s" % record["id"][:8],
         project=project,
+        prompt_set=record["order"].get(
+            "prompt_set", prompt_sets.DEFAULT_SET_NAME
+        ),
     )
     authority_path = os.path.join(
         reviewed_state_directory(home, record["id"]), "authority.md"

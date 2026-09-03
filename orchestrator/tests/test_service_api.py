@@ -2685,14 +2685,12 @@ class StrategyConfiguratorPanelTest(ServiceApiTest):
         )
         source = self.strategy_source()
         self.assertIn('? "reserved — non-operative" : decision.status;', source)
-        self.assertIn("const dials = profileDials(p);", source)
-        self.assertEqual(source.count("const dials = profileDials(p);"), 2)
-        dials = source[
-            source.index("function profileDials"):
-            source.index("/* ---- runtime profile swap")
+        rows = source[
+            source.index("function strategyDecisionRows"):
+            source.index("function renderStrategyProfiles")
         ]
-        self.assertIn("strategyDecisions.map(decision =>", dials)
-        self.assertIn("strategySupportText(decision)", dials)
+        self.assertIn("strategySupportText(decision)", rows)
+        self.assertNotIn("function profileDials", source)
 
     def test_configurator_load_and_save_failures_do_not_fallback(self):
         source = self.strategy_source()

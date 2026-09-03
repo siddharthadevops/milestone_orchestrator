@@ -4299,6 +4299,11 @@ def _reviewed_task_config(home, project=None):
     return config
 
 
+def _uses_reviewed_task_lifecycle(task_executor):
+    """Whether this executor resolves and recovers reviewed-work config."""
+    return task_executor in ("reviewed_task", "deep_task")
+
+
 def _projectless_task_work_area(who, value):
     if not who.get("admin"):
         raise ApiError(403, FORBIDDEN)
@@ -4360,12 +4365,61 @@ def _resolve_direct_task_order(home, who, body):
                 tasks.INVALID_TASK_REQUEST,
                 "brainstorming_mode is service-owned",
             )
+        if isinstance(body, dict) and "strategy_profile" in body:
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "strategy_profile is service-owned",
+            )
+        profile_supplied = isinstance(body, dict) and "profile" in body
+        profile_name = body.get("profile") if profile_supplied else None
+        strategy_profile = None
+        if profile_supplied:
+            if not tasks.task_executor_supports_binding(
+                body.get("task_executor"), "strategy_profile"
+            ):
+                raise tasks.TaskRequestError(
+                    tasks.INVALID_TASK_REQUEST,
+                    "profile is unavailable for this TaskExecutor",
+                )
+            if not isinstance(profile_name, str) or not profile_name.strip():
+                raise tasks.TaskRequestError(
+                    tasks.INVALID_TASK_REQUEST,
+                    "profile must be a non-empty profile name",
+                )
+            try:
+                profile_ref, profile_content = profiles.resolve(
+                    home, profile_name.strip()
+                )
+            except profiles.ProfileError as exc:
+                raise tasks.TaskRequestError(
+                    tasks.INVALID_TASK_REQUEST,
+                    "strategy profile is unavailable",
+                ) from exc
+            strategy_profile = {
+                "ref": profile_ref,
+                "profile": profile_content,
+            }
+        canonical_body = copy.deepcopy(body) if isinstance(body, dict) else body
+        if isinstance(canonical_body, dict):
+            canonical_body.pop("profile", None)
+            task_executor = canonical_body.get("task_executor")
+            if tasks.task_executor_supports_binding(
+                task_executor, "prompt_set"
+            ):
+                canonical_body.setdefault(
+                    "prompt_set", prompt_sets.DEFAULT_SET_NAME
+                )
+            if strategy_profile is not None:
+                canonical_body["strategy_profile"] = strategy_profile
         # A deep order's implementation thresholds can be a partial override
         # of the bound project's values. Validate the common envelope first,
         # then freeze the actual two policies once that project is known.
-        preflight = body
-        if isinstance(body, dict) and body.get("task_executor") == "deep_task":
-            preflight = copy.deepcopy(body)
+        preflight = canonical_body
+        if (
+            isinstance(canonical_body, dict)
+            and canonical_body.get("task_executor") == "deep_task"
+        ):
+            preflight = copy.deepcopy(canonical_body)
             preflight["configuration"] = {}
         order = tasks.validate_order(preflight)
         selector = order["request"]["work_area"]
@@ -4394,18 +4448,31 @@ def _resolve_direct_task_order(home, who, body):
                 tasks.INVALID_TASK_REQUEST, "invalid task work area selector"
             )
         order["request"]["work_area"] = work_area
-        if order["task_executor"] in ("reviewed_task", "deep_task"):
+        if _uses_reviewed_task_lifecycle(order["task_executor"]):
             config = _reviewed_task_config(home, project_slug)
+            if strategy_profile is not None:
+                retained = copy.deepcopy(config)
+                retained["profile_ref"] = copy.deepcopy(
+                    strategy_profile["ref"]
+                )
+                retained["profile"] = copy.deepcopy(
+                    strategy_profile["profile"]
+                )
+                config = interpreter.effective_config({
+                    "config": retained,
+                    "events": [],
+                })
             if order["task_executor"] == "reviewed_task":
                 order["configuration"] = (
                     tasks.resolve_reviewed_task_configuration(
-                        body["configuration"], defaults=config
+                        canonical_body["configuration"], defaults=config
                     )
                 )
             else:
                 order["configuration"] = (
                     tasks.resolve_deep_task_configuration(
-                        body.get("configuration", {}), defaults=config
+                        canonical_body.get("configuration", {}),
+                        defaults=config,
                     )
                 )
         if order["staffing_session"] is not None:
@@ -4528,7 +4595,7 @@ def create_task(home, who, body, host):
     store = task_api.StandaloneTaskStore(home)
     resolver = (
         (lambda: _reviewed_task_config(home, project))
-        if order["task_executor"] in ("reviewed_task", "deep_task")
+        if _uses_reviewed_task_lifecycle(order["task_executor"])
         else (lambda: _direct_task_config(home, project))
     )
     # Reap outside the lock: reaping takes the registry lock itself.
@@ -5701,8 +5768,9 @@ def make_server(home, port, task_host=None):
             lambda record: (
                 lambda: (
                     _reviewed_task_config(home, _task_project(record))
-                    if (record.get("order") or {}).get("task_executor")
-                    in ("reviewed_task", "deep_task")
+                    if _uses_reviewed_task_lifecycle(
+                        (record.get("order") or {}).get("task_executor")
+                    )
                     else _direct_task_config(home, _task_project(record))
                 )
             )

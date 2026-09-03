@@ -362,11 +362,6 @@
   #taskform { width: min(680px, 92vw); max-height: 90vh; overflow-y: auto; }
   #taskform .field > select { width: 100%; border: 1px solid var(--line);
     border-radius: 8px; padding: 7px 10px; font: inherit; background: #fff; }
-  .executor-card { border: 1px solid var(--line); border-radius: 8px;
-    background: var(--panel); padding: 10px 12px; margin-bottom: 12px; }
-  .executor-card h3 { font-size: 14px; margin-bottom: 3px; }
-  .executor-meta { margin-top: 5px; color: var(--dim); font-size: 12px; }
-  .executor-examples { margin: 5px 0 0 18px; font-size: 12px; }
   .executor-config { display: grid; grid-template-columns: minmax(120px, 1fr)
     minmax(160px, 2fr); align-items: center; gap: 7px 10px; }
   .executor-config label { color: var(--dim); font-size: 12px; }
@@ -376,8 +371,6 @@
   .executor-config-group { grid-column: 1 / -1; border: 1px solid var(--line);
     border-radius: 8px; padding: 8px; }
   .executor-config-group > .executor-config { margin-top: 7px; }
-  .executor-config-note { grid-column: 1 / -1; color: var(--dim);
-    font-size: 11px; }
   .plan-values { display: inline-flex; flex-wrap: wrap; gap: 5px;
     margin-left: 10px; vertical-align: middle; }
   .plan-value { border: 1px solid var(--line); border-radius: 9px;
@@ -664,14 +657,12 @@
     <div class="hint" id="f_staffing_hint"></div></div>
   <div class="field"><label>Milestone material</label>
     <input id="f_staffing_material" class="mono" value="default"
-      placeholder="default">
-    <div class="hint">The work's theme, not its task type. A live change
-      applies to the next call.</div></div>
+      placeholder="default"></div>
   <div class="field"><label>Prompt set</label>
     <div class="pathrow">
       <select id="f_prompt_set"><option value="default">default</option></select>
     </div>
-    <div class="hint" id="f_prompt_set_hint">Names only; prompt contents are checked per call.</div></div>
+    <div class="hint" id="f_prompt_set_hint"></div></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
       onclick="toggleMore()">More options ▾</button></div>
@@ -750,10 +741,7 @@
     <div class="rosterops">
       <button class="btn sm" type="button" onclick="addBsSeat()">+ Add contrary position</button>
     </div>
-    <div class="hint">the roster is the discussion's shape — who proposes,
-      who challenges, and Dante asking anti-drift questions. Who RUNS each
-      position is the staffing below, answered at the seat's roster
-      position when its call is actually made.</div></div>
+  </div>
   <div class="field" id="bs_staffing"></div>
   <div class="field"><label>Closure policy *</label>
     <select id="b_policy">
@@ -770,8 +758,7 @@
         onclick="browseBsRef()">Browse…</button>
       <button class="btn" type="button" onclick="addBsRef()">Add</button>
     </div>
-    <div class="hint">read-only context for the discussion, relative to the
-      work directory</div></div>
+  </div>
   <div class="field">
     <label style="display:flex;align-items:center;gap:6px;font-size:12px">
       <input type="checkbox" id="b_deliver_chat" style="width:auto">
@@ -780,7 +767,7 @@
     <div class="pathrow">
       <select id="b_prompt_set"><option value="default">default</option></select>
     </div>
-    <div class="hint" id="b_prompt_set_hint">Names only; prompt contents are checked per call.</div></div>
+    <div class="hint" id="b_prompt_set_hint"></div></div>
   <div class="formrow">
     <span id="bsError" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
     <button class="btn" onclick="document.getElementById('bsform').close()">Cancel</button>
@@ -810,7 +797,7 @@
           onclick="browseTaskReference()">Browse…</button>
         <button class="btn" type="button" onclick="addTaskReference()">Add</button>
       </div>
-      <div class="hint">Added order is preserved in the task request.</div></div>
+    </div>
     <div class="field"><label>Output directory (optional)</label>
       <div class="pathrow">
         <input id="t_output" class="mono" placeholder="artifacts/task-output">
@@ -820,14 +807,17 @@
   </div>
   <div class="field"><label>TaskExecutor *</label>
     <select id="t_executor" onchange="onTaskExecutorChange()"></select></div>
-  <div id="task_executor_details"></div>
-  <div id="task_configuration"></div>
+  <div class="field" id="t_profile_field" style="display:none"><label>Strategy profile *</label>
+    <select id="t_profile" onchange="onTaskProfileChange()">
+      <option value="" disabled selected>— choose a strategy profile —</option></select>
+    <div class="hint" id="t_profile_hint"></div></div>
   <div class="field" id="task_staffing"></div>
   <div class="field" id="t_prompt_set_field" style="display:none"><label>Prompt set</label>
     <div class="pathrow">
       <select id="t_prompt_set"><option value="default">default</option></select>
     </div>
-    <div class="hint" id="t_prompt_set_hint">Names only; prompt contents are checked per call.</div></div>
+    <div class="hint" id="t_prompt_set_hint"></div></div>
+  <div id="task_configuration"></div>
   <div id="task_catalogue_error" class="failure" style="display:none"></div>
   <div class="formrow">
     <span id="task_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
@@ -961,10 +951,6 @@
   <div class="field"><label>Profile</label>
     <select id="ps_sel" onchange="onPsChange()"></select>
     <div class="hint" id="ps_hint"></div></div>
-  <div class="hint" style="margin-top:8px">Swap ≠ edit: the run points at
-    another profile; the reusable definition itself is never mutated. The
-    resolved replacement takes effect before the driver's next action
-    decision; work already decided keeps its prior strategy.</div>
   <div class="formrow">
     <span id="ps_err" style="color:var(--bad,#c33);font-size:12px"></span>
     <button class="btn"
@@ -4381,8 +4367,7 @@ async function loadPromptSetSelect(selectId, hintId, forBrainstorming=false) {
       `<option value="${esc(name)}">${esc(name)}</option>`).join("");
     select.value = names.includes("default") ? "default" : names[0];
     hint.textContent = supported
-      ? "Names only; prompt contents are checked per call."
-      : "Restart the panel service to enable saved prompt sets here.";
+      ? "" : "Restart the panel service to enable saved prompt sets here.";
   } catch (e) {
     hint.textContent = e.message;
   }
@@ -4429,11 +4414,8 @@ async function loadStaffingDocuments() {
   onLaunchStaffingChange();
 }
 function onLaunchStaffingChange() {
-  const name = document.getElementById("f_staffing_document").value;
-  const rigor = document.getElementById("f_staffing_rigor").value;
   document.getElementById("f_staffing_hint").textContent =
-    staffingDocumentsError ||
-    `Every call of this run is staffed by ${name} at ${rigor}.`;
+    staffingDocumentsError;
 }
 /* ---- the staffing-document catalogue and its whole-document editor
        (staffing-router slice 8), replacing the transitional model-profile
@@ -4645,9 +4627,7 @@ async function loadStandaloneStaffing(prefix) {
   if (!select) return;  // the dialog was reopened while the read was out
   select.innerHTML = staffingDocumentOptions("default");
   document.getElementById(prefix + "_staffing_hint").textContent =
-    staffingDocumentsError ||
-    "Every call this orders is staffed by the chosen document, at the "
-    + "chosen rigor, over the material if one is named.";
+    staffingDocumentsError;
 }
 async function standaloneStaffingSession(prefix, workArea, families) {
   // The session the operation about to be submitted will carry: its work
@@ -4755,7 +4735,7 @@ async function loadProfiles() {
   sel.disabled = true;
   sel.innerHTML =
     `<option value="" disabled selected>— loading strategy profiles —</option>`;
-  document.getElementById("f_profile_hint").textContent = "Loading…";
+  document.getElementById("f_profile_hint").textContent = "";
   if (document.getElementById("strategyprofilesdlg").open)
     renderStrategyProfiles();
   let loadedProfiles = [];
@@ -4935,25 +4915,8 @@ async function saveStrategyProfile() {
   await openStrategyProfiles();
 }
 function onProfileChange() {
-  const hint = document.getElementById("f_profile_hint");
-  const p = launchProfiles.find(x => x.name ===
-    document.getElementById("f_profile").value);
-  if (!p) { hint.textContent = launchProfilesError; return; }
-  const dials = profileDials(p);
-  hint.innerHTML =
-    `<span class="mono">${esc(p.hash)}</span>${dials ? " · " + esc(dials) : ""}` +
-    (p.description
-      ? `<br>${esc(strategyDescriptionText(p.description))}` : "");
-}
-/* The same fetched support status accompanies values in both selectors. */
-function profileDials(profile) {
-  if (strategyIsCompatibility(profile)) return "compatibility — not composable";
-  return strategyDecisions.map(decision => {
-    const value = strategyDecisionValue(profile.profile, decision.key);
-    if (value === undefined) return null;
-    return `${decision.key}: ${strategyValueText(value)} ` +
-      `[${strategySupportText(decision)}]`;
-  }).filter(Boolean).join(" · ");
+  document.getElementById("f_profile_hint").textContent =
+    launchProfilesError;
 }
 /* ---- runtime profile swap: repoint a live run at another profile. The
         dialog lives outside the polled container, seeded once on open. ---- */
@@ -4974,12 +4937,7 @@ async function openProfileSwap() {
   document.getElementById("profileswapdlg").showModal();
 }
 function onPsChange() {
-  const p = psProfiles.find(x => x.name ===
-    document.getElementById("ps_sel").value);
-  const dials = profileDials(p);
-  document.getElementById("ps_hint").innerHTML = p
-    ? `<span class="mono">${esc(p.hash)}</span>${dials ? " · " + esc(dials) : ""}`
-    : "";
+  document.getElementById("ps_hint").textContent = "";
 }
 async function applyProfileSwap() {
   const name = document.getElementById("ps_sel").value;
@@ -5578,6 +5536,7 @@ let taskReferences = [];
 let taskExecutorCatalogue = [];
 let taskExecutorSelected = "";
 let taskExecutorDrafts = {};
+let taskAdvancedOpen = false;
 let taskCatalogueSeq = 0;
 let taskDialogSeq = 0;
 let taskSubmitPending = false;
@@ -5601,11 +5560,19 @@ function resetTaskDialog() {
   taskDialogSeq += 1;
   taskExecutorDrafts = {};
   taskExecutorSelected = "";
+  taskAdvancedOpen = false;
+  const profile = document.getElementById("t_profile");
+  profile.innerHTML =
+    '<option value="" disabled selected>— choose a strategy profile —</option>';
+  profile.value = "";
+  document.getElementById("t_profile_hint").textContent = "";
+  document.getElementById("t_profile_field").style.display = "none";
+  document.getElementById("t_prompt_set_field").style.display = "none";
   document.getElementById("task_error").textContent = "";
   document.getElementById("task_error").style.display = "";
   setTaskMessage("task_catalogue_error", "");
   document.getElementById("task_direct_fields").style.display = "";
-  document.getElementById("task_staffing").style.display = "";
+  document.getElementById("task_staffing").style.display = "none";
   document.getElementById("task_submit").textContent = "Order task";
   syncTaskSubmitDisabled();
 }
@@ -5620,7 +5587,32 @@ function openDirectTaskForm(preselect) {
   loadTaskProjects(preselect);
   loadTaskExecutorCatalogue();
   loadStandaloneStaffing("task");
+  loadTaskProfiles();
   loadPromptSetSelect("t_prompt_set", "t_prompt_set_hint", true);
+}
+
+async function loadTaskProfiles() {
+  const dialogSeq = taskDialogSeq;
+  const select = document.getElementById("t_profile");
+  select.disabled = true;
+  select.innerHTML =
+    '<option value="" disabled selected>— loading strategy profiles —</option>';
+  document.getElementById("t_profile_hint").textContent = "";
+  const current = await loadProfiles();
+  if (dialogSeq !== taskDialogSeq) return;
+  const available = selectableLaunchProfiles(launchProfiles);
+  select.innerHTML =
+    '<option value="" disabled selected>— choose a strategy profile —</option>' +
+    available.map(profile =>
+      `<option value="${esc(profile.name)}">${esc(profileLabel(profile))}</option>`
+    ).join("");
+  select.disabled = !current || !!launchProfilesError || !available.length;
+  select.value = "";
+  onTaskProfileChange();
+}
+function onTaskProfileChange() {
+  document.getElementById("t_profile_hint").textContent =
+    launchProfilesError;
 }
 async function loadTaskProjects(preselect) {
   const dialogSeq = taskDialogSeq;
@@ -5746,7 +5738,7 @@ function taskExecutorEntry(id) {
 function taskExecutorOptions(preferred) {
   const select = document.getElementById("t_executor");
   select.innerHTML = taskExecutorCatalogue.map(entry =>
-    `<option value="${esc(entry.id)}">${esc(entry.name)} · ${esc(entry.id)}</option>`
+    `<option value="${esc(entry.id)}">${esc(entry.name)}</option>`
   ).join("") || '<option value="">— catalogue unavailable —</option>';
   const ids = taskExecutorCatalogue.map(entry => entry.id);
   taskExecutorSelected = ids.includes(preferred) ? preferred
@@ -5785,6 +5777,7 @@ function snapshotTaskExecutorConfiguration(id) {
 function onTaskExecutorChange() {
   snapshotTaskExecutorConfiguration(taskExecutorSelected);
   taskExecutorSelected = document.getElementById("t_executor").value;
+  taskAdvancedOpen = false;
   renderTaskExecutorEditor();
 }
 function onTaskConfigurationChange(control) {
@@ -5856,13 +5849,8 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
       const nested = renderTaskConfigurationSchema(
         definition.properties, draft, path
       );
-      const constraints = (definition.constraints || []).map(item =>
-        `<div class="executor-config-note">${esc(item)}</div>`
-      ).join("");
       return `<div class="executor-config-group"><label>${esc(name)}</label>
-        ${definition.description
-          ? `<div class="executor-config-note">${esc(definition.description)}</div>` : ""}
-        <div class="executor-config">${nested}${constraints}</div></div>`;
+        <div class="executor-config">${nested}</div></div>`;
     }
     if (definition.type === "task_executor") {
       const selectionPath = `${path}.task_executor`;
@@ -5894,23 +5882,38 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
     return "";
   }).join("");
 }
+function taskConfigurationLayers(schema) {
+  const primary = {};
+  const advanced = {};
+  for (const [name, definition] of Object.entries(schema || {}))
+    (definition.optional ? advanced : primary)[name] = definition;
+  return {primary, advanced};
+}
+function taskUsesExecutionBinding(executor, binding) {
+  const entry = taskExecutorEntry(executor);
+  const bindings = entry && entry.execution_bindings;
+  return !!bindings && bindings[binding] === true;
+}
+function toggleTaskAdvanced() {
+  taskAdvancedOpen = !taskAdvancedOpen;
+  const details = document.getElementById("t_more");
+  const button = document.getElementById("t_more_btn");
+  if (details) details.style.display = taskAdvancedOpen ? "block" : "none";
+  if (button) button.textContent =
+    taskAdvancedOpen ? "Advanced ▴" : "Advanced ▾";
+}
 function renderTaskExecutorEditor() {
   const entry = taskExecutorEntry(taskExecutorSelected);
+  document.getElementById("t_profile_field").style.display =
+    entry && taskUsesExecutionBinding(entry.id, "strategy_profile")
+      ? "" : "none";
+  document.getElementById("task_staffing").style.display =
+    entry && taskUsesExecutionBinding(entry.id, "staffing") ? "" : "none";
   document.getElementById("t_prompt_set_field").style.display =
-    entry && entry.id === "brainstorming" ? "" : "none";
-  const details = document.getElementById("task_executor_details");
+    entry && taskUsesExecutionBinding(entry.id, "prompt_set")
+      ? "" : "none";
   const controls = document.getElementById("task_configuration");
-  if (!entry) { details.innerHTML = ""; controls.innerHTML = ""; return; }
-  const examples = Array.isArray(entry.usage_examples)
-    ? entry.usage_examples : [];
-  details.innerHTML = `<div class="executor-card">
-    <h3>${esc(entry.name)} <span class="mono executor-meta">${esc(entry.id)}</span></h3>
-    <div>${esc(entry.description)}</div>
-    <div class="executor-meta"><b>Operating mode:</b> ${esc(entry.operating_mode)}</div>
-    ${examples.length ? `<ul class="executor-examples">${examples.map(item =>
-      `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
-    <div class="executor-meta"><b>Available staffing:</b> ${esc(entry.available_agent_configurations)}</div>
-  </div>`;
+  if (!entry) { controls.innerHTML = ""; return; }
   const schema = entry.configuration_schema || {};
   const draft = taskExecutorDrafts[entry.id] || {};
   for (const [name, definition] of Object.entries(schema))
@@ -5918,10 +5921,21 @@ function renderTaskExecutorEditor() {
         && definition.default !== undefined)
       draft[name] = String(definition.default);
   taskExecutorDrafts[entry.id] = draft;
-  const rows = renderTaskConfigurationSchema(schema, draft);
-  controls.innerHTML = rows
-    ? `<div class="field"><label>Executor configuration</label><div class="executor-config">${rows}</div></div>`
-    : "";
+  const layers = taskConfigurationLayers(schema);
+  const primary = renderTaskConfigurationSchema(layers.primary, draft);
+  const advanced = renderTaskConfigurationSchema(layers.advanced, draft);
+  controls.innerHTML =
+    (primary
+      ? `<div class="field"><div class="executor-config">${primary}</div></div>`
+      : "") +
+    (advanced
+      ? `<div class="field"><button class="btn" type="button" id="t_more_btn"
+          onclick="toggleTaskAdvanced()">${
+            taskAdvancedOpen ? "Advanced ▴" : "Advanced ▾"}</button></div>
+        <div id="t_more" style="display:${taskAdvancedOpen ? "block" : "none"}">
+          <div class="field"><div class="executor-config">${advanced}</div></div>
+        </div>`
+      : "");
 }
 function setTaskConfigurationValue(target, path, value) {
   const parts = path.split(".");
@@ -5989,7 +6003,30 @@ async function submitTaskForm() {
   catch (e) { error.textContent = e.message; return; }
   const payload = {task_executor: taskExecutorSelected};
   if (resolved.present) payload.configuration = resolved.configuration;
-  if (taskExecutorSelected === "brainstorming")
+  if (taskUsesExecutionBinding(taskExecutorSelected, "strategy_profile")) {
+    if (strategyCatalogueLoading) {
+      error.textContent = "strategy profiles are still loading";
+      return;
+    }
+    if (launchProfilesError) {
+      error.textContent = launchProfilesError;
+      return;
+    }
+    const profile = document.getElementById("t_profile").value;
+    if (!profile) {
+      error.textContent = "choose a strategy profile";
+      return;
+    }
+    if (!selectableLaunchProfiles(launchProfiles).some(
+      candidate => candidate.name === profile
+    )) {
+      error.textContent =
+        "choose a strategy profile from the current catalogue";
+      return;
+    }
+    payload.profile = profile;
+  }
+  if (taskUsesExecutionBinding(taskExecutorSelected, "prompt_set"))
     payload.prompt_set = document.getElementById("t_prompt_set").value || "default";
   const binding = taskBinding();
   if (!binding) {
@@ -6015,8 +6052,9 @@ async function submitTaskForm() {
   try {
     // First request. It either yields the id this order carries, or the order
     // is never sent, including when its staffing session cannot be read.
-    payload.staffing_session = await standaloneStaffingSession(
-      "task", binding, families);
+    if (taskUsesExecutionBinding(taskExecutorSelected, "staffing"))
+      payload.staffing_session = await standaloneStaffingSession(
+        "task", binding, families);
     await postJSON(path, payload);
     if (dialogSeq === taskDialogSeq)
       document.getElementById("taskform").close();

@@ -12,7 +12,7 @@ from unittest import mock
 
 from orchestrator import brainstorming, contracts
 from orchestrator import driver as drv
-from orchestrator import runners, staffing
+from orchestrator import profiles, runners, staffing
 from orchestrator import state as st
 from orchestrator import tasks
 
@@ -107,6 +107,7 @@ class TaskContractsTest(unittest.TestCase):
             "usage_examples",
             "available_agent_configurations",
             "configuration_schema",
+            "execution_bindings",
         }
         for entry in catalogue:
             self.assertEqual(set(entry), fields)
@@ -121,6 +122,49 @@ class TaskContractsTest(unittest.TestCase):
                 entry["available_agent_configurations"], str
             )
             self.assertTrue(entry["available_agent_configurations"].strip())
+
+        self.assertEqual(
+            {
+                entry["id"]: entry["execution_bindings"]
+                for entry in catalogue
+            },
+            {
+                "agent_call": {
+                    "staffing": True,
+                    "strategy_profile": False,
+                    "prompt_set": False,
+                },
+                "brainstorming": {
+                    "staffing": True,
+                    "strategy_profile": False,
+                    "prompt_set": True,
+                },
+                "reviewed_task": {
+                    "staffing": True,
+                    "strategy_profile": True,
+                    "prompt_set": True,
+                },
+                "deep_task": {
+                    "staffing": True,
+                    "strategy_profile": True,
+                    "prompt_set": True,
+                },
+            },
+        )
+        catalogue[0]["execution_bindings"]["staffing"] = False
+        self.assertTrue(
+            tasks.task_executor_catalogue()[0]["execution_bindings"][
+                "staffing"
+            ]
+        )
+        for entry in tasks.task_executor_catalogue():
+            for binding, supported in entry["execution_bindings"].items():
+                self.assertEqual(
+                    tasks.task_executor_supports_binding(
+                        entry["id"], binding
+                    ),
+                    supported,
+                )
 
         # The one thing an orderer chooses about an agent call's staffing:
         # the process step it performs, from the router's own closed
@@ -538,6 +582,81 @@ class TaskContractsTest(unittest.TestCase):
             tasks.validate_order,
             {"task_executor": "other", "request": task_request()},
         )
+
+    def test_reviewed_and_deep_orders_retain_optional_prompt_and_strategy(self):
+        content = copy.deepcopy(profiles.SEEDS["light"]["profile"])
+        snapshot = {
+            "ref": {
+                "name": "light",
+                "version": 1,
+                "hash": profiles.semantic_hash(content),
+            },
+            "profile": content,
+        }
+        reviewed = tasks.validate_order({
+            "task_executor": "reviewed_task",
+            "configuration": {"task_kind": "draft_skeleton"},
+            "request": task_request(),
+            "prompt_set": "operator",
+            "strategy_profile": snapshot,
+        })
+        deep = tasks.validate_order({
+            "task_executor": "deep_task",
+            "request": task_request(),
+            "prompt_set": "operator",
+            "strategy_profile": snapshot,
+        })
+        for order in (reviewed, deep):
+            self.assertEqual(order["prompt_set"], "operator")
+            self.assertEqual(order["strategy_profile"], snapshot)
+
+        # Internal milestone and pre-cutover orders that carry neither field
+        # remain profileless and do not acquire a prompt binding here.
+        plain = tasks.validate_order({
+            "task_executor": "reviewed_task",
+            "configuration": {"task_kind": "draft_skeleton"},
+            "request": task_request(),
+        })
+        self.assertNotIn("prompt_set", plain)
+        self.assertNotIn("strategy_profile", plain)
+        plain_deep = tasks.validate_order({
+            "task_executor": "deep_task",
+            "request": task_request(),
+        })
+        self.assertNotIn("prompt_set", plain_deep)
+        self.assertNotIn("strategy_profile", plain_deep)
+        plain_child = tasks.deep_documentation_order({"order": plain_deep})
+        self.assertNotIn("prompt_set", plain_child)
+        self.assertNotIn("strategy_profile", plain_child)
+
+        parent = {"order": deep}
+        for child in (
+            tasks.deep_documentation_order(parent),
+            tasks.deep_implementation_order(parent, "docs/note.md"),
+        ):
+            self.assertEqual(child["prompt_set"], "operator")
+            self.assertEqual(child["strategy_profile"], snapshot)
+            self.assertEqual(
+                tasks.validate_order(child)["strategy_profile"], snapshot
+            )
+
+        damaged = copy.deepcopy(snapshot)
+        damaged["ref"]["hash"] = "0" * 64
+        for task_executor, configuration in (
+            ("reviewed_task", {"task_kind": "draft_skeleton"}),
+            ("deep_task", {}),
+        ):
+            with self.subTest(task_executor=task_executor):
+                self.assert_request_error(
+                    tasks.INVALID_TASK_REQUEST,
+                    tasks.validate_order,
+                    {
+                        "task_executor": task_executor,
+                        "configuration": configuration,
+                        "request": task_request(),
+                        "strategy_profile": damaged,
+                    },
+                )
 
     def test_result_contract_and_native_opacity(self):
         success_source = task_result(

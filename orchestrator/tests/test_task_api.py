@@ -15,7 +15,7 @@ import urllib.request
 from unittest import mock
 
 from orchestrator import access, brainstorming_lifecycle, brainstorming_tasks
-from orchestrator import registry, runners, service
+from orchestrator import interpreter, profiles, registry, runners, service
 from orchestrator import staffing
 from orchestrator import state as st
 from orchestrator import task_api, tasks
@@ -334,6 +334,80 @@ class TaskApiTest(unittest.TestCase):
             cwd=self.primary, check=True, capture_output=True, text=True,
         ).stdout.strip()
         self.assertEqual(subject, "Complete reviewed task %s" % record["id"])
+
+    def test_direct_reviewed_and_deep_bind_prompt_and_strategy_once(self):
+        for executor, configuration in (
+            ("reviewed_task", {"task_kind": "draft_skeleton"}),
+            ("deep_task", {}),
+        ):
+            with self.subTest(executor=executor):
+                order = self.order(executor)
+                order["configuration"] = configuration
+                order["profile"] = "light"
+                order["prompt_set"] = "literature"
+                with mock.patch.object(
+                    service.profiles,
+                    "resolve",
+                    wraps=profiles.resolve,
+                ) as resolved:
+                    status, body = self.request("POST", "/api/tasks", order)
+                self.assertEqual(status, 201, body)
+                resolved.assert_called_once_with(self.home, "light")
+                record = body["task"]
+                self.assertEqual(record["order"]["prompt_set"], "literature")
+                snapshot = record["order"]["strategy_profile"]
+                self.assertEqual(snapshot["ref"]["name"], "light")
+                profiles.verify_retained(snapshot["ref"], snapshot["profile"])
+                policies = (
+                    [record["order"]["configuration"]]
+                    if executor == "reviewed_task"
+                    else list(record["order"]["configuration"].values())
+                )
+                self.assertTrue(all(
+                    policy["p3_defer_max_risk"] == "medium"
+                    for policy in policies
+                ))
+
+                if executor == "reviewed_task":
+                    path = task_api.ensure_reviewed_state(
+                        self.home, record, make_config(docs_dir="docs")
+                    )
+                    lifecycle = st.load(path)
+                    self.assertEqual(lifecycle["prompt_set"], "literature")
+                    self.assertEqual(
+                        lifecycle["config"]["profile_ref"], snapshot["ref"]
+                    )
+                    self.assertEqual(
+                        lifecycle["config"]["profile"], snapshot["profile"]
+                    )
+                    self.assertTrue(interpreter.reform_active(lifecycle))
+
+    def test_direct_reviewed_binding_defaults_and_service_owned_snapshot(self):
+        plain = self.order("reviewed_task")
+        plain["configuration"] = {"task_kind": "draft_skeleton"}
+        status, body = self.request("POST", "/api/tasks", plain)
+        self.assertEqual(status, 201, body)
+        stored = body["task"]["order"]
+        self.assertEqual(stored["prompt_set"], "default")
+        self.assertNotIn("strategy_profile", stored)
+
+        snapshot = {
+            "ref": {"name": "fake", "version": 1, "hash": "0" * 64},
+            "profile": {"compat": True},
+        }
+        refused = self.order("deep_task")
+        refused["strategy_profile"] = snapshot
+        status, body = self.request("POST", "/api/tasks", refused)
+        self.assertEqual(
+            (status, body["error"]), (400, tasks.INVALID_TASK_REQUEST)
+        )
+        for executor, profile in (("agent_call", "light"), ("deep_task", None)):
+            invalid = self.order(executor)
+            invalid["profile"] = profile
+            status, body = self.request("POST", "/api/tasks", invalid)
+            self.assertEqual(
+                (status, body["error"]), (400, tasks.INVALID_TASK_REQUEST)
+            )
 
     def test_direct_order_resolves_access_before_admission(self):
         self.project("mine", self.primary, [access.USER_EMAILS[0]])

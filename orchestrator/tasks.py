@@ -11,7 +11,7 @@ import math
 import os
 import uuid
 
-from orchestrator import brainstorming, contracts, kvstore, prompt_sets
+from orchestrator import brainstorming, contracts, kvstore, profiles, prompt_sets
 from orchestrator import staffing
 from orchestrator import state as st
 
@@ -121,6 +121,11 @@ _TASK_EXECUTORS = (
             "One agent-call seat; agent, model, and effort resolve from the "
             "staffing session that owns the order, at the role below."
         ),
+        "execution_bindings": {
+            "staffing": True,
+            "strategy_profile": False,
+            "prompt_set": False,
+        },
         # The process step the one call performs, and the only thing an
         # orderer chooses about its staffing: the seat is always the role's
         # first and the round always its first, so no caller can reach into
@@ -143,6 +148,11 @@ _TASK_EXECUTORS = (
             "model, and effort resolve from the staffing session that owns "
             "the order, at each seat's roster position."
         ),
+        "execution_bindings": {
+            "staffing": True,
+            "strategy_profile": False,
+            "prompt_set": True,
+        },
         "configuration_schema": _BRAINSTORMING_CONFIGURATION_SCHEMA,
     },
     {
@@ -160,6 +170,11 @@ _TASK_EXECUTORS = (
             "The producer and review seats resolve from the staffing session "
             "that owns the order."
         ),
+        "execution_bindings": {
+            "staffing": True,
+            "strategy_profile": True,
+            "prompt_set": True,
+        },
         "configuration_schema": {
             "task_kind": {
                 "type": "choice",
@@ -335,6 +350,11 @@ _TASK_EXECUTORS += (
             "Documentation and implementation producers and reviewers resolve "
             "from the staffing session that owns the order."
         ),
+        "execution_bindings": {
+            "staffing": True,
+            "strategy_profile": True,
+            "prompt_set": True,
+        },
         "configuration_schema": {
             "documentation": {
                 "type": "object",
@@ -459,6 +479,15 @@ def _request_error(exc):
 def task_executor_catalogue():
     """Return the ordered, detached built-in TaskExecutor catalogue."""
     return _json_copy(list(_TASK_EXECUTORS), "TaskExecutor catalogue")
+
+
+def task_executor_supports_binding(task_executor, binding):
+    """Whether the executor catalogue declares one execution binding."""
+    entry = _TASK_EXECUTOR_BY_ID.get(task_executor)
+    return bool(
+        entry is not None
+        and (entry.get("execution_bindings") or {}).get(binding) is True
+    )
 
 
 def producer_task_executor_catalogue():
@@ -1014,6 +1043,21 @@ def _order_staffing_session(value):
     return _text(value, "task order.staffing_session")
 
 
+def _strategy_profile(value):
+    """Validate one service-resolved, retained strategy snapshot."""
+    if not isinstance(value, dict) or set(value) != {"ref", "profile"}:
+        raise ContractError(
+            "task order.strategy_profile must contain ref and profile"
+        )
+    try:
+        profiles.verify_retained(value["ref"], value["profile"])
+    except profiles.ProfileError as exc:
+        raise ContractError(
+            "task order.strategy_profile is invalid"
+        ) from exc
+    return _json_copy(value, "task order.strategy_profile")
+
+
 def validate_order(order, reviewed_defaults=None):
     """Validate a closed order and return its resolved, detached value."""
     try:
@@ -1022,7 +1066,7 @@ def validate_order(order, reviewed_defaults=None):
             ("task_executor", "request"),
             (
                 "configuration", "staffing_session", "prompt_set",
-                "brainstorming_mode",
+                "brainstorming_mode", "strategy_profile",
             ),
             "task order",
         )
@@ -1034,9 +1078,30 @@ def validate_order(order, reviewed_defaults=None):
                 UNKNOWN_TASK_EXECUTOR,
                 "unknown TaskExecutor %r" % task_executor,
             )
-        if "prompt_set" in order and task_executor != "brainstorming":
+        if (
+            "staffing_session" in order
+            and not task_executor_supports_binding(task_executor, "staffing")
+        ):
             raise ContractError(
-                "task order.prompt_set is only available for Brainstorming"
+                "task order.staffing_session is unavailable for this "
+                "TaskExecutor"
+            )
+        if (
+            "prompt_set" in order
+            and not task_executor_supports_binding(task_executor, "prompt_set")
+        ):
+            raise ContractError(
+                "task order.prompt_set is unavailable for this TaskExecutor"
+            )
+        if (
+            "strategy_profile" in order
+            and not task_executor_supports_binding(
+                task_executor, "strategy_profile"
+            )
+        ):
+            raise ContractError(
+                "task order.strategy_profile is unavailable for this "
+                "TaskExecutor"
             )
         if "brainstorming_mode" in order and (
             task_executor != "brainstorming"
@@ -1058,7 +1123,7 @@ def validate_order(order, reviewed_defaults=None):
                 order.get("staffing_session")
             ),
         }
-        if task_executor == "brainstorming":
+        if task_executor == "brainstorming" or "prompt_set" in order:
             try:
                 checked["prompt_set"] = prompt_sets.validate_name(
                     order.get("prompt_set", prompt_sets.DEFAULT_SET_NAME)
@@ -1067,6 +1132,10 @@ def validate_order(order, reviewed_defaults=None):
                 raise ContractError("task order.prompt_set is invalid") from exc
             if "brainstorming_mode" in order:
                 checked["brainstorming_mode"] = order["brainstorming_mode"]
+        if "strategy_profile" in order:
+            checked["strategy_profile"] = _strategy_profile(
+                order["strategy_profile"]
+            )
         return _json_copy(checked, "task order")
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
@@ -1224,12 +1293,16 @@ def deep_documentation_order(record):
         record["order"]["configuration"]["documentation"]
     )
     configuration["task_kind"] = contracts.KIND_DRAFT_SLICE_NOTE
-    return {
+    order = {
         "task_executor": "reviewed_task",
         "configuration": configuration,
         "request": copy.deepcopy(record["order"]["request"]),
         "staffing_session": record["order"].get("staffing_session"),
     }
+    for name in ("prompt_set", "strategy_profile"):
+        if name in record["order"]:
+            order[name] = copy.deepcopy(record["order"][name])
+    return order
 
 
 def deep_implementation_order(record, documentation_reference):
@@ -1240,12 +1313,16 @@ def deep_implementation_order(record, documentation_reference):
     configuration["task_kind"] = contracts.KIND_IMPLEMENT
     request = copy.deepcopy(record["order"]["request"])
     request["reference_documents"].append(documentation_reference)
-    return {
+    order = {
         "task_executor": "reviewed_task",
         "configuration": configuration,
         "request": request,
         "staffing_session": record["order"].get("staffing_session"),
     }
+    for name in ("prompt_set", "strategy_profile"):
+        if name in record["order"]:
+            order[name] = copy.deepcopy(record["order"][name])
+    return order
 
 
 def deep_task_result(status, child_results, reason=None):

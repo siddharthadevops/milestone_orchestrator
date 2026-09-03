@@ -15,14 +15,20 @@ class TaskPanelTests(unittest.TestCase):
             "/* ---- standalone task ordering", 1
         )[1].split("/* ---- new brainstorming:", 1)[0]
 
-    def test_one_catalogue_drives_description_and_configuration(self):
+    def test_one_catalogue_drives_options_and_configuration(self):
         self.assertEqual(self.task_ui.count('api("/api/task-executors")'), 1)
         for member in (
-            "id", "name", "description", "operating_mode",
-            "usage_examples", "available_agent_configurations",
-            "configuration_schema",
+            "id", "name", "configuration_schema", "execution_bindings",
         ):
             self.assertIn("entry.%s" % member, self.task_ui)
+        for explanatory_member in (
+            "description", "operating_mode", "usage_examples",
+            "available_agent_configurations",
+        ):
+            self.assertNotIn("entry.%s" % explanatory_member, self.task_ui)
+        self.assertNotIn("task_executor_details", self.panel)
+        self.assertNotIn("profileDials(profile)", self.task_ui)
+        self.assertNotIn("executor-config-note", self.task_ui)
         self.assertIn("Object.entries(schema)", self.task_ui)
         self.assertIn('definition.type === "integer"', self.task_ui)
         self.assertIn('min="${esc(definition.minimum)}"', self.task_ui)
@@ -46,8 +52,11 @@ class TaskPanelTests(unittest.TestCase):
             '"agent_call"', "max_rounds", "closure_policy",
         ):
             self.assertNotIn(copied_constant, self.task_ui)
+        self.assertIn('id="t_profile"', self.panel)
         self.assertIn('id="t_prompt_set"', self.panel)
-        self.assertIn('entry.id === "brainstorming"', self.task_ui)
+        self.assertIn("entry.execution_bindings", self.task_ui)
+        self.assertIn("taskUsesExecutionBinding(entry.id", self.task_ui)
+        self.assertIn("payload.profile = profile", self.task_ui)
         self.assertIn(
             'payload.prompt_set = document.getElementById("t_prompt_set")',
             self.task_ui,
@@ -56,8 +65,104 @@ class TaskPanelTests(unittest.TestCase):
             r'<dialog id="taskform"(.*?)</dialog>', self.panel, re.S
         ).group(1)
         self.assertLess(
+            task_dialog.index('id="t_profile_field"'),
+            task_dialog.index('id="task_staffing"'),
+        )
+        self.assertLess(
             task_dialog.index('id="task_staffing"'),
             task_dialog.index('id="t_prompt_set_field"'),
+        )
+        self.assertLess(
+            task_dialog.index('id="task_staffing"'),
+            task_dialog.index('id="task_configuration"'),
+        )
+
+    def test_optional_configuration_uses_one_closed_advanced_layer(self):
+        layers = re.search(
+            r"function taskConfigurationLayers\(schema\) \{(.*?)\n\}",
+            self.task_ui,
+            re.S,
+        ).group(1)
+        self.assertIn("Object.entries(schema || {})", layers)
+        self.assertIn("definition.optional ? advanced : primary", layers)
+        self.assertNotIn("reviewed_task", layers)
+        self.assertNotIn("deep_task", layers)
+
+        render = re.search(
+            r"function renderTaskExecutorEditor\(\) \{(.*?)\n\}",
+            self.task_ui,
+            re.S,
+        ).group(1)
+        self.assertIn("renderTaskConfigurationSchema(layers.primary", render)
+        self.assertIn("renderTaskConfigurationSchema(layers.advanced", render)
+        self.assertIn('id="t_more_btn"', render)
+        self.assertIn('id="t_more"', render)
+        self.assertIn(
+            'style="display:${taskAdvancedOpen ? "block" : "none"}"',
+            render,
+        )
+        self.assertNotIn("reviewed_task", render)
+        self.assertNotIn("deep_task", render)
+        self.assertIn("let taskAdvancedOpen = false;", self.task_ui)
+
+        change = re.search(
+            r"function onTaskConfigurationChange\(control\) \{(.*?)\n\}",
+            self.task_ui,
+            re.S,
+        ).group(1)
+        self.assertNotIn("taskAdvancedOpen = false", change)
+        executor_change = re.search(
+            r"function onTaskExecutorChange\(\) \{(.*?)\n\}",
+            self.task_ui,
+            re.S,
+        ).group(1)
+        self.assertIn("taskAdvancedOpen = false", executor_change)
+        self.assertGreaterEqual(
+            self.task_ui.count("taskAdvancedOpen = false"), 2
+        )
+        self.assertIn(
+            '"#task_configuration [data-task-config]"', self.task_ui
+        )
+
+    def test_reviewed_and_deep_share_profile_and_prompt_bindings(self):
+        profile_loader = re.search(
+            r"async function loadTaskProfiles\(\) \{(.*?)\n\}",
+            self.task_ui,
+            re.S,
+        ).group(1)
+        self.assertIn("await loadProfiles()", profile_loader)
+        self.assertIn("selectableLaunchProfiles(launchProfiles)", profile_loader)
+        self.assertNotIn("legacy", profile_loader)
+
+        execution_binding = re.search(
+            r"function taskUsesExecutionBinding\(executor, binding\) "
+            r"\{(.*?)\n\}",
+            self.task_ui,
+            re.S,
+        ).group(1)
+        self.assertIn("entry.execution_bindings", execution_binding)
+        self.assertIn("bindings[binding] === true", execution_binding)
+        self.assertNotIn("TASK_STRATEGY_PROFILE_EXECUTORS", self.task_ui)
+        self.assertNotIn("TASK_PROMPT_SET_EXECUTORS", self.task_ui)
+
+        submit = self.task_ui[
+            self.task_ui.index("async function submitTaskForm"):
+            self.task_ui.index("function taskContext")
+        ]
+        self.assertIn(
+            'taskUsesExecutionBinding(taskExecutorSelected, "strategy_profile")',
+            submit,
+        )
+        self.assertIn('error.textContent = "choose a strategy profile"', submit)
+        self.assertIn("selectableLaunchProfiles(launchProfiles).some(", submit)
+        self.assertIn("payload.profile = profile", submit)
+        self.assertIn(
+            'taskUsesExecutionBinding(taskExecutorSelected, "prompt_set")',
+            submit,
+        )
+        self.assertIn(
+            'taskUsesExecutionBinding(taskExecutorSelected, "staffing")',
+            submit,
         )
 
     def test_direct_order_preserves_closed_project_bound_request(self):
