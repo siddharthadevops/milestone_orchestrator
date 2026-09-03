@@ -18,9 +18,11 @@ literalmente «escoge» no prueba que el sistema permita incumplir un encargo de
 elección.
 
 Por tanto, la respuesta proporcionada al encargo es **no cambiar ahora el set**.
-Sí quedan dos hipótesis concretas para observar: cierre de la decisión pedida en
-`implement` y contralectura en `review_round`/`delta_review`. Solo un caso real
-debe activar una prueba, sobre la ruta que falle y sin ids nuevos.
+Sí quedan dos tipos de fallo que observar: una entrega de autor que compare sin
+tomar la decisión pedida y un hallazgo de revisión que no sobreviva a una
+contralectura plausible. No se elige ahora su punto de montaje: el primer caso
+real debe identificar la ruta que falló y activar una sola prueba, sin ids
+nuevos.
 
 ## Qué hacen —y qué no hacen— las preguntas de salida
 
@@ -39,6 +41,9 @@ ceremonia.
   sesión ensamblan sin recurrir a `default`.
 - Planificación responde cuatro preguntas, implementación tres, revisión dos y
   Dante tres; una sesión productora puede heredar además las de su tarea.
+  `standalone@*` no hereda preguntas y su autor responde solo las dos del turno,
+  igual que en `default`; su rol ya ordena realizar el trabajo y no hay una
+  entrega fallida que convierta esa delgadez en defecto.
 - El intro de `literature` ya pide evidencia textual o editorial. Las 222
   respuestas históricas citadas pertenecen a `default` y a trabajo sobre
   código: no miden esta redacción ni una entrega literaria.
@@ -52,15 +57,19 @@ ceremonia.
 - No apareció otro sistema de prompts literarios en los repositorios
   concedidos que deba conectarse o extenderse.
 
-## Hipótesis precisas por ruta
+## Hipótesis y criterio para localizar la ruta
 
-| Ruta | Cobertura actual | Señal que justificaría actuar | Cambio mínimo que probar |
+| Superficie | Cobertura actual | Señal que justificaría actuar | Cambio mínimo que probar |
 | --- | --- | --- | --- |
-| `implement` | Crear o revisar lo pedido directamente; contrastar la entrega con el brief y el efecto buscado. | Un encargo exige escoger, priorizar o dictaminar y la entrega real solo compara opciones. | Añadir una cláusula a su `human_scale`: «¿La entrega ejecuta el acto pedido o solo describe opciones? Señala dónde lo resuelve». |
+| Entrega de autor (`standalone@*` o `implement`) | Ambos ordenan realizar el trabajo; `implement` además contrasta la entrega con el brief y el efecto buscado. | Un encargo exige escoger, priorizar o dictaminar y la entrega real solo compara opciones. | Probar «¿La entrega ejecuta el acto pedido o solo describe opciones? Señala dónde lo resuelve» únicamente en `turn_human_scale` o `human_scale` de la ruta que produjo el fallo. |
 | `review_round` | Cada hallazgo necesita estándar, pasaje, daño material y alternativa proporcionada. | Un hallazgo de gusto sobrevive porque el revisor no probó una lectura plausible del pasaje. | Añadir la contralectura al `human_scale` de esta ruta, reutilizando la falsificación ya usada por el fixer. |
 | `delta_review` | Igual que revisión, pero limitado al cambio y sus efectos directos. | El mismo fallo aparece específicamente al revisar un delta. | Aplicar allí la misma cláusula; no tocar la revisión completa por anticipado. |
 | `draft_skeleton`, `draft_slice_note`, `reclassify`, `fix_findings` | Sus preguntas homónimas gobiernan planificación, tamaño, rating o resolución de una cola. | Ninguna señal actual. | Ningún cambio: no extender a ellas una recomendación por compartir id. |
 | Dante | Tres controles complementarios sobre adecuación, preguntas decisorias y foco. | Ninguna señal actual. | Mantener `turn_environment_fit`, `turn_human_scale` y `request_focus`. |
+
+La tabla localiza solo las dos hipótesis del informe; no inventaría todas las
+rutas. Incluir `standalone@*` en la primera fila evita prejuzgar dónde estaría
+un fallo futuro, no convierte su batería de dos preguntas en una carencia.
 
 La contralectura no debe colgar de `environment_fit`: esa pregunta preserva
 audiencia, etapa, voz, ambigüedad y forma frente a la convencionalización. El
