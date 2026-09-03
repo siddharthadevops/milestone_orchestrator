@@ -49,6 +49,13 @@ class TaskPanelTests(unittest.TestCase):
             'payload.prompt_set = document.getElementById("t_prompt_set")',
             self.task_ui,
         )
+        task_dialog = re.search(
+            r'<dialog id="taskform"(.*?)</dialog>', self.panel, re.S
+        ).group(1)
+        self.assertLess(
+            task_dialog.index('id="task_staffing"'),
+            task_dialog.index('id="t_prompt_set_field"'),
+        )
 
     def test_direct_order_preserves_closed_project_bound_request(self):
         body = re.search(
