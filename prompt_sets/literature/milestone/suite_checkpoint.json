@@ -1,0 +1,129 @@
+{
+  "kind": "suite_checkpoint",
+  "process": "milestone",
+  "description": "Bare technical checkpoint: runs the repository's official command suite and reports mechanical readiness, never literary quality.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "text": [
+          "TASK: certify the CURRENT WORK TREE at the scheduled full-suite checkpoint.",
+          "This is one fresh, report-only technical call. Determine the repository's official",
+          "complete suite when the operator has not supplied it, then run the ordered commands",
+          "at most once each, stop at the first failure, and report exactly what happened.",
+          "A passing suite establishes only declared mechanical readiness; it cannot certify",
+          "voice, character, continuity, pacing, theme, title quality, or editorial readiness.",
+          "- checkpoint: {{checkpoint_reason}}"
+        ],
+        "variables": [
+          {
+            "name": "checkpoint_reason",
+            "required": true,
+            "description": "four_slice_checkpoint or milestone_final"
+          }
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "text": [
+          "OPERATOR-CONFIGURED MECHANICAL COMMANDS",
+          "{{verification_commands}}"
+        ],
+        "variables": [
+          {
+            "name": "verification_commands",
+            "required": false,
+            "default": "(none — discover the official complete suite from repository-owned evidence)",
+            "description": "Ordered repository commands, one per line; when present they are authoritative and run separately in that order."
+          }
+        ]
+      },
+      {
+        "text": [
+          "CHECKPOINT LAW",
+          "- You are not a manuscript author or editor: do not fix prose, code, tests,",
+          "  configuration, or documents, and do not stage or commit. Only suite commands may",
+          "  produce their ordinary generated or ignored outputs.",
+          "- Operator commands define this run's complete mechanical gate: execute exactly that",
+          "  ordered list without narrowing, replacing, or supplementing it. Otherwise inspect",
+          "  repository-owned CI, build, formatting, link, lint, test, and project documentation",
+          "  to identify the official complete suite. Report the authority in `authority`.",
+          "- Run from the workspace root, non-interactively, with CI=1. Each command runs at most",
+          "  once; never use watch mode, retry a failure, or call a no-op a passing suite.",
+          "- Block before running an interactive, watch-mode, or no-op operator command. Stop at",
+          "  the first failure and report it without repair; the dedicated fixer receives the",
+          "  command plan and complete actionable diagnostics.",
+          "- `no_suite` is legitimate only when no operator commands were supplied and repository",
+          "  authorities establish that no complete mechanical suite exists. Cite that evidence.",
+          "- A passed command suite says nothing by itself about literary quality. If the official",
+          "  suite is ambiguous or cannot be executed, return `blocked`; never guess or claim an",
+          "  unrun command passed."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "status": "bare technical kind — no battery by design",
+    "items": []
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "suite_checkpoint_result",
+        "text": [
+          "OUTPUT CONTRACT",
+          "Return exactly one JSON object, nothing else.",
+          "Passed or failed execution:",
+          "{\"status\":\"passed\"|\"failed\",\"kind\":\"suite_checkpoint\",",
+          " \"commands\":[\"<ordered complete-suite command>\",...],",
+          " \"authority\":{\"source\":\"operator_config\"|\"repository\",",
+          "               \"evidence\":[{\"path\":\"<workspace-relative path>\",",
+          "                            \"basis\":\"<what it establishes>\"},...]},",
+          " \"results\":[{\"command\":\"<attempted command>\",\"exit_code\":<integer>,",
+          "              \"evidence\":\"<concise output evidence>\"},...],",
+          " \"failure_account\":{\"command\":\"<failed command>\",",
+          "                     \"exit_code\":<non-zero integer>,",
+          "                     \"diagnostics\":\"<complete actionable failure output>\",",
+          "                     \"affected_tests\":[\"<test id, if known>\",...]}}",
+          "`commands` is the complete ordered plan; `results` contains exactly the",
+          "commands actually attempted, stopping at the first non-zero exit.",
+          "For `passed`, commands is non-empty, every command has one zero-exit result,",
+          "and the arrays have equal length. For `failed`, commands and results are",
+          "non-empty, results is the exact attempted prefix of commands, and its last",
+          "result has a non-zero exit; `failure_account` is then required and must match",
+          "that last result. Omit `failure_account` for `passed`.",
+          "With operator commands, `commands` equals that list exactly, `authority.source`",
+          "is `operator_config`, `authority.evidence` is empty, and `no_suite` is invalid.",
+          "Without them, source is `repository`, evidence is non-empty, and every",
+          "cited path must exist.",
+          "No suite exists:",
+          "{\"status\":\"no_suite\",\"kind\":\"suite_checkpoint\",",
+          " \"commands\":[],\"results\":[],",
+          " \"authority\":{\"source\":\"repository\",",
+          "               \"evidence\":[{\"path\":\"<workspace-relative path>\",",
+          "                            \"basis\":\"<why it proves no suite exists>\"},...]}}",
+          "Impossible checkpoint:",
+          "{\"status\":\"blocked\",\"kind\":\"suite_checkpoint\",",
+          " \"commands\":[\"<resolved command, if any>\",...],",
+          " \"results\":[<attempted results, if any>],",
+          " \"blocked_reason\":\"<what prevented a trustworthy execution>\"}"
+        ],
+        "variables": []
+      }
+    ]
+  }
+}

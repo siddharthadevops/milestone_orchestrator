@@ -1,0 +1,134 @@
+{
+  "kind": "draft_slice_note",
+  "process": "milestone",
+  "description": "Literary brief author: turns one reviewed plan unit into a concise, passage-grounded editorial assignment.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "author_recovery"
+      },
+      {
+        "text": [
+          "TASK: draft the literary work note for slice {{slice_id}} ({{slice_title}}).",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE. The original mandate remains at {{goal_path}}; read it only when the skeleton does not settle intent.",
+          "Read the exact manuscript material in scope and enough surrounding text to understand its voice, continuity, pacing, themes, and editorial stage."
+        ],
+        "variables": [
+          {
+            "name": "slice_id",
+            "required": true
+          },
+          {
+            "name": "slice_title",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          }
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "text": [
+          "Write {{slice_note_path}} as a concise editorial brief. Name the exact passage,",
+          "manuscript material, or deliverable in scope; the intended reader effect; the",
+          "audience, genre, form, and editorial stage; constraints and context to preserve;",
+          "explicit non-goals; dependencies and risks; and observable acceptance evidence.",
+          "State what must become true without prescribing unnecessary wording or technique."
+        ],
+        "variables": [
+          {
+            "name": "slice_note_path",
+            "required": true,
+            "description": "Workspace-relative path where the literary work note must be written."
+          }
+        ]
+      },
+      {
+        "ref": "two_register"
+      },
+      {
+        "text": [
+          "EDITORIAL BASIS (structured gate; mandatory in this run)",
+          "Add one concise row per item below. Cite the mandate, source, or located manuscript",
+          "passage that supports each answer and read enough context to verify the citation.",
+          "Answer for THIS unit rather than copying the skeleton's plan-level account.",
+          "  - textual_basis: the exact material in scope, its current effect, and the surrounding passages that govern it",
+          "  - intended_reader_effect: what should change or remain for the intended audience at this editorial stage",
+          "  - continuity_constraints: established spelling, chronology, point of view, tense, voice, character facts, motifs, sources, and do-not-change material relevant here",
+          "  - relevant_lenses: which of title, structure, voice, character, continuity, pacing, themes, and readiness materially bear on this unit",
+          "  - non_goals: tempting adjacent rewrites, polish, or analysis this unit must not absorb",
+          "  - smallest_intervention: the smallest cohesive textual change, reusing established language and facts before invention",
+          "  - intervention_cost: revision, continuity, review, and later-publication cost versus leaving the passage unchanged",
+          "  - risks: concrete ways the change could damage voice, ambiguity, rhythm, character, continuity, pacing, theme, factual fidelity, or reader comprehension",
+          "  - completion_check: passage-level, reader-facing, source, editorial, or declared mechanical evidence that proves this unit complete"
+        ],
+        "variables": []
+      },
+      {
+        "ref": "altitude_doc"
+      },
+      {
+        "ref": "reuse_gate"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (answer each in output with concise textual or editorial evidence)"
+    ],
+    "items": [
+      {
+        "id": "due_diligence_count",
+        "text": "How many Editorial Basis rows did you answer in the document?"
+      },
+      {
+        "id": "machinery_trust",
+        "text": "Does the note ask the writer to invent lore, scenes, characters, constraints, trackers, or editorial machinery that the current text and mandate do not need? Answer with what you checked and any case found."
+      },
+      {
+        "id": "environment_fit",
+        "text": "Does the brief match the declared audience, genre, form, and editorial stage, or does it demand a stronger kind of polish than this unit owns? Answer with the standard used and any excess found."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put the brief next to this slice's intent: is the passage scope and intervention proportionate, or has it expanded into an exhaustive manuscript audit? Answer with a brief comparison."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_verbose"
+      },
+      {
+        "ref": "common_fields",
+        "defaults": {
+          "status_vocabulary": "\"ok\" | \"blocked\""
+        }
+      },
+      {
+        "ref": "draft_slice_note_result"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

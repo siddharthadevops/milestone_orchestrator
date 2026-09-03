@@ -1,0 +1,116 @@
+{
+  "kind": "merge_repair",
+  "process": "milestone",
+  "description": "Bare Git reconciliation call: preserves the accepted manuscript revision and run history without unsolicited creative rewriting.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: the accepted plan computed a wipe boundary. The repository remains at",
+          "accepted_revision; the driver has performed no rewind, apply, merge, or conflict",
+          "resolution. Own the run-scoped Git reconciliation and final same-branch commit.",
+          "Preserve required pre-boundary history, the accepted manuscript revision, and every",
+          "accepted creative or editorial intent; remove only unwound work. Do not turn merge",
+          "repair into an unsolicited rewrite or change voice, structure, character, continuity,",
+          "pacing, theme, or title beyond the supplied reconciliation account.",
+          "Leave a clean repository with one valid canonical plan block. You may update that block",
+          "only as reconciliation requires and must finish it in this call. If impossible, return",
+          "blocked and leave the repository in the final state you can account for.",
+          "The final run-owned history must be linear. With a wipe boundary, it is an ancestor of",
+          "final HEAD and invalidated recorded commits are absent from final HEAD ancestry. Without",
+          "one, accepted_revision is an ancestor of final HEAD and there are no invalidations.",
+          "These are revision checks, not proof of literary quality or permission for creative change."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "process_authority"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "text": [
+          "WHAT HAPPENED",
+          "- wipe reason: {{wipe_reason}}",
+          "- wipe_boundary: {{wipe_boundary}}",
+          "- source call: {{source_kind}}",
+          "- source_base_revision ({{source_base_role}}): {{source_base_revision}}",
+          "- accepted_revision: {{accepted_revision}}",
+          "- source range: {{source_base_revision}}..{{accepted_revision}}",
+          "- opening reconciliation account (original old plan/run boundaries and opening wipe/requeue/checkpoint effects): {{opening_reconciliation_account}}",
+          "- required outcome: {{required_outcome}}"
+        ],
+        "variables": [
+          {
+            "name": "wipe_reason",
+            "required": true,
+            "description": "Why the plan computed a wipe boundary and which manuscript or editorial units were unwound or requeued."
+          },
+          {
+            "name": "wipe_boundary",
+            "required": true,
+            "description": "Computed opening boundary; the repository has not been rewound to it."
+          },
+          {
+            "name": "source_kind",
+            "required": true,
+            "description": "brainstorming_session or agent_call"
+          },
+          {
+            "name": "source_base_role",
+            "required": true,
+            "description": "pre_session_commit for Brainstorming; pre_call_commit for a direct agent call"
+          },
+          {
+            "name": "source_base_revision",
+            "required": true,
+            "description": "Commit captured before the accepted plan-changing call; source-range start and never the wipe boundary by implication."
+          },
+          {
+            "name": "accepted_revision",
+            "required": true,
+            "description": "Source-range end and dispatch HEAD: closed_ready_HEAD for Brainstorming, or the driver's accepted-result commit for a direct call."
+          },
+          {
+            "name": "opening_reconciliation_account",
+            "required": true,
+            "description": "Persisted original plan and run boundaries, source range, and opening wipe, requeue, and checkpoint account."
+          },
+          {
+            "name": "required_outcome",
+            "required": true,
+            "description": "Required preserved history and accepted literary intent, removed unwound work, valid final block, clean branch, and final commit."
+          }
+        ]
+      }
+    ]
+  },
+  "questions": {
+    "status": "bare technical kind — no battery by design (decision 57)",
+    "items": []
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "merge_repair_result",
+        "text": [
+          "OUTPUT CONTRACT",
+          "Return exactly one JSON object, nothing else:",
+          "{\"status\": \"ok\" | \"blocked\",",
+          " \"kind\": \"merge_repair\",",
+          " \"files_changed\": [\"<workspace-relative paths you touched>\", ...],",
+          " \"blocked_reason\": \"<required when blocked: what cannot be reconciled>\",",
+          " \"notes\": \"<optional, short>\"}"
+        ],
+        "variables": []
+      }
+    ]
+  }
+}

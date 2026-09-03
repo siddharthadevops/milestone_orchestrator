@@ -1,0 +1,256 @@
+{
+  "kind": "fix_findings",
+  "process": "milestone",
+  "description": "Literary fixer: rechecks every queued criticism against the current text, then revises minimally or rejects it with evidence.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "one_of": "target_frame"
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "fixer_recovery"
+      },
+      {
+        "ref": "implementation_scope",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "text": [
+          "ADVERSARIAL FINDING VALIDATION",
+          "- Each finding came from a non-authoritative reviewer, not the operator. Treat every",
+          "  stored field as an unverified reading, not a fact about the manuscript.",
+          "- Before editing, make one focused falsification pass against the current passage,",
+          "  necessary surrounding text, mandate, editorial stage, and the FIX VERDICT ACCOUNT.",
+          "  If the criticism survives, revise it; if it rests on taste, missing context, or an",
+          "  invented standard, reject it with textual evidence."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "QUEUED FINDINGS (claims, not facts — verify each against the current manuscript,",
+          "sources, and editorial documents before deciding). Exact stored objects:",
+          "{{queued_findings}}"
+        ],
+        "variables": [
+          {
+            "name": "queued_findings",
+            "required": true,
+            "description": "Queued literary finding objects as a JSON array, verbatim from the review ledger."
+          }
+        ]
+      },
+      {
+        "text": [
+          "{{suite_repair}}"
+        ],
+        "variables": [
+          {
+            "name": "suite_repair",
+            "required": false,
+            "drop_unit_if_absent": true,
+            "description": "Driver-owned full-suite repair assignment, supplied only when this fixer follows a failed scheduled checkpoint."
+          }
+        ]
+      },
+      {
+        "text": [
+          "FIX DECISION TABLE (exactly once per queued finding)",
+          "- valid -> `fixed`; make the smallest coherent revision now.",
+          "- invalid -> `rejected` directly. If ambiguous editorial guidance caused the false",
+          "  finding, add only the smallest clarifying `prevention` edit.",
+          "- settled duplicate without new textual evidence -> `rejected_adjudicated` with",
+          "  adjudication_ref. If CONTESTS supplies new evidence, assess it directly.",
+          "- confirmed and impossible within the authorized work -> per-finding `blocked`."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "evidence"
+      },
+      {
+        "text": [
+          "FIX VERDICT ACCOUNT (mandatory for every queued finding)",
+          "1. Standard: identify the exact mandate, intended reader effect, pinned manuscript",
+          "   fact, source, or editorial-stage expectation the located passage violates. Return",
+          "   it as `violated_guarantee`; preference alone is not a violation.",
+          "2. Baseline: compare deliberate voice, ambiguity, rhythm, form, and established context",
+          "   with the alleged effect. Return `permitted_baseline`, `incremental_harm`, and",
+          "   `exceeds_baseline`.",
+          "3. Affected reader or editorial outcome: name the concrete confusion, contradiction,",
+          "   lost emphasis, pacing effect, continuity break, or readiness risk. Return",
+          "   `affected_party` and `observable_damage` with located textual evidence.",
+          "4. Alternative: when revision is warranted, compare the smallest concrete wording or",
+          "   structural change and explain its reader effect and trade-off.",
+          "5. Scope: confirm that the fix belongs to this unit and editorial stage."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "FIX RULES",
+          "- Use `fixed` or `blocked` only when textual evidence shows a concrete affected reader",
+          "  or editorial outcome, material damage, an exact violated standard, and incremental",
+          "  harm beyond the permitted baseline.",
+          "- Otherwise use `rejected`, or `rejected_adjudicated` for a settled duplicate. Do not",
+          "  accept a reviewer by authority or reject one reflexively.",
+          "- Decide from the current manuscript, its necessary context, sources, mandate, and",
+          "  editorial brief — not from memory, chat summary, or the finding's confidence.",
+          "- Preserve surrounding voice, ambiguity, rhythm, character, continuity, pacing, and",
+          "  thematic work. Do not expand a local fix into unrelated polish or new story material.",
+          "- Run cheap focused mechanical checks only when relevant; a supplied FULL-SUITE REPAIR",
+          "  block is the sole exception. Resolve every queued id before returning."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "scope_authority",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "reuse_gate"
+      },
+      {
+        "ref": "altitude_fix",
+        "mount": [
+          "target:document"
+        ]
+      },
+      {
+        "ref": "deferred_debt"
+      },
+      {
+        "ref": "adjudicated_rejections"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "Do the revisions match the declared audience, genre, form, and editorial stage, and did you reject criticisms that merely prefer smoother or more conventional prose? Answer with the standard and any excess removed."
+      },
+      {
+        "id": "human_scale",
+        "text": "For every queued id, did you either make the smallest coherent evidence-supported revision or reject the criticism from the current text, while preserving surrounding voice and continuity? Answer with how you checked the complete queue."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output with concise textual or editorial evidence)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_compact"
+      },
+      {
+        "id": "fix_results",
+        "text": [
+          "Completed fix pass:",
+          "{\"status\":\"ok\",\"kind\":\"fix_findings\",\"findings\":[<result>, ...],",
+          " \"files_changed\":[\"...\"],\"notes\":\"<optional short note>\"}",
+          "Return one result for every queued id, and no others:",
+          "{\"id\":\"<echo>\",\"severity\":\"<echo>\",\"summary\":\"...\",",
+          " \"validity\":{\"affected_party\":\"...\",\"observable_damage\":\"...\",",
+          "             \"violated_guarantee\":\"...\",\"permitted_baseline\":\"...\",",
+          "             \"incremental_harm\":\"...\",\"exceeds_baseline\":true|false},",
+          " \"disposition\":\"fixed|rejected|rejected_adjudicated|blocked\",",
+          " \"prevention\":null|{\"documented_in\":\"<edited path>\",\"note\":\"...\"},",
+          " \"adjudication_ref\":null|\"<settled rejection id>\"}",
+          "`fixed`/`blocked` require a concrete, evidence-backed affected party,",
+          "observable damage, and violated guarantee, plus exceeds_baseline=true. If any",
+          "cannot be demonstrated, the finding is invalid: use `rejected`",
+          "(`rejected_adjudicated` remains the settled-duplicate path), and",
+          "both rejection dispositions require exceeds_baseline=false. Include any extra",
+          "field explicitly required by an active project-safeguard or",
+          "active project block above. Plan edits live only in the canonical skeleton",
+          "block; never duplicate them in the reply. Rejection is the fixer's own",
+          "evidence-backed judgment.",
+          "When the prompt supplies a FULL-SUITE REPAIR block, `status: \"ok\"` also",
+          "certifies that its complete command list passed on the final workspace bytes."
+        ],
+        "variables": []
+      },
+      {
+        "id": "fix_blocked",
+        "text": [
+          "Impossible worker task (not a finding disposition):",
+          "{\"status\":\"blocked\",\"kind\":\"fix_findings\",\"blocked_reason\":\"...\",",
+          " \"questions\":[...]}   (the QUESTIONS entries are required in EVERY reply)"
+        ],
+        "variables": []
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  },
+  "variants": {
+    "target_frame": {
+      "slice_unit": {
+        "text": [
+          "TASK: recheck, triage, and resolve the queued literary findings on {{task_subject}}.",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE. The original mandate remains at {{goal_path}} for intent the skeleton does not settle.",
+          "EDITABLE: {{editable_path}} is the primary target. Read the current passage and necessary surrounding manuscript before editing. Touch another editorial document only when the evidence-backed fix genuinely requires it."
+        ],
+        "variables": [
+          {
+            "name": "task_subject",
+            "required": true,
+            "description": "For example, the current structural brief, revised chapter, scene, or copyedited manuscript unit."
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "editable_path",
+            "required": true,
+            "description": "Workspace-relative manuscript or editorial artifact the queued findings may edit."
+          }
+        ]
+      },
+      "skeleton_unit": {
+        "text": [
+          "TASK: recheck, triage, and resolve the queued literary findings on the milestone skeleton.",
+          "BASELINE: the operator's mandate at {{goal_path}} defines the literary milestone boundary.",
+          "EDITABLE: {{skeleton_path}} is the primary target. Read the actual manuscript and sources needed to test each planning claim; touch another editorial document only when the evidence-backed fix genuinely requires it."
+        ],
+        "variables": [
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "kind": "draft_skeleton",
+  "process": "milestone",
+  "description": "Literary plan author: writes the manuscript or editorial skeleton and proposes coherent delivery units.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "author_recovery"
+      },
+      {
+        "text": [
+          "TASK: draft the milestone skeleton for this manuscript or editorial goal.",
+          "MANDATE: the operator's mandate is preserved VERBATIM at {{goal_path}} (generated snapshot, frozen at launch — the live original may drift). Read it IN FULL before working; every requirement binds as if printed here.",
+          "Read the assigned manuscript and necessary surrounding text before planning. WRITE: {{skeleton_path}}"
+        ],
+        "variables": [
+          {
+            "name": "goal_path",
+            "required": true,
+            "description": "Workspace-relative path of the frozen literary mandate snapshot."
+          },
+          {
+            "name": "skeleton_path",
+            "required": true,
+            "description": "Workspace-relative path where the literary skeleton must be written."
+          }
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "text": [
+          "SKELETON SCOPE",
+          "- A slice is the smallest manuscript or editorial outcome that can be reviewed,",
+          "  approved, and completed coherently. Keep one clear intent and no unrelated work.",
+          "- Organize by reader-facing or editorial outcome, not automatically by chapter and",
+          "  never one slice per title, structure, voice, character, continuity, pacing, theme,",
+          "  or readiness lens. Use only the lenses relevant to the mandate.",
+          "- Preserve dependencies that must be judged together: a title may depend on theme,",
+          "  a structural move on continuity, or a character revision on voice and pacing.",
+          "- The skeleton is a planning contract, not a draft of every later brief. Record rough",
+          "  intent, pinned constraints, sequencing, and completion evidence; leave exact passages,",
+          "  risks, and local acceptance detail to each just-in-time slice note.",
+          "- Match the editorial stage. Developmental work may reshape structure or character;",
+          "  line and copy work preserve settled intent; proofreading does not reopen the book."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "producer_planning"
+      },
+      {
+        "ref": "two_register"
+      },
+      {
+        "text": [
+          "EDITORIAL BASIS (structured gate; mandatory in this run)",
+          "Add an `Editorial Basis` section to the skeleton with one concise row for each item",
+          "below. Each row cites the mandate, source, or located manuscript passage that supports",
+          "it. Read what you cite; do not infer a textual problem from the request summary alone.",
+          "  - textual_basis: what exists now, which passages establish it, and what surrounding context matters",
+          "  - intended_reader_effect: the audience, genre, form, editorial stage, and effect this work must achieve",
+          "  - continuity_constraints: established facts, chronology, point of view, tense, diction, motifs, characters, and do-not-change material that matter here",
+          "  - relevant_lenses: which of title, structure, voice, character, continuity, pacing, themes, and editorial readiness can change the outcome, and why the others need no separate work",
+          "  - smallest_intervention: the smallest coherent set of manuscript or editorial changes that can achieve the outcome, reusing established material first",
+          "  - intervention_cost: creative, editorial, continuity, review, and later-publication cost weighed against leaving the text as it is",
+          "  - completion_check: the concrete passage-level, document-level, reader-facing, source, or declared mechanical evidence that will show the unit is done"
+        ],
+        "variables": []
+      },
+      {
+        "ref": "altitude_doc"
+      },
+      {
+        "ref": "reuse_gate"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (answer each in output with concise textual or editorial evidence)"
+    ],
+    "items": [
+      {
+        "id": "due_diligence_count",
+        "text": "How many Editorial Basis rows did you answer in the document?"
+      },
+      {
+        "id": "machinery_trust",
+        "text": "Does the skeleton invent lore, scenes, characters, constraints, trackers, or editorial machinery that the mandate and manuscript do not need? Answer with the passages and planning choices you checked, and name any invention you removed or justified."
+      },
+      {
+        "id": "environment_fit",
+        "text": "Does the plan match the declared audience, genre, form, and editorial stage, or does it demand publication polish or conventional form where the mandate does not? Answer with the standard used and any excess found."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put the skeleton next to the mandate: are its units the grain and size of the requested literary outcome, without one chapter or one lens becoming an automatic slice? Answer with a brief comparison."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_verbose"
+      },
+      {
+        "ref": "common_fields",
+        "defaults": {
+          "status_vocabulary": "\"ok\" | \"blocked\""
+        }
+      },
+      {
+        "ref": "draft_skeleton_result"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "kind": "implement",
+  "process": "milestone",
+  "description": "Literary author or reviser: creates one coherent manuscript or editorial unit against its reviewed brief.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "author_recovery"
+      },
+      {
+        "text": [
+          "TASK: create or revise slice {{slice_id}} ({{slice_title}}) against its current reviewed literary work note.",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE. The original mandate remains at {{goal_path}}; read it only when the skeleton does not settle intent.",
+          "SLICE NOTE: {{slice_note_path}}. Read the text in scope and enough adjacent manuscript material to preserve voice and continuity before editing."
+        ],
+        "variables": [
+          {
+            "name": "slice_id",
+            "required": true
+          },
+          {
+            "name": "slice_title",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "slice_note_path",
+            "required": true
+          }
+        ]
+      },
+      {
+        "ref": "implementation_scope"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "ref": "implementation_rules"
+      },
+      {
+        "ref": "implementation_metering",
+        "mount": [
+          "executor:agent_call"
+        ]
+      },
+      {
+        "ref": "reuse_gate"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "machinery_trust",
+        "text": "Did the delivered text invent facts, lore, diction, motifs, characters, scenes, or editorial machinery instead of reusing what the manuscript already establishes? Answer with the passages you checked and any case found."
+      },
+      {
+        "id": "environment_fit",
+        "text": "Does the revision match the declared audience, genre, form, and editorial stage while preserving deliberate voice, ambiguity, rhythm, and unconventional form? Answer with the standard used and any excess found."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put the delivered change next to the brief: is it the smallest coherent intervention that achieves the intended reader effect, with no unrelated polish or exhaustive lens audit? Answer with a brief comparison."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output with concise textual or editorial evidence)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_verbose"
+      },
+      {
+        "ref": "common_fields",
+        "defaults": {
+          "status_vocabulary": "\"ok\" | \"blocked\""
+        }
+      },
+      {
+        "ref": "implement_result"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

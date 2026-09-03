@@ -1,0 +1,623 @@
+{
+  "description": "Shared literary-work guidance and runtime contract sections used by more than one kind. Kind files reference these units and the router inlines them.",
+  "units": {
+    "header": {
+      "text": [
+        "KIND: {{kind}}",
+        "WORKSPACE: {{workspace}}"
+      ],
+      "variables": [
+        {
+          "name": "kind",
+          "required": true,
+          "description": "The kind id; the worker echoes it in its output."
+        },
+        {
+          "name": "workspace",
+          "required": true,
+          "description": "Absolute path of the primary workspace."
+        }
+      ]
+    },
+    "project_context": {
+      "text": [
+        "PROJECT AND MANUSCRIPT CONTEXT (standing project law; binding)",
+        "{{ecosystem_map}}"
+      ],
+      "variables": [
+        {
+          "name": "ecosystem_map",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "PRIMARY ROOT / ADDITIONAL ROOT lines identifying the manuscript, source, and editorial materials available to the work."
+        }
+      ]
+    },
+    "producer_planning": {
+      "text": [
+        "MANUSCRIPT DELIVERY PLANNING",
+        "Write exactly one `## Canonical slice plan` heading followed directly, or after one empty line,",
+        "by one fenced `json` object rooted `{\"slices\":[...]}`. Array order is",
+        "delivery. Each slice has exactly a unique integer `id`, non-empty `title`",
+        "and `intent`, optional non-empty `material`, and",
+        "`producer_task_executor` with exactly `draft_slice_note` and `implement`.",
+        "Choose both executor ids from the catalogue below. Configuration is not",
+        "part of the plan, and no duplicate plan is returned in the reply.",
+        "Plan coherent creative or editorial outcomes, not one slice per chapter or",
+        "one audit per literary lens. Combine work that must be judged together.",
+        "TASK EXECUTOR CATALOGUE:",
+        "{{task_executor_catalogue}}"
+      ],
+      "variables": [
+        {
+          "name": "task_executor_catalogue",
+          "required": true,
+          "description": "The task-executor catalogue as JSON, with id and literary-work description for each available executor."
+        }
+      ]
+    },
+    "two_register": {
+      "text": [
+        "TWO-REGISTER EDITORIAL DOCUMENT",
+        "Write the document in two clearly separated registers:",
+        "1. CREATIVE INTENT (plain language): the manuscript or editorial outcome,",
+        "   its intended reader effect, audience, genre, form, and stage; what this",
+        "   work owns and explicitly does not change. Review this for substance, not",
+        "   for the polish expected of final prose.",
+        "2. PINNED-FACTS TABLE: the small set of constraints where deviation would",
+        "   contradict the mandate or established manuscript — for example spelling,",
+        "   chronology, point of view, tense, title requirements, factual-source",
+        "   limits, and named do-not-change material. Use one canonical table:",
+        "     | fact | value | authority (file:line) | touch / do-not-touch |",
+        "   Cite the passage, source, mandate, or reviewed-plan section that actually",
+        "   establishes each row. Do not turn preferences, possible themes, or every",
+        "   story fact into pinned law; keep the table small enough to guide the work."
+      ],
+      "variables": []
+    },
+    "altitude_doc": {
+      "text": [
+        "ALTITUDE (editorial-document discipline)",
+        "- State the creative intent, intended reader effect, continuity constraints,",
+        "  boundaries, and observable completion evidence. Leave sentence-by-sentence",
+        "  invention to the manuscript work unless exact wording is deliberately fixed.",
+        "- A statement that can be judged only by comparing a future draft to one",
+        "  prescribed technique is usually over-specific. Reduce it to the reader-facing",
+        "  effect or manuscript fact that the technique is meant to preserve.",
+        "- Exact wording, sequence, or form belongs here only when the mandate, source",
+        "  material, or established manuscript makes it a real constraint.",
+        "- Avoid pseudo-scenes, defensive FAQs, repeated lens checklists, and speculative",
+        "  future editorial chains. Keep plans and briefs concise enough to use while",
+        "  writing, revising, and reviewing."
+      ],
+      "variables": []
+    },
+    "reuse_gate": {
+      "text": [
+        "READ-BEFORE-INVENTING GATE",
+        "- Read the assigned manuscript and enough surrounding text to understand what",
+        "  is already established. Reuse existing facts, diction, motifs, characters,",
+        "  chronology, sources, and formal patterns before adding anything new.",
+        "- New lore, scenes, taxonomies, trackers, or editorial machinery need a",
+        "  concrete reader-facing or production need. Do not create them merely because",
+        "  a stronger or more exhaustive treatment can be imagined.",
+        "- Prefer the smallest coherent textual intervention that achieves the requested",
+        "  effect. Preserve deliberate voice, ambiguity, rhythm, and unconventional form",
+        "  unless they conflict with stated intent or cause a demonstrable problem."
+      ],
+      "variables": []
+    },
+    "evidence": {
+      "text": [
+        "TEXTUAL EVIDENCE",
+        "- Read the relevant manuscript files directly. Locate claims in specific passages",
+        "  and use brief quotations or precise references; a task summary is not evidence",
+        "  that the text has a problem. Read adjacent passages whenever context may change",
+        "  the meaning, voice, continuity, pacing, or reader effect.",
+        "- Use Git only for scope, changed-text comparison, relevant history, and revision",
+        "  verification where the routed task requires repository evidence."
+      ],
+      "variables": []
+    },
+    "judgment_rubric": {
+      "text": [
+        "LITERARY JUDGMENT RUBRIC (answer once per alleged defect)",
+        "FINDING VALIDITY",
+        "1. Standard: which stated mandate, intended reader effect, pinned manuscript fact,",
+        "   or editorial-stage expectation does the located passage fail? Separate a defect",
+        "   from personal taste and from polish not required at this stage.",
+        "2. Baseline versus passage: record `permitted_baseline`, `actual_outcome`,",
+        "   `incremental_harm`, and `exceeds_baseline`. Deliberate ambiguity, rhythm, voice,",
+        "   or unconventional form is permitted unless it conflicts with declared intent or",
+        "   creates a demonstrated reader-facing problem.",
+        "3. Affected reader or editorial outcome: name the confusion, contradiction, lost",
+        "   emphasis, pacing effect, continuity break, or readiness risk, and cite the text.",
+        "4. Material consequence: explain how the passage changes reading or later editorial",
+        "   work. When an alternative matters, compare concrete wording or structure and",
+        "   state the reader effect and trade-off.",
+        "5. Scope: judge only the assigned artifact and relevant lenses. Titles, structure,",
+        "   voice, character, continuity, pacing, themes, and readiness are coverage for the",
+        "   set, not a checklist imposed on every task.",
+        "Report only findings with `exceeds_baseline=true`."
+      ],
+      "variables": []
+    },
+    "severity_battery": {
+      "text": [
+        "SEVERITY BATTERY",
+        "- Defect or taste? A supported reading that fulfills the mandate is not defective",
+        "  merely because another editor would choose differently. State the actual stage",
+        "  and standard used.",
+        "- P0/P1: publication-critical factual, legal, ethical, or continuity harm; or a",
+        "  central reader-facing failure that defeats the declared purpose. P2: bounded,",
+        "  reversible confusion or a visible structural, voice, character, pacing, thematic,",
+        "  title, or readiness problem. P3: preference, negligible effect, or a local issue",
+        "  with no material reader/editorial consequence. P0-P2 require located textual",
+        "  evidence. Score the demonstrated effect, not unease."
+      ],
+      "variables": []
+    },
+    "adjudicated_rejections": {
+      "text": [
+        "ADJUDICATED REJECTIONS (settled for this unit unless NEW textual evidence)",
+        "{{adjudicated_rejections}}"
+      ],
+      "variables": [
+        {
+          "name": "adjudicated_rejections",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Settled criticism entries for this unit, one per line. Reopen one only with new manuscript or source evidence; recurring guidance belongs in an operator amendment."
+        }
+      ]
+    },
+    "deferred_debt": {
+      "text": [
+        "DEFERRED EDITORIAL DEBT (settled for this unit; do NOT re-report or revise)",
+        "Leave each entry settled unless new textual evidence raises correction risk",
+        "above its recorded rating. Then contest it by citing its id in",
+        "`contests.rejection_id`, giving only the new evidence and resulting delta.",
+        "A valid contest reopens that item for the fixer.",
+        "{{deferred_debt}}"
+      ],
+      "variables": [
+        {
+          "name": "deferred_debt",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Deferred editorial findings for this unit, one per line."
+        }
+      ]
+    },
+    "process_authority": {
+      "text": [
+        "PROCESS AUTHORITY",
+        "- Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)",
+        "  and the entire .orchestrator/ directory: they do not govern this",
+        "  run and are not yours to edit."
+      ],
+      "variables": []
+    },
+    "bs_sources": {
+      "text": [
+        "SOURCES TO READ",
+        "- Brainstorming chat: {{chat_path}}",
+        "- Goal, manuscript, and reference documents:",
+        "{{reference_documents}}"
+      ],
+      "variables": [
+        {
+          "name": "chat_path",
+          "required": true,
+          "description": "Absolute path of the session chat."
+        },
+        {
+          "name": "reference_documents",
+          "required": true,
+          "description": "Indented list of goal, manuscript, and reference-document paths, one per line."
+        }
+      ]
+    },
+    "rethink_charge": {
+      "text": [
+        "TASK",
+        "Resolve the problem below in the project Git repository. Read the manuscript,",
+        "editorial documents, and necessary surrounding text before changing them.",
+        "Make the smallest coherent repository change that removes the problem; clarifying",
+        "the governing editorial document may be the complete solution. Return `ready` only",
+        "after the full resolution is present in the repository.",
+        "",
+        "PROBLEM",
+        "{{rethink_problem}}"
+      ],
+      "variables": [
+        {
+          "name": "rethink_problem",
+          "required": true,
+          "description": "The exact literary or editorial problem reported by the originating worker."
+        }
+      ]
+    },
+    "altitude_review": {
+      "text": [
+        "ALTITUDE (editorial-document review)",
+        "- A plan or brief should pin creative intent, reader effect, continuity constraints,",
+        "  scope, and completion evidence without dictating every sentence or technique.",
+        "- Under-specification is a finding when the next writer or editor could make a",
+        "  materially different choice without guidance. Over-specification is a finding",
+        "  when it suppresses legitimate voice, ambiguity, rhythm, or form without authority.",
+        "- Exact wording or sequence is justified only by the mandate, established manuscript,",
+        "  factual source, or an explicit do-not-change constraint. Cite that authority.",
+        "- Do not demand one audit per title, structure, voice, character, continuity, pacing,",
+        "  theme, or readiness lens. Apply only the lenses that can change this decision.",
+        "- Replacing prescribed technique with an unchanged intended effect is not lost content;",
+        "  verify that the effect and pinned facts truly remain intact."
+      ],
+      "variables": []
+    },
+    "altitude_fix": {
+      "text": [
+        "ALTITUDE (editorial-document revision)",
+        "- Fix a valid gap by recording the missing creative intent, reader effect, continuity",
+        "  constraint, boundary, or completion evidence — not by prescribing unnecessary prose.",
+        "- Preserve exact wording, sequence, or form only when the mandate, established",
+        "  manuscript, factual source, or explicit do-not-change material requires it.",
+        "- Remove needless technique mandates without weakening the outcome or pinned facts.",
+        "  Do not turn a local clarification into a new framework or exhaustive checklist."
+      ],
+      "variables": []
+    },
+    "reuse_gate_review": {
+      "text": [
+        "READ-BEFORE-INVENTING REVIEW",
+        "- Look for revisions that ignore established facts, diction, motifs, characters,",
+        "  chronology, sources, or formal patterns. Name the conflicting passage or source.",
+        "- Challenge new lore, scenes, trackers, taxonomies, and editorial machinery with no",
+        "  concrete reader-facing need; also report a harmful omission when text proves one.",
+        "- Prefer a smaller evidence-supported intervention. Do not demand a stronger, smoother,",
+        "  or more conventional manuscript merely because it matches personal taste."
+      ],
+      "variables": []
+    },
+    "verification_boundary": {
+      "text": [
+        "VERIFICATION BOUNDARY",
+        "- Use focused reading and only the mechanical checks needed for a concrete claim;",
+        "  the scheduled suite checkpoint owns the complete repository command suite."
+      ],
+      "variables": []
+    },
+    "scope_authority": {
+      "text": [
+        "SCOPE AUTHORITY",
+        "- Scope is authorized by the CURRENT reviewed SKELETON, not only by this unit's",
+        "  earlier note. Authority runs MANDATE > current SKELETON > unit note. When an",
+        "  accepted design change updates the skeleton, the unit may perform the manuscript",
+        "  or editorial work now assigned there, including a correction an earlier unit",
+        "  should have made. Judge against the current skeleton; flag only work assigned to",
+        "  no unit or work that contradicts the mandate or another unit's reviewed boundary."
+      ],
+      "variables": []
+    },
+    "implementation_scope": {
+      "text": [
+        "{{implementation_scope}}"
+      ],
+      "variables": [
+        {
+          "name": "implementation_scope",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Prompt-ready projection of the exact current sequential manuscript or editorial assignment."
+        }
+      ]
+    },
+    "contract_correction": {
+      "text": [
+        "CONTRACT CORRECTION",
+        "The previous reply was rejected by the served structural contract:",
+        "{{contract_correction}}",
+        "Return a fresh reply satisfying this contract."
+      ],
+      "variables": [
+        {
+          "name": "contract_correction",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Opaque diagnostic from the previous rejected reply."
+        }
+      ]
+    },
+    "fixer_recovery": {
+      "text": [
+        "FIXER RECOVERY",
+        "Recovery state: {{fixer_recovery_state}}.",
+        "The pending delta may contain partial manuscript or editorial work from an earlier",
+        "fixer attempt. Read it and its surrounding context first; complete, correct, or",
+        "remove that work so the final revision is coherent."
+      ],
+      "variables": [
+        {
+          "name": "fixer_recovery_state",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Driver-owned machine state for a retained partial fixer delta."
+        }
+      ]
+    },
+    "author_recovery": {
+      "text": [
+        "{{author_recovery}}"
+      ],
+      "variables": [
+        {
+          "name": "author_recovery",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Physical-call recovery context for the retained manuscript or editorial assignment."
+        }
+      ]
+    },
+    "implementation_rules": {
+      "text": [
+        "MANUSCRIPT WORK RULES",
+        "- Create or revise the requested material directly. Read enough surrounding text to",
+        "  preserve voice, character, continuity, pacing, thematic intent, and established facts.",
+        "- Make one cohesive change at the requested editorial stage. Run only project-declared",
+        "  focused mechanical checks relevant to touched files; the complete command suite",
+        "  belongs to the scheduled suite_checkpoint call."
+      ],
+      "variables": []
+    },
+    "reuse_gate_questioner": {
+      "text": [
+        "READ-BEFORE-INVENTING QUESTIONS",
+        "- When new lore, scenes, structures, trackers, or editorial machinery appear, ask what",
+        "  the manuscript already establishes and what concrete reader problem the addition solves.",
+        "- When a change is defended as necessary, ask for the passage or source that supports",
+        "  the claim and whether a smaller textual intervention achieves the same reader effect.",
+        "- Ask; never rule. Dante carries the anti-drift questions, while the other seats decide."
+      ],
+      "variables": []
+    },
+    "altitude_questioner": {
+      "text": [
+        "EDITORIAL ALTITUDE QUESTIONS",
+        "- When a plan dictates exact technique or wording, ask which reader-facing effect or",
+        "  pinned manuscript fact requires it, and whether deliberate voice or form would be lost.",
+        "- When a plan is thin, ask which decision-changing fact the next writer or editor would",
+        "  need and not find. Do not ask for an exhaustive lens audit."
+      ],
+      "variables": []
+    },
+    "implementation_metering": {
+      "text": [
+        "- The driver meters reviewable Git lines live while you work:",
+        "  around {{soft_lines}} it will ask you to close the current unit",
+        "  coherently; at {{hard_lines}} it stops the call. Cut at the first",
+        "  natural boundary instead of waiting to be asked.",
+        "- Finish the coherent piece and return `implementation_cut` with",
+        "  concise `cut_scope` and `remaining_scope`; the driver reviews",
+        "  this part before opening the next. Never compress, omit, or",
+        "  distort sound work to fit. If the slice is complete, omit",
+        "  `implementation_cut`."
+      ],
+      "variables": [
+        {
+          "name": "soft_lines",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Reviewable-line count where this call's live driver meter asks for a coherent close."
+        },
+        {
+          "name": "hard_lines",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Reviewable-line count where this call's live driver meter stops the call."
+        }
+      ]
+    },
+    "doc_review_duty": {
+      "text": [
+        "TEXTUAL CITATIONS",
+        "- Every passage, source, or file:line authority pinned by an editorial document must",
+        "  actually support the claim. Read what it cites and enough context to interpret it."
+      ],
+      "variables": []
+    },
+    "impl_review_duty": {
+      "text": [
+        "EDITORIAL ACCEPTANCE EVIDENCE",
+        "- Every claimed reader-facing or continuity outcome must be visible in located text;",
+        "  every declared mechanical readiness check must be named and actually pass."
+      ],
+      "variables": []
+    },
+    "operator_amendments_author": {
+      "text": [
+        "OPERATOR AMENDMENTS (binding; they refine the MANDATE)",
+        "Apply them as constraints on the literary work itself.",
+        "{{operator_amendments}}"
+      ],
+      "variables": [
+        {
+          "name": "operator_amendments",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "The [A#] entries, verbatim operator data, one per line."
+        }
+      ]
+    },
+    "operator_amendments_review": {
+      "text": [
+        "OPERATOR AMENDMENTS (binding; they refine the MANDATE)",
+        "A contradiction between an amendment and the reviewed manuscript or editorial artifact is a finding.",
+        "{{operator_amendments}}"
+      ],
+      "variables": [
+        {
+          "name": "operator_amendments",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "The [A#] entries, verbatim operator data, one per line."
+        }
+      ]
+    },
+    "trusted_judgment_read_only": {
+      "text": [
+        "TRUSTED REPORT-ONLY REPOSITORY BOUNDARY",
+        "Do not create, edit, delete, stage, or commit any file; leave the work tree, index, and HEAD unchanged."
+      ],
+      "variables": []
+    },
+    "bs_workarea": {
+      "text": [
+        "WORK AREA — EXPLICIT EDITING BOUNDARY",
+        "{{workarea_boundary}}",
+        "Contrary Position and the questioner leave files, the index, and HEAD unchanged.",
+        "The chat records what changed and why; verify literary claims against the current",
+        "target text or Git delta named by the boundary."
+      ],
+      "variables": [
+        {
+          "name": "workarea_boundary",
+          "required": false,
+          "default": "REPOSITORY CHARGE — the Initial Position may make only the repository changes allowed by this session's charge. The driver commits each completed author turn.",
+          "description": "Router-owned target-only or repository-charge authority for manuscript and editorial edits."
+        }
+      ]
+    },
+    "bs_prior_decisions": {
+      "text": [
+        "PRIOR PROJECT DECISIONS (revisable context, not an operator mandate)",
+        "These may include earlier creative or editorial choices. Test them against the",
+        "current manuscript, sources, mandate, audience, genre, form, and stage. If a choice",
+        "is mistaken, incomplete, or disproportionate, identify or question it within your role.",
+        "{{prior_decisions}}"
+      ],
+      "variables": [
+        {
+          "name": "prior_decisions",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Earlier creative and editorial decisions supplied as revisable context."
+        }
+      ]
+    }
+  },
+  "contract_sections": {
+    "envelope_verbose": {
+      "text": [
+        "OUTPUT CONTRACT (mandatory)",
+        "Respond with EXACTLY ONE JSON object and nothing else: no prose before or",
+        "after it, no markdown fences. The object must satisfy:"
+      ],
+      "variables": []
+    },
+    "envelope_compact": {
+      "text": [
+        "OUTPUT CONTRACT (mandatory)",
+        "Return exactly one JSON object; no prose or markdown fences."
+      ],
+      "variables": []
+    },
+    "common_fields": {
+      "text": [
+        "Common fields:",
+        "  \"status\": {{status_vocabulary}}",
+        "  \"kind\": \"<echo the KIND header of this prompt>\"",
+        "  \"blocked_reason\": string    (required when status is \"blocked\": explain",
+        "                               precisely what stops you; the run will end",
+        "                               with this explanation in the log)",
+        "  \"notes\": string             (optional, short)"
+      ],
+      "variables": [
+        {
+          "name": "status_vocabulary",
+          "required": true,
+          "description": "The exact status enum this kind accepts, e.g. \"ok\" | \"blocked\" | \"need_rethink\". Single-sourced from the validator."
+        }
+      ]
+    },
+    "design_correction_verdict": {
+      "text": [
+        "A provisional design-correction delta supplies its complete retained context here and requires design_correction_verdict={decision, reason}."
+      ],
+      "variables": []
+    },
+    "review_contract": {
+      "text": [
+        "Completed review:",
+        "{\"status\":\"ok\",\"kind\":\"<echo KIND>\",\"findings\":[<finding>, ...],",
+        " \"notes\":\"<optional short note>\"}",
+        "Each finding is exactly:",
+        "{\"id\":\"<unique id>\",\"severity\":\"P0|P1|P2|P3\",\"summary\":\"...\",",
+        " \"validity\":{\"permitted_baseline\":\"...\",\"actual_outcome\":\"...\",",
+        "             \"incremental_harm\":\"...\",\"exceeds_baseline\":true},",
+        " \"plain\":\"<one lay sentence, under 500 chars>\",",
+        " \"example\":\"<smallest concrete scenario, under 500 chars>\",",
+        " \"contests\":null|{\"rejection_id\":\"<settled id>\",",
+        "                   \"new_evidence\":\"<what changes it>\"}}",
+        "Reviewers report only: never add a disposition. Empty findings means clean.",
+        "If the outcome does not exceed the permitted baseline, emit no finding.",
+        "Plain and example must expose the defect and its scale without opening files.",
+        "If a finding challenges a listed rejection, `contests` is mandatory: cite its",
+        "id and genuinely new evidence. Without new evidence, emit no finding.",
+        "Include any extra field explicitly required by an active project-safeguard or",
+        "active project block above."
+      ],
+      "variables": []
+    },
+    "review_blocked": {
+      "text": [
+        "Impossible task:",
+        "{\"status\":\"blocked\",\"kind\":\"<echo KIND>\",\"blocked_reason\":\"...\",",
+        " \"questions\":[...]}   (the QUESTIONS entries are required in EVERY reply)"
+      ],
+      "variables": []
+    },
+    "questions_output": {
+      "text": [
+        "\"questions\": [{\"id\": \"<id>\", \"answer\": \"<the answer, backed by an explanation>\"}, ...]",
+        "  (one entry per QUESTIONS id above, in EVERY reply whatever its status;",
+        "   each entry ANSWERS its question and briefly describes the work behind",
+        "   it — the machine requires one non-empty answer per mounted id; it does not judge substance or length)"
+      ],
+      "variables": []
+    },
+    "implement_result": {
+      "text": [
+        "Kind implement adds:",
+        "  \"files_changed\": [\"<workspace-relative paths you created or edited>\", ...]",
+        "  \"implementation_cut\": {\"cut_scope\": \"<the coherent functional cut now",
+        "                            complete and ready for review>\",",
+        "                         \"remaining_scope\": \"<the original slice obligations",
+        "                            deliberately delegated to the next sequential",
+        "                            implementation part>\"}",
+        "   Include `implementation_cut` proactively when you close a coherent unit",
+        "   while original slice work remains, or when responding to the driver's live",
+        "   close instruction or forced-cutoff stabilization. Omit it when the original",
+        "   slice scope is complete. Both strings must be concrete and non-empty. This",
+        "   field reports the boundary; it does not let you choose labels or",
+        "   create/renumber design slices. The orchestrator derives a/b/c sequentially",
+        "   and opens the next part only after this one completes its full review cycle."
+      ],
+      "variables": []
+    },
+    "draft_skeleton_result": {
+      "text": [
+        "Kind draft_skeleton adds:",
+        "  \"artifact\": \"<workspace-relative path of the skeleton document you wrote>\""
+      ],
+      "variables": []
+    },
+    "draft_slice_note_result": {
+      "text": [
+        "Kind draft_slice_note adds:",
+        "  \"artifact\": \"<workspace-relative path of the slice note you wrote>\""
+      ],
+      "variables": []
+    }
+  },
+  "material_layers": {}
+}

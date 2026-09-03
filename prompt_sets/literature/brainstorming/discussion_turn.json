@@ -1,0 +1,231 @@
+{
+  "kind": "discussion_turn",
+  "process": "brainstorming",
+  "description": "One seat's turn in a bounded literary Brainstorming discussion, with an evidence-grounded stance selected per seat.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: take the next turn in the bounded literary Brainstorming conversation.",
+          "Read the chat from beginning to end, then read the assigned manuscript, target,",
+          "references, and necessary surrounding passages directly before writing or judging.",
+          "Continue naturally from the evidence in the shared record."
+        ],
+        "variables": [],
+        "mount": [
+          "job:producer"
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_author",
+        "mount": [
+          "role:initial_position"
+        ]
+      },
+      {
+        "ref": "operator_amendments_review",
+        "mount": [
+          "role:contrary_position"
+        ]
+      },
+      {
+        "ref": "bs_prior_decisions"
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "bs_workarea"
+      },
+      {
+        "ref": "process_authority"
+      },
+      {
+        "ref": "bs_sources"
+      },
+      {
+        "ref": "rethink_charge",
+        "mount": [
+          "job:rethink"
+        ]
+      },
+      {
+        "text": [
+          "TURN",
+          "- participant_id: {{participant_id}}",
+          "- role: {{role}}",
+          "- round: {{round}}",
+          "- work area at {{target_authority}}; primary target: {{target_path}}, {{target_state}} on disk"
+        ],
+        "variables": [
+          {
+            "name": "participant_id",
+            "required": true
+          },
+          {
+            "name": "role",
+            "required": true
+          },
+          {
+            "name": "round",
+            "required": true
+          },
+          {
+            "name": "target_path",
+            "required": true
+          },
+          {
+            "name": "target_authority",
+            "required": true
+          },
+          {
+            "name": "target_state",
+            "required": true
+          }
+        ],
+        "mount": [
+          "job:producer"
+        ]
+      },
+      {
+        "text": [
+          "TURN",
+          "- participant_id: {{participant_id}}",
+          "- role: {{role}}",
+          "- round: {{round}}",
+          "- repository authority: {{repository_authority}}"
+        ],
+        "variables": [
+          {
+            "name": "participant_id",
+            "required": true
+          },
+          {
+            "name": "role",
+            "required": true
+          },
+          {
+            "name": "round",
+            "required": true
+          },
+          {
+            "name": "repository_authority",
+            "required": true
+          }
+        ],
+        "mount": [
+          "job:rethink"
+        ]
+      },
+      {
+        "one_of": "role_stance"
+      },
+      {
+        "ref": "two_register",
+        "mount": [
+          "role:initial_position",
+          "target:document"
+        ]
+      },
+      {
+        "ref": "altitude_doc",
+        "mount": [
+          "role:initial_position",
+          "target:document"
+        ]
+      },
+      {
+        "ref": "reuse_gate",
+        "mount": [
+          "role:initial_position"
+        ]
+      },
+      {
+        "ref": "implementation_rules",
+        "mount": [
+          "role:initial_position",
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "evidence",
+        "mount": [
+          "role:contrary_position"
+        ]
+      },
+      {
+        "ref": "altitude_review",
+        "mount": [
+          "role:contrary_position",
+          "target:document"
+        ]
+      }
+    ]
+  },
+  "variants": {
+    "role_stance": {
+      "initial_position": {
+        "text": [
+          "ROLE",
+          "You are the Initial Position. Develop the best current literary answer and apply the work during this turn before reporting it. The request is not proof that any suggested diagnosis or technique is right: read the manuscript and sources, locate the relevant passages, and preserve established voice, ambiguity, rhythm, character, continuity, pacing, theme, and form where they serve the stated intent. Make the smallest coherent change for the audience, genre, form, and editorial stage, then state in chat what changed and why. Treat earlier positions as revisable, but change course only when Dante or the Contrary Position exposes a real evidence-backed problem rather than a difference in taste."
+        ],
+        "variables": [],
+        "questions": []
+      },
+      "contrary_position": {
+        "text": [
+          "ROLE",
+          "You are the Contrary Position. You are read-only: leave every file, the index, and HEAD unchanged. Test the Initial Position's reasoning against the current manuscript, mandate, sources, and intended reader effect. Separate located textual evidence from taste, editorial-stage mismatch, or preference for conventional form. Challenge the weakest premise or causal link and look for a materially better alternative to the same requested outcome. Offer an alternative only when concrete passages or formulations support it; compare reader effect and trade-off, and name the unnecessary revision, invention, or editorial burden it avoids. Do not manufacture disagreement after the issue is resolved, and do not concede merely because a claim sounds plausible. Consider Dante's questions."
+        ],
+        "variables": [],
+        "questions": [
+          {
+            "id": "turn_better_alternative",
+            "text": "Did you test a materially better alternative to the same literary outcome? If textual evidence supports one, include it in the chat and identify the concrete passage or formulation, reader effect, trade-off, and unnecessary revision it avoids; otherwise say briefly that no better alternative was supported."
+          }
+        ]
+      }
+    }
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (answer each in output with concise textual or editorial evidence)"
+    ],
+    "items": [
+      {
+        "id": "turn_environment_fit",
+        "text": "Does this intervention match the declared audience, genre, form, and editorial stage, preserving deliberate voice, ambiguity, rhythm, and unconventional form unless the text proves a problem? Answer with the standard and passages checked."
+      },
+      {
+        "id": "turn_human_scale",
+        "text": "Put the intervention next to the request and manuscript: is it the smallest coherent change for the intended reader effect, or has it drifted into unrelated polish, invention, or an exhaustive lens audit? Answer with a brief comparison."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "discussion_turn_envelope",
+        "text": [
+          "OUTPUT CONTRACT",
+          "Return exactly one JSON object with kind \"discussion_turn\", one non-empty",
+          "\"markdown\" field, and the \"questions\" entries required below. You may add",
+          "ready: true when your position needs no further turns. Ready refers to",
+          "the current accepted revision; the session's closure protocol decides",
+          "how that judgment counts. Do not add source",
+          "content or control metadata beyond these fields."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

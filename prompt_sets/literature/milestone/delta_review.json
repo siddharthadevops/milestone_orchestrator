@@ -1,0 +1,162 @@
+{
+  "kind": "delta_review",
+  "process": "milestone",
+  "description": "Report-only literary delta review of changed text and its direct contextual effects against an explicit base revision.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "one_of": "target_frame"
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "implementation_scope",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "trusted_judgment_read_only"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_review"
+      },
+      {
+        "ref": "verification_boundary"
+      },
+      {
+        "ref": "evidence"
+      },
+      {
+        "ref": "judgment_rubric"
+      },
+      {
+        "ref": "severity_battery"
+      },
+      {
+        "ref": "reuse_gate_review"
+      },
+      {
+        "ref": "doc_review_duty",
+        "mount": [
+          "target:document"
+        ]
+      },
+      {
+        "ref": "impl_review_duty",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "scope_authority",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "altitude_review",
+        "mount": [
+          "target:document"
+        ]
+      },
+      {
+        "ref": "deferred_debt"
+      },
+      {
+        "ref": "adjudicated_rejections"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "Do your findings judge the changed text at its declared audience, genre, form, and editorial stage, preserving deliberate voice and ambiguity unless the delta demonstrates harm? Answer with the standard and any excess removed."
+      },
+      {
+        "id": "human_scale",
+        "text": "Does every finding stay within the changed text and its direct contextual effects, with a located passage and material reader or editorial consequence rather than a reopened whole-manuscript audit? Answer with how you checked the set."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output with concise textual or editorial evidence)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_compact"
+      },
+      {
+        "ref": "review_contract"
+      },
+      {
+        "ref": "review_blocked"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  },
+  "variants": {
+    "target_frame": {
+      "slice_unit": {
+        "text": [
+          "TASK: incremental literary review of the CURRENT WORK TREE against base revision {{delta_base_revision}} — every committed, staged, unstaged, and newly created change after that base — plus only their direct contextual effects. HEAD is not the baseline.",
+          "REPORT ONLY. Read adjacent passages where context may alter voice, continuity, pacing, meaning, or reader effect; do not reopen an exhaustive manuscript audit.",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE. The original mandate remains at {{goal_path}} for intent the skeleton does not settle.",
+          "STANDARD: {{reference_path}} — check only whether the delta contradicts the literary brief or established manuscript context."
+        ],
+        "variables": [
+          {
+            "name": "delta_base_revision",
+            "required": true,
+            "description": "Commit captured before the literary change began; compare the complete current work tree against it."
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "reference_path",
+            "required": true
+          }
+        ]
+      },
+      "skeleton_unit": {
+        "text": [
+          "TASK: incremental literary review of the CURRENT WORK TREE against base revision {{delta_base_revision}} — every committed, staged, unstaged, and newly created change after that base — plus only their direct effects. HEAD is not the baseline.",
+          "REPORT ONLY. Read the manuscript evidence necessary to assess changed planning decisions without re-reviewing the whole skeleton.",
+          "BASELINE: the operator's mandate at {{goal_path}} defines the literary milestone boundary.",
+          "STANDARD: {{goal_path}} — check only whether the delta contradicts the mandate or established manuscript evidence."
+        ],
+        "variables": [
+          {
+            "name": "delta_base_revision",
+            "required": true,
+            "description": "Commit captured before the literary change began; compare the complete current work tree against it."
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          }
+        ]
+      }
+    }
+  }
+}

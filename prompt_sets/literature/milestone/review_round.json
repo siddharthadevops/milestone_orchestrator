@@ -1,0 +1,175 @@
+{
+  "kind": "review_round",
+  "process": "milestone",
+  "description": "Report-only full literary critique of the assigned manuscript or editorial artifact against its mandate and reviewed brief.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "one_of": "target_frame"
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "implementation_scope",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "trusted_judgment_read_only"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_review"
+      },
+      {
+        "ref": "verification_boundary"
+      },
+      {
+        "ref": "evidence"
+      },
+      {
+        "ref": "judgment_rubric"
+      },
+      {
+        "ref": "severity_battery"
+      },
+      {
+        "ref": "reuse_gate_review"
+      },
+      {
+        "ref": "doc_review_duty",
+        "mount": [
+          "target:document"
+        ]
+      },
+      {
+        "ref": "impl_review_duty",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "scope_authority",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "altitude_review",
+        "mount": [
+          "target:document"
+        ]
+      },
+      {
+        "ref": "deferred_debt"
+      },
+      {
+        "ref": "adjudicated_rejections"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "Do your findings judge the artifact at its declared audience, genre, form, and editorial stage, preserving deliberate voice, ambiguity, rhythm, and unconventional form unless the text demonstrates harm? Answer with the standard and any taste-based excess removed."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put your findings next to the mandate and the manuscript: would the person who asked for this review recognize the grain and priorities they meant, or did a literal application of one lens turn harmless variation into work? Answer with a brief description of the grain and priorities they asked for, and whether that comparison made you keep, reword, or withdraw a finding."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output with concise textual or editorial evidence)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_compact"
+      },
+      {
+        "ref": "review_contract"
+      },
+      {
+        "ref": "review_blocked"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  },
+  "variants": {
+    "target_frame": {
+      "slice_unit": {
+        "text": [
+          "TASK: {{task}} REPORT ONLY.",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE. The original mandate remains at {{goal_path}}; consult it only when the skeleton leaves intent unsettled.",
+          "TARGET: {{target}}. Read the whole assigned artifact and the surrounding manuscript needed to judge context.",
+          "STANDARD: {{reference_path}} — the reviewed literary brief this target must satisfy. If that brief itself conflicts with the mandate or manuscript evidence, report the conflict as a finding rather than blocking."
+        ],
+        "variables": [
+          {
+            "name": "task",
+            "required": true,
+            "description": "For example, a full critique of the current structural revision or line-edited scene."
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "target",
+            "required": true,
+            "description": "The manuscript or editorial artifact under review, including surrounding text needed for context."
+          },
+          {
+            "name": "reference_path",
+            "required": true,
+            "description": "The reviewed literary brief or skeleton the target must satisfy."
+          }
+        ]
+      },
+      "skeleton_unit": {
+        "text": [
+          "TASK: {{task}} REPORT ONLY.",
+          "BASELINE: the operator's mandate at {{goal_path}} defines the literary milestone boundary.",
+          "TARGET: the skeleton at {{skeleton_path}}. Judge whether it fits the actual manuscript, sources, audience, genre, form, stage, and mandate; the manuscript itself is contextual evidence, not the review target.",
+          "COVERAGE",
+          "- Every mandate requirement belongs to a coherent unit, every unit serves the mandate,",
+          "  and dependencies that must be judged together remain together.",
+          "- Titles, structure, voice, character, continuity, pacing, themes, and readiness are",
+          "  considered where relevant, without automatically creating one slice per chapter or lens."
+        ],
+        "variables": [
+          {
+            "name": "task",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          }
+        ]
+      }
+    }
+  }
+}

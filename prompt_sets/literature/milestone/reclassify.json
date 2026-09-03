@@ -1,0 +1,147 @@
+{
+  "kind": "reclassify",
+  "process": "milestone",
+  "description": "Report-only editorial drift rater: rates one unresolved issue's risk to the next writer or editor and the cost of later correction.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: rate ONE finding's literary or editorial drift risk. REPORT ONLY —",
+          "edit nothing and review nothing else."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "trusted_judgment_read_only"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_review"
+      },
+      {
+        "text": [
+          "Rate the finding against {{artifact_path}} as it currently reads. Read the artifact,",
+          "the located manuscript passage, and enough surrounding text to test the claim; do not",
+          "take the ledger summary on trust.",
+          "",
+          "DRIFT RISK — probability that the next writer or editor is silently misled:",
+          "  low    no plausible reading changes the next editorial decision",
+          "  medium a careful reader resolves it from nearby context; a hasty one might not",
+          "  high   it could plausibly steer wording, structure, voice, character, continuity,",
+          "         pacing, theme, title, or readiness work in the wrong direction",
+          "  xhigh  it states a central manuscript fact, source limit, or binding constraint",
+          "         incorrectly, so later work would probably propagate the error",
+          "A visible omission that makes the next worker stop and ask is self-revealing and usually",
+          "rates lower than a confidently wrong statement that will be trusted.",
+          "",
+          "DRIFT DAMAGE — real cost if the mistaken reading guides later work:",
+          "  low    a small local wording or brief correction once noticed",
+          "  medium bounded revision within this unit, caught in its own editorial review",
+          "  high   correction propagates through dependent passages or already reviewed units",
+          "  xhigh  effectively irreversible or already published externally",
+          "Price actual correction, not fear. Self-revelation can reduce damage because the issue",
+          "is caught before prose is built on it. Deferred findings remain recorded for operator",
+          "review and do not vanish merely because they do not block this milestone.",
+          "",
+          "WHO BUILDS ON IT: {{builders}} — assess the reading that writer or editor would",
+          "actually make, not a hypothetical less capable reader.",
+          "",
+          "If the issue has a wider reader-facing, factual, continuity, or publication consequence",
+          "than its severity suggests, state that evidence in `reason`. Do not inflate a rating to",
+          "force revision or deflate it to be agreeable."
+        ],
+        "variables": [
+          {
+            "name": "artifact_path",
+            "required": true,
+            "description": "Workspace-relative path of the manuscript or editorial artifact being rated."
+          },
+          {
+            "name": "builders",
+            "required": true,
+            "description": "The next writers or editors who depend on the artifact, including their editorial role."
+          }
+        ]
+      },
+      {
+        "text": [
+          "FINDING (severity {{finding_severity}}, id {{finding_id}}):",
+          "{{finding_summary}}",
+          "In plain words: {{finding_plain}}",
+          "Smallest textual or editorial failure scenario: {{finding_example}}"
+        ],
+        "variables": [
+          {
+            "name": "finding_severity",
+            "required": true
+          },
+          {
+            "name": "finding_id",
+            "required": true
+          },
+          {
+            "name": "finding_summary",
+            "required": true,
+            "description": "The finding's summary and validity account, verbatim from the editorial ledger."
+          },
+          {
+            "name": "finding_plain",
+            "required": true,
+            "description": "The finding's stored plain-language sentence."
+          },
+          {
+            "name": "finding_example",
+            "required": true,
+            "description": "The finding's smallest stored reader-facing or editorial failure scenario."
+          }
+        ]
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "Does the rating use the manuscript's declared audience, genre, form, and editorial stage, or assume a stricter or more conventional standard? Answer with the standard used."
+      },
+      {
+        "id": "human_scale",
+        "text": "Is the rating proportionate to the real chance of misleading the next writer or editor and the actual correction cost, including propagation through dependent passages or publication? Answer with the concrete basis for both axes."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output with concise textual or editorial evidence)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "reclassify_result",
+        "text": [
+          "OUTPUT CONTRACT (mandatory)",
+          "Respond with EXACTLY ONE JSON object and nothing else — no prose outside it,",
+          "no markdown fences:",
+          "{\"status\": \"ok\",",
+          " \"kind\": \"reclassify\",",
+          " \"drift_risk\": \"low\" | \"medium\" | \"high\" | \"xhigh\",",
+          " \"drift_damage\": \"low\" | \"medium\" | \"high\" | \"xhigh\",",
+          " \"reason\": \"<one sentence: the concrete basis for BOTH ratings>\",",
+          " \"questions\": [{\"id\": \"<id>\", \"answer\": \"<the answer, backed by an explanation>\"}, ...]}",
+          "  (one entry per QUESTIONS id above; each answer must be non-empty; substance and length are not machine-judged)"
+        ],
+        "variables": []
+      }
+    ]
+  }
+}
