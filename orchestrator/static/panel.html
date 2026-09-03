@@ -619,11 +619,11 @@
     <p><b>Goal doc</b> — when a description doc path is set, the file's
       content becomes the goal, snapshotted at launch.</p>
     <p><b>Strategy profile</b> — governs the run's review depth.
-      <b>legacy</b> preserves the pre-reform review policy; <b>strict</b> /
-      <b>light</b> set separate documentation/implementation classification
-      floors and the risk threshold that chooses fixing versus tracked debt.
-      Every profile uses the same deterministic seal. No seed is pre-selected
-      on purpose — the choice is explicit.</p>
+      <b>strict</b> / <b>light</b> set separate
+      documentation/implementation classification floors and the risk
+      threshold that chooses fixing versus tracked debt. Every profile uses
+      the same deterministic seal. No seed is pre-selected on purpose — the
+      choice is explicit.</p>
     <p><b>Staffing and material</b> — the document, rigor and milestone theme
       used from launch. No seat, model or effort is chosen here. Change any
       of them from the run's Edit page; the next call uses the new value.</p>
@@ -651,7 +651,7 @@
     <datalist id="dl_doc"></datalist></div>
   <div class="field"><label>Strategy profile *</label>
     <select id="f_profile" onchange="onProfileChange()">
-      <option value="" disabled selected>— choose: strict / light / legacy —</option></select>
+      <option value="" disabled selected>— choose a strategy profile —</option></select>
     <div class="hint" id="f_profile_hint"></div></div>
   <div class="field"><label>Staffing document</label>
     <div class="pathrow">
@@ -4730,6 +4730,9 @@ function strategySupportText(decision) {
 function strategyIsCompatibility(profile) {
   return !!(profile && profile.profile && profile.profile.compat === true);
 }
+function selectableLaunchProfiles(profiles) {
+  return profiles.filter(profile => profile.name !== "legacy");
+}
 function strategyDescriptionText(description) {
   if (typeof description === "string") return description;
   const encoded = JSON.stringify(description);
@@ -4768,13 +4771,14 @@ async function loadProfiles() {
   strategyDecisions = loadedDecisions;
   launchProfilesError = loadError;
   strategyCatalogueLoading = false;
+  const selectableProfiles = selectableLaunchProfiles(launchProfiles);
   sel.innerHTML =
-    `<option value="" disabled${keep ? "" : " selected"}>— choose: strict / light / legacy —</option>` +
-    launchProfiles.map(p => `<option value="${esc(p.name)}">${esc(profileLabel(p))}</option>`).join("");
-  sel.disabled = !!launchProfilesError || !launchProfiles.length;
+    `<option value="" disabled${keep ? "" : " selected"}>— choose a strategy profile —</option>` +
+    selectableProfiles.map(p => `<option value="${esc(p.name)}">${esc(profileLabel(p))}</option>`).join("");
+  sel.disabled = !!launchProfilesError || !selectableProfiles.length;
   // No seed is pre-selected: an explicit choice is required. A prior
   // in-progress choice survives a successful reload only while it exists.
-  sel.value = launchProfiles.some(p => p.name === keep) ? keep : "";
+  sel.value = selectableProfiles.some(p => p.name === keep) ? keep : "";
   onProfileChange();
   if (document.getElementById("strategyprofilesdlg").open)
     renderStrategyProfiles();
@@ -5181,11 +5185,11 @@ async function submitForm() {
   }
   const profile = document.getElementById("f_profile").value;
   if (!profile) {
-    err.textContent =
-      "choose a strategy profile (legacy preserves the pre-reform review posture)";
+    err.textContent = "choose a strategy profile";
     return;
   }
-  if (!launchProfiles.some(candidate => candidate.name === profile)) {
+  if (!selectableLaunchProfiles(launchProfiles).some(
+      candidate => candidate.name === profile)) {
     err.textContent = "choose a strategy profile from the current catalogue";
     return;
   }

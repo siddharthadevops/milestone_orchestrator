@@ -2651,6 +2651,30 @@ class StrategyConfiguratorPanelTest(ServiceApiTest):
         self.assertIn("if (strategyEditor.compatibility) return content;", source)
         self.assertIn("Compatibility semantics — not composable", source)
 
+    def test_legacy_is_not_selectable_at_launch(self):
+        _, listed = self.request_json("GET", "/api/profiles")
+        self.assertIn("legacy", [p["name"] for p in listed["profiles"]])
+
+        panel = self.panel_source()
+        source = self.strategy_source()
+        self.assertIn(
+            'return profiles.filter(profile => profile.name !== "legacy");',
+            source,
+        )
+        self.assertIn(
+            "const selectableProfiles = selectableLaunchProfiles(launchProfiles);",
+            source,
+        )
+        self.assertIn("selectableProfiles.map(p =>", source)
+        self.assertIn("psProfiles = launchProfiles.slice();", source)
+        submit = panel[
+            panel.index("async function submitForm"):
+            panel.index("/* ---- launch binding")
+        ]
+        self.assertIn("selectableLaunchProfiles(launchProfiles).some(",
+                      submit)
+        self.assertNotIn("strict / light / legacy", source)
+
     def test_strategy_surfaces_mark_reserved_values_non_operative(self):
         _, catalogue = self.request_json("GET", "/api/profiles")
         reserved = [d for d in catalogue["decisions"]
@@ -2752,7 +2776,7 @@ class StrategyConfiguratorPanelTest(ServiceApiTest):
         self.assertIn("if (strategyCatalogueLoading)", submit)
         self.assertIn("if (launchProfilesError)", submit)
         self.assertIn(
-            "launchProfiles.some(candidate => candidate.name === profile)",
+            "selectableLaunchProfiles(launchProfiles).some(",
             submit,
         )
 
