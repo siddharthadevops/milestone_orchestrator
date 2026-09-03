@@ -21,8 +21,8 @@ Por tanto, la respuesta proporcionada al encargo es **no cambiar ahora el set**.
 Sí quedan dos tipos de fallo que observar: una entrega de autor que compare sin
 tomar la decisión pedida y un hallazgo de revisión que no sobreviva a una
 contralectura plausible. No se elige ahora su punto de montaje: el primer caso
-real debe identificar la ruta que falló y activar una sola prueba, sin ids
-nuevos.
+real debe identificar la ruta y la entrega afectadas; solo entonces se elige el
+mecanismo mínimo que permita probar la cláusula sin alterar otras superficies.
 
 ## Qué hacen —y qué no hacen— las preguntas de salida
 
@@ -61,7 +61,7 @@ ceremonia.
 
 | Superficie | Cobertura actual | Señal que justificaría actuar | Cambio mínimo que probar |
 | --- | --- | --- | --- |
-| Entrega de autor (`standalone@*` o `implement`) | Ambos ordenan realizar el trabajo; `implement` además contrasta la entrega con el brief y el efecto buscado. | Un encargo exige escoger, priorizar o dictaminar y la entrega real solo compara opciones. | Probar «¿La entrega ejecuta el acto pedido o solo describe opciones? Señala dónde lo resuelve» únicamente en `turn_human_scale` o `human_scale` de la ruta que produjo el fallo. |
+| Entrega de autor (`standalone@*` o `implement`) | Ambos ordenan realizar el trabajo; `implement` además contrasta la entrega con el brief y el efecto buscado. | Un encargo exige escoger, priorizar o dictaminar y la entrega real solo compara opciones. | Probar «¿La entrega ejecuta el acto pedido o solo describe opciones? Señala dónde lo resuelve» únicamente sobre la entrega afectada; decidir el montaje después de localizar el caso. |
 | `review_round` | Cada hallazgo necesita estándar, pasaje, daño material y alternativa proporcionada. | Un hallazgo de gusto sobrevive porque el revisor no probó una lectura plausible del pasaje. | Añadir la contralectura al `human_scale` de esta ruta, reutilizando la falsificación ya usada por el fixer. |
 | `delta_review` | Igual que revisión, pero limitado al cambio y sus efectos directos. | El mismo fallo aparece específicamente al revisar un delta. | Aplicar allí la misma cláusula; no tocar la revisión completa por anticipado. |
 | `draft_skeleton`, `draft_slice_note`, `reclassify`, `fix_findings` | Sus preguntas homónimas gobiernan planificación, tamaño, rating o resolución de una cola. | Ninguna señal actual. | Ningún cambio: no extender a ellas una recomendación por compartir id. |
@@ -69,7 +69,9 @@ ceremonia.
 
 La tabla localiza solo las dos hipótesis del informe; no inventaría todas las
 rutas. Incluir `standalone@*` en la primera fila evita prejuzgar dónde estaría
-un fallo futuro, no convierte su batería de dos preguntas en una carencia.
+un fallo futuro, no convierte su batería de dos preguntas en una carencia. Sus
+preguntas de turno son compartidas y hoy no permiten aislarla; resolver esa
+topología antes de observar el caso sería especificar maquinaria sin víctima.
 
 La contralectura no debe colgar de `environment_fit`: esa pregunta preserva
 audiencia, etapa, voz, ambigüedad y forma frente a la convencionalización. El
