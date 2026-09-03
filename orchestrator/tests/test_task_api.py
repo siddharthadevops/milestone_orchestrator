@@ -15,6 +15,7 @@ import urllib.request
 from unittest import mock
 
 from orchestrator import access, brainstorming_lifecycle, brainstorming_tasks
+from orchestrator import contracts
 from orchestrator import interpreter, profiles, registry, runners, service
 from orchestrator import staffing
 from orchestrator import state as st
@@ -504,6 +505,29 @@ class TaskApiTest(unittest.TestCase):
                          ["task"], record)
         release.set()
         self.assertEqual(self.wait_record(record["id"])["result"]["status"], "success")
+
+    def test_direct_reviewed_detail_survives_missing_or_corrupt_activity(self):
+        order = self.order("reviewed_task")
+        order["configuration"] = tasks.resolve_reviewed_task_configuration(
+            {"task_kind": contracts.KIND_IMPLEMENT}, defaults={}
+        )
+        record = task_api.StandaloneTaskStore(self.home).admit(
+            order, {}, self.primary
+        )
+
+        for corrupt in (False, True):
+            if corrupt:
+                path = task_api.reviewed_state_path(self.home, record["id"])
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write("{not-json")
+            status, body = self.request(
+                "GET", "/api/tasks/%s" % record["id"]
+            )
+            self.assertEqual(status, 200, body)
+            self.assertEqual(body["task"], record)
+            self.assertEqual(body["reviewed_task"]["task_kind"], "implement")
+            self.assertIsNone(body["reviewed_task"]["activity"])
 
     def test_direct_worker_preserves_raw_request_result_and_accounting(self):
         release = threading.Event()

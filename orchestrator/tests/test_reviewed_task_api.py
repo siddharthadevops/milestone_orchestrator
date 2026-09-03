@@ -423,12 +423,32 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
                     {"production_result", "review_evidence", "gate_commit"},
                 )
                 self.assertTrue(native["gate_commit"])
+                status, detail = self.request(
+                    "GET", "/api/tasks/%s" % terminal["id"]
+                )
+                self.assertEqual(status, 200, detail)
+                reviewed_view = detail["reviewed_task"]
+                self.assertEqual(reviewed_view["task_kind"], kind)
+                self.assertEqual(reviewed_view["status"], "success")
+                unit = reviewed_view["activity"]["unit"]
+                self.assertEqual(unit["source_task_id"], terminal["id"])
+                self.assertEqual(unit["status"], "sealed")
+                self.assertTrue(unit["drafts"])
+                self.assertTrue(unit["rounds"])
         records = task_api.StandaloneTaskStore(self.home).records()
         self.assertEqual(len(records), before + len(kinds))
         self.assertTrue(all(
             record["order"]["task_executor"] == "reviewed_task"
             for record in records[before:]
         ))
+        status, sidebar = self.request(
+            "GET", "/api/tasks?scope=direct&limit=10"
+        )
+        self.assertEqual(status, 200, sidebar)
+        self.assertEqual(
+            {row["record"]["id"] for row in sidebar["rows"]},
+            {record["id"] for record in records[before:]},
+        )
 
     def test_brainstorming_jobs_reach_the_same_result_without_size_control(self):
         for index, kind in enumerate(("draft_slice_note", "implement")):

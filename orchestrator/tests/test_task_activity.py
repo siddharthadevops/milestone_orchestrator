@@ -221,6 +221,81 @@ class TaskActivityProjectionTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.status, 404)
 
+    def test_sidebar_lists_only_top_level_tasks_before_applying_limit(self):
+        parent_order = self.order(executor="deep_task")
+        parent_order["configuration"] = tasks.resolve_deep_task_configuration(
+            {}, defaults={}
+        )
+        parent_order["staffing_session"] = None
+        store = task_api.StandaloneTaskStore(self.home)
+        parent = store.admit(parent_order, {}, self.workspace)
+        direct_review = store.admit(
+            tasks.deep_documentation_order(parent), {}, self.workspace
+        )
+        child_review = store.admit_related_locked(
+            parent["id"], "documentation", None,
+            tasks.deep_documentation_order(parent), {}, self.workspace,
+        )
+        for record in (parent, direct_review, child_review):
+            store.record_result(record["id"], self.terminal())
+
+        rows = service.visible_direct_task_rows(
+            self.home, {"admin": True}
+        )
+        self.assertEqual(
+            [row["record"]["id"] for row in rows],
+            [direct_review["id"], parent["id"]],
+        )
+        limited = service.visible_direct_task_rows(
+            self.home, {"admin": True}, limit=1
+        )
+        self.assertEqual(
+            [row["record"]["id"] for row in limited],
+            [direct_review["id"]],
+        )
+        self.assertEqual(
+            {record["id"] for record in service.visible_tasks(
+                self.home, {"admin": True}
+            )},
+            {parent["id"], direct_review["id"], child_review["id"]},
+        )
+        self.assertEqual(
+            service.read_task(
+                self.home, {"admin": True}, child_review["id"]
+            )["parent"]["task_id"],
+            parent["id"],
+        )
+
+    def test_direct_reviewed_activity_preserves_part_and_normalizes_billing(self):
+        order = self.order(executor="reviewed_task")
+        order["configuration"] = tasks.resolve_reviewed_task_configuration(
+            {"task_kind": contracts.KIND_IMPLEMENT}, defaults={}
+        )
+        store = task_api.StandaloneTaskStore(self.home)
+        record = store.admit(order, {}, self.workspace)
+        path = task_api.ensure_reviewed_state(
+            self.home, record,
+            {"families_order": ["codex", "claude"], "model_defaults": {}},
+        )
+        lifecycle = st.load(path)
+        target = next(
+            unit for unit in lifecycle["units"]
+            if st.unit_key(unit) == lifecycle["reviewed_task"]["unit"]
+        )
+        target["implementation_cut"] = {
+            "part": "a", "next_part": "b",
+            "cut_scope": "coherent first part",
+            "remaining_scope": "remaining second part",
+        }
+        lifecycle["config"]["billing"] = True
+        st.save(path, lifecycle)
+
+        view = service.direct_reviewed_task_view(
+            self.home, store.record(record["id"])
+        )
+        self.assertEqual(view["activity"]["unit"]["part"], "a")
+        self.assertEqual(view["billing"], {})
+
     def test_direct_deep_task_projects_ordered_reviewed_child_activity(self):
         parent_order = self.order(executor="deep_task")
         parent_order["configuration"] = tasks.resolve_deep_task_configuration(
@@ -317,6 +392,8 @@ class TaskActivityProjectionTests(unittest.TestCase):
                 decoy = copy.deepcopy(target)
                 decoy["unit"] = "slice_doc-99"
                 summary["units"].insert(0, decoy)
+            if implementation_b["id"] in path:
+                summary["billing"] = True
             return summary
 
         with mock.patch.object(
@@ -324,6 +401,12 @@ class TaskActivityProjectionTests(unittest.TestCase):
         ):
             view = service.direct_deep_task_view(
                 self.home, {"admin": True}, parent, Host()
+            )
+            reviewed_view = service.direct_reviewed_task_view(
+                self.home, store.record(implementation_a["id"]), Host()
+            )
+            corrupt_view = service.direct_reviewed_task_view(
+                self.home, store.record(implementation_z["id"]), Host()
             )
         self.assertEqual(store.records(), before)
         self.assertEqual(
@@ -349,6 +432,16 @@ class TaskActivityProjectionTests(unittest.TestCase):
         )
         self.assertIsNone(by_id[implementation_z["id"]]["activity"])
         self.assertIsNone(by_id[implementation_aa["id"]]["activity"])
+        self.assertEqual(reviewed_view["task_kind"], contracts.KIND_IMPLEMENT)
+        self.assertEqual(
+            reviewed_view["activity"]["unit"],
+            by_id[implementation_a["id"]]["activity"]["unit"],
+        )
+        self.assertEqual(reviewed_view["activity"]["process"], "running")
+        self.assertIsNone(corrupt_view["activity"])
+        self.assertIsInstance(view["billing"], dict)
+        for forbidden in ("goal", "events", "order", "result", "native_result"):
+            self.assertNotIn(forbidden, reviewed_view)
         for child, note in (
             (implementation_a, "part a evidence"),
             (implementation_b, "part b evidence"),

@@ -1413,7 +1413,7 @@ function openSession(id) {
   selectedSession = id;
   selected = null;
   selectedTask = null; taskPageRunId = null; lastTaskPage = null;
-  lastTaskDeep = null;
+  lastTaskPipeline = null;
   runView = "main";
   sessionView = "main";
   goalOpen = false;
@@ -2749,7 +2749,7 @@ function select(id) {
   pendingLanding = "last-chip";
   selectedSession = null; lastSessionView = null;
   selectedTask = null; taskPageRunId = null; lastTaskPage = null;
-  lastTaskDeep = null;
+  lastTaskPipeline = null;
   document.body.classList.add("m-detail");  // mobile: swap to the detail page
   refreshRuns(); refreshDetail();
 }
@@ -2828,7 +2828,7 @@ function mobileBack() {
   selected = null;
   selectedSession = null;
   selectedTask = null; taskPageRunId = null; lastTaskPage = null;
-  lastTaskDeep = null;
+  lastTaskPipeline = null;
   lastSessionView = null;
   document.getElementById("detail").innerHTML =
     '<div class="empty">Nothing selected.</div>';
@@ -3208,7 +3208,7 @@ function pipelineGitLink(u, taskId = null) {
     onclick="showCommit('${esc(u.unit)}'${evidenceTaskArg(taskId)})">${
       wip ? "wip " : ""}${esc(sha)}</span>`;
 }
-function pipelineUnitRow(u, activity, running, scopeKey) {
+function pipelineUnitRow(u, activity, running, scopeKey, labelOverride = null) {
   const time = u.work_duration_s != null
     ? ` · ${fmtDHMS(u.work_duration_s)}` : "";
   const tokens = fmtTokenUsage(
@@ -3225,12 +3225,12 @@ function pipelineUnitRow(u, activity, running, scopeKey) {
     : (tokens ? ` · ${esc(tokens)}` : "");
   const slicePhase = u.unit.match(/^slice_(doc|impl)-\d+(?:-[a-z]+)?$/);
   const phase = u.unit === "skeleton" || slicePhase;
-  const label = u.unit === "skeleton"
+  const label = labelOverride || (u.unit === "skeleton"
     ? "Milestone architecture"
     : slicePhase
       ? (slicePhase[1] === "doc" ? "Documentation"
         : `Implementation${u.part ? ` ${u.part}` : ""}`)
-      : u.unit;
+      : u.unit);
   return `
   <div class="unit${phase ? " phase" : ""}">
     <div class="unit-head"><span class="unit-name">${esc(label)}</span>
@@ -5324,7 +5324,7 @@ function launchBinding() {
 let selectedTask = null;
 let taskPageRunId = null;
 let lastTaskPage = null;
-let lastTaskDeep = null;
+let lastTaskPipeline = null;
 let lastTaskPageSession = null;
 let taskPageSeq = 0;
 let taskStopping = false;
@@ -5406,7 +5406,38 @@ function deepTaskPipeline(view) {
   );
   return `<div class="card"><h3>Pipeline</h3>${rendered.html}</div>`;
 }
-function renderTaskPage(record, admittedAt, deepTask = null) {
+function reviewedTaskPipeline(view) {
+  if (!view) return "";
+  lastBilling = view.billing || null;
+  lastWebBase = view.commit_web_base || null;
+  const activity = view.activity || null;
+  const unit = activity && activity.unit ? {...activity.unit} : null;
+  const scopeKey = `task:${selectedTask}:reviewed`;
+  const status = view.status && view.status !== "open"
+    ? view.status : (unit ? unit.status : "pending");
+  let rows = pipelineCategoryRow(
+    "Reviewed task", "", status,
+    unit ? unit.work_duration_s : null,
+    unit ? unit.work_token_usage : null,
+    unit ? unit.work_token_usage_partial : false,
+    "slice-cat",
+    unit ? unit.work_cost : null,
+    unit ? unit.work_cost_partial : false,
+    scopeKey
+  );
+  if (unit) {
+    unit.source_task_id = unit.source_task_id || selectedTask;
+    unit.activity = activity;
+    unit.running = activity.process === "running";
+    const label = view.task_kind === "complete_verification"
+      ? "Complete verification" : null;
+    rows += pipelineUnitRow(
+      unit, activity, unit.running, scopeKey, label
+    );
+  }
+  return `<div class="card"><h3>Pipeline</h3>${rows}</div>`;
+}
+function renderTaskPage(record, admittedAt, taskPipeline = null) {
   const result = record.result;
   const running = result === null || result === undefined;
   const executor = taskExecutor(record);
@@ -5469,7 +5500,9 @@ function renderTaskPage(record, admittedAt, deepTask = null) {
     html += `<div class="failure">${esc(taskStopNotice)}</div>`;
   if (!running && result.reason)
     html += `<div class="failure">${esc(result.reason)}</div>`;
-  if (executor === "deep_task") html += deepTaskPipeline(deepTask);
+  if (executor === "deep_task") html += deepTaskPipeline(taskPipeline);
+  if (executor === "reviewed_task")
+    html += reviewedTaskPipeline(taskPipeline);
   const ctxRows = [];
   if (context.brief) ctxRows.push(["brief", context.brief]);
   if (context.task_kind) ctxRows.push(["kind", context.task_kind]);
@@ -5508,7 +5541,7 @@ function paintTaskPage() {
   const wasOpen = Array.from(det.querySelectorAll("details"))
     .map(node => node.open);
   det.innerHTML = renderTaskPage(
-    lastTaskPage, listed ? listed.admitted_at : null, lastTaskDeep
+    lastTaskPage, listed ? listed.admitted_at : null, lastTaskPipeline
   );
   Array.from(det.querySelectorAll("details")).forEach((node, i) => {
     if (wasOpen[i]) node.open = true;
@@ -5551,7 +5584,7 @@ async function deleteSelectedTask(event) {
   }
   taskDeleting = false;
   selectedTask = null; taskPageRunId = null; lastTaskPage = null;
-  lastTaskDeep = null;
+  lastTaskPipeline = null;
   document.body.classList.remove("m-detail");
   document.getElementById("detail").innerHTML =
     '<div class="empty">Nothing selected.</div>';
@@ -5568,7 +5601,7 @@ async function refreshTaskPage() {
       (runId ? "?run_id=" + encodeURIComponent(runId) : ""));
     if (seq !== taskPageSeq || id !== selectedTask) return;
     lastTaskPage = data.task;
-    lastTaskDeep = data.deep_task || null;
+    lastTaskPipeline = data.deep_task || data.reviewed_task || null;
     if (data.session_id) lastTaskPageSession = data.session_id;
     if (data.task.result !== null) taskStopping = false;
     const det = document.getElementById("detail");
@@ -5589,7 +5622,7 @@ function openTask(taskId, runId) {
   selectedTask = taskId;
   taskPageRunId = runId || null;
   lastTaskPage = null;
-  lastTaskDeep = null;
+  lastTaskPipeline = null;
   lastTaskPageSession = null;
   taskStopping = false;
   taskStopNotice = "";

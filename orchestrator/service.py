@@ -4694,15 +4694,20 @@ def visible_tasks(home, who):
 
 
 def visible_direct_task_rows(home, who, limit=None):
-    """Sidebar listing: standalone tasks only, newest admission first.
+    """Sidebar listing: top-level standalone tasks, newest admission first.
 
-    Each row is `{admitted_at, record}`; milestone tasks are not listed here
-    (they live inside their run). `limit` bounds each project's page from
-    the newest end (running tasks always included); a cursor-based
-    continuation is left for a later step, the store already lists by
-    prefix with cursor and limit."""
+    Reviewed children composed by a deep task live in that parent's pipeline,
+    not beside it as duplicate operator-launched work.  Their durable relation
+    remains available through the canonical task reads and evidence routes.
+    `limit` bounds each project's page from the newest end (running top-level
+    tasks always included); a cursor-based continuation is left for a later
+    step, the store already lists by prefix with cursor and limit."""
     allowed = _allowed_task_projects(home, who)
     rows = task_api.StandaloneTaskStore(home).documents()
+    rows = [
+        row for row in rows
+        if not _is_deep_reviewed_child(row["record"])
+    ]
     if allowed is not None:
         rows = [
             row for row in rows if _task_project(row["record"]) in allowed
@@ -4723,6 +4728,20 @@ def visible_direct_task_rows(home, who, limit=None):
             if not running:
                 seen[project] = count + 1
     return kept
+
+
+def _is_deep_reviewed_child(record):
+    """Whether one standalone record belongs inside a deep-task pipeline."""
+    if tasks.stored_task_executor(
+        (record.get("order") or {}).get("task_executor")
+    ) != "reviewed_task":
+        return False
+    relation = record.get("parent")
+    return (
+        isinstance(relation, dict)
+        and bool(relation.get("task_id"))
+        and relation.get("phase") in ("documentation", "implementation")
+    )
 
 
 def _sidebar_task_row(row):
@@ -4852,6 +4871,81 @@ def _task_host_active(host, task_id):
         return False
 
 
+def direct_reviewed_task_view(home, record, host=None):
+    """Best-effort pipeline activity for one authorized reviewed task."""
+    if tasks.stored_task_executor(
+        (record.get("order") or {}).get("task_executor")
+    ) != "reviewed_task":
+        raise ApiError(404, "task has no reviewed activity")
+    result = record.get("result")
+    configuration = (record.get("order") or {}).get("configuration") or {}
+    view = {
+        "status": "open" if result is None else result.get("status"),
+        "task_kind": configuration.get("task_kind"),
+        "activity": None,
+        "billing": {},
+        "commit_web_base": None,
+    }
+    workspace = None
+    try:
+        workspace = task_api._workspace(record)
+    except Exception:
+        pass
+    state_path = task_api.reviewed_state_path(home, record["id"])
+    try:
+        lifecycle = st.load(state_path)
+        target_unit = (lifecycle.get("reviewed_task") or {}).get("unit")
+        if not isinstance(target_unit, str) or not target_unit:
+            raise ValueError("reviewed task target unit is unavailable")
+        summary = load_summary(state_path, model_profiles_home=home)
+        unit = next(
+            item for item in summary.get("units") or []
+            if item.get("unit") == target_unit
+        )
+        unit = copy.deepcopy(unit)
+        if result is not None:
+            unit["status"] = (
+                "sealed" if result.get("status") == "success" else "failure"
+            )
+        relation = record.get("parent") or {}
+        if relation.get("part") is not None:
+            unit["part"] = relation["part"]
+        unit["source_task_id"] = record["id"]
+        active = _task_host_active(host, record["id"])
+        in_flight = read_in_flight({"state_path": state_path}, active)
+        if (
+            in_flight
+            and not in_flight.get("model")
+            and in_flight.get("family")
+        ):
+            defaults = summary.get("model_defaults") or {}
+            in_flight["model"] = (
+                defaults.get(in_flight["family"]) or {}
+            ).get("model")
+        view["activity"] = {
+            "process": "running" if active else "stopped",
+            "current_unit": summary.get("current_unit"),
+            "current_unit_status": summary.get("current_unit_status"),
+            "current_family": summary.get("current_family"),
+            "current_model": summary.get("current_model"),
+            "in_flight": in_flight,
+            "unit": unit,
+        }
+        billing = summary.get("billing")
+        view["billing"] = billing if isinstance(billing, dict) else {}
+        workspace = workspace or summary.get("workspace")
+    except Exception:
+        # Task identity/result remain readable even when disposable activity
+        # state has not appeared yet or can no longer be projected.
+        pass
+    if workspace:
+        try:
+            view["commit_web_base"] = commit_web_base(workspace)
+        except Exception:
+            pass
+    return view
+
+
 def direct_deep_task_view(home, who, parent, host=None):
     """Best-effort reviewed-child activity for one direct deep task.
 
@@ -4870,6 +4964,7 @@ def direct_deep_task_view(home, who, parent, host=None):
         workspace = task_api._workspace(parent)
     except Exception:
         pass
+    web_base = commit_web_base(workspace) if workspace else None
     for document in task_api.StandaloneTaskStore(home).documents():
         child = document["record"]
         relation = child.get("parent") or {}
@@ -4884,62 +4979,28 @@ def direct_deep_task_view(home, who, parent, host=None):
         phase = relation.get("phase")
         if phase not in ("documentation", "implementation"):
             continue
-        result = child.get("result")
+        try:
+            reviewed = direct_reviewed_task_view(home, child, host)
+        except Exception:
+            result = child.get("result")
+            reviewed = {
+                "status": (
+                    "open" if result is None else result.get("status")
+                ),
+                "activity": None,
+                "billing": {},
+                "commit_web_base": None,
+            }
         view = {
             "id": child["id"],
             "admitted_at": document["admitted_at"],
             "phase": phase,
             "part": relation.get("part"),
-            "status": "open" if result is None else result.get("status"),
-            "activity": None,
+            "status": reviewed["status"],
+            "activity": reviewed["activity"],
         }
-        state_path = task_api.reviewed_state_path(home, child["id"])
-        try:
-            lifecycle = st.load(state_path)
-            target_unit = (lifecycle.get("reviewed_task") or {}).get("unit")
-            if not isinstance(target_unit, str) or not target_unit:
-                raise ValueError("reviewed task target unit is unavailable")
-            summary = load_summary(state_path, model_profiles_home=home)
-            unit = next(
-                item for item in summary.get("units") or []
-                if item.get("unit") == target_unit
-            )
-            unit = copy.deepcopy(unit)
-            if result is not None:
-                unit["status"] = (
-                    "sealed" if result.get("status") == "success"
-                    else "failure"
-                )
-            unit["part"] = relation.get("part")
-            unit["source_task_id"] = child["id"]
-            active = _task_host_active(host, child["id"])
-            in_flight = read_in_flight(
-                {"state_path": state_path}, active
-            )
-            if (
-                in_flight
-                and not in_flight.get("model")
-                and in_flight.get("family")
-            ):
-                defaults = summary.get("model_defaults") or {}
-                in_flight["model"] = (
-                    defaults.get(in_flight["family"]) or {}
-                ).get("model")
-            view["activity"] = {
-                "process": "running" if active else "stopped",
-                "current_unit": summary.get("current_unit"),
-                "current_unit_status": summary.get("current_unit_status"),
-                "current_family": summary.get("current_family"),
-                "current_model": summary.get("current_model"),
-                "in_flight": in_flight,
-                "unit": unit,
-            }
-            billing.update(summary.get("billing") or {})
-            workspace = workspace or summary.get("workspace")
-        except Exception:
-            # Presentation is explicitly best-effort.  Keep the canonical
-            # child in the sequence and let the panel show a pending row.
-            pass
+        billing.update(reviewed["billing"])
+        web_base = web_base or reviewed["commit_web_base"]
         children.append(view)
     children.sort(key=lambda child: (
         0 if child["phase"] == "documentation" else 1,
@@ -4953,7 +5014,7 @@ def direct_deep_task_view(home, who, parent, host=None):
         ),
         "children": children,
         "billing": billing,
-        "commit_web_base": commit_web_base(workspace) if workspace else None,
+        "commit_web_base": web_base,
     }
 
 
@@ -5086,13 +5147,20 @@ def make_handler(home, task_host=None):
                         )
                         payload = {"ok": True, "task": record}
                         if query.get("run_id") is None:
-                            if tasks.stored_task_executor(
+                            executor = tasks.stored_task_executor(
                                 (record.get("order") or {}).get(
                                     "task_executor"
                                 )
-                            ) == "deep_task":
+                            )
+                            if executor == "deep_task":
                                 payload["deep_task"] = direct_deep_task_view(
                                     home, who, record, task_host
+                                )
+                            elif executor == "reviewed_task":
+                                payload["reviewed_task"] = (
+                                    direct_reviewed_task_view(
+                                        home, record, task_host
+                                    )
                                 )
                             session_id = task_api.task_session_id(
                                 home, record, task_host

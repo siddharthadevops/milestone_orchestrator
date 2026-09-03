@@ -328,7 +328,7 @@ class TaskPanelTests(unittest.TestCase):
         )
 
         detail = re.search(
-            r"function renderTaskPage\(record, admittedAt, deepTask = null\) "
+            r"function renderTaskPage\(record, admittedAt, taskPipeline = null\) "
             r"\{(.*?)\n\}",
             self.panel,
             re.S,
@@ -341,7 +341,7 @@ class TaskPanelTests(unittest.TestCase):
 
     def test_task_detail_preserves_native_result_and_accounting(self):
         detail = re.search(
-            r"function renderTaskPage\(record, admittedAt, deepTask = null\) "
+            r"function renderTaskPage\(record, admittedAt, taskPipeline = null\) "
             r"\{(.*?)\n\}",
             self.panel,
             re.S,
@@ -361,13 +361,13 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn("opaque TaskExecutor output", detail)
         self.assertNotIn("actual staffing", detail.lower())
 
-    def test_task_request_and_deep_task_reuse_existing_presenters(self):
+    def test_task_request_and_reviewed_pipelines_reuse_existing_presenters(self):
         self.assertIn("-webkit-line-clamp: 2", self.panel)
         self.assertIn("clamp.scrollHeight > clamp.clientHeight + 1", self.panel)
         self.assertIn('onclick="openRequest()"', self.panel)
         self.assertIn("mdRender(fullRequestText)", self.panel)
         detail = re.search(
-            r"function renderTaskPage\(record, admittedAt, deepTask = null\) "
+            r"function renderTaskPage\(record, admittedAt, taskPipeline = null\) "
             r"\{(.*?)\n\}",
             self.panel,
             re.S,
@@ -376,7 +376,9 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn("requestTitle(fullRequestText)", detail)
         self.assertNotIn('<div class="card"><h3>Request</h3>', detail)
         self.assertIn('executor === "deep_task"', detail)
-        self.assertIn("deepTaskPipeline(deepTask)", detail)
+        self.assertIn("deepTaskPipeline(taskPipeline)", detail)
+        self.assertIn('executor === "reviewed_task"', detail)
+        self.assertIn("reviewedTaskPipeline(taskPipeline)", detail)
 
         shared = re.search(
             r"function renderSlicePipeline\(slice, units, activity, running, "
@@ -399,11 +401,26 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn("unit.part = child.part", deep)
         self.assertIn('label: "Deep task"', deep)
         self.assertIn("renderSlicePipeline(", deep)
-        self.assertIn("lastTaskDeep", self.panel)
-        self.assertIn("data.deep_task || null", self.panel)
+        self.assertIn("lastTaskPipeline", self.panel)
+        self.assertIn(
+            "data.deep_task || data.reviewed_task || null", self.panel
+        )
+
+        reviewed = re.search(
+            r"function reviewedTaskPipeline\(view\) \{(.*?)\n\}",
+            self.panel,
+            re.S,
+        ).group(1)
+        self.assertIn("pipelineCategoryRow(", reviewed)
+        self.assertIn("pipelineUnitRow(", reviewed)
+        self.assertIn("unit.source_task_id", reviewed)
+        self.assertIn('activity.process === "running"', reviewed)
+        self.assertIn('view.task_kind === "complete_verification"', reviewed)
+        self.assertNotIn("renderSlicePipeline(", reviewed)
 
         unit_row = re.search(
-            r"function pipelineUnitRow\(u, activity, running, scopeKey\) "
+            r"function pipelineUnitRow\(u, activity, running, scopeKey, "
+            r"labelOverride = null\) "
             r"\{(.*?)\n\}",
             self.panel,
             re.S,
