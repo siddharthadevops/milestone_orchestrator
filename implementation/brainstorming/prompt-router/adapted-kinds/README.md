@@ -793,6 +793,14 @@ captured evidence it was pruned from.
     is not reinterpreted. This supersedes the non-voting/questioner-never-ready
     parts of decisions 45 and 68.
 
+80. **Skeleton slices serve faithful goal delivery, not a line target**
+    (operator ruling, 2026-09-04): `draft_skeleton` defines a slice as a
+    coherent unit that merits its own design and usefully advances the complete
+    milestone goal without scope drift. The default skeleton's ~500-line
+    planning aim is removed, and literature adopts the same slice definition.
+    Live implementation metering and sequential parts remain unchanged. This
+    supersedes the skeleton-sizing portion of decision 23.
+
 ## Content observations left untouched (not adaptation's call)
 
 - The Dante questioner keeps its fiction wrapper and an all-caps MANDATORY line.

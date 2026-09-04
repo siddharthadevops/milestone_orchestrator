@@ -1554,40 +1554,22 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                               {'text': ['SKELETON '
                                                                         'SCOPE',
                                                                         '- A slice is '
-                                                                        'the smallest '
-                                                                        'reviewable, '
-                                                                        'approvable, '
-                                                                        'and closeable',
-                                                                        '  delivery '
-                                                                        'unit. Keep '
-                                                                        'slices '
-                                                                        'narrow: one '
-                                                                        'clear intent, '
-                                                                        'one',
-                                                                        '  reviewable '
-                                                                        'surface, no '
-                                                                        'unrelated '
-                                                                        'scope.',
-                                                                        '- Plan slices '
-                                                                        'so the '
-                                                                        'expected '
-                                                                        'change diff '
-                                                                        'aims to stay '
-                                                                        'under about',
-                                                                        '  500 changed '
-                                                                        'lines where '
-                                                                        'practical. '
-                                                                        'Generated, '
-                                                                        'lockfile, and',
-                                                                        '  mechanical '
-                                                                        'changes do '
-                                                                        'not count '
-                                                                        'toward that '
-                                                                        'aim. Do not '
-                                                                        'split',
-                                                                        '  cohesive '
-                                                                        'work '
-                                                                        'artificially.',
+                                                                        'a coherent '
+                                                                        'unit of work '
+                                                                        'that merits '
+                                                                        'its own design '
+                                                                        'and provides',
+                                                                        '  a useful '
+                                                                        'boundary for '
+                                                                        'advancing the '
+                                                                        'milestone '
+                                                                        'toward a '
+                                                                        'complete and '
+                                                                        'faithful',
+                                                                        '  implementation '
+                                                                        'of its goal, '
+                                                                        'without scope '
+                                                                        'drift.',
                                                                         '- Skeletons '
                                                                         'are planning '
                                                                         'contracts, '

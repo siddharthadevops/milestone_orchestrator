@@ -38,8 +38,9 @@
       {
         "text": [
           "SKELETON SCOPE",
-          "- A slice is the smallest manuscript or editorial outcome that can be reviewed,",
-          "  approved, and completed coherently. Keep one clear intent and no unrelated work.",
+          "- A slice is a coherent unit of work that merits its own design and provides",
+          "  a useful boundary for advancing the milestone toward a complete and faithful",
+          "  implementation of its goal, without scope drift.",
           "- Organize by reader-facing or editorial outcome, not automatically by chapter and",
           "  never one slice per title, structure, voice, character, continuity, pacing, theme,",
           "  or readiness lens. Use only the lenses relevant to the mandate.",
