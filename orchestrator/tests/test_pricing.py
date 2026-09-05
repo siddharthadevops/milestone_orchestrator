@@ -68,20 +68,70 @@ class CodexAdapterTest(unittest.TestCase):
         )
 
     def test_every_available_model_is_priced(self):
-        million_in = {"input_tokens": 1_000_000}
-        million_out = {"output_tokens": 1_000_000}
+        standard_in = {"input_tokens": 100_000}
+        standard_out = {"input_tokens": 0, "output_tokens": 100_000}
         for model, expect_in, expect_out in (
+            ("gpt-6-astra", 10.00, 50.00),
             ("gpt-5.6-sol", 5.00, 30.00),
             ("gpt-5.6-terra", 2.00, 12.00),
             ("gpt-5.6-luna", 0.20, 1.20),
         ):
             with self.subTest(model=model):
                 self.assertAlmostEqual(
-                    pricing.codex_api_cost(model, million_in), expect_in
+                    pricing.codex_api_cost(model, standard_in),
+                    expect_in / 10,
                 )
                 self.assertAlmostEqual(
-                    pricing.codex_api_cost(model, million_out), expect_out
+                    pricing.codex_api_cost(model, standard_out),
+                    expect_out / 10,
                 )
+
+    def test_astra_standard_rates_cover_every_band(self):
+        payload = {
+            "input_tokens": 1000,
+            "cached_input_tokens": 200,
+            "cache_write_input_tokens": 300,
+            "output_tokens": 100,
+        }
+        self.assertAlmostEqual(
+            pricing.codex_api_cost("gpt-6-astra", payload),
+            (500 * 10.00 + 200 * 1.00 + 300 * 12.50 + 100 * 50.00)
+            / 1_000_000.0,
+        )
+
+    def test_astra_long_context_starts_strictly_above_272k(self):
+        at_boundary = {"input_tokens": 272_000, "output_tokens": 1000}
+        above_boundary = {
+            "input_tokens": 300_000,
+            "cached_input_tokens": 100_000,
+            "cache_write_input_tokens": 50_000,
+            "output_tokens": 10_000,
+        }
+        self.assertAlmostEqual(
+            pricing.codex_api_cost("gpt-6-astra", at_boundary),
+            (272_000 * 10.00 + 1000 * 50.00) / 1_000_000.0,
+        )
+        self.assertAlmostEqual(
+            pricing.codex_api_cost("gpt-6-astra", above_boundary),
+            (
+                150_000 * 20.00
+                + 100_000 * 2.00
+                + 50_000 * 25.00
+                + 10_000 * 75.00
+            ) / 1_000_000.0,
+        )
+
+    def test_astra_needs_total_input_to_choose_its_price_tier(self):
+        self.assertIsNone(
+            pricing.codex_api_cost(
+                "gpt-6-astra", {"cached_input_tokens": 1000}
+            )
+        )
+        self.assertIsNone(
+            pricing.codex_api_cost(
+                "gpt-6-astra", {"input_tokens": "many", "output_tokens": 1}
+            )
+        )
 
     def test_reasoning_output_is_not_charged_twice(self):
         without = {"output_tokens": 1000}
@@ -235,6 +285,15 @@ class QuoteManyTest(unittest.TestCase):
             billing=pricing.BILLING_API,
         )
         self.assertAlmostEqual(total.api_usd, 1.20)
+
+    def test_astra_long_context_tier_is_per_physical_response(self):
+        payload = {"input_tokens": 150_000, "output_tokens": 10_000}
+        total = pricing.quote_many(
+            "codex", "gpt-6-astra", [payload, payload],
+            billing=pricing.BILLING_API,
+        )
+        self.assertAlmostEqual(total.api_usd, 4.0)
+        self.assertAlmostEqual(total.real_usd, 4.0)
 
     def test_silence_about_spending_is_unknown_not_free(self):
         self.assertEqual(

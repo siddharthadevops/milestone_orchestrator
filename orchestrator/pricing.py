@@ -119,6 +119,15 @@ def claude_api_cost(model, provider_output):
 # published rate summaries. Update by hand when OpenAI moves them — git dates
 # the change, so the table carries no date of its own.
 CODEX_RATES = {
+    "gpt-6-astra": {
+        "input": 10.00, "cached_input": 1.00, "cache_write": 12.50,
+        "output": 50.00,
+        "long_context": {
+            "input_tokens_over": 272_000,
+            "input_multiplier": 2.0,
+            "output_multiplier": 1.5,
+        },
+    },
     "gpt-5.6-sol": {
         "input": 5.00, "cached_input": 0.50, "cache_write": 6.25,
         "output": 30.00,
@@ -157,6 +166,11 @@ def codex_api_cost(model, provider_output):
     additively instead, the result is a mild undercount rather than a
     negative price.
 
+    A model may declare a long-context tier in its rate entry. That tier is
+    selected from the physical call's total reported input and applies to the
+    whole call; without that total, the tier and therefore the price are
+    unknown.
+
     reasoning_output_tokens is a breakdown of output_tokens and is therefore
     never charged again on top of it.
     """
@@ -185,11 +199,26 @@ def codex_api_cost(model, provider_output):
     cache_write = band("cache_write_input_tokens", "cacheWriteInputTokens")
     output = band("output_tokens", "outputTokens")
     fresh_input = max(reported_input - cached_input - cache_write, 0)
+
+    input_multiplier = 1.0
+    output_multiplier = 1.0
+    long_context = rates.get("long_context")
+    if long_context is not None:
+        raw_input = provider_output.get(
+            "input_tokens", provider_output.get("inputTokens")
+        )
+        if _amount(raw_input) is None:
+            # Without the total prompt-token count, the applicable Astra
+            # tier cannot be known. Do not underprice a possibly long call.
+            return None
+        if reported_input > long_context["input_tokens_over"]:
+            input_multiplier = long_context["input_multiplier"]
+            output_multiplier = long_context["output_multiplier"]
     total = (
-        fresh_input * rates["input"]
-        + cached_input * rates["cached_input"]
-        + cache_write * rates["cache_write"]
-        + output * rates["output"]
+        fresh_input * rates["input"] * input_multiplier
+        + cached_input * rates["cached_input"] * input_multiplier
+        + cache_write * rates["cache_write"] * input_multiplier
+        + output * rates["output"] * output_multiplier
     )
     return total / _PER_MILLION
 
