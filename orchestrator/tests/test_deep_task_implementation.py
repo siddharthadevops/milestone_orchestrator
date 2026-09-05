@@ -9,7 +9,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import brainstorming_tasks, contracts, registry, runners
+from orchestrator import brainstorming, brainstorming_lifecycle
+from orchestrator import brainstorming_milestone, brainstorming_tasks, contracts
+from orchestrator import driver as drv
+from orchestrator import registry, runners
 from orchestrator import service, task_api, tasks
 from orchestrator import state as st
 from orchestrator.tests import test_deep_task_documentation as deep_tests
@@ -36,6 +39,11 @@ class DeepTaskImplementationTest(unittest.TestCase):
     start_server = api_tests.TaskApiTest.start_server
     request = api_tests.TaskApiTest.request
     order = api_tests.TaskApiTest.order
+    _sleeper = api_tests.TaskApiTest._sleeper
+    _manual_brainstorming = api_tests.TaskApiTest._manual_brainstorming
+    _waiting_manual_brainstorming = (
+        api_tests.TaskApiTest._waiting_manual_brainstorming
+    )
     _git = staticmethod(reviewed_tests.ReviewedTaskOrderingTest._git)
     _repo = reviewed_tests.ReviewedTaskOrderingTest._repo
 
@@ -220,6 +228,196 @@ class DeepTaskImplementationTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(tasks.TaskRequestError, "stay inside"):
             host._deep_documentation_reference(parent, fake)
+
+    def test_waiting_session_keeps_milestone_reviewed_and_deep_owners_open(self):
+        workspace = self._repo("deep-waiting-brainstorming")
+        session_id, waiting, create = (
+            reviewed_tests.ReviewedTaskOrderingTest._waiting_rethink_session(
+                self, workspace, "deep-reviewed-wait.md"
+            )
+        )
+        pending = [
+            runners.MockRunner(reviewed_tests.ReviewedTaskOrderingTest._script(
+                contracts.KIND_DRAFT_SLICE_NOTE
+            )),
+            runners.MockRunner([
+                reviewed_tests.ReviewedTaskOrderingTest._rethink_step(
+                    contracts.KIND_IMPLEMENT
+                )
+            ]),
+        ]
+        host = task_api.DirectTaskHost(
+            self.home,
+            runner_factory=lambda _config, _workspace: pending.pop(0),
+            poll_interval=0.001,
+        )
+        self.start_server(host)
+        with mock.patch.object(
+            service,
+            "_direct_task_config",
+            return_value=reviewed_tests.ReviewedTaskOrderingTest._config(),
+        ), mock.patch.object(
+            brainstorming_milestone,
+            "create_session",
+            side_effect=create,
+        ), mock.patch.object(
+            brainstorming_milestone, "terminal_handoff", return_value=None
+        ):
+            status, body = self.request(
+                "POST", "/api/tasks", self._deep_order(workspace)
+            )
+            self.assertEqual(status, 201, body)
+            parent_id = body["task"]["id"]
+            documentation = self._wait_related(
+                parent_id, "documentation", None, terminal=True
+            )
+            implementation = self._wait_related(
+                parent_id, "implementation", "a", terminal=False
+            )
+            deadline = time.time() + 3
+            while time.time() < deadline and host.running_session_id(
+                implementation["id"]
+            ) != session_id:
+                time.sleep(0.01)
+
+            store = task_api.StandaloneTaskStore(self.home)
+            self.assertEqual(documentation["result"]["status"], "success")
+            self.assertIsNone(store.record(parent_id)["result"])
+            self.assertIsNone(store.record(implementation["id"])["result"])
+            lifecycle = st.load(task_api.reviewed_state_path(
+                self.home, implementation["id"]
+            ))
+            selected = next(
+                unit for unit in lifecycle["units"]
+                if st.unit_key(unit) == lifecycle["reviewed_task"]["unit"]
+            )
+            self.assertEqual(
+                selected["brainstorming_wait"]["session_id"], session_id
+            )
+            self.assertIsNone(lifecycle["failure"])
+
+            continued_process = self._sleeper()
+            with mock.patch.object(
+                brainstorming_lifecycle,
+                "_launch_lifecycle_process",
+                return_value=brainstorming_lifecycle.GatedLaunch(
+                    continued_process,
+                    lambda: None,
+                    continued_process.terminate,
+                ),
+            ) as launched:
+                status, continued = self.request(
+                    "POST",
+                    "/api/brainstorming/sessions/%s/continue" % session_id,
+                    {"waiting_revision": waiting.revision},
+                )
+            self.assertEqual(status, 200, continued)
+            self.assertEqual(continued["session"]["id"], session_id)
+            self.assertEqual(
+                continued["session"]["state"]["status"], "running"
+            )
+            launched.assert_called_once()
+            self.assertIsNone(store.record(parent_id)["result"])
+            self.assertIsNone(store.record(implementation["id"])["result"])
+
+            self.request("POST", "/api/tasks/%s/stop" % parent_id, {})
+            self.assertEqual(self._wait_terminal(parent_id)["result"]["status"],
+                             "failure")
+            terminal_session = brainstorming.SessionStore(
+                brainstorming_lifecycle.state_directory(self.home)
+            ).read(session_id)
+            self.assertEqual(terminal_session.state["status"], "failure")
+            status, refused = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % session_id,
+                {"waiting_revision": waiting.revision},
+            )
+            self.assertEqual(
+                (status, refused["error"]),
+                (409, brainstorming_lifecycle.CONTINUATION_CONFLICT),
+            )
+
+    def test_brainstorming_producer_wait_continues_under_deep_owner(self):
+        workspace = self._repo("deep-brainstorming-producer-wait")
+        session_id, waiting, start = (
+            reviewed_tests.ReviewedTaskOrderingTest
+            ._waiting_producer_session(
+                self, workspace, "deep-brainstorming-producer-wait.md"
+            )
+        )
+        pending = [
+            runners.MockRunner(reviewed_tests.ReviewedTaskOrderingTest._script(
+                contracts.KIND_DRAFT_SLICE_NOTE
+            )),
+            runners.MockRunner([]),
+        ]
+        host = task_api.DirectTaskHost(
+            self.home,
+            runner_factory=lambda _config, _workspace: pending.pop(0),
+            poll_interval=0.001,
+        )
+        self.start_server(host)
+        configuration = {
+            "implementation": {
+                "producer": {"task_executor": "brainstorming"}
+            }
+        }
+        with mock.patch.object(
+            service,
+            "_direct_task_config",
+            return_value=reviewed_tests.ReviewedTaskOrderingTest._config(),
+        ), mock.patch.object(
+            brainstorming_tasks, "start_task", side_effect=start
+        ), mock.patch.object(
+            brainstorming_tasks, "finish_task", return_value=None
+        ):
+            status, body = self.request(
+                "POST",
+                "/api/tasks",
+                self._deep_order(workspace, configuration=configuration),
+            )
+            self.assertEqual(status, 201, body)
+            parent_id = body["task"]["id"]
+            implementation = self._wait_related(
+                parent_id, "implementation", "a", terminal=False
+            )
+            deadline = time.time() + 3
+            while time.time() < deadline and host.running_session_id(
+                implementation["id"]
+            ) != session_id:
+                time.sleep(0.01)
+            self.assertEqual(
+                host.running_session_id(implementation["id"]), session_id
+            )
+
+            continued_process = self._sleeper()
+            with mock.patch.object(
+                brainstorming_lifecycle,
+                "_launch_lifecycle_process",
+                return_value=brainstorming_lifecycle.GatedLaunch(
+                    continued_process,
+                    lambda: None,
+                    continued_process.terminate,
+                ),
+            ) as launched:
+                status, continued = self.request(
+                    "POST",
+                    "/api/brainstorming/sessions/%s/continue" % session_id,
+                    {"waiting_revision": waiting.revision},
+                )
+            self.assertEqual(status, 200, continued)
+            self.assertEqual(continued["session"]["id"], session_id)
+            self.assertEqual(
+                continued["session"]["state"]["status"], "running"
+            )
+            launched.assert_called_once()
+            store = task_api.StandaloneTaskStore(self.home)
+            self.assertIsNone(store.record(parent_id)["result"])
+            self.assertIsNone(store.record(implementation["id"])["result"])
+
+            self.request("POST", "/api/tasks/%s/stop" % parent_id, {})
+            self.assertEqual(self._wait_terminal(parent_id)["result"]["status"],
+                             "failure")
 
     def test_unreadable_documentation_artifact_fails_parent_without_implementation(self):
         workspace = self._repo("deep-unreadable-documentation")
@@ -581,6 +779,36 @@ class DeepTaskImplementationTest(unittest.TestCase):
                 {}, workspace,
             )
 
+        session_id, waiting, create = (
+            reviewed_tests.ReviewedTaskOrderingTest._waiting_rethink_session(
+                self, workspace, "deep-durable-stop.md"
+            )
+        )
+        session_usage, session_cost = (
+            reviewed_tests.ReviewedTaskOrderingTest
+            ._record_brainstorming_activity(self, session_id)
+        )
+        path = task_api.ensure_reviewed_state(
+            self.home,
+            implementation,
+            reviewed_tests.ReviewedTaskOrderingTest._config(),
+        )
+        subject = drv.Driver(
+            path,
+            runner=runners.MockRunner([
+                reviewed_tests.ReviewedTaskOrderingTest._rethink_step(
+                    contracts.KIND_IMPLEMENT
+                )
+            ]),
+            model_profiles_home=self.home,
+        )
+        with mock.patch.object(
+            brainstorming_milestone, "create_session", side_effect=create
+        ), mock.patch.object(
+            brainstorming_milestone, "terminal_handoff", return_value=None
+        ):
+            reviewed_tests.ReviewedTaskOrderingTest._standalone_step(subject)
+
         previous_host = task_api.DirectTaskHost(self.home, store=store)
         with previous_host._lock:
             previous_host._active[parent["id"]] = workspace
@@ -590,13 +818,26 @@ class DeepTaskImplementationTest(unittest.TestCase):
             task_api.StandaloneTaskStore(self.home).stop_reason(parent["id"]),
             reason,
         )
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+        ) as launched:
+            status, refused = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % session_id,
+                {"waiting_revision": waiting.revision},
+            )
+        self.assertEqual(
+            (status, refused["error"]),
+            (409, brainstorming_lifecycle.CONTINUATION_CONFLICT),
+        )
+        launched.assert_not_called()
 
+        settlement_runner = runners.MockRunner([])
         recovered_host = task_api.DirectTaskHost(
             self.home,
             store=task_api.StandaloneTaskStore(self.home),
-            runner_factory=lambda *_args: self.fail(
-                "accepted Stop recovery launched a provider lifecycle"
-            ),
+            runner_factory=lambda *_args: settlement_runner,
             poll_interval=0.001,
         )
         outcome = recovered_host.adopt_open_tasks(
@@ -608,8 +849,12 @@ class DeepTaskImplementationTest(unittest.TestCase):
         self.assertIn(parent["id"], outcome["adopted"])
         self.assertEqual(stopped_child["result"]["status"], "failure")
         self.assertEqual(stopped_child["result"]["reason"], reason)
+        self.assertEqual(stopped_child["result"]["token_usage"], session_usage)
+        self.assertEqual(stopped_child["result"]["cost"], session_cost)
         self.assertEqual(stopped_parent["result"]["status"], "failure")
         self.assertEqual(stopped_parent["result"]["reason"], reason)
+        self.assertEqual(stopped_parent["result"]["token_usage"], session_usage)
+        self.assertEqual(stopped_parent["result"]["cost"], session_cost)
         self.assertEqual(
             stopped_parent["result"],
             task_api.DirectTaskHost._deep_result(
@@ -623,6 +868,43 @@ class DeepTaskImplementationTest(unittest.TestCase):
         )
         self.assertEqual(store.stop_reason(parent["id"]), reason)
         self.assertNotIn("stop_reason", store.record(parent["id"]))
+        self.assertEqual(settlement_runner.calls, [])
+        terminal_session = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        ).read(session_id)
+        self.assertEqual(terminal_session.state["status"], "failure")
+        child_lifecycle = st.load(task_api.reviewed_state_path(
+            self.home, implementation["id"]
+        ))
+        child_unit = next(
+            item for item in st.summary(child_lifecycle)["units"]
+            if item["unit"] == child_lifecycle["reviewed_task"]["unit"]
+        )
+        self.assertEqual(
+            next(
+                item for item in child_unit["brainstormings"]
+                if item["session_id"] == session_id
+            )["outcome"],
+            "failed",
+        )
+        status, refused = self.request(
+            "POST",
+            "/api/brainstorming/sessions/%s/rounds" % session_id,
+            {"maximum": 2},
+        )
+        self.assertEqual(
+            (status, refused["error"]),
+            (409, brainstorming_lifecycle.CONTINUATION_CONFLICT),
+        )
+        status, refused = self.request(
+            "POST",
+            "/api/brainstorming/sessions/%s/continue" % session_id,
+            {"waiting_revision": waiting.revision},
+        )
+        self.assertEqual(
+            (status, refused["error"]),
+            (409, brainstorming_lifecycle.CONTINUATION_CONFLICT),
+        )
 
     def test_part_admission_crash_windows_and_races_reuse_exact_child(self):
         cut = {

@@ -875,6 +875,27 @@ class BrainstormingClosureTest(unittest.TestCase):
                 with self.assertRaises(coordination.CoordinationRejected):
                     subject.run_closure(session_id, object())
 
+    def test_add_rounds_winning_closure_race_prevents_stale_exhaustion(self):
+        snapshot, _subject, _roster, _executors, _target, _sibling = (
+            self._boundary("extended-closure", max_rounds=1)
+        )
+        ballot = self._ballot(snapshot.state, ("accept", "object"))
+
+        extended = self.store.extend_rounds("extended-closure", 3)
+        with self.assertRaises(bs.RevisionConflict):
+            self.store.wait_with_ballot(
+                "extended-closure", snapshot.revision, ballot
+            )
+
+        self.assertEqual(extended.state["status"], "running")
+        self.assertEqual(bs.effective_max_rounds(extended.state), 3)
+        self.assertEqual(extended.state["transcript_events"], [])
+        accepted = self.store.record_closure_ballot(
+            "extended-closure", extended.revision, ballot
+        )
+        self.assertEqual(accepted.state["status"], "running")
+        self.assertNotIn("result", accepted.state)
+
     def test_success_requires_current_approved_ballot_and_is_atomic(self):
         majority_roster = participants(3)
         snapshot, subject, roster, executors, _target, _sibling = (

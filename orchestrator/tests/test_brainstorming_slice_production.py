@@ -149,7 +149,19 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         head = self._git(workspace, "rev-parse", "HEAD")
 
         state = st.load(path)
-        canonical_plan.establish_current_plan(state, skeleton_path)
+        # This suite exercises plans frozen before prospective milestone
+        # producers were narrowed to agent_call.  Admit the original anchor
+        # through that historical catalogue; ordinary unpatched dispatches
+        # below then prove the retained Brainstorming assignment still runs.
+        historical_catalogue = [
+            {"id": executor} for executor in ("agent_call", "brainstorming")
+        ]
+        with mock.patch.object(
+            tasks,
+            "producer_task_executor_catalogue",
+            return_value=historical_catalogue,
+        ):
+            canonical_plan.establish_current_plan(state, skeleton_path)
         state["units"][0].update({
             "status": st.U_SEALED,
             "artifact": skeleton_path,

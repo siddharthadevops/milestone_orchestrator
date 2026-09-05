@@ -2718,6 +2718,7 @@ _BRAINSTORMING_OUTCOMES = {
     "brainstorming_review_restarted": "restarted",
     "brainstorming_rethink_sealed": "continued",
     "brainstorming_failure_routed": "failed",
+    "brainstorming_owner_stop_detached": "detached",
     "brainstorming_operational_detached": "detached",
     "brainstorming_missing_detached": "detached",
 }

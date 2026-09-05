@@ -493,6 +493,58 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         self.assertEqual((view["status"], view["process"]), ("running", "stopped"))
         self.assertIsNone(view["result"])
 
+    def test_panel_uses_public_round_and_continue_controls(self):
+        with open(
+            os.path.join(service.STATIC_DIR, "panel.html"),
+            encoding="utf-8",
+        ) as handle:
+            html = handle.read()
+
+        for contract in (
+            'view.status === "waiting"',
+            "view.round.completed",
+            "view.round.maximum",
+            "view.round.remaining",
+            "function addRoundsSelectedSession",
+            'encodeURIComponent(selectedSession) + "/rounds"',
+            "function parseApiPayload",
+            "function addedRoundMaximum",
+            "body: '{\"maximum\":' + maximum + '}'",
+            "function continueSelectedSession",
+            'encodeURIComponent(selectedSession) + "/continue"',
+            'body: \'{"waiting_revision":\' + view.revision + \'}\'',
+            "sessionAddingRounds || sessionContinuing",
+        ):
+            self.assertIn(contract, html)
+        self.assertRegex(
+            html,
+            r'const data = await api\(\s*'
+            r'"/api/brainstorming/sessions/" \+ encodeURIComponent\(id\) '
+            r'\+ "/view",\s*undefined,\s*true\s*\);',
+        )
+        self.assertNotIn("localStorage", html)
+
+    def test_panel_controls_preserve_integers_above_javascript_safe_range(self):
+        with open(
+            os.path.join(service.STATIC_DIR, "panel.html"),
+            encoding="utf-8",
+        ) as handle:
+            html = handle.read()
+        for contract in (
+            "context.source",
+            "return value;",
+            "const maximumText = String(maximum);",
+            "const quantityText = String(quantity).trim();",
+            "BigInt(maximumText) + BigInt(quantityText)",
+            "body: '{\"maximum\":' + maximum + '}'",
+        ):
+            self.assertIn(contract, html)
+        self.assertNotIn("Number(view.round.maximum)", html)
+        self.assertNotIn("JSON.stringify({maximum})", html)
+        self.assertNotIn(
+            "JSON.stringify({waiting_revision: view.revision})", html
+        )
+
     def test_activity_modal_marks_partial_token_usage(self):
         with open(
             os.path.join(service.STATIC_DIR, "panel.html"),

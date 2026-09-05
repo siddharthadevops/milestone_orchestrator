@@ -276,6 +276,15 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(waiting.state["status"], "waiting")
         return session_id, waiting
 
+    def _attach_direct_task_session(self, task_id, session_id):
+        with brainstorming_lifecycle._locked_registry(self.home):
+            document = brainstorming_lifecycle._load_registry(self.home)
+            record = brainstorming_lifecycle._find_record(
+                document, session_id
+            )
+            record["caller"] = "task:%s" % task_id
+            brainstorming_lifecycle._save_registry(self.home, document)
+
     def test_catalogue_route_reuses_shared_schema(self):
         status, body = self.request("GET", "/api/task-executors")
         self.assertEqual(status, 200)
@@ -1029,6 +1038,56 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(result["cost"], {"api_usd": 0.7, "real_usd": 0.2})
         self.assertEqual(result["native_result"], native)
 
+    def test_recovered_terminal_result_cannot_overwrite_accepted_stop(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        record = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        discovered = threading.Event()
+        release = threading.Event()
+
+        def recover_terminal(state, task_id, *_args, **_kwargs):
+            tasks.record_task_result(state, task_id, {
+                "status": "success",
+                "duration_s": 3.0,
+                "token_usage": None,
+                "token_usage_partial": True,
+                "cost": None,
+                "cost_partial": True,
+                "native_result": {
+                    "outcome": "success",
+                    "session_id": "recovered-terminal-session",
+                },
+            })
+            discovered.set()
+            release.wait(2)
+            return None
+
+        host = task_api.DirectTaskHost(
+            self.home, store=store, poll_interval=0.001
+        )
+        with mock.patch.object(
+            brainstorming_tasks, "start_task", side_effect=recover_terminal
+        ):
+            thread = host.start(record, lambda: {})
+            self.assertTrue(discovered.wait(2))
+            self.assertTrue(host.stop(record["id"], "stopped during recovery"))
+            release.set()
+            terminal = self.wait_record(record["id"])
+            thread.join(timeout=2)
+
+        self.assertEqual(terminal["result"]["status"], "failure")
+        self.assertEqual(
+            terminal["result"]["reason"], "stopped during recovery"
+        )
+        self.assertEqual(
+            terminal["result"]["native_result"]["session_id"],
+            "recovered-terminal-session",
+        )
+        self.assertFalse(thread.is_alive())
+
     def test_missing_open_task_workspace_does_not_abort_service_startup(self):
         pins = {
             "dispatch_authority": "static",
@@ -1718,6 +1777,793 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(body["session"]["max_rounds"], 3)
         self.assertEqual(body["session"]["rounds_remaining"], 2)
         launched.assert_called_once()
+        owner = st.load(entry["state_path"])
+        self.assertIsNone(owner["failure"])
+        self.assertEqual(
+            st.current_unit(owner)["brainstorming_wait"]["session_id"],
+            session_id,
+        )
+
+    def test_task_owned_continue_live_wait_returns_continuation_conflict(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "task-live-wait-conflict.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        exiting_process = self._sleeper()
+        with brainstorming_lifecycle._locked_registry(self.home):
+            document = brainstorming_lifecycle._load_registry(self.home)
+            record = brainstorming_lifecycle._find_record(
+                document, session_id
+            )
+            record["pid"] = exiting_process.pid
+            brainstorming_lifecycle._save_registry(self.home, document)
+        session_store = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        )
+        before = session_store.read(session_id)
+
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=AssertionError("a live wait must not relaunch"),
+        ) as launch:
+            status, refused = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % session_id,
+                {"waiting_revision": waiting.revision},
+            )
+
+        self.assertEqual(
+            (status, refused["error"]),
+            (409, brainstorming_lifecycle.CONTINUATION_CONFLICT),
+        )
+        launch.assert_not_called()
+        self.assertEqual(session_store.read(session_id), before)
+
+    def test_api_only_continuation_handles_direct_and_task_owned_sessions(self):
+        direct_id, direct_wait = self._waiting_manual_brainstorming(
+            "direct-api-continue.md"
+        )
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=lambda *_args, **_kwargs: (
+                lambda process: brainstorming_lifecycle.GatedLaunch(
+                    process, lambda: None, process.terminate
+                )
+            )(self._sleeper()),
+        ):
+            status, direct = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % direct_id,
+                {"waiting_revision": direct_wait.revision},
+            )
+        self.assertEqual(status, 200, direct)
+        self.assertEqual(direct["session"]["id"], direct_id)
+        self.assertEqual(direct["session"]["state"]["status"], "running")
+        self.request(
+            "POST", "/api/brainstorming/sessions/%s/stop" % direct_id, {}
+        )
+
+        store = task_api.StandaloneTaskStore(self.home)
+        staffing = {"dispatch_authority": "static", "participants": []}
+        task = store.admit(
+            self.order("brainstorming"), staffing, self.primary
+        )
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "task-owned-continue.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        host = NoopHost()
+        self.start_server(host)
+
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=lambda *_args, **_kwargs: (
+                lambda process: brainstorming_lifecycle.GatedLaunch(
+                    process, lambda: None, process.terminate
+                )
+            )(self._sleeper()),
+        ):
+            status, continued = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % session_id,
+                {"waiting_revision": waiting.revision},
+            )
+        self.assertEqual(status, 200, continued)
+        self.assertEqual(continued["session"]["id"], session_id)
+        self.assertEqual(host.started, [task["id"]])
+        self.assertIsNone(store.record(task["id"])["result"])
+        self.request(
+            "POST", "/api/brainstorming/sessions/%s/stop" % session_id, {}
+        )
+
+        stopped_task = store.admit(
+            self.order("brainstorming"), staffing, self.primary
+        )
+        stopped_session, stopped_wait = self._waiting_manual_brainstorming(
+            "task-owned-stopped.md"
+        )
+        self._attach_direct_task_session(stopped_task["id"], stopped_session)
+        with registry.locked(self.home):
+            store.record_stop_locked(stopped_task["id"], "stopped by operator")
+        before = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        ).read(stopped_session)
+        status, refused = self.request(
+            "POST",
+            "/api/brainstorming/sessions/%s/continue" % stopped_session,
+            {"waiting_revision": stopped_wait.revision},
+        )
+        self.assertEqual(
+            (status, refused["error"]),
+            (409, brainstorming_lifecycle.CONTINUATION_CONFLICT),
+        )
+        self.assertEqual(
+            brainstorming.SessionStore(
+                brainstorming_lifecycle.state_directory(self.home)
+            ).read(stopped_session),
+            before,
+        )
+
+    def test_task_owned_continue_maps_owner_host_launch_failure(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "task-owned-host-launch-failure.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        host = NoopHost()
+        host.start = mock.Mock(side_effect=RuntimeError("private host diagnostic"))
+        self.start_server(host)
+        session_store = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        )
+        before = session_store.read(session_id)
+
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=AssertionError("session launch must follow owner launch"),
+        ) as launch:
+            status, refused = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % session_id,
+                {"waiting_revision": waiting.revision},
+            )
+
+        self.assertEqual(status, 503, refused)
+        self.assertEqual(refused, {
+            "ok": False,
+            "error": brainstorming_lifecycle.UNAVAILABLE,
+        })
+        self.assertEqual(session_store.read(session_id), before)
+        host.start.assert_called_once()
+        launch.assert_not_called()
+
+    def test_add_rounds_conflicts_after_owner_stop(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, _waiting = self._waiting_manual_brainstorming(
+            "task-owned-stopped-rounds.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        with registry.locked(self.home):
+            store.record_stop_locked(task["id"], "stopped by operator")
+        session_store = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        )
+        before = session_store.read(session_id)
+
+        status, refused = self.request(
+            "POST",
+            "/api/brainstorming/sessions/%s/rounds" % session_id,
+            {"maximum": 4},
+        )
+
+        self.assertEqual(
+            (status, refused["error"]),
+            (409, brainstorming_lifecycle.CONTINUATION_CONFLICT),
+        )
+        self.assertEqual(session_store.read(session_id), before)
+
+    def test_direct_task_stop_retries_session_settlement_failure(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, _waiting = self._waiting_manual_brainstorming(
+            "task-stop-retry.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        projection = brainstorming_lifecycle.inspect_session(
+            self.home, session_id, lambda _record: None
+        )
+        host = task_api.DirectTaskHost(
+            self.home, store=store, poll_interval=0.001
+        )
+        self.start_server(host)
+        abandon = brainstorming_lifecycle.abandon_session
+        attempts = []
+
+        def transient_failure(*args, **kwargs):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise brainstorming_lifecycle.PublicLifecycleError(
+                    503, brainstorming_lifecycle.UNAVAILABLE
+                )
+            return abandon(*args, **kwargs)
+
+        with mock.patch.object(
+            brainstorming_tasks, "start_task", return_value=projection
+        ), mock.patch.object(
+            brainstorming_tasks, "finish_task", return_value=None
+        ), mock.patch.object(
+            brainstorming_lifecycle,
+            "abandon_session",
+            side_effect=transient_failure,
+        ):
+            thread = host.start(task, lambda: {})
+            deadline = time.time() + 2
+            while time.time() < deadline \
+                    and host.running_session_id(task["id"]) != session_id:
+                time.sleep(0.01)
+            self.assertEqual(host.running_session_id(task["id"]), session_id)
+            status, stopped = self.request(
+                "POST", "/api/tasks/%s/stop" % task["id"], {}
+            )
+            self.assertEqual((status, stopped["state"]), (200, "stopping"))
+            terminal = self.wait_record(task["id"])
+            thread.join(timeout=2)
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(terminal["result"]["status"], "failure")
+        self.assertEqual(
+            brainstorming.SessionStore(
+                brainstorming_lifecycle.state_directory(self.home)
+            ).read(session_id).state["status"],
+            "failure",
+        )
+        self.assertFalse(thread.is_alive())
+
+    def test_direct_task_stop_settles_after_concurrent_inspection_failure(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, _waiting = self._waiting_manual_brainstorming(
+            "task-stop-inspection-race.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        projection = brainstorming_lifecycle.inspect_session(
+            self.home, session_id, lambda _record: None
+        )
+        host = task_api.DirectTaskHost(
+            self.home, store=store, poll_interval=0.001
+        )
+        self.start_server(host)
+        inspection_started = threading.Event()
+        release_failure = threading.Event()
+
+        def failed_inspection(*_args, **_kwargs):
+            inspection_started.set()
+            release_failure.wait(3)
+            raise brainstorming_lifecycle.PublicLifecycleError(
+                503, brainstorming_lifecycle.UNAVAILABLE
+            )
+
+        with mock.patch.object(
+            brainstorming_tasks, "start_task", return_value=projection
+        ), mock.patch.object(
+            brainstorming_tasks, "finish_task", side_effect=failed_inspection
+        ):
+            thread = host.start(task, lambda: {})
+            self.assertTrue(inspection_started.wait(2))
+            status, stopped = self.request(
+                "POST", "/api/tasks/%s/stop" % task["id"], {}
+            )
+            self.assertEqual((status, stopped["state"]), (200, "stopping"))
+            release_failure.set()
+            terminal = self.wait_record(task["id"])
+            thread.join(timeout=2)
+
+        self.assertEqual(terminal["result"]["status"], "failure")
+        self.assertEqual(
+            brainstorming.SessionStore(
+                brainstorming_lifecycle.state_directory(self.home)
+            ).read(session_id).state["status"],
+            "failure",
+        )
+        self.assertFalse(thread.is_alive())
+
+    def test_waiting_task_stop_after_host_exit_closes_task_and_session(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "task-stop-after-host-exit.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        projection = brainstorming_lifecycle.inspect_session(
+            self.home, session_id, lambda _record: None
+        )
+        host = task_api.DirectTaskHost(
+            self.home, store=store, poll_interval=0.001
+        )
+        self.start_server(host)
+
+        with mock.patch.object(
+            brainstorming_tasks, "start_task", return_value=projection
+        ), mock.patch.object(
+            brainstorming_tasks,
+            "finish_task",
+            side_effect=brainstorming_lifecycle.PublicLifecycleError(
+                503, brainstorming_lifecycle.UNAVAILABLE
+            ),
+        ):
+            thread = host.start(task, lambda: {})
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(host.is_active(task["id"]))
+        self.assertIsNone(store.record(task["id"])["result"])
+        status, stopped = self.request(
+            "POST", "/api/tasks/%s/stop" % task["id"], {}
+        )
+        self.assertEqual((status, stopped["state"]), (200, "stopping"))
+        terminal = self.wait_record(task["id"])
+        terminal_session = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        ).read(session_id)
+
+        self.assertEqual(terminal["result"]["status"], "failure")
+        self.assertEqual(
+            terminal["result"]["native_result"]["session_id"], session_id
+        )
+        self.assertEqual(terminal_session.state["status"], "failure")
+        self.assertEqual(
+            terminal_session.state["completed_turns"],
+            waiting.state["completed_turns"],
+        )
+        self.assertIsNotNone(store.stop_reason(task["id"]))
+
+    def test_recovery_settles_stopped_resumed_session_without_relaunch(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "task-stop-recovery.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        session_store = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        )
+        resumed_process = self._sleeper()
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            return_value=brainstorming_lifecycle.GatedLaunch(
+                resumed_process,
+                lambda: None,
+                resumed_process.terminate,
+            ),
+        ):
+            brainstorming_lifecycle.continue_session(
+                self.home,
+                session_id,
+                {"waiting_revision": waiting.revision},
+                lambda _record: None,
+            )
+        resumed = session_store.read(session_id)
+        reason = "stopped before service recovery"
+        with registry.locked(self.home):
+            store.record_stop_locked(task["id"], reason)
+        paused = brainstorming_lifecycle.stop_session(
+            self.home, session_id, lambda _record: None
+        )
+        self.assertEqual(paused["process"], "stopped")
+        self.assertEqual(paused["state"]["status"], "running")
+
+        recovered = task_api.DirectTaskHost(
+            self.home, store=store, poll_interval=0.001
+        )
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=AssertionError("accepted Stop cannot relaunch"),
+        ) as launch:
+            outcome = recovered.adopt_open_tasks(
+                lambda _record: (lambda: {})
+            )
+            terminal = self.wait_record(task["id"])
+            deadline = time.time() + 2
+            while recovered.is_active(task["id"]) and time.time() < deadline:
+                time.sleep(0.01)
+
+        self.assertEqual(outcome["adopted"], [task["id"]])
+        launch.assert_not_called()
+        self.assertFalse(recovered.is_active(task["id"]))
+        self.assertEqual(terminal["result"]["status"], "failure")
+        self.assertEqual(terminal["result"]["reason"], reason)
+        self.assertEqual(
+            terminal["result"]["native_result"]["session_id"], session_id
+        )
+        settled = session_store.read(session_id)
+        self.assertEqual(settled.state["status"], "failure")
+        self.assertEqual(
+            settled.state["completed_turns"], resumed.state["completed_turns"]
+        )
+
+    def test_task_stop_at_waiting_session_closes_both_and_requires_successor(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "task-stop-waiting.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        projection = brainstorming_lifecycle.inspect_session(
+            self.home, session_id, lambda _record: None
+        )
+        host = task_api.DirectTaskHost(self.home, store=store, poll_interval=0.001)
+        self.start_server(host)
+
+        with mock.patch.object(
+            brainstorming_tasks, "start_task", return_value=projection
+        ), mock.patch.object(
+            brainstorming_tasks, "finish_task", return_value=None
+        ):
+            thread = host.start(task, lambda: {})
+            deadline = time.time() + 2
+            while time.time() < deadline \
+                    and host.running_session_id(task["id"]) != session_id:
+                time.sleep(0.01)
+            self.assertEqual(host.running_session_id(task["id"]), session_id)
+            status, stopped = self.request(
+                "POST", "/api/tasks/%s/stop" % task["id"], {}
+            )
+            self.assertEqual((status, stopped["state"]), (200, "stopping"))
+            terminal_task = self.wait_record(task["id"])
+            thread.join(timeout=2)
+
+        terminal_session = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        ).read(session_id)
+        self.assertEqual(terminal_task["result"]["status"], "failure")
+        self.assertEqual(terminal_session.state["status"], "failure")
+        self.assertEqual(
+            terminal_task["result"]["native_result"]["session_id"], session_id
+        )
+        self.assertEqual(
+            terminal_session.state["completed_turns"],
+            waiting.state["completed_turns"],
+        )
+        self.assertEqual(
+            terminal_session.state["transcript_events"][:-1],
+            waiting.state["transcript_events"],
+        )
+        for suffix, body in (
+            ("rounds", {"maximum": 4}),
+            ("continue", {"waiting_revision": waiting.revision}),
+        ):
+            status, refused = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/%s" % (session_id, suffix),
+                body,
+            )
+            self.assertEqual(
+                (status, refused["error"]),
+                (409, brainstorming_lifecycle.CONTINUATION_CONFLICT),
+            )
+        successor = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        self.assertNotEqual(successor["id"], task["id"])
+
+    def test_task_stop_settles_when_discard_wins_after_pause(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, _waiting = self._waiting_manual_brainstorming(
+            "task-stop-discard-race.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        projection = brainstorming_lifecycle.inspect_session(
+            self.home, session_id, lambda _record: None
+        )
+        host = task_api.DirectTaskHost(
+            self.home, store=store, poll_interval=0.001
+        )
+        self.start_server(host)
+        abandon_entered = threading.Event()
+        allow_abandon = threading.Event()
+        abandon = brainstorming_lifecycle.abandon_session
+
+        def delayed_abandon(*args, **kwargs):
+            abandon_entered.set()
+            allow_abandon.wait(3)
+            return abandon(*args, **kwargs)
+
+        with mock.patch.object(
+            brainstorming_tasks, "start_task", return_value=projection
+        ), mock.patch.object(
+            brainstorming_tasks, "finish_task", return_value=None
+        ), mock.patch.object(
+            brainstorming_lifecycle,
+            "abandon_session",
+            side_effect=delayed_abandon,
+        ):
+            thread = host.start(task, lambda: {})
+            deadline = time.time() + 2
+            while time.time() < deadline \
+                    and host.running_session_id(task["id"]) != session_id:
+                time.sleep(0.01)
+            self.assertEqual(host.running_session_id(task["id"]), session_id)
+            status, stopped = self.request(
+                "POST", "/api/tasks/%s/stop" % task["id"], {}
+            )
+            self.assertEqual((status, stopped["state"]), (200, "stopping"))
+            self.assertTrue(abandon_entered.wait(2))
+            status, discarded = self.request(
+                "DELETE",
+                "/api/brainstorming/sessions/%s?purge=1" % session_id,
+            )
+            self.assertEqual(status, 200, discarded)
+            allow_abandon.set()
+            terminal = self.wait_record(task["id"])
+            thread.join(timeout=2)
+
+        self.assertEqual(terminal["result"]["status"], "failure")
+        self.assertTrue(terminal["result"]["reason"].startswith("stopped by"))
+        self.assertIsNone(
+            brainstorming.SessionStore(
+                brainstorming_lifecycle.state_directory(self.home)
+            ).read(session_id)
+        )
+        self.assertFalse(thread.is_alive())
+
+    def test_start_refuses_owner_stop_before_session_settlement(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "task-stop-start-race.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        session_store = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        )
+        resumed = session_store.continue_waiting(
+            session_id, waiting.revision
+        )
+        projection = brainstorming_lifecycle.inspect_session(
+            self.home, session_id, lambda _record: None
+        )
+        host = task_api.DirectTaskHost(
+            self.home, store=store, poll_interval=0.001
+        )
+        self.start_server(host)
+        abandon_entered = threading.Event()
+        allow_abandon = threading.Event()
+        abandon = brainstorming_lifecycle.abandon_session
+
+        def delayed_abandon(*args, **kwargs):
+            abandon_entered.set()
+            allow_abandon.wait(3)
+            return abandon(*args, **kwargs)
+
+        with mock.patch.object(
+            brainstorming_tasks, "start_task", return_value=projection
+        ) as start_task, mock.patch.object(
+            brainstorming_tasks, "finish_task", return_value=None
+        ), mock.patch.object(
+            brainstorming_lifecycle,
+            "abandon_session",
+            side_effect=delayed_abandon,
+        ):
+            thread = host.start(task, lambda: {})
+            deadline = time.time() + 2
+            while time.time() < deadline \
+                    and host.running_session_id(task["id"]) != session_id:
+                time.sleep(0.01)
+            self.assertEqual(host.running_session_id(task["id"]), session_id)
+            status, stopped = self.request(
+                "POST", "/api/tasks/%s/stop" % task["id"], {}
+            )
+            self.assertEqual((status, stopped["state"]), (200, "stopping"))
+            self.assertTrue(abandon_entered.wait(2))
+
+            status, refused = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % session_id,
+                {},
+            )
+            self.assertEqual(
+                (status, refused["error"]),
+                (503, brainstorming_lifecycle.UNAVAILABLE),
+            )
+            self.assertEqual(start_task.call_count, 1)
+            self.assertEqual(session_store.read(session_id), resumed)
+
+            allow_abandon.set()
+            terminal = self.wait_record(task["id"])
+            thread.join(timeout=2)
+
+        self.assertEqual(terminal["result"]["status"], "failure")
+        self.assertEqual(session_store.read(session_id).state["status"], "failure")
+        self.assertFalse(thread.is_alive())
+
+    def test_stale_running_continue_rechecks_accepted_owner_stop(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "task-stop-stale-continue.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        session_store = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        )
+        before = session_store.read(session_id)
+        inspected = threading.Event()
+        release_continue = threading.Event()
+        real_inspect = brainstorming_lifecycle.inspect_session
+
+        def stale_inspect(*args, **kwargs):
+            projection = real_inspect(*args, **kwargs)
+            projection["process"] = "running"
+            inspected.set()
+            self.assertTrue(release_continue.wait(5))
+            return projection
+
+        outcome = []
+
+        def continue_waiting():
+            outcome.append(self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % session_id,
+                {"waiting_revision": waiting.revision},
+            ))
+
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "inspect_session",
+            side_effect=stale_inspect,
+        ), mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=AssertionError(
+                "an accepted owner Stop cannot launch continuation"
+            ),
+        ) as launch:
+            thread = threading.Thread(target=continue_waiting)
+            thread.start()
+            self.assertTrue(inspected.wait(5))
+            with registry.locked(self.home):
+                store.record_stop_locked(task["id"], "stopped by operator")
+            stopped = brainstorming_lifecycle.stop_session(
+                self.home, session_id, lambda _record: None
+            )
+            release_continue.set()
+            thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(outcome), 1)
+        self.assertEqual(
+            (outcome[0][0], outcome[0][1]["error"]),
+            (409, brainstorming_lifecycle.CONTINUATION_CONFLICT),
+        )
+        launch.assert_not_called()
+        self.assertEqual(session_store.read(session_id), before)
+        self.assertEqual(stopped["state"]["status"], "waiting")
+        self.assertEqual(stopped["process"], "stopped")
+
+    def test_stale_running_start_rechecks_owner_stop_before_relaunch(self):
+        store = task_api.StandaloneTaskStore(self.home)
+        task = store.admit(
+            self.order("brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        session_id, _process = self._manual_brainstorming(
+            "task-stop-stale-start.md"
+        )
+        self._attach_direct_task_session(task["id"], session_id)
+        inspected = threading.Event()
+        release_start = threading.Event()
+        real_inspect = brainstorming_lifecycle.inspect_session
+
+        def stale_inspect(*args, **kwargs):
+            projection = real_inspect(*args, **kwargs)
+            if not inspected.is_set():
+                inspected.set()
+                self.assertTrue(release_start.wait(5))
+            return projection
+
+        outcome = []
+
+        def start():
+            try:
+                outcome.append(service._start_brainstorming_session(
+                    self.home, {"admin": True}, session_id
+                ))
+            except Exception as exc:
+                outcome.append(exc)
+
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "inspect_session",
+            side_effect=stale_inspect,
+        ), mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=AssertionError(
+                "an accepted owner Stop cannot launch a replacement"
+            ),
+        ) as launch:
+            thread = threading.Thread(target=start)
+            thread.start()
+            self.assertTrue(inspected.wait(5))
+            with registry.locked(self.home):
+                store.record_stop_locked(task["id"], "stopped by operator")
+            stopped = brainstorming_lifecycle.stop_session(
+                self.home, session_id, lambda _record: None
+            )
+            release_start.set()
+            thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(outcome), 1)
+        self.assertIsInstance(outcome[0], service.ApiError)
+        self.assertEqual(outcome[0].status, 503)
+        self.assertEqual(
+            str(outcome[0]), brainstorming_lifecycle.UNAVAILABLE
+        )
+        launch.assert_not_called()
+        self.assertEqual(
+            store.owner_stop_reason(task["id"]), "stopped by operator"
+        )
+        self.assertEqual(stopped["state"]["status"], "running")
+        self.assertEqual(stopped["process"], "stopped")
 
     def test_live_direct_task_blocks_starting_a_paused_manual_brainstorming(self):
         session_id = self._pause_manual_brainstorming("paused-for-task.md")

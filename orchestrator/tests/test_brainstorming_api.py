@@ -1849,6 +1849,68 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
         self.assertEqual(status, 404, streamed)
 
+    def test_round_controls_authorize_before_read_and_allow_project_member(self):
+        self._target("controlled.md")
+        project = self._ready_project(users=[access.USER_EMAILS[0]])
+        headers = self._remote_headers(access.USER_EMAILS[0])
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, created = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload(
+                    "controlled.md",
+                    project=project["slug"],
+                    work_area="main",
+                ),
+                headers=headers,
+            )
+        self.assertEqual(status, 201, created)
+        session_id = created["session"]["id"]
+        foreign = self._remote_headers(access.USER_EMAILS[1])
+
+        with mock.patch.object(
+            bs.SessionStore,
+            "read",
+            side_effect=AssertionError("foreign session state was read"),
+        ) as state_read:
+            for suffix, body in (
+                ("rounds", {"maximum": 3}),
+                ("continue", {"waiting_revision": 1}),
+            ):
+                code, refused = self._request(
+                    "POST",
+                    "/api/brainstorming/sessions/%s/%s"
+                    % (session_id, suffix),
+                    body,
+                    headers=foreign,
+                )
+                self.assertEqual(
+                    (code, refused["error"]), (403, service.FORBIDDEN)
+                )
+        state_read.assert_not_called()
+
+        code, raised = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/rounds" % session_id,
+            {"maximum": 3},
+            headers=headers,
+        )
+        self.assertEqual(code, 200, raised)
+        code, refused = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/continue" % session_id,
+            {"waiting_revision": raised["session"]["revision"]},
+            headers=headers,
+        )
+        self.assertEqual(
+            (code, refused["error"]),
+            (409, lifecycle.CONTINUATION_CONFLICT),
+        )
+
     def test_floor_intervention_route_appends_and_refuses_terminal(self):
         self._target("floor.md")
         with mock.patch.object(
@@ -2124,6 +2186,40 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertIsNone(record["pid"])
         released.assert_not_called()
         aborted.assert_called_once_with()
+
+    def test_continue_activity_projection_failure_is_unavailable(self):
+        self._target("failure.md")
+        created = lifecycle.create_session(
+            self.home,
+            self._payload("failure.md"),
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        self._stop_sleeper_record(created["id"])
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, created["id"], require_pid_claim=False
+        ), 0)
+
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        before = store.read(created["id"])
+        self.assertEqual(before.state["status"], "waiting")
+        with mock.patch.object(
+            bs.SessionStore,
+            "read_activity",
+            side_effect=RuntimeError("private activity failure"),
+        ):
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % created["id"],
+                {"waiting_revision": before.revision},
+            )
+
+        self.assertEqual(
+            (code, response["error"]),
+            (503, lifecycle.UNAVAILABLE),
+        )
+        self.assertNotIn("private activity failure", str(response))
+        self.assertEqual(store.read(created["id"]), before)
 
     def test_add_rounds_missing_durable_state_is_unavailable(self):
         self._target("missing-rounds-state.md")

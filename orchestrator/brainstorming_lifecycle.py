@@ -1864,25 +1864,27 @@ def _activity_projection(store, record, state):
 
 
 def _projection(home, record):
-    store = brainstorming.SessionStore(state_directory(home))
     try:
+        store = brainstorming.SessionStore(state_directory(home))
         snapshot = store.read(record["id"])
+        if snapshot is None:
+            raise PublicLifecycleError(503, UNAVAILABLE)
+        projected = {
+            "id": record["id"],
+            "caller": record["caller"],
+            "project": record["project"],
+            "work_area": record["work_area"],
+            "process": "running" if _process_alive(record) else "stopped",
+            "revision": snapshot.revision,
+            "state": snapshot.state,
+        }
+        projected.update(_round_facts(snapshot.state))
+        projected.update(_activity_projection(store, record, snapshot.state))
+        return projected
+    except PublicLifecycleError:
+        raise
     except Exception as exc:
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
-    if snapshot is None:
-        raise PublicLifecycleError(503, UNAVAILABLE)
-    projected = {
-        "id": record["id"],
-        "caller": record["caller"],
-        "project": record["project"],
-        "work_area": record["work_area"],
-        "process": "running" if _process_alive(record) else "stopped",
-        "revision": snapshot.revision,
-        "state": snapshot.state,
-    }
-    projected.update(_round_facts(snapshot.state))
-    projected.update(_activity_projection(store, record, snapshot.state))
-    return projected
 
 
 def _round_facts(state):
@@ -3102,6 +3104,64 @@ def stop_session(home, session_id, authorize):
         # observes the active stop and refuses.
         record = _record_by_id(home, session_id)
         return _stop_authorized(home, session_id, record)
+    except PublicLifecycleError:
+        raise
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    finally:
+        with _STOPS_GUARD:
+            _STOPS_IN_FLIGHT.discard(token)
+
+
+def abandon_session(home, session_id, authorize, reason):
+    """Stop and terminalize one task-owned discussion as operator failure.
+
+    Direct session Stop remains a pause.  This stricter operation belongs to
+    the direct-task host: once that owner accepts Stop, its discussion cannot
+    remain actionable.  The process is made quiet before the existing atomic
+    interruption/failure successor chooses against concurrent closure.
+    """
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    token = (os.path.abspath(home), session_id)
+    with _STOPS_GUARD:
+        _STOPS_IN_FLIGHT.add(token)
+    try:
+        record = _record_by_id(home, session_id)
+        projection = _stop_authorized(home, session_id, record)
+        if projection["state"]["status"] in brainstorming.TERMINAL_STATUSES:
+            return projection
+        store = brainstorming.SessionStore(state_directory(home))
+        for _attempt in range(8):
+            snapshot = store.read(session_id)
+            if snapshot is None:
+                raise PublicLifecycleError(503, UNAVAILABLE)
+            if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                return _projection(home, _record_by_id(home, session_id))
+            progress = brainstorming.coordination_projection(snapshot.state)
+            interruption = {
+                "after_completed_turns": (
+                    0 if progress is None else len(progress["completed_turns"])
+                ),
+                "plain": reason,
+            }
+            try:
+                store.close_with_interruption(
+                    session_id,
+                    snapshot.revision,
+                    interruption,
+                    _failure_result(snapshot.state, reason),
+                    _closing_summary(
+                        snapshot.state,
+                        reason,
+                        "Ending the explicitly stopped discussion preserves "
+                        "its accepted history and prevents further task work.",
+                    ),
+                )
+                return _projection(home, _record_by_id(home, session_id))
+            except brainstorming.RevisionConflict:
+                continue
+        raise PublicLifecycleError(503, UNAVAILABLE)
     except PublicLifecycleError:
         raise
     except Exception as exc:

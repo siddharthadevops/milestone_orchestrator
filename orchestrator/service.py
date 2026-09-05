@@ -3664,7 +3664,7 @@ def _git_sync_lease(
 def _require_unowned_workspace(
     home, workspace, task_host=None, reap=True, live_sessions_only=False,
     workspace_lease_token=None, excluded_task_id=None, excluded_run_id=None,
-    check_sessions=True,
+    excluded_session_id=None, check_sessions=True,
 ):
     """Refuse while any orchestrator work owns this worktree.
 
@@ -3712,6 +3712,8 @@ def _require_unowned_workspace(
         # area is free; refuse rather than merge under an unknown owner.
         raise ApiError(409, WORK_AREA_BUSY)
     for session in sessions:
+        if session.get("id") == excluded_session_id:
+            continue
         # A session with no readable state counts as live: unknown is not
         # evidence of being finished.
         if session.get("status") in ("success", "failure"):
@@ -3730,7 +3732,8 @@ def _require_unowned_workspace(
 
 def _require_startable_workspace_locked(
     home, workspace, task_host=None, workspace_lease_token=None,
-    excluded_task_id=None, excluded_run_id=None, check_sessions=True,
+    excluded_task_id=None, excluded_run_id=None, excluded_session_id=None,
+    check_sessions=True,
 ):
     """Refuse a new worker while any other service owner holds its tree."""
     if workspace_sync_in_flight(
@@ -3746,6 +3749,7 @@ def _require_startable_workspace_locked(
         workspace_lease_token=workspace_lease_token,
         excluded_task_id=excluded_task_id,
         excluded_run_id=excluded_run_id,
+        excluded_session_id=excluded_session_id,
         check_sessions=check_sessions,
     )
 
@@ -3908,7 +3912,8 @@ def _brainstorming_task_attachment(home, record, allow_missing=False):
     )
     matches = []
     try:
-        direct = task_api.StandaloneTaskStore(home).records()
+        direct_store = task_api.StandaloneTaskStore(home)
+        direct = direct_store.records()
     except Exception:
         # A milestone attachment may still be authoritative.  If it is not,
         # the ordinary no-unique-match refusal below remains conservative.
@@ -3937,8 +3942,55 @@ def _brainstorming_task_attachment(home, record, allow_missing=False):
                 "task_id": task_id,
                 "dispatch_authority": authority,
                 "terminal": task.get("result") is not None,
+                "stop_pending": (
+                    direct_store.owner_stop_reason(task_id) is not None
+                ),
                 "record": task,
             })
+        if (
+            (task.get("order") or {}).get("task_executor")
+            != "reviewed_task"
+        ):
+            continue
+        path = task_api.reviewed_state_path(home, task["id"])
+        try:
+            lifecycle = st.load(path)
+            owned = [
+                item
+                for item in lifecycle.get("tasks") or []
+                if isinstance(item, dict)
+                and item.get("id") == task_id
+                and (item.get("order") or {}).get("task_executor")
+                == "brainstorming"
+                and (item.get("resolved_staffing") or {}).get(
+                    "dispatch_authority"
+                ) == authority
+            ]
+            task_workspace = task_api._workspace(task)
+        except Exception:
+            continue
+        if len(owned) > 1:
+            raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+        if not owned or (
+            isinstance(workspace, str)
+            and os.path.abspath(task_workspace) != os.path.abspath(workspace)
+        ):
+            continue
+        matches.append({
+            "standalone": False,
+            "reviewed": True,
+            "owner_task_id": task["id"],
+            "state_path": os.path.abspath(path),
+            "task_id": task_id,
+            "dispatch_authority": authority,
+            "terminal": (
+                task.get("result") is not None
+                or owned[0].get("result") is not None
+            ),
+            "stop_pending": (
+                direct_store.owner_stop_reason(task["id"]) is not None
+            ),
+        })
     try:
         entries = registry.load(home).get("runs") or []
     except Exception as exc:
@@ -3973,6 +4025,7 @@ def _brainstorming_task_attachment(home, record, allow_missing=False):
                 "task_id": task_id,
                 "dispatch_authority": authority,
                 "terminal": owned[0].get("result") is not None,
+                "stop_pending": False,
             })
         elif len(owned) > 1:
             raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
@@ -4038,6 +4091,88 @@ def _brainstorming_milestone_attachment(
     return matches[0]
 
 
+def _brainstorming_reviewed_attachment(
+    home, session_id, record, allow_missing=False
+):
+    """Find the standalone reviewed lifecycle that owns a discussion."""
+    caller = record.get("caller")
+    if not (isinstance(caller, str) and caller.startswith("milestone:")):
+        return None
+    context = record.get("execution_context")
+    workspace = (
+        context.get("workspace_path") if isinstance(context, dict) else None
+    )
+    try:
+        store = task_api.StandaloneTaskStore(home)
+        records = store.records()
+    except Exception as exc:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
+    matches = []
+    for task in records:
+        if (
+            (task.get("order") or {}).get("task_executor")
+            != "reviewed_task"
+        ):
+            continue
+        path = task_api.reviewed_state_path(home, task["id"])
+        try:
+            lifecycle = st.load(path)
+            unit_key = lifecycle["reviewed_task"]["unit"]
+            unit = next(
+                item for item in lifecycle["units"]
+                if st.unit_key(item) == unit_key
+            )
+            owned_session = (unit.get("brainstorming_wait") or {}).get(
+                "session_id"
+            )
+            expected_caller = "milestone:%s:%s" % (
+                lifecycle.get("name") or "run", unit_key
+            )
+            task_workspace = task_api._workspace(task)
+        except Exception as exc:
+            # A direct reviewed lifecycle names its durable outer task in
+            # the session caller.  Once that owner is identified, losing
+            # its state is not evidence that the session is unattached: the
+            # unreadable state may contain an accepted Stop.
+            if caller.startswith(
+                "milestone:reviewed task %s:" % task["id"]
+            ):
+                raise ApiError(
+                    503, brainstorming_lifecycle.UNAVAILABLE
+                ) from exc
+            continue
+        # Session creation is durable before the reviewed driver can save its
+        # attachment.  The immutable, task-specific caller is sufficient to
+        # recover that narrow handoff window; an attachment to another id
+        # still wins and prevents adopting historical sessions.
+        if (
+            caller != expected_caller
+            or owned_session not in (None, session_id)
+        ):
+            continue
+        if (
+            isinstance(workspace, str)
+            and os.path.abspath(task_workspace) != os.path.abspath(workspace)
+        ):
+            continue
+        matches.append({
+            "standalone": True,
+            "reviewed": True,
+            "task_id": task["id"],
+            "state_path": os.path.abspath(path),
+            "terminal": task.get("result") is not None,
+            "stop_pending": store.owner_stop_reason(task["id"]) is not None,
+            "record": task,
+        })
+    if len(matches) > 1:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    if not matches:
+        if allow_missing:
+            return None
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    return matches[0]
+
+
 def _attached_brainstorming_staffing_session(
     home, session_id, record=None
 ):
@@ -4057,9 +4192,19 @@ def _attached_brainstorming_staffing_session(
     if task_attachment is not None:
         if task_attachment["dispatch_authority"] != "current_profile":
             return None
-        if task_attachment["terminal"]:
+        if task_attachment["terminal"] or task_attachment["stop_pending"]:
             raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
         return _run_staffing_session(task_attachment["state_path"])
+    reviewed_attachment = _brainstorming_reviewed_attachment(
+        home, session_id, record, allow_missing=True
+    )
+    if reviewed_attachment is not None:
+        if (
+            reviewed_attachment["terminal"]
+            or reviewed_attachment["stop_pending"]
+        ):
+            raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+        return _run_staffing_session(reviewed_attachment["state_path"])
     milestone_attachment = _brainstorming_milestone_attachment(
         home, session_id, record
     )
@@ -4076,6 +4221,22 @@ def _run_staffing_session(state_path):
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
 
 
+def _owner_restart_barrier(home, who, session_id, attachment):
+    """Refuse new work after an attached owner accepted Stop."""
+    if attachment is None or not (
+        attachment["terminal"] or attachment["stop_pending"]
+    ):
+        return None
+    projection = brainstorming_lifecycle.inspect_session(
+        home,
+        session_id,
+        lambda current: require_brainstorming_access(home, who, current),
+    )
+    if projection["state"]["status"] in brainstorming.TERMINAL_STATUSES:
+        return projection
+    raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+
+
 def _start_brainstorming_session(home, who, session_id, task_host=None):
     """Resume task-owned sessions through their durable adapter boundary."""
     record = brainstorming_lifecycle._record_by_id(home, session_id)
@@ -4086,13 +4247,27 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
         lambda current: require_brainstorming_access(home, who, current),
     )
     if projection.get("process") == "running":
-        # Preserve lifecycle's stop-vs-start precedence.  This remains a
-        # no-op for an ordinary live child and needs no attachment lookup.
-        return brainstorming_lifecycle.start_session(
-            home,
-            session_id,
-            lambda current: require_brainstorming_access(home, who, current),
-        )
+        # The process projection is eventual.  Serialize the no-op recheck
+        # with task Stop and reread the durable owner fence before lifecycle
+        # is allowed to replace a child that stopped after the projection.
+        with registry.locked(home):
+            attachment = _brainstorming_task_attachment(home, record)
+            if attachment is None:
+                attachment = _brainstorming_reviewed_attachment(
+                    home, session_id, record, allow_missing=True
+                )
+            blocked = _owner_restart_barrier(
+                home, who, session_id, attachment
+            )
+            if blocked is not None:
+                return blocked
+            return brainstorming_lifecycle.start_session(
+                home,
+                session_id,
+                lambda current: require_brainstorming_access(
+                    home, who, current
+                ),
+            )
     terminal = (
         projection["state"]["status"] in brainstorming.TERMINAL_STATUSES
     )
@@ -4108,6 +4283,14 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
     if attachment is None:
         workspace = projection["state"]["request"]["workspace_path"]
         with registry.locked(home):
+            reviewed_attachment = _brainstorming_reviewed_attachment(
+                home, session_id, record, allow_missing=True
+            )
+            blocked = _owner_restart_barrier(
+                home, who, session_id, reviewed_attachment
+            )
+            if blocked is not None:
+                return blocked
             _require_startable_workspace_locked(
                 home,
                 workspace,
@@ -4144,6 +4327,12 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
         # the same registry lock from lease inspection until the direct host
         # has claimed the workspace, so a sync cannot begin in between.
         with registry.locked(home):
+            attachment = _brainstorming_task_attachment(home, record)
+            blocked = _owner_restart_barrier(
+                home, who, session_id, attachment
+            )
+            if blocked is not None:
+                return blocked
             store = task_api.StandaloneTaskStore(home)
             state = {"tasks": store.records()}
             task = tasks.task_record(state, attachment["task_id"])
@@ -4190,18 +4379,30 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
                     lambda: _direct_task_config(home, project),
                 )
         return projection
-    staffing_selection = (
-        {"session": _run_staffing_session(attachment["state_path"])}
-        if attachment["dispatch_authority"] == "current_profile"
-        else None
-    )
     try:
         with registry.locked(home):
+            attachment = _brainstorming_task_attachment(home, record)
+            blocked = _owner_restart_barrier(
+                home, who, session_id, attachment
+            )
+            if blocked is not None:
+                return blocked
+            staffing_selection = (
+                {"session": _run_staffing_session(attachment["state_path"])}
+                if attachment["dispatch_authority"] == "current_profile"
+                else None
+            )
             _require_startable_workspace_locked(
                 home,
                 projection["state"]["request"]["workspace_path"],
                 task_host=task_host,
-                excluded_run_id=attachment["run_id"],
+                **(
+                    {"excluded_task_id": attachment.get(
+                        "owner_task_id", attachment["task_id"]
+                    )}
+                    if attachment.get("reviewed")
+                    else {"excluded_run_id": attachment["run_id"]}
+                ),
             )
             projection, task = brainstorming_tasks.start_persisted_task(
                 attachment["state_path"],
@@ -4251,39 +4452,99 @@ def _continue_brainstorming_session(
             ),
         )
 
+    # Process liveness is eventual: even a projected live child must cross the
+    # durable owner fence before the lifecycle recheck is allowed to relaunch.
     if (
         projection["revision"] != waiting_revision
         or projection["state"]["status"] != "waiting"
-        or projection.get("process") == "running"
     ):
         return continue_authorized()
 
-    attachment = _brainstorming_task_attachment(home, record)
-    admission = {}
-    if attachment is None:
-        milestone_attachment = _brainstorming_milestone_attachment(
-            home, session_id, record, allow_missing=True
-        )
-        if milestone_attachment is None:
-            # Match ordinary Start: document sessions retain their existing
-            # target-level concurrency, while runs and direct tasks still own
-            # the containing worktree.
-            admission["check_sessions"] = False
-        else:
-            admission["excluded_run_id"] = milestone_attachment["run_id"]
-    elif attachment["standalone"]:
-        admission["excluded_task_id"] = attachment["task_id"]
-    else:
-        admission["excluded_run_id"] = attachment["run_id"]
-
     with registry.locked(home):
+        attachment = _brainstorming_task_attachment(home, record)
+        if attachment is None:
+            attachment = _brainstorming_reviewed_attachment(
+                home, session_id, record, allow_missing=True
+            )
+        if attachment is not None and (
+            attachment["terminal"] or attachment["stop_pending"]
+        ):
+            raise ApiError(
+                409, brainstorming_lifecycle.CONTINUATION_CONFLICT
+            )
+        admission = {}
+        if attachment is None:
+            milestone_attachment = _brainstorming_milestone_attachment(
+                home, session_id, record, allow_missing=True
+            )
+            if milestone_attachment is None:
+                # Match ordinary Start: document sessions retain their
+                # existing target-level concurrency, while runs and direct
+                # tasks still own the containing worktree.
+                admission["check_sessions"] = False
+            else:
+                admission["excluded_run_id"] = milestone_attachment["run_id"]
+        elif attachment.get("reviewed"):
+            admission["excluded_task_id"] = attachment.get(
+                "owner_task_id", attachment["task_id"]
+            )
+        elif attachment["standalone"]:
+            admission["excluded_task_id"] = attachment["task_id"]
+        else:
+            admission["excluded_run_id"] = attachment["run_id"]
         _require_startable_workspace_locked(
             home,
             projection["state"]["request"]["workspace_path"],
             task_host=task_host,
+            excluded_session_id=session_id,
             **admission,
         )
+        if (
+            attachment is not None
+            and attachment["standalone"]
+            and not attachment.get("reviewed")
+        ):
+            starter = getattr(task_host, "start", None)
+            if callable(starter):
+                task = attachment["record"]
+                try:
+                    starter(
+                        task,
+                        lambda: _direct_task_config(
+                            home, _task_project(task)
+                        ),
+                    )
+                except Exception as exc:
+                    raise ApiError(
+                        503, brainstorming_lifecycle.UNAVAILABLE
+                    ) from exc
         return continue_authorized()
+
+
+def _add_brainstorming_rounds(home, who, session_id, body):
+    """Raise capacity only while an attached task still permits work."""
+    record = brainstorming_lifecycle._record_by_id(home, session_id)
+    authorize = lambda current: require_brainstorming_access(
+        home, who, current
+    )
+    require_brainstorming_access(home, who, record)
+    # Preserve request-error precedence before consulting an owner.
+    brainstorming_lifecycle._positive_control_value(body, "maximum")
+    with registry.locked(home):
+        attachment = _brainstorming_task_attachment(home, record)
+        if attachment is None:
+            attachment = _brainstorming_reviewed_attachment(
+                home, session_id, record, allow_missing=True
+            )
+        if attachment is not None and (
+            attachment["terminal"] or attachment["stop_pending"]
+        ):
+            raise ApiError(
+                409, brainstorming_lifecycle.CONTINUATION_CONFLICT
+            )
+        return brainstorming_lifecycle.add_rounds(
+            home, session_id, body, authorize
+        )
 
 
 def brainstorming_visibility(home, who):
@@ -4633,6 +4894,18 @@ def stop_task(home, who, task_id, host):
     if email:
         reason = "stopped by %s" % email
     delivered = host.stop(task_id, reason)
+    if not delivered:
+        recover_stop = getattr(
+            host, "stop_inactive_brainstorming", None
+        )
+        if callable(recover_stop):
+            delivered = recover_stop(
+                task_id,
+                reason,
+                lambda: _direct_task_config(
+                    home, _task_project(direct.record(task_id))
+                ),
+            )
     return {"stopped": bool(delivered), "state": "stopping" if delivered
             else "not_running"}
 
@@ -5760,12 +6033,9 @@ def make_handler(home, task_host=None):
                         and parts[5] in ("rounds", "continue")
                     ):
                         body = self._brainstorming_body()
-                        authorize = lambda record: require_brainstorming_access(
-                            home, who, record
-                        )
                         if parts[5] == "rounds":
-                            session = brainstorming_lifecycle.add_rounds(
-                                home, parts[4], body, authorize
+                            session = _add_brainstorming_rounds(
+                                home, who, parts[4], body
                             )
                         else:
                             session = _continue_brainstorming_session(

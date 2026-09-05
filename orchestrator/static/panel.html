@@ -1363,6 +1363,9 @@ function sessionRow(s) {
     // next — never past the ceiling the session may not exceed.
     bits.push(`round ${Math.min(Number(s.rounds_used || 0) + 1,
       s.max_rounds)}/${s.max_rounds}`);
+  else if (s.status === "waiting")
+    bits.push(s.exhausted ? "waiting · round limit reached" :
+      `waiting · ${s.rounds_remaining} rounds reserved`);
   else if (!terminal && !running) bits.push("stopped");
   else if (s.status) bits.push(s.status);
   const origin = sessionOrigin(s);
@@ -1398,7 +1401,7 @@ function sessionStatusIndicator(s) {
   if (s.status === "failure")
     return `<span class="dot err" title="failed"></span>`;
   if (s.status === "success") return "";
-  return `<span class="dot" title="stopped"></span>`;
+  return `<span class="dot" title="${s.status === "waiting" ? "waiting" : "stopped"}"></span>`;
 }
 /* ---- brainstorming session detail: rendered in the panel's right pane,
    exactly like a milestone, polling the session's dedicated view route
@@ -1410,6 +1413,9 @@ let selectedSession = null;
 let sessionSeq = 0;
 let sessionStopping = false;
 let sessionStarting = false;
+let sessionAddingRounds = false;
+let sessionContinuing = false;
+let sessionRoundsToAdd = 2;
 let sessionDiscarding = false;
 let lastSessionView = null;
 let sessionView = "main";  // "main" | "info"
@@ -1423,6 +1429,9 @@ function openSession(id) {
   goalOpen = false;
   sessionStopping = false;
   sessionStarting = false;
+  sessionAddingRounds = false;
+  sessionContinuing = false;
+  sessionRoundsToAdd = 2;
   sessionDiscarding = false;
   lastSessionView = null;
   document.body.classList.add("m-detail");  // mobile: swap to detail page
@@ -1444,7 +1453,9 @@ async function refreshSessionDetail() {
   const seq = ++sessionSeq, id = selectedSession;
   try {
     const data = await api(
-      "/api/brainstorming/sessions/" + encodeURIComponent(id) + "/view"
+      "/api/brainstorming/sessions/" + encodeURIComponent(id) + "/view",
+      undefined,
+      true
     );
     if (seq !== sessionSeq || id !== selectedSession) return;
     lastSessionView = data.view;
@@ -1741,8 +1752,10 @@ function renderSessionDetail(view) {
   fullRequestText = String(view.request || "");
   const terminal = BS_TERMINAL.has(view.status);
   const running = view.process === "running";
+  const waiting = view.status === "waiting";
   const listed = lastSessions.find(s => s.id === view.id);
-  const displayStatus = !terminal && !running ? "stopped" : view.status;
+  const displayStatus = waiting ? "waiting"
+    : !terminal && !running ? "stopped" : view.status;
   const statusCls = view.status === "success" ? "closed"
     : view.status === "failure" ? "failed" : "open";
   let html = "";
@@ -1761,7 +1774,7 @@ function renderSessionDetail(view) {
         : ""}
       <div class="amend-hint mono">closure: ${esc(view.closure_policy)} · ${
         view.same_family_fallback ? "same-family fallback" : "cross-family"}</div>
-      <div class="amend-hint mono">rounds: ${view.round.completed} complete · ${view.round.maximum} maximum</div></div>`;
+      <div class="amend-hint mono">rounds: ${view.round.completed} used · ${view.round.maximum} maximum · ${view.round.remaining} remaining</div></div>`;
     html += `<div class="card"><h3>Participants</h3>` +
       view.participants.map(p =>
         `<div class="amend-hint mono"><b>${esc(p.delivery)}</b>: ${esc(p.id)} · ` +
@@ -1804,7 +1817,7 @@ function renderSessionDetail(view) {
     `<span class="chip ${statusCls}">${esc(displayStatus)}</span></div>`;
   const bits = [
     `round ${view.round.current || 0}/${view.round.maximum}` +
-      ` · ${view.round.completed} complete`,
+      ` · ${view.round.completed} used · ${view.round.remaining} remaining`,
     view.closure_policy,
     view.work_duration_s != null
       ? `LLM ${fmtDHMS(liveWorkSeconds(view.work_duration_s,
@@ -1829,7 +1842,7 @@ function renderSessionDetail(view) {
     ${running
       ? `<button class="btn danger" ${sessionStopping ? "disabled" : ""}
           onclick="stopSelectedSession()">${sessionStopping ? "Stopping…" : "Stop session"}</button>`
-      : (!terminal
+      : (!terminal && !waiting
           ? `<button class="btn primary" ${sessionStarting ? "disabled" : ""}
               onclick="startSelectedSession()">${sessionStarting ? "Starting…" : "Start session"}</button>`
           : "")}
@@ -1839,6 +1852,25 @@ function renderSessionDetail(view) {
     <button class="btn" style="margin-left:auto"
       onclick="openSessionInfo()">Info&#8230;</button>
   </div>`;
+  if (waiting) {
+    const controlBusy = sessionAddingRounds || sessionContinuing;
+    html += `<div class="card"><h3>Waiting for more rounds</h3>
+      <div class="amend-hint">${view.exhausted
+        ? "The round limit was reached without agreement."
+        : `${view.round.remaining} additional rounds are reserved.`}
+        ${view.round.completed} used · ${view.round.maximum} maximum ·
+        ${view.round.remaining} remaining.</div>
+      <div class="toolbar" style="margin-top:10px">
+        <label class="amend-hint">Add
+          <input type="number" min="1" step="1" value="${esc(String(sessionRoundsToAdd))}"
+            oninput="sessionRoundsToAdd=this.value" style="width:72px">
+          rounds</label>
+        <button class="btn" ${controlBusy ? "disabled" : ""}
+          onclick="addRoundsSelectedSession()">${sessionAddingRounds ? "Adding…" : "Add rounds"}</button>
+        <button class="btn primary" ${controlBusy ? "disabled" : ""}
+          onclick="continueSelectedSession()">${sessionContinuing ? "Continuing…" : "Continue"}</button>
+      </div></div>`;
+  }
   html += `<div class="card"><h3>Activity</h3>${sessionChips(view)}</div>`;
   html += sessionClosingCard(view);
   if (view.final_agreement) {
@@ -1983,6 +2015,53 @@ async function startSelectedSession() {
     alert(e.message);
   } finally {
     sessionStarting = false;
+    refreshSessionDetail();
+  }
+}
+async function addRoundsSelectedSession() {
+  const view = lastSessionView;
+  const maximum = addedRoundMaximum(
+    view && view.round.maximum, sessionRoundsToAdd
+  );
+  if (!selectedSession || sessionAddingRounds || sessionContinuing ||
+      !view || view.status !== "waiting") return;
+  if (maximum === null) {
+    alert("round quantity must be a positive integer");
+    return;
+  }
+  sessionAddingRounds = true;
+  renderSessionDetail(view);
+  try {
+    await api("/api/brainstorming/sessions/" +
+      encodeURIComponent(selectedSession) + "/rounds", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: '{"maximum":' + maximum + '}',
+    });
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    sessionAddingRounds = false;
+    refreshSessionDetail();
+  }
+}
+async function continueSelectedSession() {
+  const view = lastSessionView;
+  if (!selectedSession || sessionAddingRounds || sessionContinuing ||
+      !view || view.status !== "waiting") return;
+  sessionContinuing = true;
+  renderSessionDetail(view);
+  try {
+    await api("/api/brainstorming/sessions/" +
+      encodeURIComponent(selectedSession) + "/continue", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: '{"waiting_revision":' + view.revision + '}',
+    });
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    sessionContinuing = false;
     refreshSessionDetail();
   }
 }
@@ -2429,9 +2508,27 @@ function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g,
     c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 }
-async function api(path, opts) {
+function parseApiPayload(text, exactIntegers = false) {
+  if (!exactIntegers) return JSON.parse(text);
+  return JSON.parse(text, (_key, value, context) => {
+    if (typeof value === "number" && !Number.isSafeInteger(value) &&
+        context &&
+        /^-?\d+$/.test(context.source)) return context.source;
+    return value;
+  });
+}
+function addedRoundMaximum(maximum, quantity) {
+  const maximumText = String(maximum);
+  const quantityText = String(quantity).trim();
+  if (!/^\d+$/.test(maximumText) || !/^[1-9]\d*$/.test(quantityText))
+    return null;
+  return (BigInt(maximumText) + BigInt(quantityText)).toString();
+}
+async function api(path, opts, exactIntegers = false) {
   const res = await fetch(path, opts);
-  const data = await res.json().catch(() => ({ok:false, error:"bad response"}));
+  const data = await res.text()
+    .then(text => parseApiPayload(text, exactIntegers))
+    .catch(() => ({ok:false, error:"bad response"}));
   if (!data.ok) throw new Error(data.error || res.statusText);
   return data;
 }

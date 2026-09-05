@@ -142,6 +142,30 @@ class StandaloneTaskStore:
     def record(self, task_id):
         return tasks.task_record({"tasks": self._load()}, task_id)
 
+    def owner_chain(self, task_id):
+        """Return the task and its durable parents, nearest first."""
+        records = self._load()
+        by_id = {record["id"]: record for record in records}
+        current = tasks.task_record({"tasks": records}, task_id)
+        chain = []
+        seen = set()
+        while current["id"] not in seen:
+            chain.append(current)
+            seen.add(current["id"])
+            parent_id = (current.get("parent") or {}).get("task_id")
+            if not isinstance(parent_id, str) or parent_id not in by_id:
+                break
+            current = by_id[parent_id]
+        return chain
+
+    def owner_stop_reason(self, task_id):
+        """Return the first accepted Stop on a task or its owner chain."""
+        for record in self.owner_chain(task_id):
+            reason = self.stop_reason(record["id"])
+            if reason is not None:
+                return reason
+        return None
+
     def admit(self, order, resolved_staffing, primary_workspace):
         with registry.locked(self.home):
             return self.admit_locked(
@@ -265,7 +289,7 @@ class StandaloneTaskStore:
         return document.get("stop_reason")
 
     def record_stop_locked(self, task_id, reason):
-        """Durably accept a deep parent Stop under the registry lock."""
+        """Durably accept an owner-coupled Stop under the registry lock."""
         if not isinstance(reason, str) or not reason.strip():
             raise tasks.TaskRecordError("task Stop reason must be non-empty")
         key = task_key(task_id)
@@ -321,9 +345,9 @@ def forget_task_evidence(home, record):
 def task_session_id(home, record, host=None):
     """The Brainstorming session a standalone task owns, or None.
 
-    Running: the host knows it. Otherwise: the session recorded on the
-    task's private target (the adapter's own retained-authority lookup).
-    Worker tasks own no session."""
+    Running: the host knows it. Otherwise: the adapter's durable caller
+    relation names a registered session, with its retained private target as
+    the fallback after discard. Worker tasks own no session."""
     executor = (record.get("order") or {}).get("task_executor")
     if executor == "reviewed_task":
         try:
@@ -352,6 +376,10 @@ def task_session_id(home, record, host=None):
         _area, _parent, target = brainstorming_tasks._private_target_paths(
             _workspace(record), home, record["id"]
         )
+        caller = brainstorming_tasks._task_caller(record, record["id"])
+        owned = brainstorming_tasks._owned_projection(home, caller, target)
+        if owned is not None:
+            return owned[0]
         store = brainstorming.SessionStore(
             brainstorming_tasks.lifecycle.state_directory(home)
         )
@@ -693,9 +721,14 @@ class DirectTaskHost:
                 if task_id not in self._active:
                     return False
                 record = self.store.record(task_id)
-                if tasks.stored_task_executor(
+                executor = tasks.stored_task_executor(
                     record["order"]["task_executor"]
-                ) == "deep_task":
+                )
+                if record["result"] is not None:
+                    return False
+                if executor in (
+                    "brainstorming", "reviewed_task", "deep_task"
+                ):
                     reason = self.store.record_stop_locked(task_id, reason)
                 self._stops[task_id] = reason
                 control = self._controls.get(task_id)
@@ -716,6 +749,38 @@ class DirectTaskHost:
                 time.sleep(0.05)
         if session_id is not None:
             self._pause_session(session_id)
+        return True
+
+    def stop_inactive_brainstorming(
+        self, task_id, reason, config_resolver
+    ):
+        """Accept and settle Stop after a direct Brainstorming host exited.
+
+        A recoverable discussion outlives its task thread.  Its durable Stop
+        therefore fences continuation first, then reuses normal host adoption
+        to terminalize the same session and task.
+        """
+        reason = str(reason or "stopped by operator").strip()
+        with registry.locked(self.home):
+            record = self.store.record(task_id)
+            if record["result"] is not None or tasks.stored_task_executor(
+                record["order"]["task_executor"]
+            ) != "brainstorming":
+                return False
+            session_id = task_session_id(self.home, record, self)
+            if session_id is None:
+                return False
+            reason = self.store.record_stop_locked(task_id, reason)
+
+        # Continuation may have re-adopted the task before the Stop fence won.
+        # Deliver to that host when present; otherwise adopt the durable Stop.
+        if not self.stop(task_id, reason):
+            try:
+                self.start(record, config_resolver)
+            except Exception:
+                # The Stop remains durable and blocks continuation. Ordinary
+                # service adoption retries the same settlement after restart.
+                pass
         return True
 
     def _pause_session(self, session_id):
@@ -866,11 +931,17 @@ class DirectTaskHost:
         return any(gitsync.paths_overlap(path, workspace) for path in active)
 
     def owns_workspace_except(self, workspace, task_id):
-        """Whether another execution thread owns an overlapping tree."""
+        """Whether work outside one task's owner chain holds the tree."""
+        try:
+            excluded = {
+                record["id"] for record in self.store.owner_chain(task_id)
+            }
+        except Exception:
+            excluded = {task_id}
         with self._lock:
             active = [
                 path for active_id, path in self._active.items()
-                if active_id != task_id
+                if active_id not in excluded
             ]
         return any(gitsync.paths_overlap(path, workspace) for path in active)
 
@@ -993,7 +1064,7 @@ class DirectTaskHost:
         return result
 
     def _await_deep_child(self, task_id, child, config_resolver):
-        if child["result"] is None:
+        if child["result"] is None and self._stop_reason(task_id) is None:
             self.start(child, config_resolver, parent_task_id=task_id)
         while True:
             child = self.store.record(child["id"])
@@ -1001,12 +1072,33 @@ class DirectTaskHost:
             if stop_reason is not None and child["result"] is None:
                 delivered = self.stop(child["id"], stop_reason)
                 if not delivered:
-                    try:
-                        child = self.store.record_result(
-                            child["id"], self._deep_failure(stop_reason)
-                        )
-                    except tasks.TaskRecordError:
+                    if tasks.stored_task_executor(
+                        child["order"]["task_executor"]
+                    ) == "reviewed_task":
+                        try:
+                            with registry.locked(self.home):
+                                current = self.store.record(child["id"])
+                                if current["result"] is None:
+                                    self.store.record_stop_locked(
+                                        child["id"], stop_reason
+                                    )
+                        except tasks.TaskRecordError:
+                            pass
                         child = self.store.record(child["id"])
+                        if child["result"] is None:
+                            # Parent Stop normally reaches an already-running
+                            # child.  After restart it instead adopts that
+                            # child's durable Stop without the stopped-parent
+                            # admission fence, so the reviewed lifecycle can
+                            # settle any attached discussion before closing.
+                            self.start(child, config_resolver)
+                    else:
+                        try:
+                            child = self.store.record_result(
+                                child["id"], self._deep_failure(stop_reason)
+                            )
+                        except tasks.TaskRecordError:
+                            child = self.store.record(child["id"])
             if child["result"] is not None:
                 return child, stop_reason
             time.sleep(self.poll_interval)
@@ -1137,11 +1229,23 @@ class DirectTaskHost:
             "native_result": None,
         }
 
-    def _record_reviewed_terminal(self, task_id, result):
-        """Choose the terminal result at the Stop-delivery boundary."""
+    def _record_reviewed_terminal(
+        self, task_id, result, stopped_session_settled=False
+    ):
+        """Choose the terminal result at the Stop-delivery boundary.
+
+        Return a Stop that won before publication so its owned discussion can
+        be settled first.  The settlement path opts into the final write only
+        after that discussion is terminal or durably detached.
+        """
         with registry.locked(self.home):
             with self._lock:
-                stop_reason = self._stops.get(task_id)
+                stop_reason = (
+                    self._stops.get(task_id)
+                    or self.store.stop_reason(task_id)
+                )
+                if stop_reason is not None and not stopped_session_settled:
+                    return stop_reason
                 if stop_reason is not None:
                     result = dict(
                         result,
@@ -1155,6 +1259,157 @@ class DirectTaskHost:
                 # mistake an in-progress settlement for abandoned work.
                 self.store.record_result_locked(task_id, result)
                 self._active.pop(task_id, None)
+        return None
+
+    def _unattached_reviewed_session_id(self, subject, unit):
+        """Recover the one session created before its attachment was saved."""
+        caller = "milestone:%s:%s" % (
+            subject.state.get("name") or "run", st.unit_key(unit)
+        )
+        rows = brainstorming_tasks.lifecycle.list_sessions(
+            self.home, lambda record: record.get("caller") == caller
+        )
+        if any(row.get("state_error") for row in rows):
+            raise brainstorming_tasks.AdapterError(
+                "owned Brainstorming session state is unavailable"
+            )
+        represented = {
+            event.get("session_id")
+            for event in subject.state.get("events", [])
+            if isinstance(event, dict)
+            and isinstance(event.get("session_id"), str)
+        }
+        unattached = [
+            row for row in rows
+            if row.get("id") not in represented
+        ]
+        if len(unattached) > 1:
+            raise brainstorming_tasks.AdapterError(
+                "one reviewed task owns multiple unattached sessions"
+            )
+        return unattached[0]["id"] if unattached else None
+
+    def _settle_stopped_reviewed(self, task_id, subject, unit, reason):
+        """Close an owned discussion before publishing task failure."""
+        session_id = (unit.get("brainstorming_wait") or {}).get("session_id")
+        if not isinstance(session_id, str):
+            try:
+                session_id = self._unattached_reviewed_session_id(
+                    subject, unit
+                )
+            except Exception:
+                return False
+        if isinstance(session_id, str):
+            projection = None
+            outcome_event = None
+            try:
+                record = brainstorming_tasks.lifecycle._record_by_id(
+                    self.home, session_id
+                )
+                projection = brainstorming_tasks.lifecycle.abandon_session(
+                    self.home,
+                    session_id,
+                    brainstorming_tasks._authorize_caller(record.get("caller")),
+                    reason,
+                )
+                outcome_event = (
+                    "brainstorming_failure_routed"
+                    if projection["state"]["status"] == "failure"
+                    else "brainstorming_owner_stop_detached"
+                )
+            except brainstorming_tasks.lifecycle.PublicLifecycleError as exc:
+                if exc.code != brainstorming_tasks.lifecycle.UNKNOWN_SESSION:
+                    # Store and lifecycle unavailability is retryable.  A
+                    # missing service record is not: Discard has already made
+                    # this discussion permanently non-actionable.
+                    return False
+                outcome_event = "brainstorming_missing_detached"
+                try:
+                    store = brainstorming.SessionStore(
+                        brainstorming_tasks.lifecycle.state_directory(
+                            self.home
+                        )
+                    )
+                    snapshot = store.read(session_id)
+                    if snapshot is not None:
+                        projection = brainstorming_tasks._retained_projection(
+                            self.home,
+                            session_id,
+                            "discarded:%s" % session_id,
+                            snapshot.state["request"].get("target_path"),
+                        )
+                except Exception:
+                    # A retained state that exists but cannot be read may hold
+                    # accounting that Stop must preserve; retry that case.
+                    return False
+            except Exception:
+                # Retain the durable Stop and owner until the session can be
+                # terminalized and its accepted accounting can be imported;
+                # adoption retries this same idempotent settlement.
+                return False
+
+            try:
+                wait = unit.get("brainstorming_wait") or {}
+                if not any(
+                    event.get("type") == "brainstorming_wait_started"
+                    and event.get("session_id") == session_id
+                    for event in subject.state.get("events", [])
+                ):
+                    # Session creation wins before the reviewed attachment is
+                    # saved.  Recover that missing ledger opening before its
+                    # accounting and terminal outcome so the ordinary summary
+                    # can represent the accepted discussion in event order.
+                    st.append_event(
+                        subject.state,
+                        "brainstorming_wait_started",
+                        unit=st.unit_key(unit),
+                        kind=(wait.get("origin") or {}).get("kind"),
+                        session_id=session_id,
+                    )
+                if projection is not None:
+                    subject._record_brainstorming_work(
+                        unit,
+                        session_id,
+                        projection.get("work_duration_s"),
+                        projection.get("work_token_usage"),
+                        projection.get("work_token_usage_partial", False),
+                        cost=projection.get("work_cost"),
+                        cost_partial=projection.get(
+                            "work_cost_partial", False
+                        ),
+                        task_id=subject._reviewed_call_task_id(unit),
+                    )
+                if not any(
+                    event.get("session_id") == session_id
+                    and event.get("type") in st._BRAINSTORMING_OUTCOMES
+                    for event in subject.state.get("events", [])
+                ):
+                    st.append_event(
+                        subject.state,
+                        outcome_event,
+                        unit=st.unit_key(unit),
+                        kind=(wait.get("origin") or {}).get("kind"),
+                        session_id=session_id,
+                    )
+                subject._save()
+            except Exception:
+                return False
+        self._record_reviewed_terminal(
+            task_id,
+            self._reviewed_failure(subject, unit, reason),
+            stopped_session_settled=True,
+        )
+        return True
+
+    def _publish_reviewed_terminal(self, task_id, subject, unit, result):
+        """Publish normally, or finish a Stop that won the result fence."""
+        stop_reason = self._record_reviewed_terminal(task_id, result)
+        if stop_reason is None:
+            return
+        while not self._settle_stopped_reviewed(
+            task_id, subject, unit, stop_reason
+        ):
+            time.sleep(self.poll_interval)
 
     def _run_reviewed(self, record):
         task_id = record["id"]
@@ -1170,14 +1425,18 @@ class DirectTaskHost:
                 unit = subject._unit_by_key(unit_key)
                 stop_reason = self._stop_reason(task_id)
                 if stop_reason is not None:
-                    self._record_reviewed_terminal(
-                        task_id, self._reviewed_failure(subject, unit, stop_reason)
-                    )
-                    return
+                    if self._settle_stopped_reviewed(
+                        task_id, subject, unit, stop_reason
+                    ):
+                        return
+                    time.sleep(self.poll_interval)
+                    continue
                 if subject.state.get("failure") is not None:
                     failure = subject.state["failure"]
-                    self._record_reviewed_terminal(
+                    self._publish_reviewed_terminal(
                         task_id,
+                        subject,
+                        unit,
                         self._reviewed_failure(
                             subject, unit, failure.get("reason")
                         ),
@@ -1209,11 +1468,16 @@ class DirectTaskHost:
                 result = subject.reviewed_work.result(unit)
                 if result is not None:
                     stop_reason = self._stop_reason(task_id)
-                    self._record_reviewed_terminal(
-                        task_id,
-                        self._reviewed_failure(subject, unit, stop_reason)
-                        if stop_reason is not None else result,
-                    )
+                    if stop_reason is not None:
+                        if not self._settle_stopped_reviewed(
+                            task_id, subject, unit, stop_reason
+                        ):
+                            time.sleep(self.poll_interval)
+                            continue
+                    else:
+                        self._publish_reviewed_terminal(
+                            task_id, subject, unit, result
+                        )
                     return
                 if session_id:
                     time.sleep(self.poll_interval)
@@ -1223,13 +1487,32 @@ class DirectTaskHost:
             reason = (
                 (subject.state.get("failure") or {}).get("reason") or str(exc)
             )
-            self._record_reviewed_terminal(
-                task_id, self._reviewed_failure(subject, unit, reason)
+            stop_reason = self._stop_reason(task_id)
+            if stop_reason is not None:
+                while not self._settle_stopped_reviewed(
+                    task_id, subject, unit, stop_reason
+                ):
+                    time.sleep(self.poll_interval)
+                return
+            self._publish_reviewed_terminal(
+                task_id,
+                subject,
+                unit,
+                self._reviewed_failure(subject, unit, reason),
             )
         except Exception as exc:
             unit = subject._unit_by_key(unit_key)
-            self._record_reviewed_terminal(
+            stop_reason = self._stop_reason(task_id)
+            if stop_reason is not None:
+                while not self._settle_stopped_reviewed(
+                    task_id, subject, unit, stop_reason
+                ):
+                    time.sleep(self.poll_interval)
+                return
+            self._publish_reviewed_terminal(
                 task_id,
+                subject,
+                unit,
                 self._reviewed_failure(
                     subject,
                     unit,
@@ -1344,10 +1627,120 @@ class DirectTaskHost:
         record = tasks.task_record(state, task_id)
         if record["result"] is None:
             return None
-        return self.store.record_result(task_id, record["result"])
+        with registry.locked(self.home):
+            stop_reason = self.store.stop_reason(task_id)
+            result = record["result"]
+            if stop_reason is not None:
+                result = dict(
+                    result,
+                    status="failure",
+                    reason=stop_reason,
+                )
+            return self.store.record_result_locked(task_id, result)
+
+    def _record_brainstorming_terminal(self, state, task_id):
+        """Order terminal result against a concurrently accepted task Stop."""
+        with registry.locked(self.home):
+            stop_reason = self.store.stop_reason(task_id)
+            if stop_reason is not None:
+                return stop_reason
+            record = tasks.task_record(state, task_id)
+            self.store.record_result_locked(task_id, record["result"])
+            return None
 
     def _run_brainstorming(self, record, config_resolver):
         task_id = record["id"]
+        caller = brainstorming_tasks._task_caller(record, task_id)
+        _area, _parent, private_target = (
+            brainstorming_tasks._private_target_paths(
+                _workspace(record), self.home, task_id
+            )
+        )
+        session_id = None
+
+        def stopped(reason):
+            nonlocal session_id
+            # Recovery may inherit a durable Stop before this host has learned
+            # the task's session id.  Discover the existing owner relation
+            # without starting it; if no session was ever admitted, close the
+            # stopped task without manufacturing one.
+            if session_id is None:
+                owned = brainstorming_tasks._owned_projection(
+                    self.home, caller, private_target
+                )
+                if owned is None:
+                    retained = brainstorming_tasks._retained_owned_projection(
+                        self.home, caller, private_target
+                    )
+                    if retained is None:
+                        self.store.record_result(task_id, {
+                            "status": "failure",
+                            "reason": reason,
+                            **brainstorming_tasks._zero_accounting(),
+                            "native_result": None,
+                        })
+                        return
+                    session_id = retained[0]
+                else:
+                    session_id = owned[0]
+                with self._lock:
+                    self._sessions[task_id] = session_id
+            # The stop may have landed before the session id was known
+            # (start() registers the task before this thread runs), or
+            # while the lead was applying agreed effects. Choose against
+            # any terminal session outcome, then close the task only after
+            # the owned session is terminal too.
+            try:
+                projection = brainstorming_tasks.lifecycle.abandon_session(
+                    self.home,
+                    session_id,
+                    brainstorming_tasks._authorize_caller(caller),
+                    reason,
+                )
+            except brainstorming_tasks.lifecycle.PublicLifecycleError as exc:
+                if exc.code != brainstorming_tasks.lifecycle.UNKNOWN_SESSION:
+                    raise
+                retained = brainstorming_tasks._retained_projection(
+                    self.home, session_id, caller, private_target
+                )
+                state = {"tasks": self.store.records()}
+                lost = brainstorming_tasks._fail_lost_session(
+                    state, task_id, retained
+                )
+                self.store.record_result(
+                    task_id, dict(lost["result"], reason=reason)
+                )
+                return
+            accounting = brainstorming_tasks._projection_accounting(
+                projection
+            )
+            native_result = copy.deepcopy(projection["state"]["result"])
+            native_result["session_id"] = session_id
+            self.store.record_result(task_id, {
+                "status": "failure",
+                "reason": reason,
+                **accounting,
+                "native_result": native_result,
+            })
+
+        def settle_stopped(reason):
+            # Stop is already durable.  Keep this task owned by the host
+            # until its same-session terminal settlement can be retried.
+            while True:
+                try:
+                    stopped(reason)
+                    return
+                except Exception:
+                    time.sleep(self.poll_interval)
+
+        # Avoid even configuration recovery when startup already inherited an
+        # accepted Stop.  Recheck below in case Stop arrived while resolving.
+        with registry.locked(self.home):
+            stop_reason = self._stop_reason(task_id)
+        if stop_reason is not None:
+            settle_stopped(stop_reason)
+            return
+
         # A directly ordered task carries its owner's session on the order
         # itself — an id, or an explicit null choosing the default document
         # — and every automatic call of its discussion resolves through
@@ -1368,6 +1761,10 @@ class DirectTaskHost:
             )
         state = {"tasks": self.store.records()}
         try:
+            stop_reason = self._stop_reason(task_id)
+            if stop_reason is not None:
+                settle_stopped(stop_reason)
+                return
             projection = brainstorming_tasks.start_task(
                 state, task_id, config, self.home, **start_options
             )
@@ -1382,28 +1779,10 @@ class DirectTaskHost:
             with self._lock:
                 self._sessions[task_id] = session_id
             authority = record["resolved_staffing"]["dispatch_authority"]
-            def stopped(reason):
-                # The stop may have landed before the session id was known
-                # (start() registers the task before this thread runs), or
-                # while the lead was applying the agreed effects, when the
-                # session is already terminal and a pause is a no-op. Pause
-                # best-effort and record the operator's outcome regardless.
-                self._pause_session(session_id)
-                self.store.record_result(task_id, {
-                    "status": "failure",
-                    "reason": reason,
-                    "duration_s": 0.0,
-                    "token_usage": None,
-                    "token_usage_partial": True,
-                    "cost": None,
-                    "cost_partial": True,
-                    "native_result": {"session_id": session_id},
-                })
-
             while True:
                 stop_reason = self._stop_reason(task_id)
                 if stop_reason is not None:
-                    stopped(stop_reason)
+                    settle_stopped(stop_reason)
                     return
                 state = {"tasks": self.store.records()}
                 effect = (
@@ -1434,12 +1813,27 @@ class DirectTaskHost:
                 if terminal is not None:
                     stop_reason = self._stop_reason(task_id)
                     if stop_reason is not None:
-                        stopped(stop_reason)
+                        settle_stopped(stop_reason)
                         return
-                    self._persist_adapter_result(state, task_id)
+                    stop_reason = self._record_brainstorming_terminal(
+                        state, task_id
+                    )
+                    if stop_reason is not None:
+                        settle_stopped(stop_reason)
                     return
                 time.sleep(self.poll_interval)
         except Exception:
             # Inspection and process loss are not a new abandonment judgment.
-            # The durable task/session remain open for native recovery.
+            # Order recovery failure against Stop acceptance: if Stop won,
+            # settle it; otherwise retire this host before a later Stop can be
+            # reported as accepted and lose its terminal settlement.
+            with registry.locked(self.home):
+                with self._lock:
+                    stop_reason = self._stops.get(task_id)
+                    if stop_reason is None:
+                        stop_reason = self.store.stop_reason(task_id)
+                    if stop_reason is None:
+                        self._active.pop(task_id, None)
+            if stop_reason is not None:
+                settle_stopped(stop_reason)
             return
