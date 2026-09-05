@@ -1727,12 +1727,13 @@ function paintSessionDetail(html) {
   const det = document.getElementById("detail");
   const top = det.scrollTop;
   det.innerHTML = html;
-  det.scrollTop = top;
   syncRequestMore(det);
+  det.scrollTop = top;
   requestAnimationFrame(() => {
     // Again after layout: fonts and the viewport settle late, and the
     // first measurement can land before either.
     syncRequestMore(det);
+    det.scrollTop = top;
     updateBottomJump();
   });
 }

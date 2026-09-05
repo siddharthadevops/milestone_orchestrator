@@ -300,6 +300,18 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('class="mdbody flow"', text)
         self.assertIn("function paintSessionDetail", text)
         self.assertIn("det.scrollTop = top", text)
+        painter = text.split("function paintSessionDetail(html) {", 1)[1]
+        painter = painter.split("\n}", 1)[0]
+        self.assertEqual(painter.count("det.scrollTop = top;"), 2)
+        self.assertLess(
+            painter.index("syncRequestMore(det);"),
+            painter.index("det.scrollTop = top;"),
+        )
+        settled = painter.split("requestAnimationFrame(() => {", 1)[1]
+        self.assertLess(
+            settled.index("syncRequestMore(det);"),
+            settled.index("det.scrollTop = top;"),
+        )
         # Sessions are discardable from the Info page's danger zone
         # (running ones refuse — the button disables, stop first). A
         # broken-state session keeps a discard escape hatch on its
