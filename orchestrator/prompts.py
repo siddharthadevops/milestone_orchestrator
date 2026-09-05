@@ -1389,9 +1389,7 @@ def _producer_planning_block():
         "every slice; the structured result and the reviewed document must agree.\n"
         "Each choice contains `task_executor` and may contain its executor's\n"
         "`configuration`. Use only the shared catalogue below; do not infer a\n"
-        "choice from its staffing description. A `max_rounds` below the\n"
-        "catalogue minimum is raised to that minimum at admission: do not\n"
-        "plan shorter discussions than the catalogue allows.\n"
+        "choice from its staffing description.\n"
         "TASKEXECUTOR CATALOGUE:\n%s\n\n"
         % json.dumps(
             tasks.producer_task_executor_catalogue(),

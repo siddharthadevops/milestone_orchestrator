@@ -25,6 +25,11 @@ PRODUCER_TASK_KINDS = (
     contracts.KIND_IMPLEMENT,
 )
 _PRODUCER_TASK_EXECUTOR_IDS = ("agent_call", "brainstorming")
+# Milestone skeletons keep choosing a producer for each semantic job, but the
+# current operator policy offers only the bounded agent-call path.  This is a
+# planning allowlist, not removal of the public Brainstorming TaskExecutor or
+# its explicit reviewed-task use.
+_MILESTONE_PRODUCER_TASK_EXECUTOR_IDS = ("agent_call",)
 REVIEWED_COMPLETE_VERIFICATION = "complete_verification"
 
 _REVIEWED_PRODUCTION_ROLES = {
@@ -495,10 +500,15 @@ def producer_task_executor_catalogue():
     return _json_copy(
         [
             entry for entry in _TASK_EXECUTORS
-            if entry["id"] in _PRODUCER_TASK_EXECUTOR_IDS
+            if entry["id"] in _MILESTONE_PRODUCER_TASK_EXECUTOR_IDS
         ],
         "producer TaskExecutor catalogue",
     )
+
+
+def is_supported_producer_task_executor(task_executor):
+    """Whether a stored producer id still has an executable implementation."""
+    return stored_task_executor(task_executor) in _PRODUCER_TASK_EXECUTOR_IDS
 
 
 def _validate_request(request):

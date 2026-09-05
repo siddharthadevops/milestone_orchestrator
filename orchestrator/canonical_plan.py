@@ -255,7 +255,12 @@ def _project(slices, anchored_slices):
                 current = tasks.stored_task_executor(spelling)
             else:
                 current = spelling
-            if current not in catalogue:
+            retained_supported = (
+                retained is not None
+                and retained[producer] == spelling
+                and tasks.is_supported_producer_task_executor(current)
+            )
+            if current not in catalogue and not retained_supported:
                 raise CanonicalPlanError(
                     "canonical slice %d %s has unknown TaskExecutor %r"
                     % (slice_plan["id"], producer, spelling)

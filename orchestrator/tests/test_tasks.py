@@ -92,7 +92,7 @@ class TaskContractsTest(unittest.TestCase):
         producer_catalogue = tasks.producer_task_executor_catalogue()
         self.assertEqual(
             [entry["id"] for entry in producer_catalogue],
-            ["agent_call", "brainstorming"],
+            ["agent_call"],
         )
         producer_catalogue[0]["description"] = "changed"
         self.assertNotEqual(

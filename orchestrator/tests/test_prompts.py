@@ -1485,7 +1485,7 @@ class TestPlannerMaterialChannel(unittest.TestCase):
                 catalogue = json.JSONDecoder().raw_decode(catalogue_text)[0]
                 self.assertEqual(
                     [entry["id"] for entry in catalogue],
-                    ["agent_call", "brainstorming"],
+                    ["agent_call"],
                 )
                 self.assertNotIn("SLICE MATERIAL PLANNING", prompt)
                 self.assertNotIn("MATERIAL CATALOGUE", prompt)

@@ -268,22 +268,46 @@ class CanonicalPlanContractTest(unittest.TestCase):
                 changed_spelling, anchored_document=current_anchor
             )
 
-        current = canonical_plan.validate_canonical_plan(
-            document(
-                [
-                    slice_plan(
-                        producer_task_executor={
-                            "draft_slice_note": "brainstorming",
-                            "implement": "agent_call",
-                        }
-                    )
-                ]
+        brainstorming_slices = [
+            slice_plan(
+                producer_task_executor={
+                    "draft_slice_note": "brainstorming",
+                    "implement": "agent_call",
+                }
             )
+        ]
+        brainstorming = document(brainstorming_slices)
+        with self.assertRaises(canonical_plan.CanonicalPlanError):
+            canonical_plan.validate_canonical_plan(brainstorming)
+        retained_edit = changed(
+            brainstorming_slices,
+            lambda value: value[0].__setitem__("title", "Edited title"),
         )
-        for selection in current["projection"][0][
-            "producer_task_executor"
-        ].values():
-            self.assertEqual(set(selection), {"task_executor"})
+        retained_brainstorming = canonical_plan.validate_canonical_plan(
+            retained_edit, anchored_document=brainstorming
+        )
+        self.assertEqual(
+            retained_brainstorming["projection"][0][
+                "producer_task_executor"
+            ]["draft_slice_note"],
+            {"task_executor": "brainstorming"},
+        )
+        changed_to_agent_call = changed(
+            brainstorming_slices,
+            lambda value: value[0]["producer_task_executor"].__setitem__(
+                "draft_slice_note", "agent_call"
+            ),
+        )
+        current = canonical_plan.validate_canonical_plan(
+            changed_to_agent_call, anchored_document=brainstorming
+        )
+        self.assertEqual(
+            current["projection"][0]["producer_task_executor"],
+            {
+                "draft_slice_note": {"task_executor": "agent_call"},
+                "implement": {"task_executor": "agent_call"},
+            },
+        )
 
 
 class CanonicalPlanGitBoundaryTest(unittest.TestCase):

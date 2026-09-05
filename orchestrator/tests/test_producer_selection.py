@@ -149,7 +149,7 @@ class PlannerMaterialCatalogueTest(DriverTestCase):
                 entry["id"]
                 for entry in self.producer_catalogue_in(drafted[2])
             ],
-            ["agent_call", "brainstorming"],
+            ["agent_call"],
         )
         self.assertNotIn("material", subject.state["milestone"]["slices"][0])
 
@@ -349,7 +349,7 @@ class ProducerSelectionTest(unittest.TestCase):
             {"agent_call", "brainstorming", "reviewed_task", "deep_task"},
         )
         self.assertEqual(
-            producer_catalogue, {"agent_call", "brainstorming"}
+            producer_catalogue, {"agent_call"}
         )
 
         planned = {
@@ -358,7 +358,7 @@ class ProducerSelectionTest(unittest.TestCase):
             "intent": "Choose both current producers.",
             "producer_task_executor": {
                 "draft_slice_note": "agent_call",
-                "implement": "brainstorming",
+                "implement": "agent_call",
             },
         }
 
@@ -373,7 +373,7 @@ class ProducerSelectionTest(unittest.TestCase):
             validated["projection"][0]["producer_task_executor"],
             {
                 "draft_slice_note": {"task_executor": "agent_call"},
-                "implement": {"task_executor": "brainstorming"},
+                "implement": {"task_executor": "agent_call"},
             },
         )
 
@@ -401,6 +401,10 @@ class ProducerSelectionTest(unittest.TestCase):
             },
             {
                 "draft_slice_note": {"task_executor": "agent_call"},
+                "implement": "brainstorming",
+            },
+            {
+                "draft_slice_note": "agent_call",
                 "implement": "brainstorming",
             },
         )
