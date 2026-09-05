@@ -62,6 +62,10 @@ sessions render in the panel's right pane — there is no separate page):
                                    pause participant work, keeping the session
     POST   /api/brainstorming/sessions/<id>/start
                                    resume the same non-terminal session
+    POST   /api/brainstorming/sessions/<id>/rounds
+                                   raise its absolute round maximum
+    POST   /api/brainstorming/sessions/<id>/continue
+                                   resume one exact waiting revision
     DELETE /api/brainstorming/sessions/<id>
                                    forget a stopped session (running: 409;
                                    ?purge=1 also removes its durable state
@@ -3979,29 +3983,11 @@ def _brainstorming_task_attachment(home, record, allow_missing=False):
     return matches[0]
 
 
-def _attached_brainstorming_staffing_session(
-    home, session_id, record=None
+def _brainstorming_milestone_attachment(
+    home, session_id, record, allow_missing=False
 ):
-    """Find the staffing session an ATTACHED discussion resolves through.
-
-    A discussion created since the staffing cutover names its own session in
-    its registry entry and never needs this. One created BEFORE it does not,
-    and its entry is never rewritten to add one, so an explicit restart
-    reattaches it to the run that owns it — through the session id held in
-    ordinary milestone state, or the immutable task id held by an attached
-    task session — and reads that run's one bound staffing session.
-    Standalone sessions stay unattached and answer nothing.
-    """
-    if record is None:
-        record = brainstorming_lifecycle._record_by_id(home, session_id)
+    """Find the one registered run that owns a milestone discussion."""
     caller = record.get("caller")
-    task_attachment = _brainstorming_task_attachment(home, record)
-    if task_attachment is not None:
-        if task_attachment["dispatch_authority"] != "current_profile":
-            return None
-        if task_attachment["terminal"]:
-            raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
-        return _run_staffing_session(task_attachment["state_path"])
     milestone_session = (
         isinstance(caller, str) and caller.startswith("milestone:")
     )
@@ -4039,12 +4025,47 @@ def _attached_brainstorming_staffing_session(
             if isinstance(unit, dict)
         )
         if milestone_attached:
-            matches.append(os.path.abspath(entry["state_path"]))
+            matches.append({
+                "run_id": entry["id"],
+                "state_path": os.path.abspath(entry["state_path"]),
+            })
     if len(matches) > 1:
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    if not matches and allow_missing:
+        return None
     if not matches:
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
-    return _run_staffing_session(matches[0])
+    return matches[0]
+
+
+def _attached_brainstorming_staffing_session(
+    home, session_id, record=None
+):
+    """Find the staffing session an ATTACHED discussion resolves through.
+
+    A discussion created since the staffing cutover names its own session in
+    its registry entry and never needs this. One created BEFORE it does not,
+    and its entry is never rewritten to add one, so an explicit restart
+    reattaches it to the run that owns it — through the session id held in
+    ordinary milestone state, or the immutable task id held by an attached
+    task session — and reads that run's one bound staffing session.
+    Standalone sessions stay unattached and answer nothing.
+    """
+    if record is None:
+        record = brainstorming_lifecycle._record_by_id(home, session_id)
+    task_attachment = _brainstorming_task_attachment(home, record)
+    if task_attachment is not None:
+        if task_attachment["dispatch_authority"] != "current_profile":
+            return None
+        if task_attachment["terminal"]:
+            raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+        return _run_staffing_session(task_attachment["state_path"])
+    milestone_attachment = _brainstorming_milestone_attachment(
+        home, session_id, record
+    )
+    if milestone_attachment is None:
+        return None
+    return _run_staffing_session(milestone_attachment["state_path"])
 
 
 def _run_staffing_session(state_path):
@@ -4198,6 +4219,71 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
         _evict_summary(attachment["state_path"])
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
     return projection
+
+
+def _continue_brainstorming_session(
+    home, who, session_id, body, task_host=None
+):
+    """Continue one wait only while its workspace remains admissible."""
+    record = brainstorming_lifecycle._record_by_id(home, session_id)
+    authorize = lambda current: require_brainstorming_access(
+        home, who, current
+    )
+    require_brainstorming_access(home, who, record)
+    # Preserve request-error precedence before consulting unrelated owners.
+    waiting_revision = brainstorming_lifecycle._positive_control_value(
+        body, "waiting_revision"
+    )
+    projection = brainstorming_lifecycle.inspect_session(
+        home, session_id, authorize
+    )
+
+    def continue_authorized():
+        return brainstorming_lifecycle.continue_session(
+            home,
+            session_id,
+            body,
+            authorize,
+            resolve_staffing_session=lambda current: (
+                _attached_brainstorming_staffing_session(
+                    home, current["id"], record=current
+                )
+            ),
+        )
+
+    if (
+        projection["revision"] != waiting_revision
+        or projection["state"]["status"] != "waiting"
+        or projection.get("process") == "running"
+    ):
+        return continue_authorized()
+
+    attachment = _brainstorming_task_attachment(home, record)
+    admission = {}
+    if attachment is None:
+        milestone_attachment = _brainstorming_milestone_attachment(
+            home, session_id, record, allow_missing=True
+        )
+        if milestone_attachment is None:
+            # Match ordinary Start: document sessions retain their existing
+            # target-level concurrency, while runs and direct tasks still own
+            # the containing worktree.
+            admission["check_sessions"] = False
+        else:
+            admission["excluded_run_id"] = milestone_attachment["run_id"]
+    elif attachment["standalone"]:
+        admission["excluded_task_id"] = attachment["task_id"]
+    else:
+        admission["excluded_run_id"] = attachment["run_id"]
+
+    with registry.locked(home):
+        _require_startable_workspace_locked(
+            home,
+            projection["state"]["request"]["workspace_path"],
+            task_host=task_host,
+            **admission,
+        )
+        return continue_authorized()
 
 
 def brainstorming_visibility(home, who):
@@ -5668,6 +5754,25 @@ def make_handler(home, task_host=None):
                             200,
                             {"ok": True, "intervention": intervention},
                         )
+                    elif (
+                        len(parts) == 6
+                        and parts[4]
+                        and parts[5] in ("rounds", "continue")
+                    ):
+                        body = self._brainstorming_body()
+                        authorize = lambda record: require_brainstorming_access(
+                            home, who, record
+                        )
+                        if parts[5] == "rounds":
+                            session = brainstorming_lifecycle.add_rounds(
+                                home, parts[4], body, authorize
+                            )
+                        else:
+                            session = _continue_brainstorming_session(
+                                home, who, parts[4], body,
+                                task_host=task_host,
+                            )
+                        self._json(200, {"ok": True, "session": session})
                     elif (
                         len(parts) == 6
                         and parts[4]

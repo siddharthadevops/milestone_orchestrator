@@ -13,7 +13,7 @@ VIEW_KEYS = {
     "id", "caller", "status", "request", "process", "revision", "target",
     "repository",
     "participants", "same_family_fallback", "closure_policy",
-    "closure_ballots", "round", "transcript_markdown", "result",
+    "closure_ballots", "round", "exhausted", "transcript_markdown", "result",
     "final_agreement",
     "activity", "work_duration_s", "work_token_usage",
     "work_token_usage_partial", "work_cost", "work_cost_partial",
@@ -398,7 +398,7 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         rejected = self._ballot(snapshot, False)
         snapshot = store.record_closure_ballot(session_id, snapshot.revision, rejected)
         view = self._view(session_id)
-        self.assertEqual(view["closure_ballots"], [rejected])
+        self.assertEqual(view["closure_ballots"], [dict(rejected, maximum=2)])
         self.assertIsNone(view["final_agreement"])
         self.assertEqual(view["target"]["content"], "<script>target one</script>")
         self.assertEqual(view["transcript_markdown"], bs.render_transcript(snapshot.state))
@@ -428,7 +428,9 @@ class BrainstormingVisualizationTest(unittest.TestCase):
             },
         )
         self.assertTrue(view["target"]["changed"])
-        self.assertEqual(view["round"], {"current": 2, "completed": 2, "maximum": 2})
+        self.assertEqual(view["round"], {
+            "current": 2, "completed": 2, "maximum": 2, "remaining": 0
+        })
     def test_coordination_without_lead_acceptance_is_not_yet_accepted(self):
         session_id, store = self._create("missing.md", content=None, rounds=4)
         self.assertEqual(

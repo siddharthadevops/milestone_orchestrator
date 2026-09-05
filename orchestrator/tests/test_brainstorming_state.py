@@ -310,6 +310,164 @@ class BrainstormingStateTestCase(unittest.TestCase):
             session_id, running.revision, target
         )
 
+    def _waiting_session(self, session_id):
+        snapshot = self._running_initialized(session_id)
+        target = bs.make_target_revision(True, b"accepted target", 0o644)
+        for round_number in (1, 2):
+            for participant in cross_family_participants():
+                snapshot = self.store.record_completed_turn(
+                    session_id,
+                    snapshot.revision,
+                    participant["id"],
+                    "Round %d contribution." % round_number,
+                    target,
+                )
+            if round_number == 1:
+                snapshot = self.store.record_closure_ballot(
+                    session_id,
+                    snapshot.revision,
+                    {
+                        "after_completed_rounds": 1,
+                        "target_revision": snapshot.state[
+                            "accepted_target_revision"
+                        ],
+                        "votes": [
+                            {"participant_id": "editor", "vote": "accept"},
+                            {"participant_id": "critic", "vote": "object"},
+                        ],
+                        "approved": False,
+                    },
+                )
+        return self.store.wait_with_ballot(
+            session_id,
+            snapshot.revision,
+            {
+                "after_completed_rounds": 2,
+                "target_revision": snapshot.state["accepted_target_revision"],
+                "votes": [
+                    {"participant_id": "editor", "vote": "accept"},
+                    {"participant_id": "critic", "vote": "object"},
+                ],
+                "approved": False,
+            },
+        )
+
+    def test_continue_top_up_matrix_is_atomic_and_idempotent(self):
+        waiting = self._waiting_session("continue-matrix")
+        for maximum in (2, 3, 4):
+            candidate = bs.round_extension_successor(waiting.state, maximum)
+            resumed = bs.continuation_successor(candidate)
+            self.assertEqual(bs.effective_max_rounds(resumed), 4)
+            self.assertEqual(resumed["rounds_used"], 2)
+            self.assertEqual(resumed["request"]["max_rounds"], 2)
+            self.assertEqual(resumed["status"], "running")
+            self.assertEqual(resumed["continued_after_rounds"], 2)
+            self.assertEqual(resumed["history"][-2:], [
+                {"status": "waiting"}, {"status": "running"}
+            ])
+        resumed = self.store.continue_waiting(
+            "continue-matrix", waiting.revision
+        )
+        self.assertEqual(bs.effective_max_rounds(resumed.state), 4)
+        with self.assertRaises(bs.RevisionConflict):
+            self.store.continue_waiting("continue-matrix", waiting.revision)
+
+    def test_delayed_continue_retry_cannot_cross_wait_boundaries(self):
+        session_id = "delayed-continue"
+        first_wait = self._waiting_session(session_id)
+        resumed = self.store.continue_waiting(
+            session_id, first_wait.revision
+        )
+        target = bs.make_target_revision(True, b"accepted target", 0o644)
+        snapshot = resumed
+        for round_number in (3, 4):
+            for participant in cross_family_participants():
+                snapshot = self.store.record_completed_turn(
+                    session_id,
+                    snapshot.revision,
+                    participant["id"],
+                    "Round %d contribution." % round_number,
+                    target,
+                )
+            ballot = {
+                "after_completed_rounds": round_number,
+                "target_revision": snapshot.state[
+                    "accepted_target_revision"
+                ],
+                "votes": [
+                    {"participant_id": "editor", "vote": "accept"},
+                    {"participant_id": "critic", "vote": "object"},
+                ],
+                "approved": False,
+            }
+            snapshot = (
+                self.store.record_closure_ballot(
+                    session_id, snapshot.revision, ballot
+                )
+                if round_number == 3
+                else self.store.wait_with_ballot(
+                    session_id, snapshot.revision, ballot
+                )
+            )
+
+        later_wait = self.store.read(session_id)
+        prepare = mock.Mock()
+        with self.assertRaises(bs.RevisionConflict):
+            self.store.continue_waiting(
+                session_id,
+                first_wait.revision,
+                before_accept=prepare,
+            )
+        self.assertEqual(self.store.read(session_id), later_wait)
+        prepare.assert_not_called()
+
+        fresh = self.store.continue_waiting(
+            session_id, later_wait.revision
+        )
+        self.assertEqual(fresh.state["status"], "running")
+        self.assertEqual(fresh.state["continued_after_rounds"], 4)
+        self.assertEqual(bs.effective_max_rounds(fresh.state), 6)
+
+    def test_add_rounds_raises_absolute_maximum_without_starting(self):
+        waiting = self._waiting_session("add-rounds")
+        before = copy.deepcopy(waiting.state)
+        for maximum in (2, 1):
+            same = self.store.extend_rounds("add-rounds", maximum)
+            self.assertEqual(same.revision, waiting.revision)
+        raised = self.store.extend_rounds("add-rounds", 6)
+        self.assertEqual(raised.state["status"], "waiting")
+        self.assertEqual(bs.effective_max_rounds(raised.state), 6)
+        self.assertEqual(raised.state["request"], before["request"])
+        self.assertEqual(raised.state["completed_turns"], before["completed_turns"])
+        duplicate = self.store.extend_rounds("add-rounds", 6)
+        self.assertEqual(duplicate.revision, raised.revision)
+
+    def test_round_extensions_preserve_rendered_transcript_history(self):
+        session_id = "stable-transcript"
+        waiting = self._waiting_session(session_id)
+        before = bs.render_transcript(waiting.state).encode("utf-8")
+        with open(waiting.state["transcript_ref"], "rb") as handle:
+            self.assertEqual(handle.read(), before)
+        self.assertIn(b"at most 2 rounds", before)
+        self.assertIn(
+            b"No complete discussion round remained within the configured limit.",
+            before,
+        )
+        self.assertEqual(
+            waiting.state["transcript_events"][-1]["fact"]["maximum"], 2
+        )
+
+        raised = self.store.extend_rounds(session_id, 7)
+        self.assertEqual(bs.effective_max_rounds(raised.state), 7)
+        self.assertEqual(bs.render_transcript(raised.state).encode("utf-8"), before)
+        with open(raised.state["transcript_ref"], "rb") as handle:
+            self.assertEqual(handle.read(), before)
+
+        resumed = self.store.continue_waiting(session_id, raised.revision)
+        self.assertEqual(bs.render_transcript(resumed.state).encode("utf-8"), before)
+        with open(resumed.state["transcript_ref"], "rb") as handle:
+            self.assertEqual(handle.read(), before)
+
     @staticmethod
     def _floor_fact(after=0, **overrides):
         fact = {

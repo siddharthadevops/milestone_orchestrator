@@ -1032,6 +1032,35 @@ rationale or other fields.
     raise brainstorming.ContractError("unknown Dante intervention action")
 
 
+def advance_repository_revision_after_round_extensions(
+    store, session_id, current, revision
+):
+    """Retain a restored revision across ceiling-only revision races."""
+    while True:
+        try:
+            return store.advance_repository_revision(
+                session_id,
+                current.revision,
+                revision,
+                publish=False,
+            )
+        except brainstorming.RevisionConflict as conflict:
+            latest = conflict.current
+            try:
+                brainstorming.assert_round_extension_successor(
+                    current.state,
+                    latest.state,
+                    brainstorming.effective_max_rounds(latest.state),
+                )
+            except (
+                brainstorming.ContractError,
+                brainstorming.IllegalTransition,
+                brainstorming.HistoryRewriteError,
+            ):
+                raise conflict
+            current = latest
+
+
 class BrainstormingCoordinator:
     """Coordinate ordered turns and revision-bound closure."""
 
@@ -1785,6 +1814,7 @@ class BrainstormingCoordinator:
             "history": state["history"],
             "transcript_events": state["transcript_events"],
             "coordination": brainstorming.coordination_projection(state),
+            "maximum": brainstorming.effective_max_rounds(state),
         }
 
     def _closure_exchange(
@@ -1998,6 +2028,43 @@ class BrainstormingCoordinator:
             except TargetMutationFailed as failed:
                 return failed.snapshot
 
+    def _record_repository_turn_after_round_extensions(
+        self,
+        session_id,
+        current,
+        participant_id,
+        markdown,
+        revision,
+        ready,
+    ):
+        """Accept a completed turn across ceiling-only revision races."""
+        while True:
+            try:
+                return self.store.record_repository_turn(
+                    session_id,
+                    current.revision,
+                    participant_id,
+                    markdown,
+                    revision,
+                    ready,
+                    publish=False,
+                )
+            except brainstorming.RevisionConflict as conflict:
+                latest = conflict.current
+                try:
+                    brainstorming.assert_round_extension_successor(
+                        current.state,
+                        latest.state,
+                        brainstorming.effective_max_rounds(latest.state),
+                    )
+                except (
+                    brainstorming.ContractError,
+                    brainstorming.IllegalTransition,
+                    brainstorming.HistoryRewriteError,
+                ):
+                    raise conflict
+                current = latest
+
     def _run_next_repository_turn(self, session_id, execution_context):
         starting = self._prepare_repository_session(session_id)
         if starting.state["status"] in brainstorming.TERMINAL_STATUSES:
@@ -2008,7 +2075,7 @@ class BrainstormingCoordinator:
             state = starting.state
         participants = state["run_config"]["participants"]
         turn_index = len(state["completed_turns"])
-        if turn_index >= state["request"]["max_rounds"] * len(participants):
+        if turn_index >= brainstorming.effective_max_rounds(state) * len(participants):
             raise RoundLimitReached("the configured round limit is exhausted")
         participant = participants[turn_index % len(participants)]
         round_number = turn_index // len(participants) + 1
@@ -2114,8 +2181,8 @@ class BrainstormingCoordinator:
             revision = outcome.get("revision")
             if revision is not None:
                 current = self._require_running(self.store.read(session_id))
-                self.store.advance_repository_revision(
-                    session_id, current.revision, revision, publish=False
+                advance_repository_revision_after_round_extensions(
+                    self.store, session_id, current, revision
                 )
             self.store.finish_turn_attempt(session_id, attempt["token"])
             return self.store.reconcile_transcript(session_id)
@@ -2145,14 +2212,13 @@ class BrainstormingCoordinator:
             raise CoordinationRejected(
                 "repository turn completion exposed no Git revision"
             )
-        self.store.record_repository_turn(
+        self._record_repository_turn_after_round_extensions(
             session_id,
-            current.revision,
+            current,
             participant["id"],
             envelope["markdown"],
             revision,
             envelope.get("ready") is True,
-            publish=False,
         )
         self.store.finish_turn_attempt(session_id, attempt["token"])
         return self.store.reconcile_transcript(session_id)
@@ -2168,7 +2234,7 @@ class BrainstormingCoordinator:
             state = starting.state
         participants = state["run_config"]["participants"]
         turn_index = len(state["completed_turns"])
-        if turn_index >= state["request"]["max_rounds"] * len(participants):
+        if turn_index >= brainstorming.effective_max_rounds(state) * len(participants):
             raise RoundLimitReached(
                 "the configured round limit is exhausted"
             )
@@ -2444,9 +2510,9 @@ class BrainstormingCoordinator:
             and event["fact"]["after_completed_rounds"]
             == state["rounds_used"]
             for event in state["transcript_events"]
-        ):
+        ) or state.get("continued_after_rounds") == state["rounds_used"]:
             raise ClosureNotEligible(
-                "another complete discussion round is required before a ballot"
+                "another complete discussion round is required before closure"
             )
 
         if state["accepted_target_revision"] is None:
@@ -2548,7 +2614,7 @@ class BrainstormingCoordinator:
             votes_by_id = {lead["id"]: "accept"}
 
         if proposal["propose"] and not accepted_target["exists"]:
-            if state["rounds_used"] < state["request"]["max_rounds"]:
+            if state["rounds_used"] < brainstorming.effective_max_rounds(state):
                 return self.store.reconcile_transcript(session_id)
             self._require_closure_target(target, accepted_target)
             current = self._require_running(self.store.read(session_id))
@@ -2557,21 +2623,14 @@ class BrainstormingCoordinator:
                 self._closure_fingerprint(state),
             ):
                 raise brainstorming.RevisionConflict(current)
-            reason = "The requested target was not produced."
-            summary = dict(summary, reason=reason)
-            result = self._closure_result(
-                current.state, "failure", reason
-            )
             return self.store.transition(
                 session_id,
                 current.revision,
-                "failure",
-                result,
-                summary,
+                "waiting",
             )
 
         if not proposal["propose"]:
-            if state["rounds_used"] < state["request"]["max_rounds"]:
+            if state["rounds_used"] < brainstorming.effective_max_rounds(state):
                 return self.store.reconcile_transcript(session_id)
             self._require_closure_target(target, accepted_target)
             current = self._require_running(self.store.read(session_id))
@@ -2580,18 +2639,10 @@ class BrainstormingCoordinator:
                 self._closure_fingerprint(state),
             ):
                 raise brainstorming.RevisionConflict(current)
-            reason = (
-                "Irreducible gap: the voting seats did not agree before the "
-                "configured round limit."
-            )
-            summary = dict(summary, reason=reason)
-            result = self._closure_result(current.state, "failure", reason)
             return self.store.transition(
                 session_id,
                 current.revision,
-                "failure",
-                result,
-                summary,
+                "waiting",
             )
 
         pending_participant = (
@@ -2671,7 +2722,7 @@ class BrainstormingCoordinator:
 
         if (
             not ballot["approved"]
-            and state["rounds_used"] < state["request"]["max_rounds"]
+            and state["rounds_used"] < brainstorming.effective_max_rounds(state)
         ):
             accepted = self.store.record_closure_ballot(
                 session_id, current.revision, ballot
@@ -2681,18 +2732,15 @@ class BrainstormingCoordinator:
             )
             return self.store.reconcile_transcript(session_id)
 
-        outcome = "success" if ballot["approved"] else "failure"
         if not ballot["approved"]:
-            reason = (
-                "Irreducible gap: the voting seats did not agree before the "
-                "configured round limit."
+            accepted = self.store.wait_with_ballot(
+                session_id, current.revision, ballot
             )
-            summary = dict(summary, reason=reason)
-            ballot["closing_summary"] = summary
+            self._clear_consumed_external_closure(session_id, accepted.state)
+            return self.store.reconcile_transcript(session_id)
         result = self._closure_result(
             current.state,
-            outcome,
-            summary["reason"] if outcome == "failure" else None,
+            "success",
         )
         return self.store.close_with_ballot(
             session_id,

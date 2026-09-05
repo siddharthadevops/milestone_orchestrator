@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - the production service is POSIX
     fcntl = None
 
 
-STATUSES = ("created", "running", "success", "failure")
+STATUSES = ("created", "running", "waiting", "success", "failure")
 TERMINAL_STATUSES = ("success", "failure")
 CLOSURE_POLICIES = ("unanimity", "majority")
 ROLES = ("initial_position", "contrary_position", "common_sense")
@@ -58,7 +58,8 @@ FLOOR_AUTHOR_ID_RE = re.compile(r"^[a-z][a-z0-9]*_[0-9a-f]{32}$")
 
 _ALLOWED_TRANSITIONS = {
     "created": ("running", "failure"),
-    "running": ("success", "failure"),
+    "running": ("waiting", "success", "failure"),
+    "waiting": ("running", "failure"),
     "success": (),
     "failure": (),
 }
@@ -89,6 +90,17 @@ ACTIVITY_FAILURE_TYPES = ("protocol", "execution", "acceptance")
 # document answered". Taken from the resolver rather than restated, so the
 # ledger and the marker can never drift apart.
 STAFFING_FALLBACK_DEFAULT_DOCUMENT = staffing.STAFFING_FALLBACK_DEFAULT_DOCUMENT
+
+
+def effective_max_rounds(state):
+    """Return the durable current ceiling without rewriting old sessions."""
+    request = state.get("request") if isinstance(state, dict) else None
+    if not isinstance(request, dict):
+        raise ContractError("state.request must be an object")
+    maximum = state.get("effective_max_rounds", request.get("max_rounds"))
+    if type(maximum) is not int or maximum <= 0:
+        raise ContractError("state.effective_max_rounds must be positive")
+    return maximum
 
 
 def _cost(value, ctx="cost"):
@@ -1697,9 +1709,14 @@ def _validate_coordination(state, request, run_config, status):
             "repository accepted_target_revision must be a full Git SHA"
         )
     participants = run_config["participants"]
-    turn_limit = request["max_rounds"] * len(participants)
+    maximum = effective_max_rounds(state)
+    if maximum < request["max_rounds"]:
+        raise ContractError(
+            "state.effective_max_rounds cannot reduce the admitted limit"
+        )
+    turn_limit = maximum * len(participants)
     if len(turns) > turn_limit:
-        raise ContractError("completed turns exceed request.max_rounds")
+        raise ContractError("completed turns exceed the effective round limit")
 
     previous_revision = None
     completed_initial_turn = False
@@ -1757,8 +1774,8 @@ def _validate_coordination(state, request, run_config, status):
         raise ContractError(
             "state.rounds_used must count only complete roster passes"
         )
-    if rounds_used > request["max_rounds"]:
-        raise ContractError("state.rounds_used exceeds request.max_rounds")
+    if rounds_used > maximum:
+        raise ContractError("state.rounds_used exceeds the effective round limit")
     if not repository_backed:
         if accepted_revision != previous_revision:
             raise ContractError(
@@ -2116,7 +2133,7 @@ def validate_closure_ballot(ballot, run_config):
     _exact_keys(
         ballot,
         ("after_completed_rounds", "target_revision", "votes", "approved"),
-        ("closing_summary",),
+        ("closing_summary", "maximum"),
         "closure_ballot",
     )
     after = ballot["after_completed_rounds"]
@@ -2138,6 +2155,12 @@ def validate_closure_ballot(ballot, run_config):
     checked = _json_copy(ballot, "closure_ballot")
     checked["votes"] = votes
     checked["approved"] = approved
+    if "maximum" in ballot:
+        maximum = ballot["maximum"]
+        if type(maximum) is not int or maximum < after:
+            raise ContractError(
+                "closure_ballot.maximum must cover its completed round"
+            )
     if "closing_summary" in ballot:
         checked["closing_summary"] = validate_closing_summary_shape(
             ballot["closing_summary"]
@@ -2307,7 +2330,7 @@ def _validate_closure_lifecycle(
                 "on the current Git revision"
             )
         if (
-            status == "running"
+            status in ("running", "waiting")
             and full_pass
             and repository_positions_ready(state, coordination)
         ):
@@ -2317,11 +2340,13 @@ def _validate_closure_lifecycle(
         if (
             status == "running"
             and full_pass
-            and coordination["rounds_used"] == request["max_rounds"]
+            and coordination["rounds_used"] == effective_max_rounds(state)
         ):
             raise ContractError(
-                "an exhausted repository discussion must become terminal"
+                "an exhausted repository discussion must wait"
             )
+        if status == "waiting" and not full_pass:
+            raise ContractError("a waiting repository discussion needs a full pass")
         return
     ballots = [
         event["fact"]
@@ -2351,10 +2376,16 @@ def _validate_closure_lifecycle(
             raise ContractError(
                 "success requires the current accepted target ballot"
             )
+    if status == "waiting" and (
+        coordination is None
+        or len(coordination["completed_turns"])
+        != coordination["rounds_used"] * len(run_config["participants"])
+    ):
+        raise ContractError("a waiting discussion needs a complete round")
     if (
         status == "running"
         and coordination is not None
-        and coordination["rounds_used"] == request["max_rounds"]
+        and coordination["rounds_used"] == effective_max_rounds(state)
         and ballots
     ):
         ballot = ballots[-1]
@@ -2364,7 +2395,7 @@ def _validate_closure_lifecycle(
             == coordination["accepted_target_revision"]
         ):
             raise ContractError(
-                "a final non-approving ballot must become failure atomically"
+                "a final non-approving ballot must become waiting atomically"
             )
 
 
@@ -2457,6 +2488,8 @@ def validate_session_state(state):
         (
             "participant_sessions",
             "failure_origin",
+            "effective_max_rounds",
+            "continued_after_rounds",
         ) + _COORDINATION_FIELDS,
         "state",
     )
@@ -2474,6 +2507,20 @@ def validate_session_state(state):
     coordination = _validate_coordination(
         state, request, run_config, status
     )
+    continued_after_rounds = state.get("continued_after_rounds")
+    if continued_after_rounds is not None and (
+        type(continued_after_rounds) is not int
+        or continued_after_rounds <= 0
+        or coordination is None
+        or continued_after_rounds > coordination["rounds_used"]
+    ):
+        raise ContractError(
+            "state.continued_after_rounds must name an accepted completed round"
+        )
+    if effective_max_rounds(state) < request["max_rounds"]:
+        raise ContractError(
+            "state.effective_max_rounds cannot reduce the admitted limit"
+        )
     transcript_events = _validate_transcript_events(
         state["transcript_events"], run_config, coordination
     )
@@ -2571,6 +2618,16 @@ def transition_session(
     old_status = current["status"]
     if new_status not in _ALLOWED_TRANSITIONS[old_status]:
         raise IllegalTransition("%s -> %s is not legal" % (old_status, new_status))
+    progress = coordination_projection(current)
+    rounds_used = 0 if progress is None else progress["rounds_used"]
+    if new_status == "waiting" and rounds_used != effective_max_rounds(current):
+        raise IllegalTransition("waiting requires an exhausted round ceiling")
+    if (
+        old_status == "waiting"
+        and new_status == "running"
+        and effective_max_rounds(current) - rounds_used < 2
+    ):
+        raise IllegalTransition("continuation requires two complete rounds")
     if new_status in TERMINAL_STATUSES:
         checked_result = validate_result(
             result,
@@ -2614,6 +2671,11 @@ def transition_session(
 
     successor = copy.deepcopy(current)
     successor["status"] = new_status
+    if old_status == "waiting" and new_status == "running":
+        # The waiting boundary already completed its closure control.  Retain
+        # that cursor so a restarted lifecycle advances to the next discussion
+        # round instead of asking the lead to close the exhausted round again.
+        successor["continued_after_rounds"] = rounds_used
     record = {"status": new_status}
     if checked_result is not None:
         successor["result"] = checked_result
@@ -2655,6 +2717,48 @@ def assert_session_successor(old_state, new_state):
         raise HistoryRewriteError("state is not the exact next session revision")
 
 
+def round_extension_successor(state, maximum):
+    """Raise one non-terminal session's absolute ceiling, never start it."""
+    current = validate_session_state(state)
+    if current["status"] in TERMINAL_STATUSES:
+        raise IllegalTransition("terminal sessions cannot add rounds")
+    if type(maximum) is not int or maximum <= 0:
+        raise ContractError("maximum must be a positive integer")
+    raised = max(effective_max_rounds(current), maximum)
+    if raised == effective_max_rounds(current):
+        return current
+    successor = copy.deepcopy(current)
+    successor["effective_max_rounds"] = raised
+    return validate_session_state(successor)
+
+
+def assert_round_extension_successor(old_state, new_state, maximum):
+    expected = round_extension_successor(old_state, maximum)
+    if not _same_json_value(expected, validate_session_state(new_state)):
+        raise HistoryRewriteError("round extension changed unrelated state")
+
+
+def continuation_successor(state):
+    """Top up one waiting revision and make that same session runnable."""
+    current = validate_session_state(state)
+    if current["status"] != "waiting":
+        raise IllegalTransition("only a waiting session can continue")
+    progress = coordination_projection(current)
+    if progress is None:
+        raise IllegalTransition("continuation requires accepted discussion")
+    successor = copy.deepcopy(current)
+    raised = max(effective_max_rounds(current), progress["rounds_used"] + 2)
+    if raised != effective_max_rounds(current):
+        successor["effective_max_rounds"] = raised
+    return transition_session(successor, "running")
+
+
+def assert_continuation_successor(old_state, new_state):
+    expected = continuation_successor(old_state)
+    if not _same_json_value(expected, validate_session_state(new_state)):
+        raise HistoryRewriteError("continuation changed unrelated state")
+
+
 def assert_participant_session_successor(
     old_state, new_state, participant_id, session_ref
 ):
@@ -2675,6 +2779,7 @@ def assert_participant_session_successor(
         "transcript_ref",
         "transcript_events",
         "transcript_format_version",
+        "continued_after_rounds",
     ):
         if not _same_json_value(old.get(field), new.get(field)):
             raise HistoryRewriteError(
@@ -2794,7 +2899,7 @@ def completed_turn_successor(
         target_revision = validate_target_revision_id(target_revision)
     participants = current["run_config"]["participants"]
     turn_index = len(current["completed_turns"])
-    if turn_index >= current["request"]["max_rounds"] * len(participants):
+    if turn_index >= effective_max_rounds(current) * len(participants):
         raise IllegalTransition("the configured round limit is exhausted")
     participant = participants[turn_index % len(participants)]
     if participant_id != participant["id"]:
@@ -2907,7 +3012,7 @@ def repository_completed_turn_successor(
 
     participants = current["run_config"]["participants"]
     turn_index = len(current["completed_turns"])
-    turn_limit = current["request"]["max_rounds"] * len(participants)
+    turn_limit = effective_max_rounds(current) * len(participants)
     if turn_index >= turn_limit:
         raise IllegalTransition("the configured round limit is exhausted")
     participant = participants[turn_index % len(participants)]
@@ -2940,12 +3045,10 @@ def repository_completed_turn_successor(
             "The configured voting threshold is ready on the current Git "
             "revision."
         )
-    elif (
-        full_pass
-        and successor["rounds_used"] == successor["request"]["max_rounds"]
-    ):
-        outcome = "failure"
-        reason = "Voting seats did not reach common repository readiness."
+    elif full_pass and successor["rounds_used"] == effective_max_rounds(successor):
+        successor["status"] = "waiting"
+        successor["history"].append({"status": "waiting"})
+        return validate_session_state(successor)
 
     if outcome is None:
         return validate_session_state(successor)
@@ -2991,6 +3094,12 @@ def _closure_ballot_at_current_boundary(state, fact):
             "closure ballots require accepted running discussion"
         )
     checked_fact = validate_closure_ballot(fact, state["run_config"])
+    maximum = effective_max_rounds(state)
+    if "maximum" in checked_fact and checked_fact["maximum"] != maximum:
+        raise HistoryRewriteError(
+            "closure ballot maximum must match its accepted capacity"
+        )
+    checked_fact["maximum"] = maximum
     participant_count = len(state["run_config"]["participants"])
     if (
         len(coordination["completed_turns"])
@@ -3045,9 +3154,9 @@ def transcript_event_successor(state, kind, fact):
             raise IllegalTransition(
                 "an approving ballot must become success atomically"
             )
-        if coordination["rounds_used"] == current["request"]["max_rounds"]:
+        if coordination["rounds_used"] == effective_max_rounds(current):
             raise IllegalTransition(
-                "a final non-approving ballot must become failure atomically"
+                "a final non-approving ballot must become waiting atomically"
             )
     else:
         raise ContractError("transcript event kind is invalid")
@@ -3063,14 +3172,9 @@ def terminal_closure_successor(state, ballot, result, closing_summary):
     """Accept one ballot and its derived terminal outcome in one state."""
     current = validate_session_state(state)
     checked_ballot = _closure_ballot_at_current_boundary(current, ballot)
-    outcome = "success" if checked_ballot["approved"] else "failure"
-    if (
-        outcome == "failure"
-        and current["rounds_used"] < current["request"]["max_rounds"]
-    ):
-        raise IllegalTransition(
-            "a rejected ballot resumes discussion while rounds remain"
-        )
+    if not checked_ballot["approved"]:
+        raise IllegalTransition("a rejected ballot cannot terminalize exhaustion")
+    outcome = "success"
     checked_result = validate_result(
         result,
         outcome,
@@ -3111,6 +3215,29 @@ def terminal_closure_successor(state, ballot, result, closing_summary):
         }
     )
     return validate_session_state(successor)
+
+
+def waiting_closure_successor(state, ballot):
+    """Accept the final rejected ballot and its non-terminal wait together."""
+    current = validate_session_state(state)
+    checked_ballot = _closure_ballot_at_current_boundary(current, ballot)
+    if checked_ballot["approved"]:
+        raise IllegalTransition("an approving ballot must become success")
+    if current["rounds_used"] != effective_max_rounds(current):
+        raise IllegalTransition("rounds remain after the rejected ballot")
+    successor = copy.deepcopy(current)
+    successor["transcript_events"].append(
+        {"kind": "closure_ballot", "fact": checked_ballot}
+    )
+    successor["status"] = "waiting"
+    successor["history"].append({"status": "waiting"})
+    return validate_session_state(successor)
+
+
+def assert_waiting_closure_successor(old_state, new_state, ballot):
+    expected = waiting_closure_successor(old_state, ballot)
+    if not _same_json_value(expected, validate_session_state(new_state)):
+        raise HistoryRewriteError("exhaustion wait is not the exact successor")
 
 
 def terminal_interruption_successor(
@@ -3376,7 +3503,7 @@ def _render_transcript_event(event, state, labels):
         else (
             "This ballot did not approve closure, so discussion could continue."
             if fact["after_completed_rounds"]
-            < state["request"]["max_rounds"]
+            < fact.get("maximum", state["request"]["max_rounds"])
             else (
                 "This ballot did not approve closure. No complete discussion "
                 "round remained within the configured limit."
@@ -4845,6 +4972,7 @@ class SessionStore:
         candidate,
         assertion,
         publish=True,
+        before_accept=None,
     ):
         if type(expected_revision) is not int or expected_revision <= 0:
             raise ContractError("expected_revision must be a positive integer")
@@ -4905,6 +5033,32 @@ class SessionStore:
                 ), True
 
             accepted, record = self._store.client._mutate(accept_terminal)
+        elif before_accept is not None:
+            def accept_prepared(document):
+                raw = self._store._raw_from_doc(document, key)
+                public = self._store._public_from_raw(raw)
+                if (
+                    not public["exists?"]
+                    or public["revision"] != expected_revision
+                ):
+                    return (False, public), False
+                assertion(validate_session_state(public["value"]), candidate)
+                before_accept()
+                envelope = {
+                    "revision": raw["revision"] + 1,
+                    "value": candidate,
+                    "deleted?": False,
+                }
+                native = document["entries"].get(key)
+                self._store.client._set_entry(
+                    document, key, envelope, native["rev"] + 1
+                )
+                return (
+                    True,
+                    self._store._public_from_raw(envelope),
+                ), True
+
+            accepted, record = self._store.client._mutate(accept_prepared)
         else:
             result = self._store.cas(key, expected_revision, candidate)
             accepted, record = result.ok, result.record
@@ -5356,6 +5510,44 @@ class SessionStore:
         )
         return self.save(session_id, expected_revision, successor)
 
+    def extend_rounds(self, session_id, maximum):
+        """Monotonically raise an absolute ceiling under the session CAS."""
+        while True:
+            current = self.read(session_id)
+            if current is None:
+                raise SessionNotFound(session_id)
+            candidate = round_extension_successor(current.state, maximum)
+            if _same_json_value(candidate, current.state):
+                return current
+
+            def assertion(old, new):
+                assert_round_extension_successor(old, new, maximum)
+
+            try:
+                return self._cas_coordination(
+                    session_id, current.revision, candidate, assertion
+                )
+            except RevisionConflict:
+                continue
+
+    def continue_waiting(
+        self, session_id, expected_revision, before_accept=None
+    ):
+        """Consume one exact waiting revision and top up its current ceiling."""
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = continuation_successor(current.state)
+        return self._cas_coordination(
+            session_id,
+            expected_revision,
+            candidate,
+            assert_continuation_successor,
+            before_accept=before_accept,
+        )
+
     def initialize_coordination(
         self, session_id, expected_revision, target_revision
     ):
@@ -5593,6 +5785,22 @@ class SessionStore:
             expected_revision,
             candidate,
             assertion,
+        )
+
+    def wait_with_ballot(self, session_id, expected_revision, ballot):
+        """Atomically retain a rejected final ballot and pause for action."""
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = waiting_closure_successor(current.state, ballot)
+
+        def assertion(old, new):
+            assert_waiting_closure_successor(old, new, ballot)
+
+        return self._cas_coordination(
+            session_id, expected_revision, candidate, assertion
         )
 
     def close_with_interruption(

@@ -8,7 +8,12 @@ import tempfile
 import unittest
 from unittest import mock
 
-from orchestrator import brainstorming, brainstorming_milestone, canonical_plan
+from orchestrator import (
+    brainstorming,
+    brainstorming_coordination,
+    brainstorming_milestone,
+    canonical_plan,
+)
 from orchestrator import brainstorming_tasks, driver, tasks
 from orchestrator import session_repository, state
 
@@ -301,17 +306,113 @@ class RepositorySealTest(unittest.TestCase):
         snapshot = self.append(snapshot, "lead", self.base, False)
         snapshot = self.append(snapshot, "contrary", self.base, True)
         snapshot = self.append(snapshot, "dante", self.base, False)
-        self.assertEqual(snapshot.state["status"], "failure")
+        self.assertEqual(snapshot.state["status"], "waiting")
         self.assertFalse(brainstorming.repository_positions_ready(snapshot.state))
 
-    def test_final_unready_pass_fails_without_ballot(self):
+    def test_final_unready_pass_waits_open(self):
         snapshot = self.running(max_rounds=1)
         snapshot = self.append(snapshot, "lead", self.base, False)
         snapshot = self.append(snapshot, "contrary", self.base, True)
-        failed = self.append(snapshot, "dante", self.base, False)
-        self.assertEqual(failed.state["status"], "failure")
-        self.assertEqual(failed.state["transcript_events"], [])
-        self.assertIn("Voting seats did not reach", failed.state["result"]["reason"])
+        waiting = self.append(snapshot, "dante", self.base, False)
+        self.assertEqual(waiting.state["status"], "waiting")
+        self.assertEqual(waiting.state["transcript_events"], [])
+        self.assertNotIn("result", waiting.state)
+
+    def test_add_rounds_racing_repository_turn_preserves_completed_work(self):
+        self.running(max_rounds=2)
+
+        class Execution:
+            def exchange_prepared_quiescent(_execution, *args, **kwargs):
+                result = mock.Mock(
+                    repository_turn={"revision": self.base}
+                )
+                return (
+                    {"markdown": "completed lead turn", "ready": False},
+                    result,
+                )
+
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            self.store,
+            Execution(),
+            turn_preparer=lambda *args: None,
+        )
+        record_repository_turn = self.store.record_repository_turn
+        raced = False
+
+        def accept_after_extension(*args, **kwargs):
+            nonlocal raced
+            if not raced:
+                raced = True
+                self.store.extend_rounds("session", 3)
+            return record_repository_turn(*args, **kwargs)
+
+        with mock.patch.object(
+            self.store,
+            "record_repository_turn",
+            side_effect=accept_after_extension,
+        ):
+            accepted = coordinator.run_next_turn("session", {})
+
+        self.assertTrue(raced)
+        self.assertEqual(accepted.state["status"], "running")
+        self.assertEqual(brainstorming.effective_max_rounds(accepted.state), 3)
+        self.assertEqual(
+            accepted.state["completed_turns"],
+            [
+                {
+                    "participant_id": "lead",
+                    "round": 1,
+                    "markdown": "completed lead turn",
+                    "target_revision": self.base,
+                    "ready": False,
+                }
+            ],
+        )
+        self.assertIsNone(self.store.read_turn_attempt("session"))
+        self.assertNotIn("failure_origin", accepted.state)
+
+    def test_add_rounds_racing_read_only_recovery_preserves_session(self):
+        self.running(max_rounds=2)
+
+        class Execution:
+            def exchange_prepared_quiescent(_execution, *args, **kwargs):
+                error = session_repository.ReadOnlyTurnInvalidated(
+                    "read-only repository mutation restored"
+                )
+                error.repository_turn = {"revision": self.base}
+                raise error
+
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            self.store,
+            Execution(),
+            turn_preparer=lambda *args: None,
+        )
+        advance_repository_revision = self.store.advance_repository_revision
+        raced = False
+
+        def recover_after_extension(*args, **kwargs):
+            nonlocal raced
+            if not raced:
+                raced = True
+                self.store.extend_rounds("session", 3)
+            return advance_repository_revision(*args, **kwargs)
+
+        with mock.patch.object(
+            self.store,
+            "advance_repository_revision",
+            side_effect=recover_after_extension,
+        ):
+            recovered = coordinator.run_next_turn("session", {})
+
+        self.assertTrue(raced)
+        self.assertEqual(recovered.state["status"], "running")
+        self.assertEqual(
+            brainstorming.effective_max_rounds(recovered.state), 3
+        )
+        self.assertEqual(recovered.state["accepted_target_revision"], self.base)
+        self.assertEqual(recovered.state["completed_turns"], [])
+        self.assertIsNone(self.store.read_turn_attempt("session"))
+        self.assertNotIn("failure_origin", recovered.state)
 
     def test_repository_readiness_honors_majority_policy(self):
         snapshot = self.running(closure_policy="majority")
@@ -327,7 +428,7 @@ class RepositorySealTest(unittest.TestCase):
         snapshot = self.append(snapshot, "contrary", self.base, True)
         failed = self.append(snapshot, "dante", self.base, True)
 
-        self.assertEqual(failed.state["status"], "failure")
+        self.assertEqual(failed.state["status"], "waiting")
 
     def test_terminal_handoff_is_exact_repository_range(self):
         snapshot = self.running()

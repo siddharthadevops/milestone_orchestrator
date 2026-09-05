@@ -14,7 +14,8 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from orchestrator import access, brainstorming_lifecycle, brainstorming_tasks
+from orchestrator import access, brainstorming, brainstorming_lifecycle
+from orchestrator import brainstorming_tasks
 from orchestrator import contracts
 from orchestrator import interpreter, profiles, registry, runners, service
 from orchestrator import staffing
@@ -181,7 +182,7 @@ class TaskApiTest(unittest.TestCase):
         self.addCleanup(stop)
         return process
 
-    def _manual_brainstorming(self, name):
+    def _manual_brainstorming(self, name, max_rounds=20):
         docs = os.path.join(self.primary, "docs")
         os.makedirs(docs, exist_ok=True)
         with open(os.path.join(docs, name), "w", encoding="utf-8") as handle:
@@ -201,7 +202,7 @@ class TaskApiTest(unittest.TestCase):
                 "target_path": "docs/%s" % name,
                 "request": "Reach one bounded decision.",
                 "context": {"brief": "Test workspace ownership."},
-                "max_rounds": 20,
+                "max_rounds": max_rounds,
             },
             "participants": [
                 {
@@ -238,6 +239,42 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(session["process"], "stopped")
         self.assertEqual(session["state"]["status"], "running")
         return session_id
+
+    def _waiting_manual_brainstorming(self, name):
+        session_id, process = self._manual_brainstorming(name, max_rounds=1)
+        process.terminate()
+        process.wait(timeout=5)
+        brainstorming_lifecycle.reap_children(self.home)
+        store = brainstorming.SessionStore(
+            brainstorming_lifecycle.state_directory(self.home)
+        )
+        snapshot = store.read(session_id)
+        target = brainstorming.make_target_revision(
+            True, b"accepted target", 0o644
+        )
+        for participant in snapshot.state["run_config"]["participants"]:
+            snapshot = store.record_completed_turn(
+                session_id,
+                snapshot.revision,
+                participant["id"],
+                "Round 1 contribution.",
+                target,
+            )
+        waiting = store.wait_with_ballot(
+            session_id,
+            snapshot.revision,
+            {
+                "after_completed_rounds": 1,
+                "target_revision": snapshot.state["accepted_target_revision"],
+                "votes": [
+                    {"participant_id": "lead", "vote": "accept"},
+                    {"participant_id": "critic", "vote": "object"},
+                ],
+                "approved": False,
+            },
+        )
+        self.assertEqual(waiting.state["status"], "waiting")
+        return session_id, waiting
 
     def test_catalogue_route_reuses_shared_schema(self):
         status, body = self.request("GET", "/api/task-executors")
@@ -1567,6 +1604,120 @@ class TaskApiTest(unittest.TestCase):
         self.assertIsNone(
             brainstorming_lifecycle._record_by_id(self.home, session_id)["pid"]
         )
+
+    def test_live_run_blocks_continuing_a_waiting_manual_brainstorming(self):
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "waiting-for-run.md"
+        )
+        status, body = self.request("POST", "/api/runs", {
+            "workspace": self.primary,
+            "goal": "hold workspace",
+            "autostart": False,
+            "config": {"docs_dir": "milestones"},
+        })
+        self.assertEqual(status, 201, body)
+        run_id = body["run"]["id"]
+        process = self._sleeper()
+
+        def spawn(home, document, entry):
+            entry["pid"] = process.pid
+            registry.save(home, document)
+            return entry
+
+        with mock.patch.object(service, "_spawn_run_locked", side_effect=spawn):
+            status, body = self.request(
+                "POST", "/api/runs/%s/start" % run_id, {}
+            )
+        self.assertEqual(status, 200, body)
+
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=AssertionError("busy workspace must not spawn"),
+        ):
+            status, body = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % session_id,
+                {"waiting_revision": waiting.revision},
+            )
+
+        self.assertEqual(
+            (status, body["error"]), (409, service.WORK_AREA_BUSY)
+        )
+        self.assertEqual(
+            brainstorming.SessionStore(
+                brainstorming_lifecycle.state_directory(self.home)
+            ).read(session_id),
+            waiting,
+        )
+        self.assertIsNone(
+            brainstorming_lifecycle._record_by_id(self.home, session_id)["pid"]
+        )
+
+    def test_owning_run_does_not_block_continuing_its_waiting_brainstorming(self):
+        session_id, waiting = self._waiting_manual_brainstorming(
+            "waiting-for-owner.md"
+        )
+        with brainstorming_lifecycle._locked_registry(self.home):
+            document = brainstorming_lifecycle._load_registry(self.home)
+            record = brainstorming_lifecycle._find_record(document, session_id)
+            record["caller"] = "milestone:test:slice_impl-01-a"
+            brainstorming_lifecycle._save_registry(self.home, document)
+
+        status, body = self.request("POST", "/api/runs", {
+            "workspace": self.primary,
+            "goal": "own the waiting discussion",
+            "autostart": False,
+            "config": {"docs_dir": "milestones"},
+        })
+        self.assertEqual(status, 201, body)
+        run_id = body["run"]["id"]
+        entry = registry.get(registry.load(self.home), run_id)
+        run_state = st.load(entry["state_path"])
+        st.current_unit(run_state)["brainstorming_wait"] = {
+            "session_id": session_id,
+        }
+        st.save(entry["state_path"], run_state)
+
+        owner_process = self._sleeper()
+
+        def spawn(home, document, current):
+            current["pid"] = owner_process.pid
+            registry.save(home, document)
+            return current
+
+        with mock.patch.object(service, "_spawn_run_locked", side_effect=spawn):
+            status, body = self.request(
+                "POST", "/api/runs/%s/start" % run_id, {}
+            )
+        self.assertEqual(status, 200, body)
+
+        continued_process = self._sleeper()
+
+        def launch(*_args, **_kwargs):
+            return brainstorming_lifecycle.GatedLaunch(
+                continued_process,
+                lambda: None,
+                continued_process.terminate,
+            )
+
+        with mock.patch.object(
+            brainstorming_lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=launch,
+        ) as launched:
+            status, body = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % session_id,
+                {"waiting_revision": waiting.revision},
+            )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["session"]["id"], session_id)
+        self.assertEqual(body["session"]["state"]["status"], "running")
+        self.assertEqual(body["session"]["max_rounds"], 3)
+        self.assertEqual(body["session"]["rounds_remaining"], 2)
+        launched.assert_called_once()
 
     def test_live_direct_task_blocks_starting_a_paused_manual_brainstorming(self):
         session_id = self._pause_manual_brainstorming("paused-for-task.md")

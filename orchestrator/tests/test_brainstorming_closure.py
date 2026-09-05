@@ -237,7 +237,7 @@ class BrainstormingClosureTest(unittest.TestCase):
             {"vote": "object"},
         )
         terminal = subject.run_closure("external-closure-crash", context)
-        self.assertEqual(terminal.state["status"], "failure")
+        self.assertEqual(terminal.state["status"], "waiting")
         self.assertIsNone(
             self.store.read_external_intervention("external-closure-crash")
         )
@@ -829,7 +829,7 @@ class BrainstormingClosureTest(unittest.TestCase):
         )
         self.assertEqual(first_round.state["rounds_used"], 1)
 
-    def test_round_exhaustion_without_approval_is_failure(self):
+    def test_round_exhaustion_without_approval_waits_open(self):
         cases = (
             ("final-rejected", True),
             ("no-proposal", False),
@@ -857,9 +857,9 @@ class BrainstormingClosureTest(unittest.TestCase):
                 )
                 self._complete_round(subject, session_id, roster)
                 terminal = subject.run_closure(session_id, object())
-                self.assertEqual(terminal.state["status"], "failure")
-                self.assertEqual(terminal.state["result"]["rounds_used"], 1)
-                self.assertTrue(terminal.state["result"]["reason"])
+                self.assertEqual(terminal.state["status"], "waiting")
+                self.assertNotIn("result", terminal.state)
+                self.assertNotIn("closing_summary", terminal.state)
                 ballots = [
                     event
                     for event in terminal.state["transcript_events"]
@@ -869,7 +869,7 @@ class BrainstormingClosureTest(unittest.TestCase):
                 if ballots:
                     self.assertFalse(ballots[0]["fact"]["approved"])
                 markdown = self._read_transcript(terminal)
-                self.assertIn("The target was left unfinished.", markdown)
+                self.assertNotIn("## Closing", markdown)
                 with self.assertRaises(coordination.CoordinationRejected):
                     subject.run_next_turn(session_id, object())
                 with self.assertRaises(coordination.CoordinationRejected):
@@ -1117,21 +1117,18 @@ class BrainstormingClosureTest(unittest.TestCase):
         )
         self.assertEqual(second_round.state["rounds_used"], 2)
         terminal = subject.run_closure("absent-success", object())
-        self.assertEqual(terminal.state["status"], "failure")
-        self.assertEqual(
-            terminal.state["result"]["reason"],
-            "The requested target was not produced.",
-        )
+        self.assertEqual(terminal.state["status"], "waiting")
+        self.assertNotIn("result", terminal.state)
         self.assertFalse(os.path.exists(target))
         self.assertFalse(any(
             event["kind"] == "closure_ballot"
             for event in terminal.state["transcript_events"]
         ))
         markdown = self._read_transcript(terminal)
-        self.assertIn("The target was left unfinished.", markdown)
+        self.assertNotIn("## Closing", markdown)
         self.assertNotIn("The target was produced.", markdown)
 
-    def test_terminal_closing_records_object_votes_as_unresolved_objections(self):
+    def test_waiting_ballot_preserves_authored_objections(self):
         roster = participants()
         authored_objection = "The requested safeguard remains unresolved."
         closing = summary("The final ballot did not reach agreement.")
@@ -1158,19 +1155,16 @@ class BrainstormingClosureTest(unittest.TestCase):
         )
         self._complete_round(subject, "record-objection", roster)
         terminal = subject.run_closure("record-objection", object())
-        generated_objection = "Contrary Position objected to closure."
-        self.assertEqual(terminal.state["status"], "failure")
+        self.assertEqual(terminal.state["status"], "waiting")
+        self.assertNotIn("closing_summary", terminal.state)
+        ballot_summary = terminal.state["transcript_events"][-1]["fact"][
+            "closing_summary"
+        ]
         self.assertEqual(
-            terminal.state["closing_summary"]["unresolved_objections"],
-            [authored_objection, generated_objection],
-        )
-        self.assertEqual(
-            terminal.state["closing_summary"],
-            terminal.state["history"][-1]["closing_summary"],
+            ballot_summary["unresolved_objections"], [authored_objection]
         )
         markdown = self._read_transcript(terminal)
-        self.assertIn(authored_objection, markdown)
-        self.assertIn(generated_objection, markdown)
+        self.assertIn("The final ballot did not reach agreement.", markdown)
         self.assertIn("**Contrary Position:** `object`", markdown)
         self.assertNotIn(
             "No unresolved objections were recorded.", markdown
@@ -1264,11 +1258,9 @@ class BrainstormingClosureTest(unittest.TestCase):
                 return (
                     "ok",
                     self.store.close_with_ballot(
-                        "contended",
-                        snapshot.revision,
-                        ballot,
-                        result,
-                        closing,
+                        "contended", snapshot.revision, ballot, result, closing
+                    ) if ballot["approved"] else self.store.wait_with_ballot(
+                        "contended", snapshot.revision, ballot
                     ),
                 )
             except bs.RevisionConflict as exc:
@@ -1285,11 +1277,9 @@ class BrainstormingClosureTest(unittest.TestCase):
             if event["kind"] == "closure_ballot"
         ]
         self.assertEqual(len(ballots), 1)
-        self.assertEqual(terminal.state["result"]["outcome"], terminal.state[
-            "status"
-        ])
+        self.assertIn(terminal.state["status"], ("success", "waiting"))
         markdown = self._read_transcript(terminal)
-        winning_reason = terminal.state["closing_summary"]["reason"]
+        winning_reason = ballots[0]["fact"]["closing_summary"]["reason"]
         losing_reason = (
             "Losing failure account."
             if winning_reason != "Losing failure account."

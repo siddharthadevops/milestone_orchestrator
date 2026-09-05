@@ -54,6 +54,7 @@ STOP_INCOMPLETE = "brainstorming_stop_incomplete"
 SESSION_RUNNING = "brainstorming_session_running"
 EXTERNAL_INTERVENTION_CONFLICT = "brainstorming_external_intervention_conflict"
 FLOOR_INTERVENTION_CONFLICT = "brainstorming_floor_intervention_conflict"
+CONTINUATION_CONFLICT = "brainstorming_continuation_conflict"
 UNAVAILABLE = "brainstorming_unavailable"
 _PROJECT_REQUEST_ERRORS = {
     "invalid_project",
@@ -1879,8 +1880,22 @@ def _projection(home, record):
         "revision": snapshot.revision,
         "state": snapshot.state,
     }
+    projected.update(_round_facts(snapshot.state))
     projected.update(_activity_projection(store, record, snapshot.state))
     return projected
+
+
+def _round_facts(state):
+    progress = brainstorming.coordination_projection(state)
+    used = 0 if progress is None else progress["rounds_used"]
+    maximum = brainstorming.effective_max_rounds(state)
+    remaining = maximum - used
+    return {
+        "rounds_used": used,
+        "max_rounds": maximum,
+        "rounds_remaining": remaining,
+        "exhausted": state["status"] == "waiting" and remaining == 0,
+    }
 
 
 def _rollback_unreleased_creation(
@@ -2457,6 +2472,8 @@ def _list_projection(store, record):
         "revision": None,
         "rounds_used": None,
         "max_rounds": None,
+        "rounds_remaining": None,
+        "exhausted": None,
         "work_duration_s": None,
         "work_token_usage": None,
         "work_token_usage_partial": False,
@@ -2479,16 +2496,12 @@ def _list_projection(store, record):
         if snapshot is None:
             raise RuntimeError("Brainstorming session state is unavailable")
         state = snapshot.state
-        progress = brainstorming.coordination_projection(state)
         row.update(
             {
                 "status": state["status"],
                 "request": state["request"]["request"],
                 "revision": snapshot.revision,
-                "rounds_used": (
-                    0 if progress is None else progress["rounds_used"]
-                ),
-                "max_rounds": state["request"]["max_rounds"],
+                **_round_facts(state),
             }
         )
         activity = _activity_projection(store, record, state)
@@ -2752,6 +2765,7 @@ def view_session(
                         target["content"] = text[:preview_limit]
                         target["truncated"] = len(text) > preview_limit
         turns = [] if progress is None else progress["completed_turns"]
+        round_facts = _round_facts(state)
         activity = _activity_projection(store, record, state)
         supplied = None
         if callable(resolve_staffing_session):
@@ -2805,9 +2819,11 @@ def view_session(
             ],
             "round": {
                 "current": turns[-1]["round"] if turns else 0,
-                "completed": 0 if progress is None else progress["rounds_used"],
-                "maximum": state["request"]["max_rounds"],
+                "completed": round_facts["rounds_used"],
+                "maximum": round_facts["max_rounds"],
+                "remaining": round_facts["rounds_remaining"],
             },
+            "exhausted": round_facts["exhausted"],
             "transcript_markdown": brainstorming.render_transcript(state),
             "result": copy.deepcopy(state.get("result")),
             "final_agreement": final_agreement,
@@ -2864,6 +2880,139 @@ def view_activity(home, session_id, activity_id, authorize, preview_limit):
     except PublicLifecycleError:
         raise
     except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def _positive_control_value(body, field):
+    try:
+        brainstorming._exact_keys(body, (field,), (), "continuation control")
+        value = body[field]
+        if type(value) is not int or value <= 0:
+            raise brainstorming.ContractError(
+                "continuation control.%s must be a positive integer" % field
+            )
+        return value
+    except (TypeError, ValueError, brainstorming.ContractError) as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+
+
+def add_rounds(home, session_id, body, authorize):
+    """Raise one authorized absolute ceiling without launching work."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    maximum = _positive_control_value(body, "maximum")
+    try:
+        store = brainstorming.SessionStore(state_directory(home))
+        store.extend_rounds(session_id, maximum)
+        return _projection(home, record)
+    except (
+        brainstorming.IllegalTransition,
+        brainstorming.HistoryRewriteError,
+    ) as exc:
+        raise PublicLifecycleError(409, CONTINUATION_CONFLICT) from exc
+    except brainstorming.SessionNotFound as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    except PublicLifecycleError:
+        raise
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def continue_session(
+    home,
+    session_id,
+    body,
+    authorize,
+    resolve_staffing_session=None,
+):
+    """Top up and launch one exact authorized waiting revision."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    waiting_revision = _positive_control_value(body, "waiting_revision")
+    token = (os.path.abspath(home), session_id)
+    launch = None
+    try:
+        store = brainstorming.SessionStore(state_directory(home))
+        with _locked_registry(home):
+            with _STOPS_GUARD:
+                if token in _STOPS_IN_FLIGHT:
+                    raise PublicLifecycleError(409, CONTINUATION_CONFLICT)
+            document = _load_registry(home)
+            current = _find_record(document, session_id)
+            if current is None:
+                raise PublicLifecycleError(404, UNKNOWN_SESSION)
+            snapshot = store.read(session_id)
+            if snapshot is None:
+                raise PublicLifecycleError(503, UNAVAILABLE)
+            if (
+                snapshot.revision != waiting_revision
+                or snapshot.state["status"] != "waiting"
+                or _process_alive(current)
+            ):
+                raise PublicLifecycleError(409, CONTINUATION_CONFLICT)
+            supplied = None
+            if (
+                resolve_staffing_session is not None
+                and "staffing_session" not in current
+                and _router_staffed(current)
+            ):
+                supplied = _validate_staffing_session(
+                    resolve_staffing_session(current)
+                )
+            prior_pid = current.get("pid")
+
+            def prepare_launch():
+                nonlocal launch
+                try:
+                    launch = _launch_lifecycle_process(
+                        home,
+                        session_id,
+                        staffing_session=record_staffing_session(
+                            current, supplied
+                        ),
+                    )
+                except Exception as exc:
+                    raise PublicLifecycleError(503, UNAVAILABLE) from exc
+                if launch.process.poll() is not None:
+                    raise PublicLifecycleError(503, UNAVAILABLE)
+                current["pid"] = launch.process.pid
+                _save_registry(home, document)
+                # The child remains excluded by this registry lock while the
+                # session CAS commits.  Running preparation inside the CAS
+                # lock also prevents a stale continuation from spawning after
+                # another session revision has already won.
+                _release_started(launch)
+
+            try:
+                store.continue_waiting(
+                    session_id,
+                    waiting_revision,
+                    before_accept=prepare_launch,
+                )
+            except BaseException:
+                if launch is not None:
+                    current["pid"] = prior_pid
+                    _save_registry(home, document)
+                raise
+            resumed = copy.deepcopy(current)
+        _track_child(home, session_id, launch.process)
+        return _projection(home, resumed)
+    except PublicLifecycleError:
+        if launch is not None:
+            launch.abort()
+        raise
+    except (
+        brainstorming.IllegalTransition,
+        brainstorming.HistoryRewriteError,
+        brainstorming.RevisionConflict,
+        brainstorming.SessionNotFound,
+    ) as exc:
+        if launch is not None:
+            launch.abort()
+        raise PublicLifecycleError(409, CONTINUATION_CONFLICT) from exc
+    except Exception as exc:
+        if launch is not None:
+            launch.abort()
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
 
 
@@ -3017,6 +3166,7 @@ def start_session(
                 raise PublicLifecycleError(503, UNAVAILABLE)
             if (
                 snapshot.state["status"] in brainstorming.TERMINAL_STATUSES
+                or snapshot.state["status"] == "waiting"
                 or _process_alive(current)
             ):
                 return _projection(home, current)
@@ -3601,11 +3751,11 @@ def _wait_for_external_response(
                     or current.state["recovery_baseline_revision"]
                 )
             ):
-                store.advance_repository_revision(
+                coordination.advance_repository_revision_after_round_extensions(
+                    store,
                     record["id"],
-                    current.revision,
+                    current,
                     completed_revision,
-                    publish=False,
                 )
                 store.discard_unanswered_external_intervention(
                     record["id"], token
@@ -3712,7 +3862,7 @@ def run_lifecycle(
             store, participant_execution, turn_preparer=turn_preparer
         )
         resumed = coordinator.reconcile_external_intervention(session_id)
-        if resumed.state["status"] in brainstorming.TERMINAL_STATUSES:
+        if resumed.state["status"] in (*brainstorming.TERMINAL_STATUSES, "waiting"):
             return 0
         while True:
             try:
@@ -3720,7 +3870,7 @@ def run_lifecycle(
                 break
             except coordination.OperationalRetryPending as pending:
                 _wait_operational_retry(pending)
-        if prepared.state["status"] in brainstorming.TERMINAL_STATUSES:
+        if prepared.state["status"] in (*brainstorming.TERMINAL_STATUSES, "waiting"):
             return 0
         execution_context = record["execution_context"]
 
@@ -3729,7 +3879,9 @@ def run_lifecycle(
                 snapshot = store.read(session_id)
                 if snapshot is None:
                     return 2
-                if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                if snapshot.state["status"] in (
+                    *brainstorming.TERMINAL_STATUSES, "waiting"
+                ):
                     return 0
                 try:
                     snapshot = coordinator.run_next_turn(
@@ -3747,7 +3899,9 @@ def run_lifecycle(
                     continue
                 except brainstorming.RevisionConflict:
                     continue
-                if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                if snapshot.state["status"] in (
+                    *brainstorming.TERMINAL_STATUSES, "waiting"
+                ):
                     return 0
 
         discussion_due_after_closure = False
@@ -3755,7 +3909,9 @@ def run_lifecycle(
             snapshot = store.read(session_id)
             if snapshot is None:
                 return 2
-            if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+            if snapshot.state["status"] in (
+                *brainstorming.TERMINAL_STATUSES, "waiting"
+            ):
                 return 0
             pending_attempt = store.read_turn_attempt(session_id)
             projection = brainstorming.coordination_projection(snapshot.state)
@@ -3765,6 +3921,8 @@ def run_lifecycle(
                 and projection["rounds_used"] > 0
                 and len(projection["completed_turns"])
                 == projection["rounds_used"] * participant_count
+                and snapshot.state.get("continued_after_rounds")
+                != projection["rounds_used"]
                 and not any(
                     event["kind"] == "closure_ballot"
                     and event["fact"]["after_completed_rounds"]
@@ -3802,7 +3960,9 @@ def run_lifecycle(
                     continue
                 except brainstorming.RevisionConflict:
                     continue
-                if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                if snapshot.state["status"] in (
+                    *brainstorming.TERMINAL_STATUSES, "waiting"
+                ):
                     return 0
                 discussion_due_after_closure = True
                 continue
@@ -3831,13 +3991,13 @@ def run_lifecycle(
                     if (
                         snapshot is not None
                         and snapshot.state["status"]
-                        in brainstorming.TERMINAL_STATUSES
+                        in (*brainstorming.TERMINAL_STATUSES, "waiting")
                     ):
                         return 0
                 if (
                     snapshot is not None
                     and snapshot.state["status"]
-                    in brainstorming.TERMINAL_STATUSES
+                    in (*brainstorming.TERMINAL_STATUSES, "waiting")
                 ):
                     return 0
     except LifecycleStop:

@@ -241,7 +241,9 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             }
         elif proposal:
             proposes = True
-            if target_name.endswith("decline-once.md"):
+            if target_name.endswith((
+                "decline-once.md", "decline-continuation.md"
+            )):
                 counter_path = os.path.join(
                     os.getcwd(), ".decline-closure-calls"
                 )
@@ -253,7 +255,11 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 count += 1
                 with open(counter_path, "w", encoding="utf-8") as handle:
                     handle.write(str(count))
-                proposes = count > 1
+                proposes = (
+                    count > 1
+                    if target_name.endswith("decline-once.md")
+                    else False
+                )
             answer = {
                 "kind": "closure_proposal",
                 "propose": proposes,
@@ -512,6 +518,10 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     "process",
                     "revision",
                     "state",
+                    "rounds_used",
+                    "max_rounds",
+                    "rounds_remaining",
+                    "exhausted",
                     "activity",
                     "work_duration_s",
                     "work_token_usage",
@@ -1568,6 +1578,38 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         ) as handle:
             self.assertEqual(handle.read(), "2")
 
+    def test_continuation_survives_restart_without_repeating_boundary_work(self):
+        self._target("decline-continuation.md")
+        created = lifecycle.create_session(
+            self.home,
+            self._payload("decline-continuation.md", max_rounds=1),
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        self._stop_sleeper_record(created["id"])
+
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, created["id"], require_pid_claim=False
+        ), 0)
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        waiting = store.read(created["id"])
+        self.assertEqual(waiting.state["status"], "waiting")
+        resumed = store.continue_waiting(created["id"], waiting.revision)
+        self.assertEqual(resumed.state["continued_after_rounds"], 1)
+
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, created["id"], require_pid_claim=False
+        ), 0)
+        repeated = store.read(created["id"])
+        self.assertEqual(repeated.state["status"], "waiting")
+        self.assertEqual(repeated.state["rounds_used"], 3)
+        self.assertEqual(len(repeated.state["completed_turns"]), 6)
+        with open(
+            os.path.join(self.workspace, ".decline-closure-calls"),
+            encoding="utf-8",
+        ) as handle:
+            self.assertEqual(handle.read(), "3")
+
     def test_active_target_identity_does_not_reserve_replaced_inode(self):
         target = self._target("replacement.md")
         unrelated = self._target("unrelated.md", b"unrelated target")
@@ -1900,7 +1942,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             (409, lifecycle.FLOOR_INTERVENTION_CONFLICT),
         )
 
-    def test_fake_provider_lifecycle_reaches_success_and_failure(self):
+    def test_api_only_continuation_preserves_success_and_failure(self):
         for name in ("success.md", "failure.md", "error.md"):
             self._target(name)
         sessions = {}
@@ -1914,12 +1956,68 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             sessions[name] = body["session"]["id"]
 
         success = self._poll_terminal(sessions["success.md"])
-        rejected = self._poll_terminal(sessions["failure.md"])
+        deadline = time.monotonic() + 20
+        rejected = None
+        while time.monotonic() < deadline:
+            code, response = self._request(
+                "GET", "/api/brainstorming/sessions/%s" % sessions["failure.md"]
+            )
+            self.assertEqual(code, 200, response)
+            rejected = response["session"]
+            if rejected["state"]["status"] == "waiting" and (
+                rejected["process"] == "stopped"
+            ):
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("exhausted session did not become waiting")
         operational = self._poll_terminal(sessions["error.md"])
         self.assertEqual(success["state"]["status"], "success")
         self.assertEqual(success["state"]["result"]["outcome"], "success")
-        self.assertEqual(rejected["state"]["status"], "failure")
-        self.assertEqual(rejected["state"]["result"]["rounds_used"], 1)
+        self.assertEqual(rejected["state"]["status"], "waiting")
+        self.assertEqual(
+            (rejected["rounds_used"], rejected["max_rounds"],
+             rejected["rounds_remaining"], rejected["exhausted"]),
+            (1, 1, 0, True),
+        )
+        code, raised = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/rounds" % sessions["failure.md"],
+            {"maximum": 4},
+        )
+        self.assertEqual(code, 200, raised)
+        self.assertEqual(raised["session"]["rounds_remaining"], 3)
+        self.assertEqual(raised["session"]["process"], "stopped")
+        code, resumed = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/continue" % sessions["failure.md"],
+            {"waiting_revision": raised["session"]["revision"]},
+        )
+        self.assertEqual(code, 200, resumed)
+        self.assertEqual(resumed["session"]["state"]["status"], "running")
+        self.assertEqual(resumed["session"]["max_rounds"], 4)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            code, response = self._request(
+                "GET", "/api/brainstorming/sessions/%s" % sessions["failure.md"]
+            )
+            rejected = response["session"]
+            if rejected["state"]["status"] == "waiting" and (
+                rejected["process"] == "stopped"
+            ):
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("continued session did not return to waiting")
+        self.assertEqual((rejected["rounds_used"], rejected["max_rounds"]), (4, 4))
+        code, stale = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/continue" % sessions["failure.md"],
+            {"waiting_revision": raised["session"]["revision"]},
+        )
+        self.assertEqual((code, stale["error"]), (
+            409, lifecycle.CONTINUATION_CONFLICT
+        ))
         self.assertEqual(operational["state"]["status"], "failure")
         self.assertIn(
             "participant execution failed",
@@ -1956,7 +2054,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
         with open(operational_log, "r", encoding="utf-8") as handle:
             self.assertIn(critic_ref, handle.read())
-        for session in (success, rejected, operational):
+        for session in (success, operational):
             self.assertEqual(
                 session["state"]["result"]["target_ref"],
                 session["state"]["request"]["target_path"],
@@ -1978,7 +2076,140 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                         transcript.index("## Material interruption"),
                         transcript.index("## Closing"),
                     )
+        with open(rejected["state"]["transcript_ref"], encoding="utf-8") as handle:
+            transcript = handle.read()
+        self.assertNotIn("## Closing", transcript)
+        self.assertIn("at most 1 round", transcript)
+        self.assertEqual(len(rejected["state"]["completed_turns"]), 8)
         self.assertEqual(registry.load(self.home)["runs"], [])
+
+    def test_continue_pre_release_death_keeps_waiting_revision(self):
+        self._target("failure.md")
+        created = lifecycle.create_session(
+            self.home,
+            self._payload("failure.md"),
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        self._stop_sleeper_record(created["id"])
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, created["id"], require_pid_claim=False
+        ), 0)
+
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        before = store.read(created["id"])
+        self.assertEqual(before.state["status"], "waiting")
+        process = mock.Mock()
+        process.pid = 987654
+        process.poll.side_effect = [None, 7]
+        released = mock.Mock()
+        aborted = mock.Mock()
+        launch = lifecycle.GatedLaunch(process, released, aborted)
+
+        with mock.patch.object(
+            lifecycle, "_launch_lifecycle_process", return_value=launch
+        ):
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % created["id"],
+                {"waiting_revision": before.revision},
+            )
+
+        self.assertEqual((code, response["error"]), (
+            503, lifecycle.UNAVAILABLE
+        ))
+        after = store.read(created["id"])
+        self.assertEqual(after, before)
+        record = lifecycle._record_by_id(self.home, created["id"])
+        self.assertIsNone(record["pid"])
+        released.assert_not_called()
+        aborted.assert_called_once_with()
+
+    def test_add_rounds_missing_durable_state_is_unavailable(self):
+        self._target("missing-rounds-state.md")
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, created = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload("missing-rounds-state.md"),
+            )
+        self.assertEqual(status, 201, created)
+        session_id = created["session"]["id"]
+        self._stop_sleeper_record(session_id)
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        store.discard_session(session_id)
+        self.assertIsNotNone(lifecycle._record_by_id(self.home, session_id))
+
+        code, response = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/rounds" % session_id,
+            {"maximum": 3},
+        )
+
+        self.assertEqual(
+            (code, response["error"]),
+            (503, lifecycle.UNAVAILABLE),
+        )
+
+    def test_round_extension_winner_conflicts_before_continue_launch(self):
+        self._target("failure.md")
+        created = lifecycle.create_session(
+            self.home,
+            self._payload("failure.md"),
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        self._stop_sleeper_record(created["id"])
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, created["id"], require_pid_claim=False
+        ), 0)
+
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        waiting = store.read(created["id"])
+        self.assertEqual(waiting.state["status"], "waiting")
+        real_continue = bs.SessionStore.continue_waiting
+
+        def extension_wins(
+            competing_store,
+            session_id,
+            expected_revision,
+            before_accept=None,
+        ):
+            competing_store.extend_rounds(session_id, 7)
+            return real_continue(
+                competing_store,
+                session_id,
+                expected_revision,
+                before_accept=before_accept,
+            )
+
+        with mock.patch.object(
+            bs.SessionStore,
+            "continue_waiting",
+            autospec=True,
+            side_effect=extension_wins,
+        ), mock.patch.object(lifecycle, "_launch_lifecycle_process") as launch:
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/continue" % created["id"],
+                {"waiting_revision": waiting.revision},
+            )
+
+        self.assertEqual((code, response["error"]), (
+            409, lifecycle.CONTINUATION_CONFLICT
+        ))
+        launch.assert_not_called()
+        after = store.read(created["id"])
+        self.assertEqual(after.state["status"], "waiting")
+        self.assertEqual(bs.effective_max_rounds(after.state), 7)
+        self.assertEqual(after.revision, waiting.revision + 1)
+        self.assertIsNone(
+            lifecycle._record_by_id(self.home, created["id"])["pid"]
+        )
 
     def test_dante_narrator_enters_through_the_external_turn_contract(self):
         self._target("dante.md")

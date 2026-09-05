@@ -1342,16 +1342,35 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         self.assertTrue(same_intervention["provider_quiescent"])
         self.assertEqual(gitops.head_full_sha(self.workspace), first_revision)
 
-        brainstorming_lifecycle._wait_for_external_response(
+        advance_repository_revision = store.advance_repository_revision
+        raced = False
+
+        def recover_after_extension(*args, **kwargs):
+            nonlocal raced
+            if not raced:
+                raced = True
+                store.extend_rounds("repository-session", 3)
+            return advance_repository_revision(*args, **kwargs)
+
+        with mock.patch.object(
             store,
-            execution,
-            record,
-            first_pending.exception,
-            {},
-            turn_preparer,
-        )
+            "advance_repository_revision",
+            side_effect=recover_after_extension,
+        ):
+            brainstorming_lifecycle._wait_for_external_response(
+                store,
+                execution,
+                record,
+                first_pending.exception,
+                {},
+                turn_preparer,
+            )
         advanced = store.read("repository-session")
+        self.assertTrue(raced)
+        self.assertEqual(advanced.state["status"], "running")
+        self.assertEqual(brainstorming.effective_max_rounds(advanced.state), 3)
         self.assertEqual(len(advanced.state["completed_turns"]), 2)
+        self.assertNotIn("failure_origin", advanced.state)
         self.assertNotEqual(
             advanced.state["accepted_target_revision"], first_revision
         )
