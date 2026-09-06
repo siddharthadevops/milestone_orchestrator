@@ -239,9 +239,32 @@ records. `GET /api/brainstorming/sessions/<id>` is the
 polling/follow surface, and `POST /api/brainstorming/sessions/<id>/stop` and
 `/start` accept no fields. These successes return
 `{"ok": true, "session": ...}`. Stop halts the lifecycle without closing or
-discarding the session; Start resumes that same session. If the lifecycle does
-not stop within the existing shutdown window, Stop returns
-`brainstorming_stop_incomplete`.
+discarding the session; Start resumes that same session after an ordinary
+stop. If the lifecycle does not stop within the existing shutdown window,
+Stop returns `brainstorming_stop_incomplete`.
+
+When a complete round reaches the limit without agreement, the session enters
+non-terminal `waiting` and its process stops. Its task and any reviewed, deep,
+or milestone owners remain open. The discussion view shows used, maximum, and
+remaining rounds and offers **Add rounds** and **Continue**:
+
+- `POST .../<id>/rounds` accepts exactly `{"maximum": <positive integer>}`.
+  It raises the current maximum without starting work. Repeating the same
+  absolute maximum is safe, and a smaller stale request cannot reduce it.
+- `POST .../<id>/continue` accepts exactly
+  `{"waiting_revision": <positive integer>}`, using the revision from the
+  current waiting view. It resumes the same discussion with at least two
+  complete rounds available, retaining a larger manually reserved allowance.
+  A duplicate or stale revision returns `409 brainstorming_continuation_conflict`;
+  a later exhaustion requires fresh action using that wait's revision.
+
+Both controls use the existing authenticated session routes and return
+`{"ok": true, "session": ...}`. Start cannot bypass `waiting`. The admitted
+limit, accepted discussion history, and accounting are preserved. Waiting
+for the operator has no timeout and consumes no reviewed execution-step budget.
+Stopping an owning task explicitly abandons its discussion and leaves both
+terminal. These controls never reopen historical terminal sessions or tasks;
+further work on those requires a new order.
 
 An external participant publishes one durable intervention and releases the
 target lock while waiting. `GET .../<id>/intervention` returns that request;
@@ -271,7 +294,8 @@ source. Authorization is decided from the immutable service record before
 any durable state is read, so a session in a project you are not assigned
 to is simply absent rather than refused; a project-less session is
 administrative. Each row carries the service metadata plus a cheap state
-projection (`status`, `request`, `rounds_used`/`max_rounds`, `revision`);
+projection (`status`, `request`, `rounds_used`/`max_rounds`,
+`rounds_remaining`, `exhausted`, `revision`);
 a row also carries accumulated `work_duration_s` and any active `in_flight`
 call or `external_intervention`;
 a session whose state store cannot be read still lists, with those fields

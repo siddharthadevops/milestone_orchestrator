@@ -649,6 +649,98 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
             self.assertEqual(self.wait_record(task_id)["result"]["status"],
                              "failure")
 
+    def test_brainstorming_wait_does_not_exhaust_reviewed_step_budget(self):
+        workspace = self.directory("long-brainstorming-wait")
+        unit = {"brainstorming_wait": {"session_id": "same-session"}}
+        subject = mock.MagicMock()
+        subject.state = {
+            "reviewed_task": {"unit": "slice-01"},
+            "failure": None,
+        }
+        subject._unit_by_key.return_value = unit
+        subject.reviewed_work.recover_pending_gate.return_value = None
+        subject.reviewed_work.next_action.return_value.type = (
+            drv.A_BRAINSTORM_WAIT
+        )
+        subject.reviewed_work.result.return_value = None
+        store = mock.Mock()
+        store.stop_reason.return_value = None
+        host = task_api.DirectTaskHost(
+            self.home, store=store, runner_factory=lambda *_args: None
+        )
+        success = {"status": "success", "native_result": None}
+        polls = 0
+
+        def operator_eventually_continues(_interval):
+            nonlocal polls
+            polls += 1
+            # A human wait must outlive the execution-step safeguard.  The
+            # same discussion then reaches a real terminal outcome.
+            if polls == 10001:
+                unit.pop("brainstorming_wait")
+                subject.reviewed_work.result.return_value = success
+
+        with mock.patch.object(
+            task_api.st, "load", return_value={"config": {}}
+        ), mock.patch.object(
+            task_api.driver, "Driver", return_value=subject
+        ), mock.patch.object(
+            task_api.time, "sleep", side_effect=operator_eventually_continues
+        ), mock.patch.object(
+            host, "_reviewed_failure", return_value={"status": "failure"}
+        ), mock.patch.object(host, "_publish_reviewed_terminal") as publish:
+            host._run_reviewed({
+                "id": "reviewed-owner",
+                "order": {"request": {"work_area": {
+                    "workspace_path": workspace,
+                }}},
+            })
+
+        self.assertEqual(polls, 10001)
+        publish.assert_called_once_with(
+            "reviewed-owner", subject, unit, success
+        )
+
+    def test_reviewed_execution_step_guard_still_stops_nonprogressing_work(self):
+        workspace = self.directory("nonprogressing-reviewed-work")
+        unit = {}
+        subject = mock.MagicMock()
+        subject.state = {
+            "reviewed_task": {"unit": "slice-01"},
+            "failure": None,
+        }
+        subject._unit_by_key.return_value = unit
+        subject.reviewed_work.recover_pending_gate.return_value = None
+        subject.reviewed_work.next_action.return_value.type = drv.A_DRAFT
+        subject.reviewed_work.result.return_value = None
+        store = mock.Mock()
+        store.stop_reason.return_value = None
+        host = task_api.DirectTaskHost(
+            self.home, store=store, runner_factory=lambda *_args: None
+        )
+        with mock.patch.object(
+            task_api.st, "load", return_value={"config": {}}
+        ), mock.patch.object(
+            task_api.driver, "Driver", return_value=subject
+        ), mock.patch.object(
+            host, "_reviewed_failure",
+            side_effect=lambda _subject, _unit, reason: {
+                "status": "failure", "reason": reason,
+            },
+        ), mock.patch.object(host, "_publish_reviewed_terminal") as publish:
+            host._run_reviewed({
+                "id": "reviewed-owner",
+                "order": {"request": {"work_area": {
+                    "workspace_path": workspace,
+                }}},
+            })
+
+        self.assertEqual(subject.reviewed_work.execute.call_count, 10000)
+        publish.assert_called_once()
+        failure = publish.call_args.args[-1]
+        self.assertEqual(failure["status"], "failure")
+        self.assertIn("exceeded its lifecycle step bound", failure["reason"])
+
     def test_reference_documents_remain_ordered_untyped_material(self):
         workspace = self._repo("references")
         references = ["docs/skeleton.md", "docs/slice-01.md", "docs/extra.md"]

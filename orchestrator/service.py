@@ -3712,7 +3712,10 @@ def _require_unowned_workspace(
         # area is free; refuse rather than merge under an unknown owner.
         raise ApiError(409, WORK_AREA_BUSY)
     for session in sessions:
-        if session.get("id") == excluded_session_id:
+        if (
+            excluded_session_id is not None
+            and session.get("id") == excluded_session_id
+        ):
             continue
         # A session with no readable state counts as live: unknown is not
         # evidence of being finished.

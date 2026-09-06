@@ -749,21 +749,88 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         snapshot = self._turn(
             session_id, snapshot, "critic-machine", "Final objection."
         )
-        snapshot = self._terminal_ballot(
-            session_id,
-            snapshot,
-            ("accept", "object"),
-            False,
-            "The final ballot did not reach agreement.",
+        reason = "The final ballot did not reach agreement."
+        proposed_summary = closing_summary(reason, ["One objection remains."])
+        ballot = self._ballot_fact(
+            snapshot, ("accept", "object"), False, proposed_summary
         )
+        historical = bs.transition_session(
+            snapshot.state,
+            "failure",
+            {
+                "outcome": "failure",
+                "target_ref": snapshot.state["request"]["target_path"],
+                "transcript_ref": snapshot.state["transcript_ref"],
+                "rounds_used": 1,
+                "reason": reason,
+            },
+            bs.closing_summary_with_ballot_facts(
+                proposed_summary, ballot, snapshot.state["run_config"]
+            ),
+        )
+        historical["transcript_events"].append(
+            {"kind": "closure_ballot", "fact": ballot}
+        )
+        # Seed an already-terminal record from before exhaustion became a
+        # wait. New closure acceptance must never produce this legacy shape.
+        written = self.store._store.cas(
+            bs._session_key(session_id),
+            snapshot.revision,
+            bs.validate_session_state(historical),
+        )
+        self.assertTrue(written.ok)
+        snapshot = self.store.reconcile_transcript(session_id)
 
         markdown = self._read(snapshot)
+        self.assertEqual(snapshot.state["status"], "failure")
+        self.assertIn("## Closing", markdown)
         self.assertNotIn("discussion could continue", markdown)
         self.assertIn(
             "No complete discussion round remained within the configured "
             "limit.",
             markdown,
         )
+        with self.assertRaises(bs.IllegalTransition):
+            self.store.extend_rounds(session_id, 3)
+        with self.assertRaises(bs.IllegalTransition):
+            self.store.continue_waiting(session_id, snapshot.revision)
+        self.assertEqual(self.store.read(session_id), snapshot)
+        self.assertEqual(self._read(snapshot), markdown)
+
+    def test_final_round_waiting_ballot_preserves_its_capacity_after_continue(self):
+        session_id = "waiting-ballot"
+        snapshot = self._initialize(
+            session_id, self._create(session_id, max_rounds=1)
+        )
+        snapshot = self._turn(
+            session_id, snapshot, "lead-machine", "Final proposal."
+        )
+        snapshot = self._turn(
+            session_id, snapshot, "critic-machine", "Final objection."
+        )
+        snapshot = self.store.wait_with_ballot(
+            session_id,
+            snapshot.revision,
+            self._ballot_fact(snapshot, ("accept", "object"), False),
+        )
+
+        markdown = self._read(snapshot)
+        self.assertEqual(snapshot.state["status"], "waiting")
+        self.assertNotIn("result", snapshot.state)
+        self.assertNotIn("closing_summary", snapshot.state)
+        self.assertNotIn("## Closing", markdown)
+        self.assertIn("at most 1 round", markdown)
+        self.assertNotIn("discussion could continue", markdown)
+        self.assertIn(
+            "No complete discussion round remained within the configured "
+            "limit.",
+            markdown,
+        )
+        raised = self.store.extend_rounds(session_id, 4)
+        self.assertEqual(self._read(raised), markdown)
+        resumed = self.store.continue_waiting(session_id, raised.revision)
+        self.assertEqual(resumed.state["status"], "running")
+        self.assertEqual(self._read(resumed), markdown)
 
     def test_terminal_closing_is_complete_even_before_first_turn(self):
         success_id = "closing-success"

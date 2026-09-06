@@ -263,7 +263,12 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function renderSessionDetail", text)
         self.assertIn("function stopSelectedSession", text)
         self.assertIn("function startSelectedSession", text)
-        self.assertIn('const displayStatus = !terminal && !running ? "stopped"', text)
+        self.assertIn('const waiting = view.status === "waiting";', text)
+        self.assertRegex(
+            text,
+            r'const displayStatus = waiting \? "waiting"\s*'
+            r': !terminal && !running \? "stopped" : view\.status;',
+        )
         self.assertIn("function sessionChips", text)
         self.assertIn("function sessionClosingCard", text)
         self.assertIn('closing-label">Proposal', text)

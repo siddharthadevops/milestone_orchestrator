@@ -1421,7 +1421,8 @@ class DirectTaskHost:
         )
         unit_key = subject.state["reviewed_task"]["unit"]
         try:
-            for _ in range(10000):
+            steps = 0
+            while steps < 10000:
                 unit = subject._unit_by_key(unit_key)
                 stop_reason = self._stop_reason(task_id)
                 if stop_reason is not None:
@@ -1447,6 +1448,10 @@ class DirectTaskHost:
                     recovered = subject.reviewed_work.recover_pending_gate()
                     if recovered is None:
                         action = subject.reviewed_work.next_action(unit)
+                        # An operator may leave a discussion waiting for any
+                        # duration. Polling it is not an execution step.
+                        if action.type != driver.A_BRAINSTORM_WAIT:
+                            steps += 1
                         subject.reviewed_work.execute(
                             action,
                             call_preparation=(
@@ -1455,6 +1460,8 @@ class DirectTaskHost:
                                 )
                             ),
                         )
+                    else:
+                        steps += 1
                     subject._save()
                     subject._clear_busy()
                 unit = subject._unit_by_key(unit_key)
