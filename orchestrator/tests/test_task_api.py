@@ -161,6 +161,16 @@ class TaskApiTest(unittest.TestCase):
             time.sleep(0.01)
         self.fail("task %s did not reach expected state" % task_id)
 
+    def wait_lifecycle(self, task_id, expected):
+        deadline = time.time() + 5
+        store = task_api.StandaloneTaskStore(self.home)
+        while time.time() < deadline:
+            lifecycle = store.lifecycle(task_id)
+            if lifecycle["status"] == expected:
+                return lifecycle
+            time.sleep(0.01)
+        self.fail("task %s did not become %s" % (task_id, expected))
+
     def _sleeper(self):
         process = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(120)"],
@@ -652,7 +662,10 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(marker["task_id"], record["id"])
         fail.append(True)
         failed_id = self.request("POST", "/api/tasks", self.order())[1]["task"]["id"]
-        failure = self.wait_record(failed_id)["result"]
+        paused = self.wait_lifecycle(failed_id, "paused")
+        self.assertIsNone(task_api.StandaloneTaskStore(self.home).record(failed_id)["result"])
+        self.assertEqual(paused["source"], "error")
+        failure = paused["history"][-1]["attempt"]
         self.assertEqual((failure["status"], failure["native_result"]),
                          ("failure", "partial evidence"))
         self.assertTrue(failure["token_usage_partial"])
@@ -1118,7 +1131,7 @@ class TaskApiTest(unittest.TestCase):
             server.server_close()
             thread.join(timeout=5)
 
-    def test_service_restart_adopts_open_brainstorming_and_reviewed_tasks(self):
+    def test_service_restart_adopts_brainstorming_but_reviewed_requires_resume(self):
         pins = {
             "dispatch_authority": "static",
             "participants": [{"id": "lead"}],
@@ -1165,6 +1178,17 @@ class TaskApiTest(unittest.TestCase):
             service, "_reviewed_task_config", return_value=reviewed_config
         ) as reviewed_resolver:
             server = service.make_server(self.home, 0)
+            self.assertEqual(resolved, {record["id"]: direct_config})
+            reviewed_resolver.assert_not_called()
+            store = task_api.StandaloneTaskStore(self.home)
+            paused = store.lifecycle(reviewed["id"])
+            self.assertEqual(paused["status"], "paused")
+            self.assertEqual(paused["source"], "interrupted")
+            resumed = service.control_task(
+                self.home, {"admin": True}, reviewed["id"], "resume",
+                {"revision": paused["revision"]}, restarted_host,
+            )
+            self.assertEqual(resumed["lifecycle"]["status"], "running")
         try:
             adoption.assert_called_once()
             self.assertEqual(resolved, {
@@ -2744,9 +2768,9 @@ class TaskApiTest(unittest.TestCase):
         )
         self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
 
-    def test_restart_adopts_open_brainstorming_and_closes_open_worker_tasks(self):
+    def test_restart_adopts_open_brainstorming_and_pauses_open_worker_tasks(self):
         # Records outlive the process; a new host re-attaches Brainstorming
-        # tasks (their session is independent) and closes Worker ones.
+        # tasks (their session is independent) and pauses ordinary calls.
         store = task_api.StandaloneTaskStore(self.home)
         worker = store.admit(
             self.order(), {"worker": {"agent": "codex"}}, self.primary
@@ -2774,15 +2798,17 @@ class TaskApiTest(unittest.TestCase):
         ):
             outcome = host.adopt_open_tasks(lambda _record: (lambda: {}))
             deadline = time.time() + 5
-            while host.owns_workspace(self.primary) and time.time() < deadline:
+            while host.is_active(discussion["id"]) and time.time() < deadline:
                 time.sleep(0.01)
         self.assertEqual(outcome, {
-            "adopted": [discussion["id"]], "closed": [worker["id"]]
+            "adopted": [discussion["id"]], "closed": []
         })
         self.assertEqual(seen, [discussion["id"]])
-        closed = store.record(worker["id"])["result"]
-        self.assertEqual(closed["status"], "failure")
-        self.assertIn("service restarted", closed["reason"])
+        self.assertIsNone(store.record(worker["id"])["result"])
+        paused = store.lifecycle(worker["id"])
+        self.assertEqual(paused["status"], "paused")
+        self.assertEqual(paused["source"], "interrupted")
+        self.assertIn("service restart", paused["reason"])
         self.assertIsNone(store.record(discussion["id"])["result"])
         self.assertEqual(store.record(done["id"])["result"]["status"], "success")
 

@@ -37,6 +37,13 @@ run's live state) and a JSON API:
                                    ?purge=1 also removes the run's state file
                                    + lock so the workspace can launch fresh)
 
+Standalone agent_call, reviewed_task and deep_task controls:
+
+    GET    /api/tasks/<id>          canonical task + separate durable lifecycle
+    POST   /api/tasks/<id>/pause    pause at a safe boundary: {reason?}
+    POST   /api/tasks/<id>/resume   continue one paused revision: {revision}
+    POST   /api/tasks/<id>/stop     cancel permanently; never a resumable pause
+
 Standalone Brainstorming (independent from milestone runs and chronology;
 sessions render in the panel's right pane — there is no separate page):
 
@@ -4224,8 +4231,29 @@ def _run_staffing_session(state_path):
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
 
 
+def _require_unpaused_brainstorming_owner(home, attachment):
+    """Session controls cannot bypass an ordinary task family's Pause."""
+    if (attachment is None or not attachment.get("reviewed")
+            or attachment["terminal"] or attachment["stop_pending"]):
+        return
+    task_id = attachment.get("owner_task_id", attachment["task_id"])
+    try:
+        store = task_api.StandaloneTaskStore(home)
+        chain = store.owner_chain(task_id)
+        paused = any(
+            owner["result"] is None
+            and store.lifecycle(owner["id"])["status"] in ("pausing", "paused")
+            for owner in chain
+        )
+    except tasks.TaskRecordError as exc:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
+    if paused:
+        raise ApiError(409, "Resume the owning task before starting its discussion")
+
+
 def _owner_restart_barrier(home, who, session_id, attachment):
-    """Refuse new work after an attached owner accepted Stop."""
+    """Refuse new work after an attached owner accepted Stop or Pause."""
+    _require_unpaused_brainstorming_owner(home, attachment)
     if attachment is None or not (
         attachment["terminal"] or attachment["stop_pending"]
     ):
@@ -4299,6 +4327,9 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
                 workspace,
                 task_host=task_host,
                 check_sessions=False,
+                excluded_task_id=(
+                    reviewed_attachment["task_id"] if reviewed_attachment else None
+                ),
             )
             return brainstorming_lifecycle.start_session(
                 home,
@@ -4457,24 +4488,24 @@ def _continue_brainstorming_session(
 
     # Process liveness is eventual: even a projected live child must cross the
     # durable owner fence before the lifecycle recheck is allowed to relaunch.
-    if (
-        projection["revision"] != waiting_revision
-        or projection["state"]["status"] != "waiting"
-    ):
-        return continue_authorized()
-
     with registry.locked(home):
         attachment = _brainstorming_task_attachment(home, record)
         if attachment is None:
             attachment = _brainstorming_reviewed_attachment(
                 home, session_id, record, allow_missing=True
             )
+        _require_unpaused_brainstorming_owner(home, attachment)
         if attachment is not None and (
             attachment["terminal"] or attachment["stop_pending"]
         ):
             raise ApiError(
                 409, brainstorming_lifecycle.CONTINUATION_CONFLICT
             )
+        if (
+            projection["revision"] != waiting_revision
+            or projection["state"]["status"] != "waiting"
+        ):
+            return continue_authorized()
         admission = {}
         if attachment is None:
             milestone_attachment = _brainstorming_milestone_attachment(
@@ -4874,6 +4905,70 @@ def _resolve_direct_task_order(home, who, body):
         _raise_task_request(exc)
 
 
+def _controllable_task(home, who, task_id):
+    """Authorize before exposing standalone control state or accepting work."""
+    record = read_task(home, who, task_id)
+    try:
+        task_api.StandaloneTaskStore(home).record(task_id)
+    except tasks.TaskRecordError as exc:
+        raise ApiError(409, "milestone tasks are controlled through their run") from exc
+    if tasks.stored_task_executor(
+        (record.get("order") or {}).get("task_executor")
+    ) not in ("agent_call", "reviewed_task", "deep_task"):
+        raise ApiError(409, "use the discussion controls for this task")
+    return record
+
+
+def control_task(home, who, task_id, action, body, host):
+    record = _controllable_task(home, who, task_id)
+    if action == "pause":
+        if set(body) - {"reason"} or (
+            "reason" in body and (
+                not isinstance(body["reason"], str)
+                or not body["reason"].strip()
+            )
+        ):
+            raise ApiError(400, "pause accepts only a non-empty reason")
+        reason = body.get("reason") or "paused by %s" % (
+            (who or {}).get("email") or "operator"
+        )
+        try:
+            lifecycle = host.pause(task_id, reason)
+        except task_api.TaskControlConflict as exc:
+            raise ApiError(409, str(exc)) from exc
+    else:
+        if (
+            set(body) != {"revision"}
+            or isinstance(body.get("revision"), bool)
+            or not isinstance(body.get("revision"), int)
+            or body["revision"] < 0
+        ):
+            raise ApiError(400, "resume requires an integer revision")
+        executor = tasks.stored_task_executor(
+            (record.get("order") or {}).get("task_executor")
+        )
+        resolver = (
+            (lambda: _reviewed_task_config(home, _task_project(record)))
+            if _uses_reviewed_task_lifecycle(executor)
+            else (lambda: _direct_task_config(home, _task_project(record)))
+        )
+        # The workspace check and accepted resume share admission's lock.
+        # Its own durable family is excluded, never unrelated work.
+        reap_exited_drivers(home)
+        with registry.locked(home):
+            _require_unowned_workspace(
+                home, task_api._workspace(record), task_host=host,
+                reap=False, live_sessions_only=True, excluded_task_id=task_id,
+            )
+            try:
+                lifecycle = host.resume_locked(task_id, resolver, body["revision"])
+            except task_api.TaskControlConflict as exc:
+                raise ApiError(409, str(exc)) from exc
+            except ValueError as exc:
+                raise ApiError(400, str(exc)) from exc
+    return {"lifecycle": lifecycle}
+
+
 def stop_task(home, who, task_id, host):
     """Stop one running standalone task the caller may see.
 
@@ -4896,7 +4991,10 @@ def stop_task(home, who, task_id, host):
     email = (who or {}).get("email")
     if email:
         reason = "stopped by %s" % email
-    delivered = host.stop(task_id, reason)
+    try:
+        delivered = host.stop(task_id, reason)
+    except task_api.TaskControlConflict as exc:
+        raise ApiError(409, str(exc)) from exc
     if not delivered:
         recover_stop = getattr(
             host, "stop_inactive_brainstorming", None
@@ -4911,6 +5009,25 @@ def stop_task(home, who, task_id, host):
             )
     return {"stopped": bool(delivered), "state": "stopping" if delivered
             else "not_running"}
+
+
+@contextlib.contextmanager
+def _task_deletion_guard(home, record, host):
+    """Keep physical-quiescence evidence pinned until its owner is forgotten."""
+    if tasks.stored_task_executor(
+        record["order"]["task_executor"]
+    ) not in task_api.RECOVERABLE_EXECUTORS:
+        yield
+        return
+    owner = host if callable(getattr(host, "_lease", None)) else task_api.DirectTaskHost(home)
+    try:
+        lease = owner._lease(record["id"]).acquire()
+    except task_api.ExecutionBusy as exc:
+        raise ApiError(409, "the task's previous execution is not quiescent: %s" % exc) from exc
+    try:
+        yield
+    finally:
+        lease.close()
 
 
 def delete_task(home, who, task_id, host):
@@ -4937,23 +5054,24 @@ def delete_task(home, who, task_id, host):
             parent = None
         if parent is not None and parent["result"] is None:
             raise ApiError(409, "the task is retained by its open parent")
-    session_id = task_api.task_session_id(home, record, host)
-    if session_id:
-        try:
-            brainstorming_lifecycle.delete_session(
-                home, session_id, lambda _record: True, purge=True
-            )
-        except brainstorming_lifecycle.PublicLifecycleError as exc:
-            if exc.code != brainstorming_lifecycle.UNKNOWN_SESSION:
-                raise ApiError(409, "the task's discussion could not be "
-                               "discarded: %s" % exc.code)
-        except Exception:
-            # Best-effort: the task goes; a leftover session record is
-            # bookkeeping the session routes can still discard.
-            pass
-    removed = direct.delete(task_id)
-    if removed is not None:
-        task_api.forget_task_evidence(home, removed)
+    with _task_deletion_guard(home, record, host):
+        session_id = task_api.task_session_id(home, record, host)
+        if session_id:
+            try:
+                brainstorming_lifecycle.delete_session(
+                    home, session_id, lambda _record: True, purge=True
+                )
+            except brainstorming_lifecycle.PublicLifecycleError as exc:
+                if exc.code != brainstorming_lifecycle.UNKNOWN_SESSION:
+                    raise ApiError(409, "the task's discussion could not be "
+                                   "discarded: %s" % exc.code)
+            except Exception:
+                # Best-effort: the task goes; a leftover session record is
+                # bookkeeping the session routes can still discard.
+                pass
+        removed = direct.delete(task_id)
+        if removed is not None:
+            task_api.forget_task_evidence(home, removed)
     return {"deleted": removed is not None, "id": task_id}
 
 
@@ -4983,20 +5101,26 @@ def create_task(home, who, body, host):
         record = store.admit_locked(order, staffing, primary)
         try:
             host.start(record, resolver)
-        except Exception:
+        except Exception as exc:
             # Admission already succeeded. Preserve the acknowledged identity
-            # and make the observed handoff failure terminal when writable.
+            # and make the handoff failure resumable for controlled executors.
             try:
-                store.record_result_locked(record["id"], {
-                    "status": "failure",
-                    "reason": "Task execution handoff failed",
-                    "duration_s": 0.0,
-                    "token_usage": None,
-                    "token_usage_partial": True,
-                    "cost": None,
-                    "cost_partial": True,
-                    "native_result": None,
-                })
+                if order["task_executor"] in task_api.RECOVERABLE_EXECUTORS:
+                    store.pause_locked(
+                        record["id"], "Task execution handoff failed: %s" % exc,
+                        source="error",
+                    )
+                else:
+                    store.record_result_locked(record["id"], {
+                        "status": "failure",
+                        "reason": "Task execution handoff failed",
+                        "duration_s": 0.0,
+                        "token_usage": None,
+                        "token_usage_partial": True,
+                        "cost": None,
+                        "cost_partial": True,
+                        "native_result": None,
+                    })
             except Exception:
                 pass
     return record
@@ -5107,7 +5231,7 @@ def _is_deep_reviewed_child(record):
     )
 
 
-def _sidebar_task_row(row, timing=None):
+def _sidebar_task_row(row, timing=None, lifecycle=None):
     """A light row for the sidebar: never the native result (which can be
     hundreds of kilobytes of raw agent output) nor the full request."""
     timing = timing or {}
@@ -5121,6 +5245,7 @@ def _sidebar_task_row(row, timing=None):
         "process": timing.get("process", "stopped"),
         "work_duration_s": timing.get("work_duration_s"),
         "in_flight": timing.get("in_flight"),
+        "lifecycle": _task_control_summary(lifecycle),
         "record": {
             "id": record.get("id"),
             "order": {
@@ -5238,6 +5363,34 @@ def _task_host_active(host, task_id):
         return False
 
 
+def _direct_task_lifecycle(home, record, host=None):
+    """Control metadata beside, never inside, the canonical task record."""
+    if tasks.stored_task_executor(
+        (record.get("order") or {}).get("task_executor")
+    ) not in ("agent_call", "reviewed_task", "deep_task"):
+        return None
+    try:
+        reader = getattr(host, "lifecycle", None)
+        if callable(reader):
+            return reader(record["id"])
+        return task_api.StandaloneTaskStore(home).lifecycle(record["id"])
+    except tasks.TaskRecordError:
+        # An unscoped task read can also resolve a milestone-owned record.
+        return None
+
+
+def _task_control_summary(lifecycle):
+    """Keep repeated sidebar/pipeline reads free of full attempt histories."""
+    if lifecycle is None:
+        return None
+    return {
+        key: lifecycle[key] for key in (
+            "status", "revision", "reason", "source", "point", "root_task_id",
+            "can_pause", "can_resume", "blocked_reason",
+        ) if key in lifecycle
+    }
+
+
 def _task_work_seconds(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -5313,9 +5466,15 @@ def direct_reviewed_task_view(home, record, host=None):
     ) != "reviewed_task":
         raise ApiError(404, "task has no reviewed activity")
     result = record.get("result")
+    control = _direct_task_lifecycle(home, record, host)
     configuration = (record.get("order") or {}).get("configuration") or {}
     view = {
-        "status": "open" if result is None else result.get("status"),
+        "status": (
+            control["status"] if control and result is None
+            and control["status"] in ("paused", "pausing")
+            else "open" if result is None else result.get("status")
+        ),
+        "lifecycle": _task_control_summary(control),
         "task_kind": configuration.get("task_kind"),
         "activity": None,
         "billing": {},
@@ -5342,11 +5501,15 @@ def direct_reviewed_task_view(home, record, host=None):
             unit["status"] = (
                 "sealed" if result.get("status") == "success" else "failure"
             )
+        elif control and control["status"] in ("paused", "pausing"):
+            unit["status"] = control["status"]
         relation = record.get("parent") or {}
         if relation.get("part") is not None:
             unit["part"] = relation["part"]
         unit["source_task_id"] = record["id"]
-        active = _task_host_active(host, record["id"])
+        active = _task_host_active(host, record["id"]) and not (
+            control and control["status"] == "paused"
+        )
         in_flight = read_in_flight({"state_path": state_path}, active)
         if (
             in_flight
@@ -5390,6 +5553,7 @@ def direct_deep_task_view(home, who, parent, host=None):
     never makes the canonical parent unreadable.
     """
     parent_id = parent["id"]
+    control = _direct_task_lifecycle(home, parent, host)
     parent_project = _task_project(parent)
     allowed_projects = _allowed_task_projects(home, who)
     children = []
@@ -5451,6 +5615,7 @@ def direct_deep_task_view(home, who, parent, host=None):
             "phase": phase,
             "part": relation.get("part"),
             "status": reviewed["status"],
+            "lifecycle": reviewed.get("lifecycle"),
             "activity": reviewed["activity"],
         }
         billing.update(reviewed["billing"])
@@ -5463,9 +5628,12 @@ def direct_deep_task_view(home, who, parent, host=None):
     ))
     return {
         "status": (
-            "open" if parent.get("result") is None
+            control["status"] if control and parent.get("result") is None
+            and control["status"] in ("paused", "pausing")
+            else "open" if parent.get("result") is None
             else parent["result"].get("status")
         ),
+        "lifecycle": _task_control_summary(control),
         "children": children,
         "process": process,
         "work_duration_s": work_duration_s if timing_known else None,
@@ -5520,7 +5688,8 @@ def _direct_task_sidebar_timing(home, who, record, host=None):
             )
         if executor == "agent_call":
             if not active:
-                return _task_timing(None)
+                lifecycle = _direct_task_lifecycle(home, record, host) or {}
+                return _task_timing((lifecycle.get("accounting") or {}).get("duration_s"))
             marker = task_api.read_worker_marker(home, record["id"])
             if marker.get("task_id") != record["id"]:
                 return _task_timing(None, process="running")
@@ -5644,6 +5813,9 @@ def make_handler(home, task_host=None):
                                     _direct_task_sidebar_timing(
                                         home, who, row["record"], task_host
                                     ),
+                                    _direct_task_lifecycle(
+                                        home, row["record"], task_host
+                                    ),
                                 ) for row in
                                 visible_direct_task_rows(home, who, limit)
                             ],
@@ -5668,6 +5840,11 @@ def make_handler(home, task_host=None):
                         )
                         payload = {"ok": True, "task": record}
                         if query.get("run_id") is None:
+                            lifecycle = _direct_task_lifecycle(
+                                home, record, task_host
+                            )
+                            if lifecycle is not None:
+                                payload["lifecycle"] = lifecycle
                             executor = tasks.stored_task_executor(
                                 (record.get("order") or {}).get(
                                     "task_executor"
@@ -5919,6 +6096,15 @@ def make_handler(home, task_host=None):
                 if route == "/api/tasks":
                     task = create_task(home, who, self._task_body(), task_host)
                     self._json(201, {"ok": True, "task": task})
+                elif (
+                    route.startswith("/api/tasks/")
+                    and len(route.rstrip("/").split("/")) == 5
+                    and route.rstrip("/").split("/")[4] in ("pause", "resume")
+                ):
+                    parts = route.rstrip("/").split("/")
+                    self._json(200, {"ok": True, **control_task(
+                        home, who, parts[3], parts[4], self._task_body(), task_host
+                    )})
                 elif (
                     route.startswith("/api/tasks/")
                     and len(route.rstrip("/").split("/")) == 5

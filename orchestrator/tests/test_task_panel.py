@@ -348,7 +348,7 @@ class TaskPanelTests(unittest.TestCase):
         ).group(1)
         for field in (
             "record.order", "taskStaffingLine(record)", "result.reason",
-            "result.duration_s", "result.token_usage_partial",
+            "accounting.duration_s", "result.token_usage_partial",
             "result.cost_partial", "result.native_result",
         ):
             self.assertIn(field, detail)
@@ -447,7 +447,7 @@ class TaskPanelTests(unittest.TestCase):
             re.S,
         ).group(1)
         self.assertIn("record.id", row)
-        self.assertIn("taskState(record)", row)
+        self.assertIn("taskState(record, row.lifecycle)", row)
         self.assertIn("task_executor", row)
         self.assertIn("const total = taskStatusClock(row)", row)
         self.assertIn("${total}", row)

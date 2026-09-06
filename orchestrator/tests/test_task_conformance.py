@@ -253,9 +253,13 @@ class TaskConformanceTest(unittest.TestCase):
                 return response
 
             def doCleanups(subject):
+                store = task_api.StandaloneTaskStore(subject.home)
+                records = store.records()
                 direct_snapshots.append((
                     list(subject.requested_task_ids),
-                    task_api.StandaloneTaskStore(subject.home).records(),
+                    records,
+                    {record["id"]: store.lifecycle(record["id"])
+                     for record in records},
                 ))
                 return super(CardinalityApiCase, subject).doCleanups()
 
@@ -307,10 +311,24 @@ class TaskConformanceTest(unittest.TestCase):
             ),
         )
         self.assertEqual(len(direct_snapshots), 2)
-        for requested_ids, records in direct_snapshots:
+        paused_count = 0
+        for requested_ids, records, lifecycles in direct_snapshots:
             self.assertEqual([record["id"] for record in records], requested_ids)
             self.assertEqual(len(records), len(requested_ids))
-            self.assertTrue(all(record["result"] is not None for record in records))
+            for record in records:
+                if record["result"] is not None:
+                    tasks.validate_result(record["result"])
+                    continue
+                paused_count += 1
+                self.assertEqual(record["order"]["task_executor"], "agent_call")
+                lifecycle = lifecycles[record["id"]]
+                self.assertEqual(lifecycle["status"], "paused")
+                self.assertEqual(lifecycle["source"], "error")
+                attempts = [event["attempt"] for event in lifecycle["history"]
+                            if "attempt" in event]
+                self.assertEqual(len(attempts), 1)
+                self.assertEqual(attempts[0]["status"], "failure")
+        self.assertEqual(paused_count, 1)
 
     def test_out_of_root_claim_and_partial_effects_do_not_strengthen_success(self):
         path = self._milestone(
@@ -386,8 +404,16 @@ class TaskConformanceTest(unittest.TestCase):
         )
         host._run_worker(crashed, lambda: copy.deepcopy(drv.DEFAULT_CONFIG))
         failed = store.record(crashed["id"])
-        self.assertEqual(failed["result"]["status"], "failure")
-        self.assertEqual(failed["result"]["native_result"],
+        self.assertEqual(failed["id"], crashed["id"])
+        self.assertIsNone(failed["result"])
+        paused = store.lifecycle(crashed["id"])
+        self.assertEqual(paused["status"], "paused")
+        self.assertEqual(paused["source"], "error")
+        attempts = [event["attempt"] for event in paused["history"]
+                    if "attempt" in event]
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["status"], "failure")
+        self.assertEqual(attempts[0]["native_result"],
                          "partial native evidence")
         self.assertTrue(os.path.isfile(partial_path))
         self.assertEqual(len(store.records()), 1)

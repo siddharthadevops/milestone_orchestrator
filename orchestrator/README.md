@@ -411,6 +411,44 @@ If a work area also records `work_area_meta.reuse_sources`, keep its
 with the template parameters. The template does not read that descriptor; it
 is project-wide standing law supplied explicitly by the operator.
 
+### Standalone task Pause, Resume and Cancel
+
+Standalone `agent_call`, `reviewed_task` and `deep_task` orders share durable
+Pause/Resume controls. A manual pause or execution failure preserves the task
+identity, completed phases, child identities, evidence and accounting, with
+`result: null`. Failure is not an automatic retry. The panel shows the reason,
+the paused pipeline position, and **Resume** once the prior execution can no
+longer write. **Pause** first displays `pausing` while active work reaches a
+safe boundary; it is not permission to start a concurrent replacement.
+
+- `POST /api/tasks/<id>/pause` accepts `{}` or `{"reason": "..."}`.
+- `GET /api/tasks/<id>` returns the canonical `task` and separate `lifecycle`
+  metadata, including `status`, `revision`, `reason`, `source`, control
+  availability and any recovery blocker. Sidebar rows include a compact
+  `lifecycle` without full attempt history.
+- `POST /api/tasks/<id>/resume` requires `{"revision": <paused revision>}`.
+  An obsolete or repeated request returns 409; it cannot accept another run.
+- `POST /api/tasks/<id>/stop` remains permanent cancellation (**Cancel task**
+  in the panel), distinct from Pause. Existing terminal records are immutable.
+
+Deep-task controls operate on the existing parent/child family: a paused child
+keeps its parent open, and Resume reuses the recorded child rather than creating
+a replacement. Paused state survives a panel restart. Resume refuses while the
+previous worker still owns the execution lease or unrelated work owns the tree;
+the panel displays that blocker and updates availability on later polls.
+An attached discussion's Start/Continue cannot bypass its owner's Pause:
+Resume the task first. Add rounds remains a non-starting capacity change.
+Error pauses and restart adoption stop independently running owned discussions
+before reporting `paused`; uncertain process/provider quiescence leaves the
+family `pausing`, with live indicators and its workspace reservation intact.
+Cancel also respects that boundary and preserves completed-call accounting,
+even if the workspace has been removed or temporarily unmounted.
+
+These task coordinators still run in the panel backend. This change does not
+move them into independent process sessions. Brainstorming retains its existing
+session controls and round-limit continuation semantics; milestone-owned tasks
+remain controlled through their run.
+
 ## The flow
 
 (What a milestone *is* — one bounded increment, not a whole project; sized

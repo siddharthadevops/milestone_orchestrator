@@ -57,6 +57,17 @@ class DeepTaskImplementationTest(unittest.TestCase):
             time.sleep(0.01)
         self.fail("deep task %s did not become terminal" % task_id)
 
+    def _wait_paused(self, task_id):
+        deadline = time.time() + 15
+        store = task_api.StandaloneTaskStore(self.home)
+        while time.time() < deadline:
+            record = store.record(task_id)
+            self.assertIsNone(record["result"])
+            if store.lifecycle(task_id)["status"] == "paused":
+                return record
+            time.sleep(0.01)
+        self.fail("deep task %s did not become paused" % task_id)
+
     def _wait_related(self, parent_id, phase, part, terminal=None):
         deadline = time.time() + 5
         store = task_api.StandaloneTaskStore(self.home)
@@ -100,6 +111,7 @@ class DeepTaskImplementationTest(unittest.TestCase):
         store=None,
         before_wait=None,
         documentation_script=None,
+        expect_paused=False,
         **order_options,
     ):
         owned_runners = [runners.MockRunner(
@@ -127,6 +139,7 @@ class DeepTaskImplementationTest(unittest.TestCase):
             runner_factory=lambda _config, _workspace: pending.pop(0),
             poll_interval=0.001,
         )
+        self._last_execution_host = host
         self.start_server(host)
         with mock.patch.object(
             service,
@@ -140,7 +153,9 @@ class DeepTaskImplementationTest(unittest.TestCase):
             self.assertEqual(status, 201, body)
             if before_wait is not None:
                 before_wait(body["task"]["id"], store)
-            parent = self._wait_terminal(body["task"]["id"])
+            parent = (self._wait_paused if expect_paused else self._wait_terminal)(
+                body["task"]["id"]
+            )
         self.assertEqual(pending, [])
         return parent, store, owned_runners
 
@@ -419,20 +434,26 @@ class DeepTaskImplementationTest(unittest.TestCase):
             self.assertEqual(self._wait_terminal(parent_id)["result"]["status"],
                              "failure")
 
-    def test_unreadable_documentation_artifact_fails_parent_without_implementation(self):
+    def test_unreadable_documentation_artifact_pauses_parent_without_implementation(self):
         workspace = self._repo("deep-unreadable-documentation")
         script = reviewed_tests.ReviewedTaskOrderingTest._script(
             contracts.KIND_DRAFT_SLICE_NOTE
         )
         script[0]["response"]["artifact"] = "docs/missing-slice.md"
         parent, store, _used = self._execute(
-            workspace, [], documentation_script=script
+            workspace, [], documentation_script=script, expect_paused=True
         )
         documentation = store.related(parent["id"], "documentation", None)
         self.assertEqual(documentation["result"]["status"], "success")
-        self.assertEqual(parent["result"]["status"], "failure")
-        self.assertIn("artifact is unavailable", parent["result"]["reason"])
+        self.assertIsNone(parent["result"])
+        paused = store.lifecycle(parent["id"])
+        self.assertEqual(paused["status"], "paused")
+        self.assertIn("artifact is unavailable", paused["reason"])
         self.assertIsNone(store.related(parent["id"], "implementation", "a"))
+        self.assertEqual(self.request(
+            "POST", "/api/tasks/%s/stop" % parent["id"], {}
+        )[0], 200)
+        parent = self._wait_terminal(parent["id"])
         for field in (
             "duration_s", "token_usage", "token_usage_partial",
             "cost", "cost_partial",
@@ -634,12 +655,12 @@ class DeepTaskImplementationTest(unittest.TestCase):
         self.assertAlmostEqual(aggregate["cost"]["api_usd"], 0.3)
         self.assertFalse(aggregate["cost_partial"])
 
-    def test_failure_and_stop_prevent_successors_and_settle_all_child_accounting(self):
+    def test_failure_pauses_and_stop_settles_all_child_accounting_without_successors(self):
         cut = {"cut_scope": "part a", "remaining_scope": "part b"}
         failed_parent, failed_store, _used = self._execute(
             self._repo("deep-child-failure"), [
                 ("part-a", cut), runners.MockRunner([]),
-            ]
+            ], expect_paused=True,
         )
         failed_children = [
             failed_store.related(
@@ -652,13 +673,25 @@ class DeepTaskImplementationTest(unittest.TestCase):
                 failed_parent["id"], "implementation", "b"
             ),
         ]
-        self.assertEqual(failed_parent["result"]["status"], "failure")
-        self.assertEqual(failed_children[-1]["result"]["status"], "failure")
+        self.assertIsNone(failed_parent["result"])
+        self.assertIsNone(failed_children[-1]["result"])
+        self.assertEqual(failed_store.lifecycle(failed_parent["id"])["status"], "paused")
+        self.assertEqual(failed_store.lifecycle(failed_children[-1]["id"])["status"], "paused")
+        cancellation_runner = runners.MockRunner([])
+        self._last_execution_host.runner_factory = lambda *_args: cancellation_runner
         self.assertIsNone(
             failed_store.related(
                 failed_parent["id"], "implementation", "c"
             )
         )
+        self.assertEqual(self.request(
+            "POST", "/api/tasks/%s/stop" % failed_parent["id"], {}
+        )[0], 200)
+        failed_parent = self._wait_terminal(failed_parent["id"])
+        failed_children = [failed_store.record(child["id"]) for child in failed_children]
+        self.assertEqual(failed_parent["result"]["status"], "failure")
+        self.assertEqual(failed_children[-1]["result"]["status"], "failure")
+        self.assertEqual(cancellation_runner.calls, [])
         self.assertEqual(
             failed_parent["result"],
             task_api.DirectTaskHost._deep_result(
@@ -1037,12 +1070,23 @@ class DeepTaskImplementationTest(unittest.TestCase):
 
                 def hold_run(task_id, _resolver):
                     try:
+                        # State construction now belongs to the leased run,
+                        # so retain that portion when holding dispatch here.
+                        task_api.ensure_reviewed_state(
+                            self.home, store.record(task_id), _resolver(),
+                            implementation_scope=host._deep_implementation_scope(
+                                store.record(task_id)
+                            ),
+                        )
                         starts.append(task_id)
                         entered.set()
                         release.wait(5)
                     finally:
                         with host._lock:
                             host._active.pop(task_id, None)
+                            lease = host._leases.pop(task_id, None)
+                            if lease is not None:
+                                lease.close()
 
                 start_barrier = threading.Barrier(4)
 
@@ -1102,8 +1146,15 @@ class DeepTaskImplementationTest(unittest.TestCase):
                         reviewed_tests.ReviewedTaskOrderingTest._config
                     )
                 )
+                self.assertEqual(outcome["adopted"], [])
+                paused = store.lifecycle(parent["id"])
+                self.assertEqual(paused["status"], "paused")
+                self.assertIsNone(store.record(child_id)["result"])
+                recovered_host.resume(
+                    parent["id"], reviewed_tests.ReviewedTaskOrderingTest._config,
+                    paused["revision"],
+                )
                 terminal = self._wait_terminal(parent["id"])
-                self.assertIn(parent["id"], outcome["adopted"])
                 self.assertEqual(terminal["result"]["status"], "success")
                 self.assertEqual(
                     store.related(parent["id"], "implementation", "b")["id"],

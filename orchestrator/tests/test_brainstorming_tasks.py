@@ -173,7 +173,8 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
             "work_cost_partial": partial,
         }
 
-    def retain_task_session(self, record, session_id, activity_amount=4):
+    def retain_task_session(self, record, session_id, activity_amount=4,
+                            target_path=None):
         work_area, target = adapter._private_target(
             self.workspace, self.home, record["id"]
         )
@@ -184,6 +185,8 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
             target,
             self.workspace,
         )
+        if target_path is not None:
+            body["request"]["target_path"] = target_path
         _runtime, run_config, eligible = lifecycle._runtime_and_roster(
             self.config,
             body["participants"],
@@ -1371,6 +1374,43 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.assertEqual(result["duration_s"], 4.0)
         self.assertEqual(result["token_usage"], usage(4))
         self.assertEqual(result["cost"], {"api_usd": 0.4, "real_usd": 0.0})
+
+    def _retained_target_projection(self, relative):
+        record = adapter.admit_task(
+            {}, self.order(), self.config, self.workspace,
+        )
+        target = os.path.join(self.workspace, "out", "retained.md")
+        recorded_target = "out/retained.md" if relative else target
+        session_id = "bs-forgotten-workspace-target"
+        store, _work_area = self.retain_task_session(
+            record, session_id, target_path=recorded_target,
+        )
+        before = store.read(session_id)
+        self.assertEqual(before.state["request"]["target_path"], recorded_target)
+        # Recovery resolves stored request identity only; an unmounted work
+        # area must not prevent importing the retained session's accounting.
+        os.rename(self.workspace, self.workspace + "-unmounted")
+        projection = adapter._retained_projection(
+            self.home, session_id, "task:" + record["id"], target,
+        )
+        self.assertEqual(projection["process"], "stopped")
+        self.assertEqual(projection["work_duration_s"], 4.0)
+        self.assertEqual(projection["work_token_usage"], usage(4))
+        self.assertFalse(projection["work_token_usage_partial"])
+        self.assertEqual(projection["work_cost"], {"api_usd": 0.4, "real_usd": 0.0})
+        self.assertFalse(projection["work_cost_partial"])
+        with self.assertRaisesRegex(adapter.AdapterError, "mismatch"):
+            adapter._retained_projection(
+                self.home, session_id, "task:" + record["id"],
+                os.path.join(self.workspace, "out", "wrong-target.md"),
+            )
+        self.assertEqual(store.read(session_id), before)
+
+    def test_retained_relative_target_resolves_from_workspace_and_preserves_accounting(self):
+        self._retained_target_projection(relative=True)
+
+    def test_retained_absolute_target_keeps_identity_and_rejects_wrong_target(self):
+        self._retained_target_projection(relative=False)
 
     def test_forgotten_inflight_effect_marks_retained_accounting_partial(self):
         state = {}

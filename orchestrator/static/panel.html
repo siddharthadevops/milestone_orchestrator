@@ -155,6 +155,7 @@
   .chip.open { color: var(--accent); border-color: #c3d4fb; background: var(--accent-soft); }
   .chip.closed { color: var(--ok); border-color: #bbe7c9; background: #f0fdf4; }
   .chip.failed { color: var(--bad); border-color: #f3c1c1; background: #fef2f2; }
+  .chip.paused, .chip.pausing { color: var(--warn); border-color: #ead6ad; background: #fffbeb; }
   .chip.clean { color: var(--ok); }
   .chip.dirty { color: var(--warn); }
   .chip.pass { color: var(--ok); border-color: #bbe7c9; }
@@ -334,6 +335,7 @@
   .st { font-size: 12px; color: var(--dim); }
   .st.sealed, .st.success { color: var(--ok); }
   .st.failed, .st.failure { color: var(--bad); }
+  .st.paused, .st.pausing { color: var(--warn); }
   .st.rounds, .st.sealing, .st.seal_fix, .st.verify_fix { color: var(--warn); }
   .evt { padding: 3px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
   .evt .t { color: var(--dim); margin-right: 8px; }
@@ -1289,7 +1291,7 @@ function taskRow(row) {
   const request = order.request || {};
   const executor = order.task_executor || "?";
   const brief = String(request.request || "").trim().split("\n")[0];
-  const state = taskState(record);
+  const state = taskState(record, row.lifecycle);
   const when = row.admitted_at ? fmtAdmitted(row.admitted_at) : "";
   const bits = [executor, state, when].filter(Boolean).join(" · ");
   const total = taskStatusClock(row);
@@ -2256,8 +2258,8 @@ function sidebarItems(runs, taskRows) {
       project,
       created_at: row.admitted_at,
       last_action_epoch: null,
-      running: row.process
-        ? row.process === "running" : record.result === null,
+      running: taskLifecycleActive(row.lifecycle) && (row.process
+        ? row.process === "running" : record.result === null),
       closed: record.result !== null,
       data: row,
     });
@@ -2725,8 +2727,8 @@ function runStatusClock(r) {
 function taskStatusClock(row) {
   if (!row) return "";
   const record = row.record || {};
-  const running = row.process
-    ? row.process === "running" : record.result === null;
+  const running = taskLifecycleActive(row.lifecycle) && (row.process
+    ? row.process === "running" : record.result === null);
   const inFlight = running ? row.in_flight : null;
   if (row.work_duration_s == null &&
       !(inFlight && Number(inFlight.started_at) > 0)) return "";
@@ -5440,10 +5442,12 @@ function launchBinding() {
 let selectedTask = null;
 let taskPageRunId = null;
 let lastTaskPage = null;
+let lastTaskLifecycle = null;
 let lastTaskPipeline = null;
 let lastTaskPageSession = null;
 let taskPageSeq = 0;
 let taskStopping = false;
+let taskControlPending = null;
 let taskStopNotice = "";
 let taskDeleting = false;
 let taskMenuOpen = false;
@@ -5458,9 +5462,15 @@ function taskTitle(record) {
   const first = request.trim().split("\n")[0].trim();
   return first || record.id;
 }
-function taskStateClassName(record) {
+function taskLifecycleActive(lifecycle) {
+  // A cooperative pause is still active until its current action settles.
+  return !lifecycle || lifecycle.status !== "paused";
+}
+function taskStateClassName(record, lifecycle = null) {
   const result = record.result;
-  if (result === null || result === undefined) return "open";
+  if (result === null || result === undefined)
+    return lifecycle && ["paused", "pausing"].includes(lifecycle.status)
+      ? lifecycle.status : "open";
   return result.status === "success" ? "closed" : "failed";
 }
 function taskStaffingLine(record) {
@@ -5491,7 +5501,8 @@ function deepTaskPipeline(view) {
   const units = (view.children || []).map(child => {
     const activity = child.activity || null;
     const fallbackStatus = child.status === "failure" ? "failure"
-      : child.status === "success" ? "sealed" : "pending";
+      : child.status === "success" ? "sealed"
+      : ["paused", "pausing"].includes(child.status) ? child.status : "pending";
     const unit = activity && activity.unit
       ? {...activity.unit}
       : {
@@ -5508,9 +5519,11 @@ function deepTaskPipeline(view) {
           debt: [], reclassify: [], repairs: [], brainstormings: [],
         };
     unit.part = child.part;
+    if (["paused", "pausing"].includes(child.status)) unit.status = child.status;
     unit.source_task_id = child.id;
     unit.activity = activity || {};
-    unit.running = !!activity && activity.process === "running";
+    unit.running = taskLifecycleActive(child.lifecycle)
+      && !!activity && activity.process === "running";
     return unit;
   });
   const rendered = renderSlicePipeline(
@@ -5544,7 +5557,9 @@ function reviewedTaskPipeline(view) {
   if (unit) {
     unit.source_task_id = unit.source_task_id || selectedTask;
     unit.activity = activity;
-    unit.running = activity.process === "running";
+    if (["paused", "pausing"].includes(view.status)) unit.status = view.status;
+    unit.running = taskLifecycleActive(view.lifecycle)
+      && activity.process === "running";
     const label = view.task_kind === "complete_verification"
       ? "Complete verification" : null;
     rows += pipelineUnitRow(
@@ -5553,23 +5568,37 @@ function reviewedTaskPipeline(view) {
   }
   return `<div class="card"><h3>Pipeline</h3>${rows}</div>`;
 }
+function taskControlHistory(lifecycle) {
+  const history = lifecycle && Array.isArray(lifecycle.history) ? lifecycle.history : [];
+  if (!history.length) return "";
+  return `<details class="card"><summary>Pause and recovery history (${history.length})</summary>` +
+    history.map(event => `<div class="story-meta"><b>${esc(event.status || "")}</b>` +
+      ` · ${esc([event.at, event.source].filter(Boolean).join(" · "))}` +
+      (event.reason ? `<div class="story-note">${esc(event.reason)}</div>` : "") +
+      `</div>`).join("") + `</details>`;
+}
 function renderTaskPage(record, admittedAt, taskPipeline = null) {
   const result = record.result;
-  const running = result === null || result === undefined;
+  const open = result === null || result === undefined;
+  const lifecycle = lastTaskLifecycle;
+  const accounting = result || (lifecycle && lifecycle.accounting);
+  const running = open && taskLifecycleActive(lifecycle);
   const executor = taskExecutor(record);
   const area = taskWorkArea(record);
   const request = (record.order || {}).request || {};
   fullRequestText = String(request.request || "");
   const context = request.context || {};
   const configuration = (record.order || {}).configuration || {};
-  const state = running ? "running" : result.status;
-  const stateCls = taskStateClassName(record);
+  const state = open ? ((lifecycle || {}).status || "running") : result.status;
+  const stateCls = taskStateClassName(record, lifecycle);
   const standalone = !taskPageRunId;
+  const controllable = standalone &&
+    ["agent_call", "reviewed_task", "deep_task"].includes(executor);
   let html = `<div class="run-sticky-head">`;
   // Project line with the page menu at the far right: the few actions on
   // a task (delete) live there, out of the way, red where they must be.
   const menuItems = [];
-  if (!running && standalone)
+  if (!open && standalone)
     menuItems.push(`<button class="grpmenu-item danger" type="button" role="menuitem"
       ${taskDeleting ? "disabled" : ""} onclick="deleteSelectedTask(event)">${
       taskDeleting ? "Deleting…" : "Delete task…"}</button>`);
@@ -5588,12 +5617,13 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
     executor.replace(/_/g, " "),
     area.work_area ? `area ${area.work_area}` : "",
     admittedAt ? `ordered ${fmtAdmitted(admittedAt)}` : "",
-    result && result.duration_s != null ? `took ${fmtDHMS(result.duration_s)}` : "",
+    accounting && accounting.duration_s != null
+      ? `${open ? "work" : "took"} ${fmtDHMS(accounting.duration_s)}` : "",
     (function () {
-      if (!result) return "";
-      const tokens = fmtTokenUsage(result.token_usage, result.token_usage_partial);
-      if (!result.cost && !result.cost_partial) return tokens;
-      const reading = costReading(result.cost, result.cost_partial);
+      if (!accounting) return "";
+      const tokens = fmtTokenUsage(accounting.token_usage, accounting.token_usage_partial);
+      if (!accounting.cost && !accounting.cost_partial) return tokens;
+      const reading = costReading(accounting.cost, accounting.cost_partial);
       return reading.known ? reading.text : (tokens || reading.text);
     })(),
   ].filter(Boolean);
@@ -5603,9 +5633,20 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
   html += `</div>`;
   const sessionId = lastTaskPageSession || taskSessionId(record);
   html += `<div class="toolbar">
-    ${running && standalone
-      ? `<button class="btn danger" ${taskStopping ? "disabled" : ""}
-          onclick="stopSelectedTask()">${taskStopping ? "Stopping…" : "Stop task"}</button>`
+    ${open && controllable && state !== "paused"
+      ? `<button class="btn" ${taskControlPending || taskStopping || state === "pausing" ||
+          (lifecycle && lifecycle.can_pause === false) ? "disabled" : ""}
+          onclick="controlSelectedTask('pause')">${state === "pausing" || taskControlPending === "pause"
+            ? "Pausing…" : "Pause"}</button>` : ""}
+    ${open && controllable && state === "paused"
+      ? `<button class="btn primary" ${taskControlPending || taskStopping ||
+          (lifecycle && lifecycle.can_resume === false) ? "disabled" : ""}
+          onclick="controlSelectedTask('resume')">${taskControlPending === "resume"
+            ? "Resuming…" : "Resume"}</button>` : ""}
+    ${open && standalone
+      ? `<button class="btn danger" ${taskStopping || taskControlPending ? "disabled" : ""}
+          onclick="stopSelectedTask()">${taskStopping ? "Cancelling…"
+            : controllable ? "Cancel task" : "Stop task"}</button>`
       : ""}
     ${sessionId
       ? `<button class="btn" onclick="openSession('${esc(escJsSq(sessionId))}')">Open discussion</button>`
@@ -5614,8 +5655,26 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
   </div>`;
   if (taskStopNotice)
     html += `<div class="failure">${esc(taskStopNotice)}</div>`;
-  if (!running && result.reason)
+  if (open && lifecycle && ["paused", "pausing"].includes(state)) {
+    const cause = ["error", "failure"].includes(lifecycle.source) ? "Paused after a failure"
+      : lifecycle.source === "child" ? "Waiting for a paused child"
+      : state === "pausing" ? "Pausing safely" : "Paused";
+    html += `<div class="card"><h3>${esc(cause)}</h3>` +
+      `<div class="story-note">${esc(lifecycle.reason || "Progress is preserved.")}</div>` +
+      (lifecycle.point ? `<div class="amend-hint">Stopped at: ${esc(lifecycle.point)}</div>` : "") +
+      (lifecycle.blocked_reason
+        ? `<div class="amend-hint">${esc(lifecycle.blocked_reason)}</div>` : "") +
+      (lifecycle.root_task_id && lifecycle.root_task_id !== record.id
+        ? `<button class="btn" onclick="openTask('${esc(escJsSq(lifecycle.root_task_id))}')">Open parent task</button>` : "") +
+      `</div>`;
+  }
+  if (!open && result.reason)
     html += `<div class="failure">${esc(result.reason)}</div>`;
+  if (open && executor === "agent_call" && accounting)
+    html += `<div class="card"><h3>Work so far</h3>` +
+      costHtml(accounting.cost, accounting.cost_partial) +
+      tokenUsageHtml(accounting.token_usage, accounting.token_usage_partial) + `</div>`;
+  html += taskControlHistory(lifecycle);
   if (executor === "deep_task") html += deepTaskPipeline(taskPipeline);
   if (executor === "reviewed_task")
     html += reviewedTaskPipeline(taskPipeline);
@@ -5638,7 +5697,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
       `<div class="story-meta"><b>${esc(k)}</b> · <span style="white-space:pre-wrap">${esc(String(v))}</span></div>`
     ).join("") + `</div>`;
   }
-  if (!running) {
+  if (!open) {
     html += `<div class="card"><h3>Result</h3>` +
       costHtml(result.cost, result.cost_partial) +
       tokenUsageHtml(result.token_usage, result.token_usage_partial) +
@@ -5717,6 +5776,7 @@ async function refreshTaskPage() {
       (runId ? "?run_id=" + encodeURIComponent(runId) : ""));
     if (seq !== taskPageSeq || id !== selectedTask) return;
     lastTaskPage = data.task;
+    lastTaskLifecycle = data.lifecycle || null;
     lastTaskPipeline = data.deep_task || data.reviewed_task || null;
     if (data.session_id) lastTaskPageSession = data.session_id;
     if (data.task.result !== null) taskStopping = false;
@@ -5738,9 +5798,11 @@ function openTask(taskId, runId) {
   selectedTask = taskId;
   taskPageRunId = runId || null;
   lastTaskPage = null;
+  lastTaskLifecycle = null;
   lastTaskPipeline = null;
   lastTaskPageSession = null;
   taskStopping = false;
+  taskControlPending = null;
   taskStopNotice = "";
   taskDeleting = false;
   taskMenuOpen = false;
@@ -5756,8 +5818,35 @@ function openTask(taskId, runId) {
 }
 // Chips inside a run open the same page, scoped to that run's records.
 function openTaskDetail(taskId) { openTask(taskId, selected); }
+async function controlSelectedTask(action) {
+  if (!selectedTask || taskControlPending || taskStopping) return;
+  const id = selectedTask;
+  const body = action === "resume"
+    ? {revision: lastTaskLifecycle && lastTaskLifecycle.revision} : {};
+  taskControlPending = action;
+  taskStopNotice = "";
+  paintTaskPage();
+  try {
+    const answer = await postJSON(
+      "/api/tasks/" + encodeURIComponent(id) + "/" + action, body);
+    if (id !== selectedTask) return;
+    lastTaskLifecycle = answer.lifecycle;
+  } catch (e) {
+    if (id !== selectedTask) return;
+    taskStopNotice = e.message;
+  } finally {
+    // Changing pages while the request is pending must not affect the new task.
+    if (id === selectedTask) {
+      taskControlPending = null;
+      paintTaskPage();
+      refreshTaskPage();
+      refreshRuns();
+    }
+  }
+}
 async function stopSelectedTask() {
-  if (!selectedTask || taskStopping) return;
+  if (!selectedTask || taskStopping || taskControlPending) return;
+  if (lastTaskLifecycle && !confirm("Cancel this task permanently? Use Pause to keep it resumable.")) return;
   taskStopping = true;
   taskStopNotice = "";
   paintTaskPage();
@@ -6320,8 +6409,9 @@ function taskContext(record) {
   return context && typeof context === "object" && !Array.isArray(context)
     ? context : {};
 }
-function taskState(record) {
-  if (!record || record.result === null) return "open";
+function taskState(record, lifecycle = null) {
+  if (!record || record.result === null)
+    return lifecycle ? lifecycle.status : "open";
   return record.result && record.result.status === "success"
     ? "success" : "failure";
 }

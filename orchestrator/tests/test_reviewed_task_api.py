@@ -373,8 +373,14 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
                 AssertionError("durable reviewed state must be reused")
             )
         )
+        self.assertEqual(outcome["adopted"], [])
+        paused = host.store.lifecycle(record["id"])
+        self.assertEqual(paused["status"], "paused")
+        self.assertIsNone(host.store.record(record["id"])["result"])
+        host.resume(record["id"], lambda: (_ for _ in ()).throw(
+            AssertionError("durable reviewed state must be reused")
+        ), paused["revision"])
         terminal = self.wait_record(record["id"])
-        self.assertEqual(outcome["adopted"], [record["id"]])
         self.assertEqual(terminal["id"], record["id"])
         self.assertEqual(terminal["result"]["status"], "success", terminal)
         return terminal
@@ -651,6 +657,9 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
 
     def test_brainstorming_wait_does_not_exhaust_reviewed_step_budget(self):
         workspace = self.directory("long-brainstorming-wait")
+        record = {"id": "reviewed-owner", "result": None,
+                  "order": {"task_executor": "reviewed_task", "request": {
+                      "work_area": {"workspace_path": workspace}}}}
         unit = {"brainstorming_wait": {"session_id": "same-session"}}
         subject = mock.MagicMock()
         subject.state = {
@@ -664,9 +673,11 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         )
         subject.reviewed_work.result.return_value = None
         store = mock.Mock()
+        store.record.return_value = record
         store.stop_reason.return_value = None
+        store.lifecycle.return_value = {"status": "running", "history": []}
         host = task_api.DirectTaskHost(
-            self.home, store=store, runner_factory=lambda *_args: None
+            self.home, store=store, runner_factory=lambda *_args: mock.Mock()
         )
         success = {"status": "success", "native_result": None}
         polls = 0
@@ -689,12 +700,7 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         ), mock.patch.object(
             host, "_reviewed_failure", return_value={"status": "failure"}
         ), mock.patch.object(host, "_publish_reviewed_terminal") as publish:
-            host._run_reviewed({
-                "id": "reviewed-owner",
-                "order": {"request": {"work_area": {
-                    "workspace_path": workspace,
-                }}},
-            })
+            host._run_reviewed(record)
 
         self.assertEqual(polls, 10001)
         publish.assert_called_once_with(
@@ -703,6 +709,9 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
 
     def test_reviewed_execution_step_guard_still_stops_nonprogressing_work(self):
         workspace = self.directory("nonprogressing-reviewed-work")
+        record = {"id": "reviewed-owner", "result": None,
+                  "order": {"task_executor": "reviewed_task", "request": {
+                      "work_area": {"workspace_path": workspace}}}}
         unit = {}
         subject = mock.MagicMock()
         subject.state = {
@@ -714,9 +723,11 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         subject.reviewed_work.next_action.return_value.type = drv.A_DRAFT
         subject.reviewed_work.result.return_value = None
         store = mock.Mock()
+        store.record.return_value = record
         store.stop_reason.return_value = None
+        store.lifecycle.return_value = {"status": "running", "history": []}
         host = task_api.DirectTaskHost(
-            self.home, store=store, runner_factory=lambda *_args: None
+            self.home, store=store, runner_factory=lambda *_args: mock.Mock()
         )
         with mock.patch.object(
             task_api.st, "load", return_value={"config": {}}
@@ -728,12 +739,7 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
                 "status": "failure", "reason": reason,
             },
         ), mock.patch.object(host, "_publish_reviewed_terminal") as publish:
-            host._run_reviewed({
-                "id": "reviewed-owner",
-                "order": {"request": {"work_area": {
-                    "workspace_path": workspace,
-                }}},
-            })
+            host._run_reviewed(record)
 
         self.assertEqual(subject.reviewed_work.execute.call_count, 10000)
         publish.assert_called_once()
@@ -1132,28 +1138,31 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         )
         result_fence_entered = threading.Event()
         release_result_fence = threading.Event()
-        record_terminal = host._record_reviewed_terminal
+        publish_outcome = host._publish_reviewed_terminal
 
         def delayed_record(*args, **kwargs):
             result_fence_entered.set()
             self.assertTrue(release_result_fence.wait(5))
-            return record_terminal(*args, **kwargs)
+            return publish_outcome(*args, **kwargs)
 
         reason = "stopped during failure publication"
         with mock.patch.object(
-            host, "_record_reviewed_terminal", side_effect=delayed_record
+            host, "_publish_reviewed_terminal", side_effect=delayed_record
         ), mock.patch.object(
             brainstorming_milestone,
             "terminal_handoff",
             side_effect=OSError("inspection failed"),
         ):
             outcome = host.adopt_open_tasks(lambda _record: self._config)
+            paused = host.store.lifecycle(owner["id"])
+            self.assertEqual(paused["status"], "paused")
+            host.resume(owner["id"], self._config, paused["revision"])
             self.assertTrue(result_fence_entered.wait(5))
             self.assertTrue(host.stop(owner["id"], reason))
             release_result_fence.set()
             terminal = self.wait_record(owner["id"])
 
-        self.assertEqual(outcome["adopted"], [owner["id"]])
+        self.assertEqual(outcome["adopted"], [])
         self.assertEqual(terminal["result"]["status"], "failure")
         self.assertEqual(terminal["result"]["reason"], reason)
         session = brainstorming.SessionStore(
@@ -1386,16 +1395,18 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
 
     def test_rethink_crash_adopts_same_id_and_resumes_without_reconciliation(self):
         workspace = self._repo("rethink-restart")
+        session_id, _waiting, bind_caller = self._waiting_rethink_session(
+            workspace, "rethink-restart.md"
+        )
         record = self._admit_open_reviewed(workspace, "implement")
         path = task_api.reviewed_state_path(self.home, record["id"])
         first_runner = runners.MockRunner([self._rethink_step("implement")])
         subject = drv.Driver(path, runner=first_runner,
                              model_profiles_home=self.home)
-        session_id = "standalone-rethink-restart"
         with mock.patch.object(
             brainstorming_milestone,
             "create_session",
-            side_effect=self._rethink_session(session_id),
+            side_effect=bind_caller,
         ), mock.patch.object(
             drv.brainstorming,
             "coordination_projection",

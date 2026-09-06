@@ -225,6 +225,14 @@ class StandaloneCutoverTestCase(unittest.TestCase):
     def records(self):
         return self.store().records()
 
+    def finish_order_fixture(self, task_id):
+        """Release an admission-only fixture without manufacturing agent work."""
+        self.store().record_result(task_id, {
+            "status": "success", "duration_s": 0.0,
+            "token_usage": None, "token_usage_partial": True,
+            "cost": None, "cost_partial": True, "native_result": None,
+        })
+
     def persist_records(self, records):
         """Write records back as stored bytes, creating documents as needed."""
         store = self.store()
@@ -401,6 +409,7 @@ class OrderContextAndRoleTest(StandaloneCutoverTestCase):
                      "task_executor"],
                 )
                 self.assertEqual(stored["configuration"], {"role": "implement"})
+                self.finish_order_fixture(task["id"])
         # The role travels beside it, from the caller's own choice.
         chosen = self.admit(
             staffing_session=named, configuration={"role": "consult"}
@@ -409,6 +418,7 @@ class OrderContextAndRoleTest(StandaloneCutoverTestCase):
             self.store().record(chosen["id"])["order"]["configuration"],
             {"role": "consult"},
         )
+        self.finish_order_fixture(chosen["id"])
 
     def _named_session_is_authorized_before_admission(self):
         before = len(self.records())
@@ -674,13 +684,22 @@ class DirectFallbackAndMarkerTest(StandaloneCutoverTestCase):
         damaged = self.session("owner-document")
         readable = self.session("owner-document")
 
+        def admitted_case(name, **changes):
+            # Inputs must become unreadable AFTER their orders are admitted.
+            # Distinct trees allow those deliberate held orders to coexist.
+            workspace = self.directory("fallback-" + name)
+            request = dict(self.order()["request"], work_area={
+                "workspace_path": workspace, "primary": workspace, "additional": [],
+            })
+            return self.admit(request=request, **changes)
+
         cases = (
             # Omitted: no session was ever named, so there is none to read.
-            ("omitted", self.admit()),
+            ("omitted", admitted_case("omitted")),
             # Absent: the record this id names is gone.
-            ("absent session", self.admit(staffing_session=deleted)),
+            ("absent session", admitted_case("absent", staffing_session=deleted)),
             # Unreadable: the session reads, the document it names does not.
-            ("damaged document", self.admit(staffing_session=damaged)),
+            ("damaged document", admitted_case("damaged", staffing_session=damaged)),
         )
         control = self.admit(staffing_session=readable)
 
@@ -750,8 +769,16 @@ class DirectFallbackAndMarkerTest(StandaloneCutoverTestCase):
             with self.subTest(condition=token):
                 del self.calls[:]
                 task = self.admit(staffing_session=session)
-                record = self.run_task(task["id"])
-                result = record["result"]
+                self.host.start(task, lambda: copy.deepcopy(self.config))
+                deadline = time.time() + 5
+                while time.time() < deadline:
+                    lifecycle = self.store().lifecycle(task["id"])
+                    if lifecycle["status"] == "paused" and not self.host.is_active(task["id"]):
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(lifecycle["status"], "paused")
+                self.assertIsNone(self.store().record(task["id"])["result"])
+                result = lifecycle["history"][-1]["attempt"]
                 self.assertEqual(result["status"], "failure", result)
                 # The public token, named in the task's own reason.
                 self.assertIn(token, result["reason"])
@@ -761,6 +788,8 @@ class DirectFallbackAndMarkerTest(StandaloneCutoverTestCase):
                 # is no evidence of a call to have to correct.
                 self.assertEqual(self.calls, [])
                 self.assertIsNone(self.marker(task["id"]))
+                self.assertTrue(self.host.stop(task["id"], "fixture finished"))
+                self.terminal(task["id"])
 
     # -- best-effort evidence --------------------------------------------
 

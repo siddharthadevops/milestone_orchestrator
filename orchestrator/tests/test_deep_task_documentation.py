@@ -503,6 +503,9 @@ class DeepTaskDocumentationTest(unittest.TestCase):
                     finally:
                         with host._lock:
                             host._active.pop(task_id, None)
+                            lease = host._leases.pop(task_id, None)
+                            if lease is not None:
+                                lease.close()
 
                 start_barrier = threading.Barrier(4)
 
@@ -627,7 +630,13 @@ class DeepTaskDocumentationTest(unittest.TestCase):
         outcome = host.adopt_open_tasks(
             lambda _record: reviewed_tests.ReviewedTaskOrderingTest._config
         )
-        self.assertEqual(outcome, {"adopted": [parent["id"]], "closed": []})
+        self.assertEqual(outcome, {"adopted": [], "closed": []})
+        paused = store.lifecycle(parent["id"])
+        self.assertEqual(paused["status"], "paused")
+        self.assertEqual(store.record(child["id"])["result"], child_result)
+        self.assertIsNone(store.related(parent["id"], "implementation", "a"))
+        host.resume(parent["id"], reviewed_tests.ReviewedTaskOrderingTest._config,
+                    paused["revision"])
         terminal = self.wait_record(parent["id"])
         self.assertEqual(
             store.related(parent["id"], "documentation", None)["id"], child["id"]
@@ -729,10 +738,13 @@ class DeepTaskDocumentationTest(unittest.TestCase):
         parent = self._admit_parent(workspace)
         store = _PausingResultStore(self.home)
         store.target_task_id = parent["id"]
+        pending = [runners.MockRunner(
+            reviewed_tests.ReviewedTaskOrderingTest._script(kind)
+        ) for kind in (contracts.KIND_DRAFT_SLICE_NOTE, contracts.KIND_IMPLEMENT)]
         host = task_api.DirectTaskHost(
             self.home,
             store=store,
-            runner_factory=lambda _config, _workspace: runners.MockRunner([]),
+            runner_factory=lambda _config, _workspace: pending.pop(0),
             poll_interval=0.001,
         )
         host.start(parent, reviewed_tests.ReviewedTaskOrderingTest._config)
@@ -756,11 +768,10 @@ class DeepTaskDocumentationTest(unittest.TestCase):
         terminal = self.wait_record(parent["id"])
         child = store.related(parent["id"], "documentation", None)
         self.assertEqual(stopped, [False])
-        self.assertEqual(terminal["result"]["status"], "failure")
-        self.assertEqual(
-            terminal["result"]["reason"], child["result"]["reason"]
-        )
-        self.assertNotEqual(terminal["result"]["reason"], "late competing stop")
+        self.assertEqual(terminal["result"]["status"], "success")
+        self.assertEqual(child["result"]["status"], "success")
+        self.assertNotIn("reason", terminal["result"])
+        self.assertEqual(pending, [])
         self.assertFalse(host.owns_workspace(workspace))
 
 

@@ -1143,11 +1143,16 @@ class SubprocessRunner(object):
 
     def __init__(self, commands, timeouts, cwd=None, env=None,
                  stall_window_s=None, stall_min_cpu_s=None,
-                 participant_process_factory=None, prompt_recorder=None):
+                 participant_process_factory=None, prompt_recorder=None,
+                 execution_lease=None):
         self.commands = commands
         self.timeouts = timeouts or {}
         self.cwd = cwd
         self.env = env
+        # Caller acquires this before Driver recovery (which can mutate Git).
+        # Both CLI transports inherit its descriptor and journal their worker
+        # identity, so a dead owner cannot make a live fix look recoverable.
+        self.execution_lease = execution_lease
         # Participant execution must apply the caller-resolved capability
         # bundle, not silently inherit this service process's authority.
         # The factory is the caller-owned pass-through seam: it receives the
@@ -1774,6 +1779,8 @@ class SubprocessRunner(object):
                 watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
 
         prompt_path = None
+        execution_lease = getattr(self, "execution_lease", None)
+        lease_dispatched = False
         try:
             prompt_path = record(prompt)
             out = tempfile.NamedTemporaryFile(
@@ -1791,6 +1798,9 @@ class SubprocessRunner(object):
             )
             quiescent = False
             try:
+                if execution_lease is not None:
+                    execution_lease.prepare_spawn(kwargs)
+                    lease_dispatched = True
                 proc = (
                     subprocess.Popen(argv, **kwargs)
                     if execution_context is _AMBIENT_EXECUTION
@@ -1798,11 +1808,22 @@ class SubprocessRunner(object):
                         execution_context, argv, kwargs
                     )
                 )
+                if execution_lease is not None:
+                    execution_lease.record_worker(proc.pid)
             except Exception as exc:
+                # Native Popen validates argv/cwd/env with ValueError before
+                # spawning; OSError means creation/exec failed and CPython
+                # reaped the failed child. Neither exception certifies this
+                # for an opaque factory, which may raise after launch.
+                if (execution_lease is not None
+                        and execution_context is _AMBIENT_EXECUTION
+                        and isinstance(exc, (OSError, ValueError))
+                        and proc is None):
+                    quiescent = True
                 error = RunnerError(
                     "failed to spawn %r: %s" % (argv[0], exc)
                 )
-                if execution_context is _AMBIENT_EXECUTION:
+                if execution_context is _AMBIENT_EXECUTION and proc is None:
                     error.provider_dispatch_started = False
                 raise error from exc
             _track_worker(proc)
@@ -1948,6 +1969,8 @@ class SubprocessRunner(object):
                     path = handle.name
                     handle.close()
                     _unlink_quiet(path)
+            if execution_lease is not None and lease_dispatched:
+                execution_lease.finish_spawn(quiescent)
 
     @staticmethod
     def _drive_codex_app_server(
@@ -2360,6 +2383,8 @@ class SubprocessRunner(object):
                 quiescent = _wait_for_process_group_quiescence(p.pid)
             return quiescent
 
+        execution_lease = getattr(self, "execution_lease", None)
+        lease_dispatched = False
         # ONE guard around the whole lifecycle. Any failure OR a
         # KeyboardInterrupt at ANY point — building argv (which may create
         # {output_file}), allocating the stdout temp, spawning, tracking, or
@@ -2430,17 +2455,30 @@ class SubprocessRunner(object):
                 # then raise without returning the process handle, so no
                 # exception after entry may certify worker quiescence.
                 worker_quiescent = False
+                if execution_lease is not None:
+                    execution_lease.prepare_spawn(popen_kwargs)
+                    lease_dispatched = True
                 if execution_context is _AMBIENT_EXECUTION:
                     proc = subprocess.Popen(argv, **popen_kwargs)
                 else:
                     proc = self.participant_process_factory(
                         execution_context, argv, popen_kwargs
                     )
+                if execution_lease is not None:
+                    execution_lease.record_worker(proc.pid)
             except Exception as exc:
+                # Only native Popen's validation/exec failure certifies no
+                # surviving worker. A participant factory may already have
+                # launched a worker before raising either exception.
+                if (execution_lease is not None
+                        and execution_context is _AMBIENT_EXECUTION
+                        and isinstance(exc, (OSError, ValueError))
+                        and proc is None):
+                    worker_quiescent = True
                 error = RunnerError(
                     "failed to spawn %r: %s" % (argv[0], exc)
                 )
-                if execution_context is _AMBIENT_EXECUTION:
+                if execution_context is _AMBIENT_EXECUTION and proc is None:
                     error.provider_dispatch_started = False
                 raise error from exc
 
@@ -2627,6 +2665,8 @@ class SubprocessRunner(object):
                     except OSError:
                         pass
             _cleanup_files()
+            if execution_lease is not None and lease_dispatched:
+                execution_lease.finish_spawn(worker_quiescent)
 
 
 def _kill_group(proc):

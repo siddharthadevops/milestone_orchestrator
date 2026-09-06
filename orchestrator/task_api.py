@@ -14,15 +14,26 @@ import time
 import uuid
 
 from orchestrator import brainstorming, brainstorming_tasks, contracts, driver, gitsync
+from orchestrator import brainstorming_coordination as coordination
 from orchestrator import kvstore, pricing, profiles, prompt_sets
 from orchestrator import registry, runners, session_repository, staffing, tasks
 from orchestrator import state as st
+from orchestrator.task_execution import ExecutionBusy, TaskExecutionLease
 
 
 TASKS_DIRNAME = "tasks"
 REVIEWED_DIRNAME = "reviewed"
 _TASK_KEY_PREFIX = "tasks/task:"
 _DOCUMENT_SCHEMA_VERSION = 1
+RECOVERABLE_EXECUTORS = frozenset(("agent_call", "reviewed_task", "deep_task"))
+
+
+class TaskControlConflict(RuntimeError):
+    """The requested control no longer names a safe execution boundary."""
+
+
+class _TaskPaused(Exception):
+    """Unwind a coordinator without publishing a terminal task result."""
 
 
 def state_directory(home):
@@ -76,7 +87,7 @@ class StandaloneTaskStore:
         )
 
     @staticmethod
-    def _document(record, admitted_at, stop_reason=None):
+    def _document(record, admitted_at, stop_reason=None, lifecycle=None):
         document = {
             "schema_version": _DOCUMENT_SCHEMA_VERSION,
             "admitted_at": admitted_at,
@@ -84,16 +95,18 @@ class StandaloneTaskStore:
         }
         if stop_reason is not None:
             document["stop_reason"] = stop_reason
+        if lifecycle is not None:
+            document["lifecycle"] = lifecycle
         return document
 
     @staticmethod
     def _validate_document(value, key):
         if (
             not isinstance(value, dict)
-            or set(value) not in (
-                {"schema_version", "admitted_at", "record"},
-                {"schema_version", "admitted_at", "record", "stop_reason"},
-            )
+            or not {"schema_version", "admitted_at", "record"} <= set(value)
+            or set(value) - {
+                "schema_version", "admitted_at", "record", "stop_reason", "lifecycle"
+            }
             or value["schema_version"] != _DOCUMENT_SCHEMA_VERSION
             or not isinstance(value["admitted_at"], str)
             or not isinstance(value["record"], dict)
@@ -108,7 +121,136 @@ class StandaloneTaskStore:
             raise tasks.TaskRecordError(
                 "standalone task document %s is malformed" % key
             )
+        if "lifecycle" not in value:
+            return value  # Pre-control documents deliberately remain readable.
+        lifecycle = value["lifecycle"]
+        required = {"status", "revision", "reason", "source", "history"}
+        if (
+            not isinstance(lifecycle, dict)
+            or not required <= set(lifecycle)
+            or set(lifecycle) - required - {"completed_result"}
+            or lifecycle.get("status") not in ("running", "pausing", "paused")
+            or type(lifecycle.get("revision")) is not int
+            or lifecycle["revision"] < 0
+            or not isinstance(lifecycle.get("history"), list)
+        ):
+            raise tasks.TaskRecordError("standalone task lifecycle is malformed")
+        for name in ("reason", "source"):
+            entry = lifecycle[name]
+            if not (entry is None or isinstance(entry, str) and entry.strip()):
+                raise tasks.TaskRecordError("standalone task lifecycle is malformed")
+            if lifecycle["status"] != "running" and entry is None:
+                raise tasks.TaskRecordError("paused task lifecycle requires a reason and source")
+        for event in lifecycle["history"]:
+            if (
+                not isinstance(event, dict)
+                or not {"status", "at"} <= set(event)
+                or set(event) - {"status", "at", "reason", "source", "attempt", "call_id"}
+                or event["status"] not in ("running", "pausing", "paused")
+                or not isinstance(event["at"], str) or not event["at"].strip()
+            ):
+                raise tasks.TaskRecordError("standalone task lifecycle history is malformed")
+            for name in ("reason", "source", "call_id"):
+                entry = event.get(name)
+                if name in event and not isinstance(entry, str):
+                    raise tasks.TaskRecordError("standalone task lifecycle history is malformed")
+                if name in event and not entry.strip():
+                    raise tasks.TaskRecordError("standalone task lifecycle history is malformed")
+                if name in ("reason", "source") and event["status"] != "running" and name not in event:
+                    raise tasks.TaskRecordError("paused task history requires a reason and source")
+            if "attempt" in event:
+                try:
+                    tasks.validate_result(event["attempt"])
+                except (TypeError, ValueError) as exc:
+                    raise tasks.TaskRecordError("task attempt result is malformed") from exc
+        if "completed_result" in lifecycle:
+            try:
+                completed = tasks.validate_result(lifecycle["completed_result"])
+                if completed["status"] != "success":
+                    raise ValueError("retained completion must be successful")
+            except (TypeError, ValueError) as exc:
+                raise tasks.TaskRecordError("retained task completion is malformed") from exc
         return value
+
+    def _read_document(self, task_id):
+        key = task_key(task_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise tasks.TaskRecordError("unknown task %r" % task_id)
+        return current, self._validate_document(current["value"], key)
+
+    @staticmethod
+    def _lifecycle(document):
+        return copy.deepcopy(document.get("lifecycle") or {
+            "status": "running", "revision": 0, "reason": None,
+            "source": None, "history": [],
+        })
+
+    def lifecycle(self, task_id):
+        _current, document = self._read_document(task_id)
+        lifecycle = self._lifecycle(document)
+        result = document["record"].get("result")
+        if result is not None:
+            lifecycle["status"] = result["status"]
+        if tasks.stored_task_executor(
+            document["record"]["order"]["task_executor"]
+        ) == "agent_call":
+            attempts = [event["attempt"] for event in lifecycle["history"]
+                        if isinstance(event.get("attempt"), dict)]
+            if attempts:
+                aggregate = result or tasks.deep_task_result("success", attempts)
+                lifecycle["accounting"] = {
+                    key: aggregate[key] for key in (
+                        "duration_s", "token_usage", "token_usage_partial", "cost", "cost_partial"
+                    )
+                }
+        return lifecycle
+
+    def _write_lifecycle_locked(self, task_id, current, document, lifecycle):
+        updated = dict(document, lifecycle=lifecycle)
+        if not self._store.cas(task_key(task_id), current["revision"], updated).ok:
+            raise TaskControlConflict("task changed while applying control")
+        return copy.deepcopy(lifecycle)
+
+    def pause_locked(self, task_id, reason, source="operator", pending=False,
+                     attempt=None, completed_result=None, attempt_id=None):
+        current, document = self._read_document(task_id)
+        if document["record"].get("result") is not None:
+            raise TaskControlConflict("a terminal task cannot be paused")
+        lifecycle = self._lifecycle(document)
+        status = "pausing" if pending else "paused"
+        if (lifecycle["status"] == "paused" and not pending and attempt is None
+                and completed_result is None) or (
+            lifecycle["status"] == "pausing" and pending and attempt is None
+            and completed_result is None
+        ):
+            return lifecycle
+        if lifecycle["status"] == "running":
+            lifecycle.update(reason=str(reason), source=source)
+        lifecycle.update(status=status, revision=lifecycle["revision"] + 1)
+        event = {"status": status, "at": _admission_stamp(),
+                 "reason": lifecycle["reason"], "source": lifecycle["source"]}
+        if attempt is not None:
+            event["attempt"] = copy.deepcopy(attempt)
+        if attempt_id is not None:
+            event["call_id"] = attempt_id
+        if completed_result is not None:
+            lifecycle["completed_result"] = copy.deepcopy(completed_result)
+        lifecycle["history"].append(event)
+        return self._write_lifecycle_locked(task_id, current, document, lifecycle)
+
+    def resume_locked(self, task_id, revision):
+        current, document = self._read_document(task_id)
+        lifecycle = self._lifecycle(document)
+        if (document["record"].get("result") is not None
+                or document.get("stop_reason") is not None
+                or lifecycle["status"] != "paused"
+                or lifecycle["revision"] != revision):
+            raise TaskControlConflict("task is not at the requested paused revision")
+        lifecycle.update(status="running", revision=revision + 1,
+                         reason=None, source=None)
+        lifecycle["history"].append({"status": "running", "at": _admission_stamp()})
+        return self._write_lifecycle_locked(task_id, current, document, lifecycle)
 
     def _documents(self):
         listing = self._store.list_entries(prefix=_TASK_KEY_PREFIX)
@@ -261,6 +403,21 @@ class StandaloneTaskStore:
         if not current["exists?"]:
             raise tasks.TaskRecordError("unknown task %r" % task_id)
         document = self._validate_document(current["value"], key)
+        if tasks.stored_task_executor(
+            document["record"]["order"]["task_executor"]
+        ) == "agent_call":
+            result = copy.deepcopy(result)
+            for event in self._lifecycle(document)["history"]:
+                attempt = event.get("attempt")
+                if not isinstance(attempt, dict) or (
+                    attempt.get("status") == "success" and result["status"] == "success"
+                ):
+                    continue
+                result["duration_s"] += attempt["duration_s"]
+                result["token_usage"] = st._add_token_usage(result["token_usage"], attempt["token_usage"])
+                result["cost"] = st._add_cost(result["cost"], attempt["cost"])
+                result["token_usage_partial"] |= attempt["token_usage_partial"]
+                result["cost_partial"] |= attempt["cost_partial"]
         state = {"tasks": [document["record"]]}
         record = tasks.record_task_result(state, task_id, result)
         outcome = self._store.cas(
@@ -270,6 +427,7 @@ class StandaloneTaskStore:
                 state["tasks"][0],
                 document["admitted_at"],
                 document.get("stop_reason"),
+                document.get("lifecycle"),
             ),
         )
         if not outcome.ok:
@@ -306,7 +464,8 @@ class StandaloneTaskStore:
         outcome = self._store.cas(
             key,
             current["revision"],
-            self._document(record, document["admitted_at"], reason.strip()),
+            self._document(record, document["admitted_at"], reason.strip(),
+                           document.get("lifecycle")),
         )
         if not outcome.ok:
             raise tasks.TaskRecordError(
@@ -433,14 +592,14 @@ def worker_staffing(config):
     }
 
 
-def _workspace(record):
+def _workspace(record, require_exists=True):
     work_area = record["order"]["request"]["work_area"]
     primary = work_area.get("primary")
     workspace = work_area.get("workspace_path")
     if isinstance(primary, dict):
         primary = primary.get("path")
     workspace = workspace or primary
-    if not isinstance(workspace, str) or not os.path.isdir(workspace):
+    if not isinstance(workspace, str) or (require_exists and not os.path.isdir(workspace)):
         raise RuntimeError("the task workspace is unavailable")
     return workspace
 
@@ -707,15 +866,459 @@ class DirectTaskHost:
         self._controls = {}
         self._sessions = {}
         self._stops = {}
+        self._leases = {}
         self._lock = threading.Lock()
 
-    def stop(self, task_id, reason="stopped by operator"):
+    def _family(self, task_id):
+        root = self.store.owner_chain(task_id)[-1]
+        family = [root]
+        identities = {root["id"]}
+        for record in self.store.records():
+            if (record.get("parent") or {}).get("task_id") in identities:
+                family.append(record)
+                identities.add(record["id"])
+        return family
+
+    def _lease(self, task_id):
+        lease = TaskExecutionLease(
+            os.path.join(self.home, "task-runtime", kvstore.validate_fragment(task_id, "task_id")),
+            on_pending=lambda: self._worker_quiescence_pending(task_id),
+            poll_interval=self.poll_interval,
+        )
+        if not os.path.exists(lease.lock_path):
+            # A pre-upgrade worker never inherited a lease or wrote its PGID.
+            # Do not turn absence of NEW evidence into proof that it died.
+            for path in (
+                _marker_path(self.home, task_id),
+                os.path.join(reviewed_state_directory(self.home, task_id), "current.json"),
+            ):
+                try:
+                    with open(path, encoding="utf-8") as handle:
+                        marker = json.load(handle)
+                except FileNotFoundError:
+                    continue
+                except (OSError, ValueError) as exc:
+                    raise ExecutionBusy("legacy execution marker is unreadable; recovery is blocked") from exc
+                if (not isinstance(marker, dict)
+                        or not isinstance(marker.get("pending_calls", []), list)
+                        or any(not isinstance(call, dict)
+                               for call in marker.get("pending_calls", []))):
+                    raise ExecutionBusy("legacy execution marker is malformed; recovery is blocked")
+                calls = [marker] + marker.get("pending_calls", [])
+                if any(call.get("completed") is not True for call in calls):
+                    raise ExecutionBusy(
+                        "prior execution predates worker tracking; its quiescence "
+                        "must be established before Resume"
+                    )
+        return lease
+
+    def _worker_quiescence_pending(self, task_id):
+        with registry.locked(self.home):
+            if self.store.record(task_id)["result"] is None:
+                self.store.pause_locked(
+                    task_id, "Waiting for prior worker quiescence before continuing",
+                    source="error", pending=True,
+                )
+
+    def _ensure_workers_quiescent(self, records, owner_ids=()):
+        """Fence physical work, including immutable terminal family members.
+
+        A coordinator checking its own safe boundary already holds the lease;
+        inspect its journal without trying to flock a second descriptor. Other
+        active coordinators must finish before their workspace can be reused.
+        """
+        for record in records:
+            identity = record["id"]
+            with self._lock:
+                active = identity in self._active
+                lease = self._leases.get(identity)
+                if lease is not None:
+                    if active and identity not in owner_ids:
+                        raise ExecutionBusy("the previous execution is still stopping")
+                    # Resume releases unused child reservations concurrently
+                    # with the root's startup checks. Keep the owned descriptor
+                    # alive for the entire journal inspection/clear operation.
+                    lease.ensure_quiescent()
+                    continue
+            with self._lease(identity):
+                pass
+            if active and identity not in owner_ids:
+                raise ExecutionBusy("the previous execution is still stopping")
+
+    def _workers_quiescent(self, records, owner_ids=()):
+        try:
+            self._ensure_workers_quiescent(records, owner_ids)
+            return True
+        except (ExecutionBusy, OSError):
+            return False
+
+    def lifecycle(self, task_id):
+        value = self.store.lifecycle(task_id)
+        family = self._family(task_id)
+        supported = tasks.stored_task_executor(
+            self.store.record(task_id)["order"]["task_executor"]
+        ) in RECOVERABLE_EXECUTORS
+        value.update(root_task_id=family[0]["id"], can_pause=False,
+                     can_resume=False, blocked_reason=None)
+        if not supported or self.store.record(task_id)["result"] is not None:
+            return value
+        if self.store.owner_stop_reason(task_id) is not None:
+            value["blocked_reason"] = "Cancellation is pending; this task cannot resume"
+            return value
+        value["can_pause"] = value["status"] == "running"
+        if value["status"] in ("paused", "pausing"):
+            try:
+                if not self._discussions_quiescent(family):
+                    raise TaskControlConflict("an owned discussion is still stopping or its quiescence is unknown")
+                self._ensure_workers_quiescent(family)
+                value["can_resume"] = value["status"] == "paused"
+            except (ExecutionBusy, TaskControlConflict) as exc:
+                value["blocked_reason"] = str(exc)
+        return value
+
+    def pause(self, task_id, reason="paused by operator"):
+        with registry.locked(self.home):
+            record = self.store.record(task_id)
+            if (tasks.stored_task_executor(record["order"]["task_executor"])
+                    not in RECOVERABLE_EXECUTORS or record["result"] is not None):
+                raise TaskControlConflict("this task cannot be paused")
+            family = self._family(task_id)
+            pending = (not self._discussions_quiescent(family)
+                       or not self._workers_quiescent(family))
+            for member in family:
+                if member["result"] is None:
+                    self.store.pause_locked(
+                        member["id"], reason,
+                        pending=pending,
+                    )
+            if pending:
+                self._start_pause_settlement(
+                    [member for member in family if member["result"] is None], lambda: {})
+        return self.lifecycle(task_id)
+
+    def resume(self, task_id, config_resolver, revision):
+        with registry.locked(self.home):
+            return self.resume_locked(task_id, config_resolver, revision)
+
+    def resume_locked(self, task_id, config_resolver, revision):
+        if type(revision) is not int or revision < 0:
+            raise ValueError("revision must be a non-negative integer")
+        current = self.store.lifecycle(task_id)
+        if current["status"] != "paused" or current["revision"] != revision:
+            raise TaskControlConflict("task is not at the requested paused revision")
+        family = self._family(task_id)
+        open_members = [member for member in family if member["result"] is None]
+        acquired = {}
+        changing = False
+        try:
+            if not self._discussions_quiescent(family):
+                raise TaskControlConflict("an owned discussion is still stopping or its quiescence is unknown")
+            # Acquire the entire family BEFORE touching state or Git. A
+            # surviving worker keeps this lease across a host-process crash.
+            for member in family:
+                identity = member["id"]
+                if self.is_active(identity):
+                    raise TaskControlConflict("the previous execution is still stopping")
+                lifecycle = self.store.lifecycle(identity)
+                if member["result"] is None and (
+                        lifecycle["status"] != "paused" or self.store.stop_reason(identity)):
+                    raise TaskControlConflict("the task family is not fully paused")
+                acquired[identity] = self._lease(identity).acquire()
+            changing = True
+            for member in open_members:
+                identity = member["id"]
+                self._recover_worker_attempt_locked(identity)
+                if tasks.stored_task_executor(member["order"]["task_executor"]) == "reviewed_task":
+                    path = reviewed_state_path(self.home, identity)
+                    if os.path.isfile(path):
+                        with st.exclusive_mutation(path):
+                            state = st.load(path)
+                            if state.get("failure") is not None:
+                                st.resume_run(state)
+                                st.save(path, state)
+                self.store.resume_locked(identity, self.store.lifecycle(identity)["revision"])
+            with self._lock:
+                self._leases.update(acquired)
+            acquired = {}
+            try:
+                self.start(family[0], config_resolver)
+            except Exception as exc:
+                for member in open_members:
+                    self.store.pause_locked(member["id"], str(exc), source="error")
+                raise
+        except ExecutionBusy as exc:
+            raise TaskControlConflict(str(exc)) from exc
+        except Exception as exc:
+            if changing:
+                for member in open_members:
+                    if self.store.record(member["id"])["result"] is None:
+                        self.store.pause_locked(
+                            member["id"], "Resume could not start: %s" % exc,
+                            source="error",
+                        )
+            raise
+        finally:
+            for lease in acquired.values():
+                lease.close()
+            # Reservations for children are released; start() reacquires
+            # them before dispatch. Durable running state alone grants no
+            # permission to execute without the lease.
+            with self._lock:
+                unused = [identity for identity in self._leases if identity not in self._active]
+                for identity in unused:
+                    self._leases.pop(identity).close()
+        return self.store.lifecycle(task_id)
+
+    @staticmethod
+    def _reviewed_discussion_callers(state, unit):
+        callers = {"milestone:%s:%s" % (state.get("name") or "run", st.unit_key(unit))}
+        # A Brainstorming producer is itself a durable inner task, and uses
+        # the adapter's task caller rather than the need_rethink caller.
+        callers.update(
+            brainstorming_tasks._task_caller(inner, inner["id"])
+            for inner in state.get("tasks", [])
+            if tasks.stored_task_executor(inner["order"]["task_executor"]) == "brainstorming"
+        )
+        return callers
+
+    def _pause_discussion_ids(self, record):
+        """Read ownership without constructing a Driver or recovering Git."""
+        if tasks.stored_task_executor(record["order"]["task_executor"]) != "reviewed_task":
+            return set()
+        path = reviewed_state_path(self.home, record["id"])
+        if not os.path.isfile(path):
+            return set()
+        state = st.load(path)
+        unit = next(unit for unit in state["units"]
+                    if st.unit_key(unit) == state["reviewed_task"]["unit"])
+        session_id = (unit.get("brainstorming_wait") or {}).get("session_id")
+        identities = {session_id} if isinstance(session_id, str) else set()
+        callers = self._reviewed_discussion_callers(state, unit)
+        # Include creation-before-attachment and still-exiting historical
+        # sessions. Neither an absent attachment nor a terminal result proves
+        # that an independently owned process has stopped.
+        rows = brainstorming_tasks.lifecycle.list_sessions(
+            self.home, lambda session: session.get("caller") in callers
+        )
+        if any(row.get("state_error") for row in rows):
+            raise TaskControlConflict("owned discussion state is unavailable")
+        identities.update(row["id"] for row in rows)
+        if (record["result"] is not None and isinstance(session_id, str)
+                and any(event.get("type") == "brainstorming_missing_detached"
+                        and event.get("session_id") == session_id
+                        for event in state.get("events", []))):
+            # Older Cancel receipts kept the missing attachment. Honor the
+            # durable detach without rewriting an immutable terminal child,
+            # but never mistake a registered session or surviving attempt for
+            # a completed discard.
+            try:
+                brainstorming_tasks.lifecycle._record_by_id(self.home, session_id)
+            except brainstorming_tasks.lifecycle.PublicLifecycleError as exc:
+                if exc.code != brainstorming_tasks.lifecycle.UNKNOWN_SESSION:
+                    raise
+                if self._discussion_attempts_quiescent(session_id):
+                    identities.discard(session_id)
+        return identities
+
+    def _discussion_quiescent(self, session_id):
+        projection = brainstorming_tasks.lifecycle.inspect_session(
+            self.home, session_id, lambda _record: True
+        )
+        if projection.get("process") != "stopped":
+            return False
+        return self._discussion_attempts_quiescent(session_id)
+
+    def _discussion_attempts_quiescent(self, session_id):
+        sessions = brainstorming.SessionStore(
+            brainstorming_tasks.lifecycle.state_directory(self.home)
+        )
+        attempt = sessions.read_turn_attempt(session_id)
+        intervention = sessions.read_external_intervention(session_id)
+        return bool(
+            (attempt is None or attempt["quiescent"])
+            and (intervention is None or intervention["provider_attempt"] == 0
+                 or intervention["provider_quiescent"])
+        )
+
+    def _discussions_quiescent(self, records, stop=False):
+        quiet = True
+        for record in records:
+            try:
+                identities = self._pause_discussion_ids(record)
+            except Exception:
+                quiet = False
+                continue
+            for identity in identities:
+                try:
+                    if self._discussion_quiescent(identity):
+                        continue
+                    if stop:
+                        brainstorming_tasks.lifecycle.stop_session(
+                            self.home, identity, lambda _record: True
+                        )
+                    if not self._discussion_quiescent(identity):
+                        quiet = False
+                except Exception:
+                    # Unknown is not stopped. Leave the durable pause pending
+                    # and retry inspection/Stop, never the failed provider call.
+                    quiet = False
+        return quiet
+
+    def _settle_pause(self, task_id, records=None, owner_ids=None):
+        records = records or [self.store.record(task_id)]
+        owner_ids = (task_id,) if owner_ids is None else owner_ids
+        evidence = (self._family(task_id)
+                    if tasks.stored_task_executor(self.store.record(task_id)["order"]["task_executor"])
+                    == "deep_task" else records)
+        while True:
+            if self._stop_reason(task_id) is not None:
+                # Leave descendant cancellation to the ordinary parent loop,
+                # but never abandon this coordinator's surviving worker.
+                if self._workers_quiescent([self.store.record(task_id)], owner_ids):
+                    return
+            elif (self._discussions_quiescent(evidence, stop=True)
+                  and self._workers_quiescent(evidence, owner_ids)):
+                with registry.locked(self.home):
+                    if self._stop_reason(task_id) is not None:
+                        return
+                    for record in reversed(records):
+                        identity = record["id"]
+                        if self.store.record(identity)["result"] is not None:
+                            continue
+                        lifecycle = self.store.lifecycle(identity)
+                        self.store.pause_locked(
+                            identity, lifecycle.get("reason") or "paused by operator",
+                            source=lifecycle.get("source") or "operator",
+                        )
+                return
+            time.sleep(self.poll_interval)
+
+    def _start_pause_settlement(self, records, config_resolver):
+        """Control-only recovery; never restores Git or dispatches a worker.
+
+        The caller holds the registry lock. Existing coordinators settle their
+        own cooperative boundary; an interrupted family needs only this host
+        thread to stop/inspect its independently running discussions.
+        """
+        with self._lock:
+            if any(record["id"] in self._active for record in records):
+                return
+            for record in records:
+                self._active[record["id"]] = _workspace(record, require_exists=False)
+
+        def settle():
+            root = records[0]
+            try:
+                self._settle_pause(root["id"], records,
+                                   owner_ids={record["id"] for record in records})
+            finally:
+                with registry.locked(self.home):
+                    with self._lock:
+                        for record in records:
+                            self._active.pop(record["id"], None)
+                            self._stops.pop(record["id"], None)
+                    if self.store.stop_reason(root["id"]) is not None:
+                        try:
+                            self.start(self.store.record(root["id"]), config_resolver)
+                        except ExecutionBusy:
+                            # The lease can become busy again between its
+                            # quiet observation and this ownership handoff.
+                            # Keep the durable Cancel supervised, not stranded
+                            # until a second operator action or service restart.
+                            self._start_pause_settlement(records, config_resolver)
+                        except Exception:
+                            pass  # Durable Cancel is retained for later adoption.
+
+        thread = threading.Thread(target=settle, name="pause-%s" % records[0]["id"], daemon=True)
+        try:
+            thread.start()
+        except Exception:
+            with self._lock:
+                for record in records:
+                    self._active.pop(record["id"], None)
+            raise
+
+    def _pause_failure(self, task_id, reason, attempt=None):
+        with registry.locked(self.home):
+            self.store.pause_locked(task_id, reason, source="error",
+                                    pending=True, attempt=attempt)
+        self._settle_pause(task_id)
+
+    def _pause_boundary(self, task_id, subject=None, unit=None):
+        if self._stop_reason(task_id) is not None:
+            return
+        lifecycle = self.store.lifecycle(task_id)
+        if lifecycle["status"] not in ("pausing", "paused"):
+            record = self.store.record(task_id)
+            deep = tasks.stored_task_executor(record["order"]["task_executor"]) == "deep_task"
+            evidence = self._family(task_id) if deep else [record]
+            # A reviewed coordinator may legitimately be awaiting its own
+            # discussion. At a deep handoff, however, every prior child must
+            # be physically quiet, including its independently owned sessions.
+            if (self._workers_quiescent(evidence, (task_id,))
+                    and (not deep or self._discussions_quiescent(evidence))):
+                return
+            with registry.locked(self.home):
+                lifecycle = self.store.pause_locked(
+                    task_id, "Waiting for prior execution quiescence before continuing",
+                    source="error", pending=True,
+                )
+        with registry.locked(self.home):
+            if self.store.stop_reason(task_id) is not None:
+                return
+            self.store.pause_locked(task_id, lifecycle["reason"],
+                                    source=lifecycle["source"], pending=True)
+        self._settle_pause(task_id)
+        if self._stop_reason(task_id) is None:
+            raise _TaskPaused()
+
+    def stop(self, task_id, reason="stopped by operator", _member=False):
         """Stop one running standalone task. Returns True when a stop was
         delivered, False when the task is not running here (already
         terminal, or not this host's). The task closes as `failure` with
         this reason: a stop is an operator outcome, never a guessed
         success from whatever the interrupted worker last printed."""
         reason = str(reason or "stopped by operator").strip()
+        record = self.store.record(task_id)
+        if (not _member and tasks.stored_task_executor(
+                record["order"]["task_executor"]) in RECOVERABLE_EXECUTORS):
+            root_id = self._family(task_id)[0]["id"]
+            if root_id != task_id:
+                return self.stop(root_id, reason)
+        if not self.is_active(task_id):
+            with registry.locked(self.home):
+                record = self.store.record(task_id)
+                if (record["result"] is not None or tasks.stored_task_executor(
+                        record["order"]["task_executor"]) not in RECOVERABLE_EXECUTORS):
+                    return False
+                if self.is_active(task_id):
+                    raise TaskControlConflict("task execution changed; retry Cancel")
+                reservations = {}
+                try:
+                    cancellation_family = [record] if _member else self._family(task_id)
+                    for member in cancellation_family:
+                        if self.is_active(member["id"]):
+                            raise TaskControlConflict("a child is still stopping")
+                        reservations[member["id"]] = self._lease(member["id"]).acquire()
+                    for member in cancellation_family:
+                        if member["result"] is None:
+                            self.store.record_stop_locked(member["id"], reason)
+                    root = cancellation_family[0]
+                    with self._lock:
+                        self._leases.update(reservations)
+                    reservations = {}
+                    self.start(root, lambda: {})
+                except ExecutionBusy as exc:
+                    raise TaskControlConflict(str(exc)) from exc
+                finally:
+                    for lease in reservations.values():
+                        lease.close()
+                    with self._lock:
+                        unused = [identity for identity in self._leases
+                                  if identity not in self._active]
+                        for identity in unused:
+                            self._leases.pop(identity).close()
+            return True
         with registry.locked(self.home):
             with self._lock:
                 if task_id not in self._active:
@@ -726,9 +1329,7 @@ class DirectTaskHost:
                 )
                 if record["result"] is not None:
                     return False
-                if executor in (
-                    "brainstorming", "reviewed_task", "deep_task"
-                ):
+                if executor in RECOVERABLE_EXECUTORS or executor == "brainstorming":
                     reason = self.store.record_stop_locked(task_id, reason)
                 self._stops[task_id] = reason
                 control = self._controls.get(task_id)
@@ -824,9 +1425,65 @@ class DirectTaskHost:
             stall_min_cpu_s=config.get("worker_stall_min_cpu_s"),
         )
 
+    def _recover_worker_attempt_locked(self, task_id):
+        """Import a completed direct call once, without changing its control.
+
+        The caller holds the registry lock. This accounting boundary is also
+        valid after Cancel: importing evidence must not turn a durable Stop
+        into a pause or require reopening the task's workspace.
+        """
+        current, document = self.store._read_document(task_id)
+        if (document["record"]["result"] is not None or tasks.stored_task_executor(
+                document["record"]["order"]["task_executor"]) != "agent_call"):
+            return False
+        try:
+            marker = read_worker_marker(self.home, task_id)
+        except (OSError, ValueError):
+            return False
+        if (not isinstance(marker, dict) or marker.get("completed") is not True
+                or marker.get("task_id") != task_id
+                or not isinstance(marker.get("call_id"), str)
+                or not marker["call_id"].strip()):
+            return False
+        lifecycle = self.store._lifecycle(document)
+        if any(event.get("call_id") == marker["call_id"]
+               for event in lifecycle["history"]):
+            return False
+        try:
+            if "result" in marker:
+                attempt = tasks.validate_result(marker["result"])
+            else:
+                # Before resumable tasks, completed markers retained only
+                # accounting, not the outcome or native answer. Preserve that
+                # physical call's charge without inventing a reusable success.
+                attempt = tasks.validate_result({
+                    "status": "failure",
+                    "reason": "Completed worker outcome was not retained by the earlier marker format",
+                    "native_result": None,
+                    **{field: marker[field] for field in (
+                        "duration_s", "token_usage", "token_usage_partial",
+                        "cost", "cost_partial",
+                    )},
+                })
+        except (KeyError, TypeError, ValueError):
+            return False
+        event = {"status": lifecycle["status"], "at": _admission_stamp(),
+                 "call_id": marker["call_id"], "attempt": copy.deepcopy(attempt)}
+        if lifecycle["status"] != "running":
+            event.update(reason=lifecycle["reason"], source=lifecycle["source"])
+        lifecycle["history"].append(event)
+        if attempt["status"] == "success":
+            lifecycle["completed_result"] = copy.deepcopy(attempt)
+        self.store._write_lifecycle_locked(task_id, current, document, lifecycle)
+        return True
+
     def start(self, record, config_resolver, parent_task_id=None):
         task_id = record["id"]
-        workspace = _workspace(record)
+        # Cancellation only settles retained evidence and owned discussions.
+        # A missing/unmounted work area must not prevent that terminal action.
+        workspace = _workspace(
+            record, require_exists=self.store.stop_reason(task_id) is None
+        )
         with self._lock:
             if (
                 parent_task_id is not None
@@ -838,19 +1495,13 @@ class DirectTaskHost:
                 return None
             if task_id in self._active:
                 return None
-            if tasks.stored_task_executor(
-                record["order"]["task_executor"]
-            ) == "reviewed_task":
-                path = reviewed_state_path(self.home, task_id)
-                if not os.path.exists(path):
-                    ensure_reviewed_state(
-                        self.home,
-                        record,
-                        config_resolver(),
-                        implementation_scope=(
-                            self._deep_implementation_scope(record)
-                        ),
-                    )
+            executor = tasks.stored_task_executor(record["order"]["task_executor"])
+            if (executor in RECOVERABLE_EXECUTORS
+                    and self.store.lifecycle(task_id)["status"] != "running"
+                    and self.store.stop_reason(task_id) is None):
+                return None
+            if executor in RECOVERABLE_EXECUTORS and task_id not in self._leases:
+                self._leases[task_id] = self._lease(task_id).acquire()
             self._active[task_id] = workspace
             thread = threading.Thread(
                 target=self._run,
@@ -862,21 +1513,18 @@ class DirectTaskHost:
                 thread.start()
             except Exception:
                 self._active.pop(task_id, None)
+                lease = self._leases.pop(task_id, None)
+                if lease is not None:
+                    lease.close()
                 raise
         return thread
 
     def adopt_open_tasks(self, config_resolver_for):
-        """Re-attach the standalone tasks left open by a previous service.
+        """Readopt independent discussions; pause interrupted ordinary tasks.
 
-        The host's execution threads die with the process; the records do
-        not. A Brainstorming task owns an independent session that may have
-        gone on (or finished) meanwhile, and the adapter already knows how
-        to recover it from the task's private target — so it is restarted
-        here and runs to its result. A Worker task's call died with the
-        service and cannot be resumed without redoing the work blind, so it
-        is closed honestly and the operator re-orders if still wanted.
-        `config_resolver_for(record)` returns the zero-arg config resolver
-        to use for that record. Returns {adopted: [...], closed: [...]}."""
+        An explicit durable Cancel still settles after restart, but a service
+        restart is never authorization to retry physical work.
+        """
         adopted, closed = [], []
         try:
             records = self.store.records()
@@ -886,8 +1534,72 @@ class DirectTaskHost:
             if record.get("result") is not None:
                 continue
             task_id = record["id"]
-            executor = (record.get("order") or {}).get("task_executor")
-            if executor in ("brainstorming", "reviewed_task", "deep_task"):
+            executor = tasks.stored_task_executor(record["order"]["task_executor"])
+            if executor in RECOVERABLE_EXECUTORS:
+                if self.is_active(task_id):
+                    continue
+                with registry.locked(self.home):
+                    if self.store.stop_reason(task_id) is not None:
+                        try:
+                            self.start(record, config_resolver_for(record))
+                            adopted.append(task_id)
+                        except ExecutionBusy as exc:
+                            self.store.pause_locked(
+                                task_id, str(exc), source="interrupted", pending=True,
+                            )
+                            self._start_pause_settlement([record], config_resolver_for(record))
+                        except Exception as exc:
+                            self.store.pause_locked(task_id, str(exc), source="interrupted")
+                        continue
+                    evidence = self._family(task_id)
+                    family = [member for member in evidence
+                              if member["result"] is None
+                              and self.store.stop_reason(member["id"]) is None]
+                    if any(self.is_active(member["id"]) for member in family):
+                        continue
+                    pending = (not self._discussions_quiescent(evidence)
+                               or not self._workers_quiescent(evidence))
+                    for member in family:
+                        identity = member["id"]
+                        previous = self.store.lifecycle(identity)
+                        if previous["status"] == "paused" and not pending:
+                            continue
+                        attempt = completed = attempt_id = None
+                        if tasks.stored_task_executor(member["order"]["task_executor"]) == "agent_call":
+                            self._recover_worker_attempt_locked(identity)
+                            try:
+                                marker = read_worker_marker(self.home, identity)
+                            except (OSError, ValueError):
+                                marker = {}
+                            if not isinstance(marker, dict):
+                                marker = {}
+                            attempt_id = marker.get("call_id")
+                            if not isinstance(attempt_id, str):
+                                attempt_id = None
+                            known = any(
+                                event.get("call_id") == attempt_id
+                                for event in self.store.lifecycle(identity)["history"]
+                            ) if attempt_id else False
+                            if not known:
+                                try:
+                                    attempt = tasks.validate_result(
+                                        marker.get("result") if marker.get("completed") is True else None
+                                    )
+                                except contracts.ContractError:
+                                    attempt = self._deep_failure(
+                                        "Worker result was not recorded before service restart"
+                                    )
+                                if attempt.get("status") == "success":
+                                    completed = attempt
+                        self.store.pause_locked(
+                            identity, "Execution interrupted by service restart; Resume when ready",
+                            source="interrupted", pending=pending,
+                            attempt=attempt, completed_result=completed, attempt_id=attempt_id,
+                        )
+                    if pending:
+                        self._start_pause_settlement(family, config_resolver_for(family[0]))
+                continue
+            if executor == "brainstorming":
                 try:
                     relation = record.get("parent") or {}
                     parent_task_id = relation.get("task_id")
@@ -925,17 +1637,38 @@ class DirectTaskHost:
         return {"adopted": adopted, "closed": closed}
 
     def owns_workspace(self, workspace):
-        """Whether an execution thread currently owns an overlapping tree."""
+        """Paused work retains its work area until completion or Cancel."""
         with self._lock:
             active = list(self._active.values())
+        active.extend(_workspace(record, require_exists=False) for record in self._reserved_records())
         return any(gitsync.paths_overlap(path, workspace) for path in active)
+
+    def _reserved_records(self):
+        for record in self.store.records():
+            if tasks.stored_task_executor(record["order"]["task_executor"]) not in RECOVERABLE_EXECUTORS:
+                continue
+            if record["result"] is None:
+                yield record
+                continue
+            journal = os.path.join(self.home, "task-runtime", record["id"], "execution.json")
+            lease_path = os.path.join(self.home, "task-runtime", record["id"], "execution.lock")
+            legacy_evidence = not os.path.exists(lease_path) and any(os.path.isfile(path) for path in (
+                _marker_path(self.home, record["id"]),
+                os.path.join(reviewed_state_directory(self.home, record["id"]), "current.json"),
+            ))
+            if os.path.isfile(journal) or legacy_evidence:
+                try:
+                    with self._lease(record["id"]):
+                        pass
+                except ExecutionBusy:
+                    # Even a terminal Cancel cannot make a surviving process
+                    # safe for another task to overwrite.
+                    yield record
 
     def owns_workspace_except(self, workspace, task_id):
         """Whether work outside one task's owner chain holds the tree."""
         try:
-            excluded = {
-                record["id"] for record in self.store.owner_chain(task_id)
-            }
+            excluded = {record["id"] for record in self._family(task_id)}
         except Exception:
             excluded = {task_id}
         with self._lock:
@@ -943,9 +1676,14 @@ class DirectTaskHost:
                 path for active_id, path in self._active.items()
                 if active_id not in excluded
             ]
+        active.extend(
+            _workspace(record, require_exists=False) for record in self._reserved_records()
+            if record["id"] not in excluded
+        )
         return any(gitsync.paths_overlap(path, workspace) for path in active)
 
     def _run(self, task_id, config_resolver):
+        unexpected_failure = False
         try:
             record = self.store.record(task_id)
             if record["result"] is not None:
@@ -953,6 +1691,26 @@ class DirectTaskHost:
             executor = tasks.stored_task_executor(
                 record["order"]["task_executor"]
             )
+            if executor in RECOVERABLE_EXECUTORS:
+                self._pause_boundary(task_id)
+                if (self._stop_reason(task_id) is not None and
+                        (executor == "agent_call" or (
+                            executor == "reviewed_task" and not os.path.isfile(
+                                reviewed_state_path(self.home, task_id))))):
+                    with registry.locked(self.home):
+                        self._recover_worker_attempt_locked(task_id)
+                        self.store.record_result_locked(task_id, {
+                            "status": "failure", "reason": self._stop_reason(task_id),
+                            "native_result": None, **brainstorming_tasks._zero_accounting(),
+                        })
+                    return
+            if executor == "reviewed_task":
+                path = reviewed_state_path(self.home, task_id)
+                if not os.path.exists(path):
+                    ensure_reviewed_state(
+                        self.home, record, config_resolver(),
+                        implementation_scope=self._deep_implementation_scope(record),
+                    )
             if executor == "agent_call":
                 self._run_worker(record, config_resolver)
             elif executor == "brainstorming":
@@ -961,12 +1719,49 @@ class DirectTaskHost:
                 self._run_deep(record, config_resolver)
             else:
                 self._run_reviewed(record)
+        except _TaskPaused:
+            self._settle_pause(task_id)
+        except Exception as exc:
+            unexpected_failure = True
+            already_cancelling = self._stop_reason(task_id) is not None
+            record = self.store.record(task_id)
+            if (record["result"] is None and tasks.stored_task_executor(
+                    record["order"]["task_executor"]) in RECOVERABLE_EXECUTORS):
+                self._pause_failure(task_id, str(exc).strip() or type(exc).__name__)
+                # A newly accepted Cancel can win while an error pause is
+                # quiescing a discussion. Settle it after releasing this host.
+                if not already_cancelling and self._stop_reason(task_id) is not None:
+                    unexpected_failure = False
+            else:
+                raise
         finally:
-            with self._lock:
-                self._active.pop(task_id, None)
-                self._controls.pop(task_id, None)
-                self._sessions.pop(task_id, None)
-                self._stops.pop(task_id, None)
+            settle_stop = False
+            with registry.locked(self.home):
+                try:
+                    current = self.store.record(task_id)
+                    settle_stop = bool(
+                        not unexpected_failure and current["result"] is None
+                        and self.store.stop_reason(task_id) is not None
+                        and tasks.stored_task_executor(current["order"]["task_executor"])
+                        in RECOVERABLE_EXECUTORS
+                    )
+                finally:
+                    with self._lock:
+                        self._active.pop(task_id, None)
+                        self._controls.pop(task_id, None)
+                        self._sessions.pop(task_id, None)
+                        self._stops.pop(task_id, None)
+                        lease = self._leases.pop(task_id, None)
+                        if lease is not None:
+                            lease.close()
+                if settle_stop:
+                    # Cancel may win just as a paused coordinator exits.
+                    # Re-enter ONLY its durable cancellation settlement; the
+                    # stop fence prevents another production or review call.
+                    try:
+                        self.start(current, config_resolver)
+                    except Exception:
+                        pass  # Keep the durable Cancel for later settlement.
 
     @staticmethod
     def _deep_child_order(record):
@@ -1045,6 +1840,9 @@ class DirectTaskHost:
         self, task_id, status, child_results, reason=None
     ):
         """Fence a deep terminal choice against concurrent operator Stop."""
+        self._pause_boundary(task_id)
+        if self._stop_reason(task_id) is not None:
+            self._settle_deep_cancel_quiescence(task_id, self._family(task_id))
         with registry.locked(self.home):
             with self._lock:
                 stop_reason = (
@@ -1056,12 +1854,33 @@ class DirectTaskHost:
                     child_results,
                     stop_reason or reason,
                 )
+                if stop_reason is None and status == "failure":
+                    self.store.pause_locked(task_id, reason or "Deep task failed", source="error")
+                    return result
+                if (stop_reason is None and self.store.lifecycle(task_id)["status"]
+                        in ("pausing", "paused")):
+                    self.store.pause_locked(task_id, "paused by operator")
+                    raise _TaskPaused()
                 self.store.record_result_locked(task_id, result)
                 # A Stop arriving after this point was not accepted: the
                 # terminal record and work-area release become visible as one
                 # host decision under the same control lock.
-                self._active.pop(task_id, None)
         return result
+
+    def _settle_deep_cancel_quiescence(self, task_id, records):
+        """Keep Cancel nonterminal until already-settled children are quiet.
+
+        Open children receive their ordinary Cancel first. Never reopen a
+        terminal child or import its discussion accounting a second time.
+        """
+        while not (self._discussions_quiescent(records, stop=True)
+                   and self._workers_quiescent(records, (task_id,))):
+            with registry.locked(self.home):
+                self.store.pause_locked(
+                    task_id, self._stop_reason(task_id) or "Waiting for cancellation quiescence",
+                    source="operator", pending=True,
+                )
+            time.sleep(self.poll_interval)
 
     def _await_deep_child(self, task_id, child, config_resolver):
         if child["result"] is None and self._stop_reason(task_id) is None:
@@ -1069,8 +1888,29 @@ class DirectTaskHost:
         while True:
             child = self.store.record(child["id"])
             stop_reason = self._stop_reason(task_id)
+            if stop_reason is None:
+                child_lifecycle = self.store.lifecycle(child["id"])
+                if (child["result"] is None and child_lifecycle["status"] == "paused"
+                        and not self.is_active(child["id"])):
+                    with registry.locked(self.home):
+                        self.store.pause_locked(
+                            task_id, child_lifecycle["reason"] or "Child task paused",
+                            source="child",
+                        )
+                    raise _TaskPaused()
+                if not self.is_active(child["id"]):
+                    self._pause_boundary(task_id)
             if stop_reason is not None and child["result"] is None:
-                delivered = self.stop(child["id"], stop_reason)
+                try:
+                    delivered = self.stop(child["id"], stop_reason, _member=True)
+                except TaskControlConflict as exc:
+                    # A surviving worker or concurrent child adoption can
+                    # temporarily refuse delivery. Cancel is already durable
+                    # on the parent: wait here and retry control, never work.
+                    with registry.locked(self.home):
+                        self.store.pause_locked(task_id, str(exc), source="operator", pending=True)
+                    time.sleep(self.poll_interval)
+                    continue
                 if not delivered:
                     if tasks.stored_task_executor(
                         child["order"]["task_executor"]
@@ -1091,7 +1931,15 @@ class DirectTaskHost:
                             # child's durable Stop without the stopped-parent
                             # admission fence, so the reviewed lifecycle can
                             # settle any attached discussion before closing.
-                            self.start(child, config_resolver)
+                            try:
+                                self.start(child, config_resolver)
+                            except ExecutionBusy as exc:
+                                with registry.locked(self.home):
+                                    self.store.pause_locked(
+                                        task_id, str(exc), source="operator", pending=True,
+                                    )
+                                time.sleep(self.poll_interval)
+                                continue
                     else:
                         try:
                             child = self.store.record_result(
@@ -1099,8 +1947,11 @@ class DirectTaskHost:
                             )
                         except tasks.TaskRecordError:
                             child = self.store.record(child["id"])
-            if child["result"] is not None:
-                return child, stop_reason
+            if child["result"] is not None and not self.is_active(child["id"]):
+                if stop_reason is not None:
+                    self._settle_deep_cancel_quiescence(task_id, [child])
+                self._pause_boundary(task_id)
+                return child, self._stop_reason(task_id)
             time.sleep(self.poll_interval)
 
     def _admit_deep_child(
@@ -1108,6 +1959,9 @@ class DirectTaskHost:
     ):
         with registry.locked(self.home):
             with self._lock:
+                if (self.store.lifecycle(task_id)["status"] != "running"
+                        and self.store.stop_reason(task_id) is None):
+                    raise _TaskPaused()
                 stop_reason = (
                     self._stops.get(task_id)
                     or self.store.stop_reason(task_id)
@@ -1137,10 +1991,9 @@ class DirectTaskHost:
 
         results = []
         for child in children:
-            if child["result"] is None:
-                child, _current_reason = self._await_deep_child(
-                    task_id, child, config_resolver
-                )
+            child, _current_reason = self._await_deep_child(
+                task_id, child, config_resolver
+            )
             results.append(child["result"])
         self._record_deep_terminal(
             task_id, "failure", results, stop_reason
@@ -1253,21 +2106,21 @@ class DirectTaskHost:
                         reason=stop_reason,
                         native_result=None,
                     )
+                if (stop_reason is None and self.store.lifecycle(task_id)["status"]
+                        in ("pausing", "paused")):
+                    raise _TaskPaused()
                 # Keep the task active until its chosen result is durable.
                 # A concurrent parent then either delivers Stop before this
                 # write or observes the already-terminal child; it can never
                 # mistake an in-progress settlement for abandoned work.
                 self.store.record_result_locked(task_id, result)
-                self._active.pop(task_id, None)
         return None
 
     def _unattached_reviewed_session_id(self, subject, unit):
         """Recover the one session created before its attachment was saved."""
-        caller = "milestone:%s:%s" % (
-            subject.state.get("name") or "run", st.unit_key(unit)
-        )
+        callers = self._reviewed_discussion_callers(subject.state, unit)
         rows = brainstorming_tasks.lifecycle.list_sessions(
-            self.home, lambda record: record.get("caller") == caller
+            self.home, lambda record: record.get("caller") in callers
         )
         if any(row.get("state_error") for row in rows):
             raise brainstorming_tasks.AdapterError(
@@ -1306,6 +2159,13 @@ class DirectTaskHost:
                 record = brainstorming_tasks.lifecycle._record_by_id(
                     self.home, session_id
                 )
+                if not self._discussion_quiescent(session_id):
+                    brainstorming_tasks.lifecycle.stop_session(
+                        self.home, session_id,
+                        brainstorming_tasks._authorize_caller(record.get("caller")),
+                    )
+                    if not self._discussion_quiescent(session_id):
+                        return False
                 projection = brainstorming_tasks.lifecycle.abandon_session(
                     self.home,
                     session_id,
@@ -1325,6 +2185,10 @@ class DirectTaskHost:
                     return False
                 outcome_event = "brainstorming_missing_detached"
                 try:
+                    # Discard removes the coordinator record, but retained
+                    # turn evidence can still describe a surviving provider.
+                    if not self._discussion_attempts_quiescent(session_id):
+                        return False
                     store = brainstorming.SessionStore(
                         brainstorming_tasks.lifecycle.state_directory(
                             self.home
@@ -1332,11 +2196,15 @@ class DirectTaskHost:
                     )
                     snapshot = store.read(session_id)
                     if snapshot is not None:
+                        target_path = (
+                            None if brainstorming.repository_session(snapshot.state)
+                            else coordination.resolve_target_path(snapshot.state["request"])
+                        )
                         projection = brainstorming_tasks._retained_projection(
                             self.home,
                             session_id,
                             "discarded:%s" % session_id,
-                            snapshot.state["request"].get("target_path"),
+                            target_path,
                         )
                 except Exception:
                     # A retained state that exists but cannot be read may hold
@@ -1391,6 +2259,10 @@ class DirectTaskHost:
                         kind=(wait.get("origin") or {}).get("kind"),
                         session_id=session_id,
                     )
+                if outcome_event == "brainstorming_missing_detached":
+                    # Match the ordinary missing-session settlement: retain
+                    # its ledger, not an attachment that can never be stopped.
+                    unit.pop("brainstorming_wait", None)
                 subject._save()
             except Exception:
                 return False
@@ -1403,6 +2275,10 @@ class DirectTaskHost:
 
     def _publish_reviewed_terminal(self, task_id, subject, unit, result):
         """Publish normally, or finish a Stop that won the result fence."""
+        if result["status"] == "failure" and self._stop_reason(task_id) is None:
+            self._pause_failure(task_id, result.get("reason") or "Reviewed task failed")
+            return
+        self._pause_boundary(task_id, subject, unit)
         stop_reason = self._record_reviewed_terminal(task_id, result)
         if stop_reason is None:
             return
@@ -1414,12 +2290,22 @@ class DirectTaskHost:
     def _run_reviewed(self, record):
         task_id = record["id"]
         path = reviewed_state_path(self.home, task_id)
-        lifecycle_state = st.load(path)
-        runner = self.runner_factory(lifecycle_state["config"], _workspace(record))
+        cancelling = self._stop_reason(task_id) is not None
+        runner = None
+        if not cancelling:
+            lifecycle_state = st.load(path)
+            runner = self.runner_factory(lifecycle_state["config"], _workspace(record))
+            runner.execution_lease = self._leases.get(task_id)
         subject = driver.Driver(
-            path, runner=runner, model_profiles_home=self.home
+            path, runner=runner, model_profiles_home=self.home,
+            pause_on_call_failure=True,
+            cancellation_only=cancelling,
         )
         unit_key = subject.state["reviewed_task"]["unit"]
+        resume_discussion = any(
+            event["status"] == "running"
+            for event in self.store.lifecycle(task_id)["history"]
+        )
         try:
             steps = 0
             while steps < 10000:
@@ -1432,6 +2318,7 @@ class DirectTaskHost:
                         return
                     time.sleep(self.poll_interval)
                     continue
+                self._pause_boundary(task_id, subject, unit)
                 if subject.state.get("failure") is not None:
                     failure = subject.state["failure"]
                     self._publish_reviewed_terminal(
@@ -1442,6 +2329,24 @@ class DirectTaskHost:
                             subject, unit, failure.get("reason")
                         ),
                     )
+                    return
+                if resume_discussion:
+                    resume_discussion = False
+                    session_id = (unit.get("brainstorming_wait") or {}).get("session_id")
+                    if isinstance(session_id, str):
+                        try:
+                            brainstorming_tasks.lifecycle.start_session(
+                                self.home, session_id, lambda _record: True,
+                                resolve_staffing_session=lambda _record: st.staffing_session(subject.state),
+                            )
+                        except brainstorming_tasks.lifecycle.PublicLifecycleError as exc:
+                            if exc.code != brainstorming_tasks.lifecycle.UNKNOWN_SESSION:
+                                raise
+                            # Let the existing missing-discussion recovery
+                            # decide the next lawful action; do not invent one.
+                completed = subject.reviewed_work.result(unit)
+                if completed is not None:
+                    self._publish_reviewed_terminal(task_id, subject, unit, completed)
                     return
                 with subject._exclusive():
                     subject._assert_not_stale()
@@ -1489,6 +2394,8 @@ class DirectTaskHost:
                 if session_id:
                     time.sleep(self.poll_interval)
             raise RuntimeError("reviewed task exceeded its lifecycle step bound")
+        except _TaskPaused:
+            raise
         except driver.StopStep as exc:
             unit = subject._unit_by_key(unit_key)
             reason = (
@@ -1530,6 +2437,20 @@ class DirectTaskHost:
 
     def _run_worker(self, record, config_resolver):
         task_id = record["id"]
+        completed = self.store.lifecycle(task_id).get("completed_result")
+        if completed is not None and self._stop_reason(task_id) is None:
+            with registry.locked(self.home):
+                lifecycle = self.store.lifecycle(task_id)
+                if lifecycle["status"] != "running":
+                    self.store.pause_locked(task_id, lifecycle["reason"])
+                    raise _TaskPaused()
+                stop_reason = self._stop_reason(task_id)
+                self.store.record_result_locked(
+                    task_id, {"status": "failure", "reason": stop_reason,
+                              "native_result": None, **brainstorming_tasks._zero_accounting()}
+                    if stop_reason else completed,
+                )
+            return
         started = time.time()
         marker = None
         carrier = None
@@ -1560,6 +2481,7 @@ class DirectTaskHost:
                 # it must not refuse a call the router already staffed.
                 pass
             runner = self.runner_factory(config, _workspace(record))
+            runner.execution_lease = self._leases.get(task_id)
             control = runners.ActiveCallControl()
             with self._lock:
                 self._controls[task_id] = control
@@ -1610,6 +2532,9 @@ class DirectTaskHost:
                 "model": model,
                 "effort": effort,
                 "completed": True,
+                "result": {"status": status, "native_result": native,
+                           **copy.deepcopy(accounting),
+                           **({"reason": reason} if status == "failure" else {})},
                 **copy.deepcopy(accounting),
             })
             try:
@@ -1628,7 +2553,31 @@ class DirectTaskHost:
         result = {"status": status, **accounting, "native_result": native}
         if status == "failure":
             result["reason"] = reason or "Worker execution failed"
-        self.store.record_result(task_id, result)
+        pending = not self._workers_quiescent([record], (task_id,))
+        with registry.locked(self.home):
+            stop_reason = self._stop_reason(task_id)
+            if pending:
+                self.store.pause_locked(
+                    task_id, result.get("reason") or "Waiting for prior worker quiescence",
+                    source="error", pending=True, attempt=result,
+                    completed_result=result if status == "success" else None,
+                    attempt_id=marker.get("call_id") if marker else None,
+                )
+            elif stop_reason is not None:
+                result.update(status="failure", reason=stop_reason)
+                self.store.record_result_locked(task_id, result)
+            elif status == "failure" or self.store.lifecycle(task_id)["status"] != "running":
+                self.store.pause_locked(
+                    task_id, result.get("reason") or "paused by operator",
+                    source="error" if status == "failure" else "operator",
+                    attempt=result,
+                    completed_result=result if status == "success" else None,
+                    attempt_id=marker.get("call_id") if marker else None,
+                )
+            else:
+                self.store.record_result_locked(task_id, result)
+        if pending:
+            self._settle_pause(task_id)
 
     def _persist_adapter_result(self, state, task_id):
         record = tasks.task_record(state, task_id)

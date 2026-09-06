@@ -1337,13 +1337,25 @@ class _ReviewSeatDispatch(_RoleDispatch):
 class Driver(object):
     model_profiles_home = None
 
-    def __init__(self, state_path, runner=None, model_profiles_home=None):
+    def __init__(self, state_path, runner=None, model_profiles_home=None,
+                 pause_on_call_failure=False, cancellation_only=False):
+        self.pause_on_call_failure = pause_on_call_failure
         self.state_path = state_path
         self.state = st.load(state_path)
         self.model_profiles_home = (
             os.path.abspath(model_profiles_home)
             if model_profiles_home is not None else None
         )
+        if cancellation_only:
+            # Stop settles retained accounting and independent discussions;
+            # it must not open, repair, or recreate a missing work area. The
+            # host already acquired the physical-execution lease.
+            self.config = self.state["config"]
+            self.workspace = self.state["workspace"]
+            self._busy_lock = threading.RLock()
+            self.runner = None
+            self._consume_stale_marker(recover_workspace=False)
+            return
         # Fail loudly before interpreting any retained strategy pair.
         interpreter.verify_embedded(self.state)
         # Merge strategy dials here and whenever an active-run replacement
@@ -3684,7 +3696,7 @@ class Driver(object):
             **task_fields,
         )
 
-    def _consume_stale_marker(self):
+    def _consume_stale_marker(self, recover_workspace=True):
         """A driver that died mid-call (Stop, crash, SIGKILL) leaves its
         in-flight marker behind. On startup, use it to repair what the
         death may have dirtied — without ever destroying legitimate work:
@@ -3782,6 +3794,9 @@ class Driver(object):
             accounted = True
         if accounted:
             self._save()
+        if not recover_workspace:
+            self._clear_busy()
+            return
         root_call = calls[0] if calls else marker
         kind = root_call.get("kind")
         if kind == "merge_repair":
@@ -5785,6 +5800,9 @@ class Driver(object):
         battery_questions) threaded into runners.call_worker.
         episode_unit keeps accounting on the admitted call owner when an
         accepted plan edit makes another unit current before validation."""
+        if self.pause_on_call_failure:
+            single_attempt = True
+            repeat_protocol = False
         call_unit = (
             episode_unit
             if episode_unit is not None else st.current_unit(self.state)

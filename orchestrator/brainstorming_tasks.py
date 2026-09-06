@@ -14,6 +14,7 @@ import shutil
 import time
 
 from orchestrator import brainstorming
+from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import brainstorming_milestone as milestone
 from orchestrator import gitops
@@ -460,9 +461,7 @@ def _retained_projection(home, session_id, caller, target_path):
     if snapshot is None:
         return None
     if not brainstorming.repository_session(snapshot.state):
-        retained_target = os.path.abspath(
-            snapshot.state["request"]["target_path"]
-        )
+        retained_target = coordination.resolve_target_path(snapshot.state["request"])
         if retained_target != target_path:
             raise AdapterError("retained Brainstorming session/task mismatch")
     record = {
