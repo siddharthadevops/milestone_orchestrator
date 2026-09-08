@@ -68,7 +68,9 @@ sessions render in the panel's right pane — there is no separate page):
     POST   /api/brainstorming/sessions/<id>/stop
                                    pause participant work, keeping the session
     POST   /api/brainstorming/sessions/<id>/start
-                                   resume the same non-terminal session
+                                   resume the same non-terminal session, or
+                                   recover a standalone repository failure:
+                                   {recovery_revision} (operational only)
     POST   /api/brainstorming/sessions/<id>/rounds
                                    raise its absolute round maximum
     POST   /api/brainstorming/sessions/<id>/continue
@@ -4268,7 +4270,64 @@ def _owner_restart_barrier(home, who, session_id, attachment):
     raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
 
 
-def _start_brainstorming_session(home, who, session_id, task_host=None):
+def _recover_brainstorming_session(
+    home, who, session_id, record, recovery_revision, task_host
+):
+    """Recover one explicit operational failure through its existing owner."""
+    if type(recovery_revision) is not int or recovery_revision <= 0:
+        raise ApiError(400, brainstorming_lifecycle.INVALID_REQUEST)
+    with registry.locked(home):
+        attachment = _brainstorming_task_attachment(home, record)
+        if (attachment is None or not attachment["standalone"]
+                or attachment.get("reviewed") or attachment["stop_pending"]):
+            raise ApiError(409, "This discussion cannot recover through this owner")
+        store = task_api.StandaloneTaskStore(home)
+        task = store.record(attachment["task_id"])
+        if task_host is not None and task_host.is_active(task["id"]):
+            raise ApiError(409, WORK_AREA_BUSY)
+        _require_startable_workspace_locked(
+            home, task_api._workspace(task), task_host=task_host,
+            excluded_task_id=task["id"], excluded_session_id=session_id,
+        )
+        _supplied, inherited = tasks.order_staffing_session(task["order"])
+        try:
+            projection = brainstorming_lifecycle.start_session(
+                home, session_id,
+                lambda current: require_brainstorming_access(home, who, current),
+                resolve_staffing_session=lambda _current: inherited,
+                recover_revision=recovery_revision,
+                before_recovery=lambda: store.recover_brainstorming_locked(
+                    task["id"], session_id, task["result"]
+                ),
+            )
+        except task_api.TaskControlConflict as exc:
+            raise ApiError(409, str(exc)) from exc
+        if task_host is not None:
+            project = _task_project(task)
+            task_host.start(
+                store.record(task["id"]),
+                lambda: _direct_task_config(home, project),
+            )
+        return projection
+
+
+def _brainstorming_recovery_available(home, session_id, task_host=None):
+    """Keep the visible recovery action within the supported owner boundary."""
+    try:
+        record = brainstorming_lifecycle._record_by_id(home, session_id)
+        attachment = _brainstorming_task_attachment(home, record, allow_missing=True)
+        return bool(
+            attachment is not None and attachment["standalone"]
+            and not attachment.get("reviewed") and not attachment["stop_pending"]
+            and (task_host is None or not task_host.is_active(attachment["task_id"]))
+        )
+    except (ApiError, brainstorming_lifecycle.PublicLifecycleError):
+        return False
+
+
+def _start_brainstorming_session(
+    home, who, session_id, task_host=None, recovery_revision=None
+):
     """Resume task-owned sessions through their durable adapter boundary."""
     record = brainstorming_lifecycle._record_by_id(home, session_id)
     require_brainstorming_access(home, who, record)
@@ -4277,6 +4336,10 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
         session_id,
         lambda current: require_brainstorming_access(home, who, current),
     )
+    if recovery_revision is not None:
+        return _recover_brainstorming_session(
+            home, who, session_id, record, recovery_revision, task_host
+        )
     if projection.get("process") == "running":
         # The process projection is eventual.  Serialize the no-op recheck
         # with task Stop and reread the durable owner fence before lifecycle
@@ -6032,6 +6095,10 @@ def make_handler(home, task_host=None):
                                 )
                             ),
                         )
+                        if view.get("recoverable"):
+                            view["recoverable"] = _brainstorming_recovery_available(
+                                home, parts[4], task_host
+                            )
                         self._json(200, {"ok": True, "view": view})
                     elif len(parts) == 5 and parts[4]:
                         session = brainstorming_lifecycle.inspect_session(
@@ -6238,7 +6305,12 @@ def make_handler(home, task_host=None):
                         and parts[5] in ("stop", "start")
                     ):
                         body = self._brainstorming_body()
-                        if body:
+                        if (body and parts[5] == "stop") or (
+                            parts[5] == "start" and body
+                            and (set(body) != {"recovery_revision"}
+                                 or type(body["recovery_revision"]) is not int
+                                 or body["recovery_revision"] <= 0)
+                        ):
                             raise ApiError(
                                 400,
                                 brainstorming_lifecycle.INVALID_REQUEST,
@@ -6252,7 +6324,8 @@ def make_handler(home, task_host=None):
                             )
                         else:
                             session = _start_brainstorming_session(
-                                home, who, parts[4], task_host=task_host
+                                home, who, parts[4], task_host=task_host,
+                                recovery_revision=body.get("recovery_revision"),
                             )
                         self._json(
                             200, {"ok": True, "session": session}

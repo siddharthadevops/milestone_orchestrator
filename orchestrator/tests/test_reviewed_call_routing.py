@@ -631,6 +631,7 @@ class ReviewedCallRoutingTest(unittest.TestCase):
             self.assertIsNotNone(unit["draft"])
             self.assertNotIn("brainstorming_wait", unit)
             self.assertEqual(tasks.task_records(survived), [])
+            self.assertEqual(runner.session_calls, [])
 
         with tempfile.TemporaryDirectory(
             prefix="reviewed-rethink-removed-"

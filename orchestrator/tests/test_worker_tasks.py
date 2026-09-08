@@ -538,6 +538,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                     drv.Driver(path, runner=runner).step()
                 state = st.load(path)
                 self.assertEqual(tasks.task_records(state), [])
+                self.assertEqual(runner.session_calls, [])
                 unit = next(
                     item for item in state["units"]
                     if item["kind"] == unit_kind
@@ -885,7 +886,6 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                     ["old-extension"],
                     ["root"],
                     None,
-                    True,
                     "base-tree",
                     task_id="task-1",
                     episode_refresher=refresh,

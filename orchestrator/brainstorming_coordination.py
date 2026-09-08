@@ -2194,6 +2194,25 @@ class BrainstormingCoordinator:
                 self.store.preserve_turn_attempt_accounting(
                     session_id, attempt["token"]
                 )
+                classification = getattr(
+                    exc, "brainstorming_failure_classification", None
+                )
+                if (
+                    isinstance(classification, dict)
+                    and classification.get("error_type")
+                    in brainstorming.RECOVERABLE_FAILURE_TYPES
+                ):
+                    current = self._require_running(self.store.read(session_id))
+                    session_repository.require_accepted_repository(current.state)
+                    self.store.finish_turn_attempt(
+                        session_id, attempt["token"]
+                    )
+                    raise session_repository.ResumableRepositoryTurnError(
+                        "participant %s stopped after a recoverable %s failure; "
+                        "the accepted repository is intact and the same turn "
+                        "can resume"
+                        % (participant["id"], classification["error_type"])
+                    ) from exc
                 self.store.finish_turn_attempt(session_id, attempt["token"])
             raise
 

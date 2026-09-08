@@ -1130,6 +1130,22 @@ def _with_usage_output(family, template):
     return cleaned
 
 
+def _without_session_persistence(family, template):
+    """Keep disposable CLI conversations out of the provider's history.
+
+    The result and usage are captured before temporary output is removed.
+    Explicit start/continue sessions bypass this so they remain resumable.
+    """
+    out = list(template)
+    if family == "codex" and len(out) >= 2 and out[1] == "exec":
+        if "--ephemeral" not in out:
+            out.insert(2, "--ephemeral")
+    elif family == "claude" and ("-p" in out or "--print" in out):
+        if "--no-session-persistence" not in out:
+            out.append("--no-session-persistence")
+    return out
+
+
 class SubprocessRunner(object):
     """Runs a family's configured command with the prompt on stdin.
 
@@ -1285,7 +1301,7 @@ class SubprocessRunner(object):
 
     def call(self, family, prompt, workspace, model=None, effort=None,
              timeout_override=None, active_control=None,
-             keep_template=False):
+             keep_template=False, execution_context=_AMBIENT_EXECUTION):
         """One call. `keep_template=True` keeps the plain template transport
         even when an `active_control` is given: the control then only binds
         interrupt (kill the worker group), which is what a stop button
@@ -1310,7 +1326,7 @@ class SubprocessRunner(object):
             raise
         return self._call_prepared(
             family, prompt, workspace, template, model, effort,
-            timeout_override, _AMBIENT_EXECUTION, active_control,
+            timeout_override, execution_context, active_control,
             keep_template=keep_template,
         )
 
@@ -1568,6 +1584,8 @@ class SubprocessRunner(object):
         execution_context, control, session_ref=None, persist_session=False,
         keep_template=False,
     ):
+        if not persist_session and session_ref is None:
+            template = _without_session_persistence(family, template)
         live_argv = (
             self._live_argv(family, template, session_ref=session_ref)
             if control and not keep_template else None
@@ -1621,6 +1639,7 @@ class SubprocessRunner(object):
                 if arg.startswith(("--model=", "--output-last-message=")) \
                         or arg in (
                             "--dangerously-bypass-approvals-and-sandbox",
+                            "--ephemeral",
                             "--json",
                             "resume",
                             "-",
@@ -2722,7 +2741,8 @@ class MockRunner(object):
         self._session_seq = 0
 
     def call(self, family, prompt, workspace, model=None, effort=None,
-             timeout_override=None, active_control=None):
+             timeout_override=None, active_control=None,
+             execution_context=_AMBIENT_EXECUTION):
         kind = prompt_kind(prompt)
         self.calls.append((family, kind, prompt))
         self.call_meta.append(

@@ -2445,7 +2445,14 @@ def _validate_history(history, request, transcript_ref):
         if index == 0:
             if record != {"status": "created"}:
                 raise ContractError("state.history must begin with created")
-        elif status not in _ALLOWED_TRANSITIONS[previous]:
+        elif not (
+            status in _ALLOWED_TRANSITIONS[previous]
+            or (
+                previous == "failure" and status == "running"
+                and history[index - 1].get("failure_origin") == "operational"
+                and repository_session({"request": request})
+            )
+        ):
             raise IllegalTransition("%s -> %s is not legal" % (previous, status))
         if status in TERMINAL_STATUSES:
             result = validate_result(
@@ -2616,7 +2623,8 @@ def transition_session(
     """Return one legal whole-state successor without mutating ``state``."""
     current = validate_session_state(state)
     old_status = current["status"]
-    if new_status not in _ALLOWED_TRANSITIONS[old_status]:
+    recovering = recoverable_operational_failure(current) and new_status == "running"
+    if new_status not in _ALLOWED_TRANSITIONS[old_status] and not recovering:
         raise IllegalTransition("%s -> %s is not legal" % (old_status, new_status))
     progress = coordination_projection(current)
     rounds_used = 0 if progress is None else progress["rounds_used"]
@@ -2671,6 +2679,9 @@ def transition_session(
 
     successor = copy.deepcopy(current)
     successor["status"] = new_status
+    if recovering:
+        for field in ("result", "closing_summary", "failure_origin"):
+            successor.pop(field, None)
     if old_status == "waiting" and new_status == "running":
         # The waiting boundary already completed its closure control.  Retain
         # that cursor so a restarted lifecycle advances to the next discussion
@@ -2687,6 +2698,15 @@ def transition_session(
             record["failure_origin"] = failure_origin
     successor["history"].append(record)
     return validate_session_state(successor)
+
+
+def recoverable_operational_failure(state):
+    """A repository execution fault can resume; a decision or cancellation cannot."""
+    return (
+        state.get("status") == "failure"
+        and state.get("failure_origin") == "operational"
+        and repository_session(state)
+    )
 
 
 def assert_session_successor(old_state, new_state):
@@ -5545,6 +5565,25 @@ class SessionStore:
             expected_revision,
             candidate,
             assert_continuation_successor,
+            before_accept=before_accept,
+        )
+
+    def recover_operational_failure(
+        self, session_id, expected_revision, before_accept=None
+    ):
+        """Reopen one operational failure, retaining all accepted work and history."""
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        if not recoverable_operational_failure(current.state):
+            raise IllegalTransition("this session has no recoverable operational failure")
+        return self._cas_coordination(
+            session_id,
+            expected_revision,
+            transition_session(current.state, "running"),
+            assert_session_successor,
             before_accept=before_accept,
         )
 

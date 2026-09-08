@@ -102,8 +102,8 @@ class RunSessionPanelControls(PanelSourceMixin, StaffingApiTestCase):
         # The binding comes from the summary's id and nothing else, and the
         # selection is read live from the session's own route.
         self.assertIn("(d.summary || {}).staffing_session", self.panel)
-        self.assertEqual(self.panel.count('"/api/staffing/sessions/"'), 2)
-        self.assertEqual(self.panel.count("encodeURIComponent(sessionId)"), 1)
+        self.assertEqual(self.panel.count('"/api/staffing/sessions/"'), 3)
+        self.assertEqual(self.panel.count("encodeURIComponent(sessionId)"), 2)
         # Exactly the four editable fields, and the two optional ones ride
         # as an explicit null when emptied — the store's own clear.
         save = re.search(
@@ -120,7 +120,7 @@ class RunSessionPanelControls(PanelSourceMixin, StaffingApiTestCase):
             self.assertNotIn("%s:" % absent, save)
         # Opening seeds from the last poll and writes nothing.
         self.assertNotIn("postJSON", re.search(
-            r"async function openStaffingSession\(\) \{(.*?)\n\}",
+            r"async function openStaffingSession\([^)]*\) \{(.*?)\n\}",
             self.session_ui, re.S).group(1))
         # The split projection is shown, never used as a gate.
         self.assertIn("staffingSplitWarning", self.session_ui)

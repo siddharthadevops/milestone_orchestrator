@@ -97,15 +97,25 @@ class RunnerParticipantExecutor:
         self.effort = effort
 
     def supports_continuation(self):
-        if self.current_resolver is not None:
+        if self.fresh_each_call or self.current_resolver is not None:
             # Current-state milestone seats deliberately start a fresh
-            # provider session for each dispatch; their prompts already point
+            # provider call for each dispatch; their prompts already point
             # to the complete shared transcript. No retained provider binding
             # can therefore freeze a prior family/model selection.
             return True
         return self.runner.supports_session_continuation(self.model_family)
 
     def start(self, prompt, workspace_path, execution_context):
+        if self.fresh_each_call:
+            return self.runner.call(
+                self.model_family,
+                prompt,
+                workspace_path,
+                model=self.model,
+                effort=self.effort,
+                timeout_override=self.timeout_override,
+                execution_context=execution_context,
+            )
         return self.runner.start_session(
             self.model_family,
             prompt,
@@ -124,15 +134,7 @@ class RunnerParticipantExecutor:
         execution_context,
     ):
         if self.fresh_each_call:
-            return self.runner.start_session(
-                self.model_family,
-                prompt,
-                workspace_path,
-                execution_context,
-                model=self.model,
-                effort=self.effort,
-                timeout_override=self.timeout_override,
-            )
+            return self.start(prompt, workspace_path, execution_context)
         return self.runner.continue_session(
             self.model_family,
             session_ref,
@@ -865,8 +867,8 @@ class ParticipantExecution:
                 evidence,
             )
             try:
-                provider_ref = self._result_session_ref(result)
                 if not fresh_each_call:
+                    provider_ref = self._result_session_ref(result)
                     bound = self.store.bind_participant_session(
                         session_id,
                         snapshot.revision,
@@ -1028,10 +1030,8 @@ class ParticipantExecution:
             evidence,
         )
         try:
-            self._result_session_ref(
-                result2,
-                expected=None if fresh_each_call else provider_ref,
-            )
+            if not fresh_each_call:
+                self._result_session_ref(result2, expected=provider_ref)
         except BaseException as exc:
             self._record_activity(
                 session_id, participant, executor, started_at2,

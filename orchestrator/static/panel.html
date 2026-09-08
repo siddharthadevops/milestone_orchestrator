@@ -1113,9 +1113,9 @@
     <select id="ss_rigor">
       <option>low</option><option>medium</option><option>high</option>
     </select></div>
-  <div class="field"><label>Milestone material</label>
+  <div class="field"><label>Material</label>
     <input id="ss_material" class="mono" placeholder="default">
-    <div class="hint">The theme every call of this run uses. Empty means
+    <div class="hint">The theme every call of this session uses. Empty means
       <code>default</code>.</div></div>
   <div class="field"><label>Session overrides (optional)</label>
     <textarea id="ss_overrides" class="jsonarea" spellcheck="false"></textarea>
@@ -1124,6 +1124,8 @@
       the service is the only semantic validator.</div></div>
   <div class="hint" id="ss_facts"></div>
   <div class="hint" id="ss_warn"></div>
+  <div class="hint">Applies from the next call; work already dispatched
+    keeps its current staffing.</div>
   <div class="formrow">
     <span id="ss_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
     <button class="btn"
@@ -1844,12 +1846,16 @@ function renderSessionDetail(view) {
     ${running
       ? `<button class="btn danger" ${sessionStopping ? "disabled" : ""}
           onclick="stopSelectedSession()">${sessionStopping ? "Stopping…" : "Stop session"}</button>`
-      : (!terminal && !waiting
+      : ((!terminal && !waiting) || view.recoverable
           ? `<button class="btn primary" ${sessionStarting ? "disabled" : ""}
-              onclick="startSelectedSession()">${sessionStarting ? "Starting…" : "Start session"}</button>`
+              onclick="startSelectedSession()">${sessionStarting ? "Starting…"
+                : view.recoverable ? "Resume session" : "Start session"}</button>`
           : "")}
     ${!terminal
       ? `<button class="btn" onclick="openFloorDialog()">Intervene&#8230;</button>`
+      : ""}
+    ${view.staffing_session
+      ? `<button class="btn" onclick="openBrainstormingStaffing()">Staffing&#8230;</button>`
       : ""}
     <button class="btn" style="margin-left:auto"
       onclick="openSessionInfo()">Info&#8230;</button>
@@ -2003,7 +2009,7 @@ async function stopSelectedSession() {
 async function startSelectedSession() {
   if (!selectedSession || sessionStarting) return;
   if (lastSessionView && (
-      BS_TERMINAL.has(lastSessionView.status) ||
+      (BS_TERMINAL.has(lastSessionView.status) && !lastSessionView.recoverable) ||
       lastSessionView.process === "running")) return;
   sessionStarting = true;
   if (lastSessionView) renderSessionDetail(lastSessionView);
@@ -2011,7 +2017,9 @@ async function startSelectedSession() {
     await api(
       "/api/brainstorming/sessions/" +
         encodeURIComponent(selectedSession) + "/start",
-      {method: "POST"}
+      {method: "POST", ...(lastSessionView && lastSessionView.recoverable
+        ? {body: JSON.stringify({recovery_revision: lastSessionView.revision})}
+        : {})}
     );
   } catch (e) {
     alert(e.message);
@@ -4711,13 +4719,26 @@ function staffingSessionCard() {
       already dispatched keeps what it was staffed with.</div></div>`;
 }
 let openedStaffingSession = null;
-async function openStaffingSession() {
+let staffingSessionAfterSave = refreshDetail;
+async function openBrainstormingStaffing() {
+  const sessionId = lastSessionView && lastSessionView.staffing_session;
+  if (sessionId) await openStaffingSession(sessionId, refreshSessionDetail);
+}
+async function openStaffingSession(sessionId = null, afterSave = refreshDetail) {
   // Seeded once, from the settings poll's own read: the dialog lives
   // outside the polled container, so a 2s re-render never resets an edit
   // in progress. Opening writes nothing.
-  if (!lastSession) return;
-  const record = lastSession.session;
+  let session = lastSession;
+  if (sessionId) {
+    try {
+      session = await api(
+        "/api/staffing/sessions/" + encodeURIComponent(sessionId));
+    } catch (e) { alert(e.message); return; }
+  }
+  if (!session) return;
+  const record = session.session;
   openedStaffingSession = record.id;
+  staffingSessionAfterSave = afterSave;
   document.getElementById("ss_error").textContent = "";
   await loadStaffingCatalogue();
   document.getElementById("ss_document").innerHTML =
@@ -4731,7 +4752,7 @@ async function openStaffingSession() {
   document.getElementById("ss_facts").textContent =
     staffingSessionFacts(record);
   document.getElementById("ss_warn").innerHTML =
-    staffingSplitWarning(lastSession.distinct_families_unsatisfiable);
+    staffingSplitWarning(session.distinct_families_unsatisfiable);
   document.getElementById("staffingsessiondlg").showModal();
 }
 async function saveStaffingSession() {
@@ -4757,7 +4778,7 @@ async function saveStaffingSession() {
     });
   } catch (e) { error.textContent = e.message; return; }  // token verbatim
   document.getElementById("staffingsessiondlg").close();
-  refreshDetail();
+  staffingSessionAfterSave();
 }
 /* ---- the shared standalone staffing choice (staffing-router slice 8).
        Ordering a task, starting a discussion and aligning a work area each

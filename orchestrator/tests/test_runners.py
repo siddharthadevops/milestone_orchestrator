@@ -1630,6 +1630,172 @@ VALID_IMPLEMENT = {
 }
 
 
+class TestProviderSessionRetention(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def _provider(self, family, print_flag="-p", wrapped=False, **kwargs):
+        workspace = tempfile.mkdtemp(dir=self._tmp.name)
+        executable = os.path.join(workspace, "provider-fake")
+        with open(executable, "w", encoding="utf-8") as handle:
+            handle.write("#!%s\n" % sys.executable)
+            handle.write(textwrap.dedent(r'''
+                import json, pathlib, sys
+
+                argv = sys.argv[1:]
+                codex = argv[0] == "exec"
+                prompt = sys.stdin.read()
+                calls_path = pathlib.Path("calls.json")
+                calls = json.loads(calls_path.read_text()) if calls_path.exists() else []
+                calls.append({"argv": argv, "prompt": prompt})
+                calls_path.write_text(json.dumps(calls))
+                history_path = pathlib.Path("provider-history.json")
+                history = json.loads(history_path.read_text()) if history_path.exists() else None
+                session = "provider-session"
+                if "--session-id" in argv:
+                    session = argv[argv.index("--session-id") + 1]
+                resume = "resume" in argv if codex else "--resume" in argv
+                if resume:
+                    session = argv[-2] if codex else argv[argv.index("--resume") + 1]
+                    if not history or history["session"] != session:
+                        sys.exit("provider session is unavailable")
+                transient = "--ephemeral" in argv or "--no-session-persistence" in argv
+                if not transient:
+                    if not resume:
+                        history = {"session": session, "prompts": []}
+                    history["prompts"].append(prompt)
+                    history_path.write_text(json.dumps(history))
+                answer = json.dumps({"status": "ok", "kind": "implement",
+                                     "files_changed": ["calc.py"]})
+                if pathlib.Path("repair-first-call").exists() and len(calls) == 1:
+                    answer = "not json"
+                turns = len(history["prompts"]) if codex and history else 1
+                usage = {"input_tokens": 10 * turns, "output_tokens": 3 * turns}
+                if codex:
+                    pathlib.Path(argv[argv.index("--output-last-message") + 1]).write_text(answer)
+                    print(json.dumps({"type": "thread.started", "thread_id": session}))
+                    print(json.dumps({"type": "item.completed", "item": {
+                        "type": "agent_message", "text": answer}}))
+                    print(json.dumps({"type": "turn.completed", "usage": usage}))
+                else:
+                    print(json.dumps({"type": "result", "subtype": "success",
+                                      "is_error": False, "session_id": session,
+                                      "result": answer, "usage": usage}))
+            '''))
+        os.chmod(executable, 0o755)
+        command = (
+            [executable, "exec", "--dangerously-bypass-approvals-and-sandbox",
+             "--output-last-message", "{output_file}"]
+            if family == "codex" else [executable, print_flag]
+        )
+        if wrapped:
+            command.insert(0, sys.executable)
+        runner = SubprocessRunner(
+            {family: command}, {family: 5},
+            prompt_recorder=lambda provider, prompt: runners.save_prompt_trace(
+                os.path.join(workspace, "prompts"), provider, prompt
+            ),
+            **kwargs,
+        )
+        return runner, workspace
+
+    def _read_json(self, workspace, name):
+        with open(os.path.join(workspace, name), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_disposable_calls_keep_results_without_provider_history(self):
+        for family, print_flag in (("codex", "-p"), ("claude", "-p"),
+                                   ("claude", "--print")):
+            for keep_template in (False, True):
+                with self.subTest(family=family, print_flag=print_flag,
+                                  keep_template=keep_template):
+                    context = object()
+                    dispatched = []
+
+                    def spawn(received_context, argv, kwargs):
+                        dispatched.append(received_context)
+                        return runners.subprocess.Popen(argv, **kwargs)
+
+                    runner, workspace = self._provider(
+                        family, print_flag, wrapped=print_flag == "--print",
+                        participant_process_factory=spawn,
+                    )
+                    original_command = list(runner.commands[family])
+                    control = runners.ActiveCallControl() if keep_template else None
+                    result = runner.call(
+                        family, "exact prompt\nline two", workspace,
+                        active_control=control, keep_template=keep_template,
+                        execution_context=context,
+                    )
+
+                    self.assertEqual(json.loads(result.text), VALID_IMPLEMENT)
+                    self.assertEqual(result.token_usage["total_tokens"], 13)
+                    self.assertIn('"usage"', result.transport_text)
+                    self.assertTrue(result.cost_payloads)
+                    with open(result.prompt_path, encoding="utf-8") as handle:
+                        self.assertEqual(handle.read(), "exact prompt\nline two")
+                    self.assertEqual(dispatched, [context])
+                    self.assertEqual(runner.commands[family], original_command)
+                    self.assertFalse(os.path.exists(os.path.join(
+                        workspace, "provider-history.json"
+                    )))
+                    call, = self._read_json(workspace, "calls.json")
+                    self.assertEqual(call["prompt"], "exact prompt\nline two")
+                    if family == "codex":
+                        argv = call["argv"]
+                        self.assertFalse(os.path.exists(
+                            argv[argv.index("--output-last-message") + 1]
+                        ))
+                    if control:
+                        self.assertTrue(control.closed)
+
+    def test_contract_repair_does_not_create_history_for_either_attempt(self):
+        for family in ("codex", "claude"):
+            with self.subTest(family=family):
+                runner, workspace = self._provider(family)
+                with open(os.path.join(workspace, "repair-first-call"), "w"):
+                    pass
+                prompt = make_prompt("implement", family=family)
+                output, result = call_worker(
+                    runner, family, prompt, "implement", workspace
+                )
+
+                self.assertEqual(output, VALID_IMPLEMENT)
+                self.assertEqual(result.token_usage["total_tokens"], 13)
+                self.assertEqual(result.repair["token_usage"]["total_tokens"], 13)
+                self.assertIn("not json", result.repair["raw_text"])
+                calls = self._read_json(workspace, "calls.json")
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[0]["prompt"], prompt)
+                self.assertEqual(calls[1]["prompt"], prompt + (
+                    runners.REPAIR_SUFFIX
+                    % "no valid JSON object found in worker output"
+                ))
+                self.assertEqual(len(os.listdir(os.path.join(workspace, "prompts"))), 2)
+                self.assertFalse(os.path.exists(os.path.join(
+                    workspace, "provider-history.json"
+                )))
+
+    def test_explicit_sessions_preserve_history_and_resume_the_same_session(self):
+        for family in ("codex", "claude"):
+            with self.subTest(family=family):
+                runner, workspace = self._provider(family)
+                first = runner.start_session(family, "first prompt", workspace)
+                second = runner.continue_session(
+                    family, first.session_ref, "second prompt", workspace
+                )
+
+                self.assertEqual(second.session_ref, first.session_ref)
+                self.assertEqual(json.loads(second.text), VALID_IMPLEMENT)
+                self.assertEqual(second.token_usage["total_tokens"], 13)
+                self.assertEqual(
+                    self._read_json(workspace, "provider-history.json"),
+                    {"session": first.session_ref,
+                     "prompts": ["first prompt", "second prompt"]},
+                )
+
+
 class TestCallWorker(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -3030,11 +3196,11 @@ class TestActiveProviderControl(unittest.TestCase):
         self.assertIn("--strict-config", live_argv)
         self.assertNotIn("--output-last-message", live_argv)
 
-    def test_codex_app_server_reads_v2_completed_agent_message(self):
+    def test_codex_ephemeral_live_call_reads_v2_completed_agent_message(self):
         fake = self._executable(
             "codex-v2-completed-item-fake",
             r'''
-            import json, sys
+            import json, pathlib, sys
 
             answer = json.dumps({
                 "status": "ok", "kind": "implement",
@@ -3046,6 +3212,11 @@ class TestActiveProviderControl(unittest.TestCase):
                 if method == "initialize":
                     print(json.dumps({"id": ident, "result": {}}), flush=True)
                 elif method == "thread/start":
+                    pathlib.Path("codex-thread-start.json").write_text(
+                        json.dumps(message["params"])
+                    )
+                    if not message["params"].get("ephemeral"):
+                        pathlib.Path("codex-provider-history").write_text("session")
                     print(json.dumps({"id": ident, "result": {
                         "thread": {"id": "thread-active"},
                     }}), flush=True)
@@ -3118,7 +3289,7 @@ class TestActiveProviderControl(unittest.TestCase):
 
         output, result = call_worker(
             runner, "codex", make_prompt("implement"), "implement",
-            self.workspace, start_session=True,
+            self.workspace,
             active_control=control,
         )
 
@@ -3126,6 +3297,12 @@ class TestActiveProviderControl(unittest.TestCase):
             "files_changed": ["coherent.py"]
         })
         self.assertEqual(json.loads(result.text), output)
+        with open(os.path.join(self.workspace, "codex-thread-start.json"),
+                  encoding="utf-8") as handle:
+            self.assertTrue(json.load(handle)["ephemeral"])
+        self.assertFalse(os.path.exists(os.path.join(
+            self.workspace, "codex-provider-history"
+        )))
         self.assertFalse(hasattr(result, "repair"))
         self.assertIsNone(
             control.model_confirmation_at,
@@ -3946,6 +4123,11 @@ class TestActiveProviderControl(unittest.TestCase):
             import json, os, sys
 
             log = os.path.join(os.getcwd(), "claude-input.jsonl")
+            with open("claude-argv.jsonl", "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(sys.argv) + "\n")
+            if "--no-session-persistence" not in sys.argv:
+                with open("claude-provider-history", "a", encoding="utf-8") as handle:
+                    handle.write("session\n")
             count = 0
             session = "session-from-argv"
             if "--session-id" in sys.argv:
@@ -4040,7 +4222,7 @@ class TestActiveProviderControl(unittest.TestCase):
         result_only_runner = SubprocessRunner(
             {"claude": [fake, "-p"]}, {"claude": 5}
         )
-        result_only_runner.start_session(
+        result_only_runner.call(
             "claude",
             make_prompt("implement", family="claude"),
             self.workspace,
@@ -4050,6 +4232,14 @@ class TestActiveProviderControl(unittest.TestCase):
             result_only_control.model_confirmation_at,
             "the terminal result is not a live model acknowledgement",
         )
+        with open(os.path.join(self.workspace, "claude-argv.jsonl"),
+                  encoding="utf-8") as handle:
+            persistent_argv, disposable_argv = [json.loads(line) for line in handle]
+        self.assertNotIn("--no-session-persistence", persistent_argv)
+        self.assertIn("--no-session-persistence", disposable_argv)
+        with open(os.path.join(self.workspace, "claude-provider-history"),
+                  encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "session\n")
 
     def test_unrecordable_steer_is_not_sent(self):
         fake = self._executable(

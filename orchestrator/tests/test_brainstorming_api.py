@@ -522,6 +522,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     "max_rounds",
                     "rounds_remaining",
                     "exhausted",
+                    "recoverable",
                     "activity",
                     "work_duration_s",
                     "work_token_usage",

@@ -65,6 +65,14 @@ State lives at `<workspace>/.orchestrator/state.json`; raw worker outputs at
 `state.failure` and the event log; `status` prints it. Config is frozen into
 the state at `init`.
 
+Disposable agent calls use Codex's `--ephemeral` (or an ephemeral app-server
+thread) and Claude's `--no-session-persistence`. The runner captures the reply
+and usage, then removes temporary output files directly. These calls do not
+leave provider session histories on disk or move them to Trash. This also
+applies to Brainstorming seats that start fresh each turn. The orchestrator
+keeps its recorded prompts, results, and accounting; explicit conversations
+that need subsequent turns retain their provider session for continuation.
+
 ## Local service panel (multi-run)
 
 The repo doubles as a local programming service: projects pin nothing — you
@@ -119,9 +127,12 @@ The session view shows those calls as clickable chips with raw output on
 demand, a live clock for the call in progress, and accumulated LLM work.
 Participant-call failures use the same classifier as milestones: it returns
 only the typed failure, optional resume time and evidence. Brainstorming owns
-the consequence. A recoverable diagnosis preserves the exact pending action,
-waits five minutes, and retries it without consuming a turn or round; other
-diagnoses close through the existing operational-failure path. Classifier LLM
+the consequence. For retained-target discussions, a recoverable diagnosis
+preserves the pending action and retries it after five minutes without consuming
+a turn or round. Repository discussions stop for explicit Start after a
+recoverable provider fault when the worker is quiescent and the accepted Git
+revision is unchanged and clean; accepted turns and accounting remain intact.
+Other diagnoses close through the existing operational-failure path. Classifier LLM
 calls are separate activity, never discussion or target authority, and their
 time is included in accumulated LLM work.
 
@@ -263,8 +274,15 @@ Both controls use the existing authenticated session routes and return
 limit, accepted discussion history, and accounting are preserved. Waiting
 for the operator has no timeout and consumes no reviewed execution-step budget.
 Stopping an owning task explicitly abandons its discussion and leaves both
-terminal. These controls never reopen historical terminal sessions or tasks;
-further work on those requires a new order.
+terminal. Cancellation and completed decisions cannot be reopened.
+
+A standalone repository Brainstorming previously closed by an operational
+execution failure offers **Resume session**. Its existing Start route accepts
+`{"recovery_revision": <current revision>}` and checks the stopped worker,
+unchanged accepted repository, owner cancellation, and workspace availability.
+Recovery retains the same task and session, completed turns, transcript and
+accounting. The prior failure remains in both histories; only the current
+result is reopened. A stale revision conflicts without launching another worker.
 
 An external participant publishes one durable intervention and releases the
 target lock while waiting. `GET .../<id>/intervention` returns that request;

@@ -11,7 +11,7 @@ from orchestrator import registry, service
 from orchestrator.tests import test_brainstorming_api as api_tests
 VIEW_KEYS = {
     "id", "caller", "status", "request", "process", "revision", "target",
-    "repository",
+    "repository", "staffing_session", "recoverable",
     "participants", "same_family_fallback", "closure_policy",
     "closure_ballots", "round", "exhausted", "transcript_markdown", "result",
     "final_agreement",
@@ -358,6 +358,7 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         state = created["session"]["state"]
         self.assertEqual(view["revision"], created["session"]["revision"])
         record = lifecycle._record_by_id(self.api.home, session_id)
+        self.assertEqual(view["staffing_session"], record["staffing_session"])
         expected_participants = []
         for index, participant in enumerate(
             state["run_config"]["participants"], start=1

@@ -1879,6 +1879,10 @@ def _projection(home, record):
             "state": snapshot.state,
         }
         projected.update(_round_facts(snapshot.state))
+        projected["recoverable"] = (
+            projected["process"] == "stopped"
+            and brainstorming.recoverable_operational_failure(snapshot.state)
+        )
         projected.update(_activity_projection(store, record, snapshot.state))
         return projected
     except PublicLifecycleError:
@@ -2486,6 +2490,7 @@ def _list_projection(store, record):
         "retry": None,
         "external_intervention": None,
         "state_error": None,
+        "recoverable": False,
     }
     if "target_path" in record:
         row["target_path"] = record["target_path"]
@@ -2503,6 +2508,10 @@ def _list_projection(store, record):
                 "status": state["status"],
                 "request": state["request"]["request"],
                 "revision": snapshot.revision,
+                "recoverable": (
+                    row["process"] == "stopped"
+                    and brainstorming.recoverable_operational_failure(state)
+                ),
                 **_round_facts(state),
             }
         )
@@ -2807,6 +2816,13 @@ def view_session(
             "revision": snapshot.revision,
             "target": target,
             "repository": repository_authority,
+            "staffing_session": (
+                staffing_binding["session"] if staffing_binding else None
+            ),
+            "recoverable": (
+                not _process_alive(record)
+                and brainstorming.recoverable_operational_failure(state)
+            ),
             "participants": _view_participants(
                 record, state, staffing_binding=staffing_binding
             ),
@@ -3196,8 +3212,10 @@ def start_session(
     session_id,
     authorize,
     resolve_staffing_session=None,
+    recover_revision=None,
+    before_recovery=None,
 ):
-    """Resume one stopped non-terminal session under its existing identity.
+    """Resume a stopped session, optionally reopening an exact operational failure.
 
     *resolve_staffing_session*, when given, is called with the stored record
     and answers the staffing session its calls resolve through. It is the
@@ -3224,8 +3242,25 @@ def start_session(
             snapshot = store.read(session_id)
             if snapshot is None:
                 raise PublicLifecycleError(503, UNAVAILABLE)
+            recovering = recover_revision is not None
+            if recovering:
+                if (
+                    type(recover_revision) is not int
+                    or snapshot.revision != recover_revision
+                    or not brainstorming.recoverable_operational_failure(snapshot.state)
+                    or _process_alive(current)
+                    or store.read_turn_attempt(session_id) is not None
+                    or store.read_external_intervention(session_id) is not None
+                    or store.read_task_effect_attempt(session_id) is not None
+                ):
+                    raise PublicLifecycleError(409, CONTINUATION_CONFLICT)
+                try:
+                    session_repository.require_accepted_repository(snapshot.state)
+                except session_repository.SessionRepositoryError as exc:
+                    raise PublicLifecycleError(409, CONTINUATION_CONFLICT) from exc
             if (
-                snapshot.state["status"] in brainstorming.TERMINAL_STATUSES
+                (snapshot.state["status"] in brainstorming.TERMINAL_STATUSES
+                 and not recovering)
                 or snapshot.state["status"] == "waiting"
                 or _process_alive(current)
             ):
@@ -3252,8 +3287,14 @@ def start_session(
                 session_id,
                 staffing_session=record_staffing_session(current, supplied),
             )
+            if launch.process.poll() is not None:
+                raise PublicLifecycleError(503, UNAVAILABLE)
             current["pid"] = launch.process.pid
             _save_registry(home, document)
+            if recovering:
+                store.recover_operational_failure(
+                    session_id, recover_revision, before_accept=before_recovery
+                )
             resumed = copy.deepcopy(current)
         _track_child(home, session_id, launch.process)
         _release_started(launch)
@@ -3263,6 +3304,11 @@ def start_session(
             launch.abort()
             _clear_pid(home, session_id, launch.process.pid)
         raise
+    except (brainstorming.RevisionConflict, brainstorming.IllegalTransition) as exc:
+        if launch is not None:
+            launch.abort()
+            _clear_pid(home, session_id, launch.process.pid)
+        raise PublicLifecycleError(409, CONTINUATION_CONFLICT) from exc
     except Exception as exc:
         if launch is not None:
             launch.abort()
@@ -4063,9 +4109,9 @@ def run_lifecycle(
     except LifecycleStop:
         return 3
     except session_repository.ResumableRepositoryTurnError:
-        # The completed participant call was rejected, and the canonical
-        # boundary restored the exact pre-turn Git state. This also covers a
-        # routed external narrator. Stop without closing the discussion so
+        # The rejected call's repository was restored, or its unchanged
+        # accepted authority was verified after a recoverable provider fault.
+        # This also covers a routed external narrator. Stop without closing so
         # Start, after a runtime repair, repeats this same seat and round.
         traceback.print_exc(file=sys.stderr)
         return 3

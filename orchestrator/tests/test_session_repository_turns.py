@@ -694,6 +694,182 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         self.assertIsNone(paused.state.get("failure_origin"))
         self.assertIsNone(paused.state.get("result"))
 
+    def test_quota_during_envelope_repair_preserves_accepted_turn_for_resume(self):
+        participants = [
+            {
+                "id": "lead", "role": "initial_position", "delivery": "llm",
+                "executor_ref": "lead-executor", "model_family": "codex",
+            },
+            {
+                "id": "contrary", "role": "contrary_position",
+                "delivery": "llm", "executor_ref": "contrary-executor",
+                "model_family": "codex",
+            },
+        ]
+        store = self._store(participants)
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            store, object()
+        )
+        initialized = coordinator.prepare("repository-session")
+        lead_attempt = self.begin("initial_position")
+        Path(self.workspace, self.target_path).write_text(
+            "accepted lead work\n", encoding="utf-8"
+        )
+        session_repository.complete_attempt(lead_attempt, "lead", 1)
+        accepted_revision = gitops.head_full_sha(self.workspace)
+        accepted = store.record_repository_turn(
+            "repository-session", initialized.revision, "lead",
+            "Accepted lead contribution.", accepted_revision, False,
+        )
+        prepared = session_calls.prepare_turn(
+            self.home, accepted.state, participants[1], 1,
+            accepted_revision, None,
+        )
+        reply = json.dumps({
+            "kind": "discussion_turn",
+            "markdown": "Continue the contrary seat after replenishing quota.",
+            "ready": False,
+            "questions": question_answers(prepared),
+        })
+
+        def quota_failure():
+            error = runners.ProviderResponseError(
+                "You've reached your Fable limit.",
+                raw_texts=["You've reached your Fable limit."],
+            )
+            error.worker_quiescent = True
+            raise error
+
+        executor = CallbackExecutor(
+            ["invalid envelope", reply],
+            callbacks=[lambda: None, quota_failure, lambda: None],
+        )
+        execution = brainstorming_execution.ParticipantExecution(
+            store, {"contrary-executor": executor},
+            failure_classifier=lambda *_args: {
+                "error_type": "quota", "resume_at": None,
+                "evidence": "You've reached your Fable limit.",
+            },
+        )
+        prepared_turns = []
+
+        def turn_preparer(session_state, participant, round_number,
+                          target_revision, correction):
+            prepared_turns.append(
+                (participant["id"], round_number, correction)
+            )
+            return session_calls.prepare_turn(
+                self.home, session_state, participant, round_number,
+                target_revision, correction,
+            )
+
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            store, execution, turn_preparer=turn_preparer
+        )
+        with self.assertRaises(
+            session_repository.ResumableRepositoryTurnError
+        ) as stopped:
+            coordinator.run_next_turn("repository-session", {})
+
+        self.assertIsInstance(stopped.exception.__cause__, runners.RunnerError)
+        paused = store.read("repository-session")
+        self.assertEqual(paused.state["status"], "running")
+        self.assertEqual(
+            paused.state["completed_turns"], accepted.state["completed_turns"]
+        )
+        self.assertEqual(paused.state["rounds_used"], 0)
+        self.assertIsNone(paused.state.get("result"))
+        self.assertIsNone(paused.state.get("failure_origin"))
+        self.assertIsNone(store.read_turn_attempt("repository-session"))
+        self.assertEqual(gitops.head_full_sha(self.workspace), accepted_revision)
+        self.assertTrue(gitops.repository_clean(self.workspace))
+        self.assertEqual(len(executor.calls), 2)
+        self.assertEqual(
+            len(store.read_activity("repository-session")["events"]), 2
+        )
+        self.assertIn(
+            "Accepted lead contribution.",
+            Path(store.transcript_ref("repository-session")).read_text(),
+        )
+
+        resumed = coordinator.run_next_turn("repository-session", {})
+        self.assertEqual(len(resumed.state["completed_turns"]), 2)
+        self.assertEqual(resumed.state["completed_turns"][0],
+                         accepted.state["completed_turns"][0])
+        self.assertEqual(
+            resumed.state["completed_turns"][1]["participant_id"], "contrary"
+        )
+        self.assertEqual(resumed.state["rounds_used"], 1)
+        self.assertEqual(prepared_turns[0], ("contrary", 1, None))
+        self.assertIsNotNone(prepared_turns[1][2])
+        self.assertEqual(prepared_turns[2], ("contrary", 1, None))
+        self.assertEqual(len(executor.calls), 3)
+
+    def _assert_unsafe_quota_turn_is_not_resumable(self, mutate,
+                                                 *, quiescent=True):
+        participants = [
+            {
+                "id": "lead", "role": "initial_position", "delivery": "llm",
+                "executor_ref": "lead-executor", "model_family": "codex",
+            },
+            {
+                "id": "contrary", "role": "contrary_position",
+                "delivery": "llm", "executor_ref": "contrary-executor",
+                "model_family": "codex",
+            },
+        ]
+        store = self._store(participants)
+
+        class FailedExecution:
+            @staticmethod
+            def exchange_prepared_quiescent(*_args, **_kwargs):
+                mutate()
+                error = runners.ProviderResponseError("quota exhausted")
+                error.worker_quiescent = quiescent
+                error.brainstorming_failure_classification = {
+                    "error_type": "quota", "resume_at": None,
+                    "evidence": "quota exhausted",
+                }
+                raise error
+
+        coordinator = brainstorming_coordination.BrainstormingCoordinator(
+            store, FailedExecution(), turn_preparer=lambda *_args: None,
+        )
+        with self.assertRaises(Exception) as failed:
+            coordinator.run_next_turn("repository-session", {})
+        self.assertNotIsInstance(
+            failed.exception, session_repository.ResumableRepositoryTurnError
+        )
+        attempt = store.read_turn_attempt("repository-session")
+        self.assertIsNotNone(attempt)
+        self.assertEqual(attempt["quiescent"], quiescent)
+        self.assertEqual(store.read("repository-session").state["completed_turns"], [])
+
+    def test_quota_with_dirty_repository_does_not_claim_safe_resume(self):
+        target = Path(self.workspace, self.target_path)
+        self._assert_unsafe_quota_turn_is_not_resumable(
+            lambda: target.write_text("unaccepted work\n", encoding="utf-8")
+        )
+        self.assertEqual(target.read_text(), "unaccepted work\n")
+
+    def test_quota_with_unaccepted_commit_does_not_claim_safe_resume(self):
+        before = gitops.head_full_sha(self.workspace)
+
+        def commit_unaccepted_work():
+            Path(self.workspace, self.target_path).write_text(
+                "unaccepted work\n", encoding="utf-8"
+            )
+            gitops.commit_plain(self.workspace, "Unaccepted worker commit")
+
+        self._assert_unsafe_quota_turn_is_not_resumable(commit_unaccepted_work)
+        self.assertNotEqual(gitops.head_full_sha(self.workspace), before)
+        self.assertTrue(gitops.repository_clean(self.workspace))
+
+    def test_quota_without_worker_quiescence_does_not_claim_safe_resume(self):
+        self._assert_unsafe_quota_turn_is_not_resumable(
+            lambda: None, quiescent=False,
+        )
+
     def _store(self, participants, charge=None):
         store = brainstorming.SessionStore(
             os.path.join(self.temp.name, "session-state")

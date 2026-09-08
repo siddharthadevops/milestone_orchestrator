@@ -570,6 +570,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
             self.assertNotIn("implementation_cut", unit)
             self.assertNotIn("implementation_attempt_snapshot", unit)
+            self.assertEqual(runner.session_calls, [])
             self.assertFalse(any(
                 event["type"] in {
                     "implementation_size_steer",
@@ -822,7 +823,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
                     [],
                     [],
                     None,
-                    True,
                     None,
                 )
 
@@ -1655,11 +1655,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertEqual(len(runner.calls), 6)
             self.assertTrue(all(control is None
                                 for control in runner.controls[1:]))
-            self.assertEqual(
-                [kind for kind, _family, _session in runner.session_calls],
-                ["start", "start", "continue", "start", "continue",
-                 "start"],
-            )
+            self.assertEqual(runner.session_calls, [])
             strikes = [
                 event for event in state["events"]
                 if event.get("type") == "worker_malformed"
@@ -1730,6 +1726,8 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertNotIn("implementation_stabilization", unit)
             self.assertEqual(resumed_runner.controls, [None])
             self.assertEqual(len(resumed_runner.calls), 1)
+            self.assertEqual(failed_runner.session_calls, [])
+            self.assertEqual(resumed_runner.session_calls, [])
             self.assertIn(
                 "FORCED CONTROLLED-CUTOFF RECOVERY",
                 resumed_runner.calls[0][2],

@@ -17,7 +17,7 @@ class SessionRepositoryError(RuntimeError):
 
 
 class ResumableRepositoryTurnError(SessionRepositoryError):
-    """A rejected turn was restored and can resume with updated runtime."""
+    """A stopped turn has safe repository authority and can resume."""
 
 
 class ReadOnlyTurnInvalidated(SessionRepositoryError):
@@ -153,6 +153,50 @@ def context_from_state(state):
     if "repository" not in charge:
         return None
     return context_from_charge(charge)
+
+
+def require_accepted_repository(session_state):
+    """Prove a stopped worker left the accepted repository ready to resume."""
+    context = context_from_state(session_state)
+    if context is None:
+        raise SessionRepositoryError("session has no repository boundary")
+    workspace = session_state["request"]["workspace_path"]
+    revision = (
+        session_state["accepted_target_revision"]
+        or session_state["recovery_baseline_revision"]
+    )
+    try:
+        if (
+            gitops.head_full_sha(workspace) != revision
+            or not gitops.repository_clean(workspace)
+        ):
+            raise SessionRepositoryError(
+                "stopped worker left unaccepted repository changes"
+            )
+        if context.get("mode") != "standalone_task":
+            milestone_state = st.load(context["state_path"])
+            if milestone_state.get("workspace") != workspace:
+                raise SessionRepositoryError(
+                    "session and milestone repository workspaces do not match"
+                )
+            if context.get("mode") == "standalone_reviewed":
+                if not milestone_state.get("reviewed_task"):
+                    raise SessionRepositoryError(
+                        "standalone reviewed repository context lost its task"
+                    )
+            else:
+                canonical_plan.guarded_dispatch(milestone_state, lambda: None)
+        if (
+            gitops.head_full_sha(workspace) != revision
+            or not gitops.repository_clean(workspace)
+        ):
+            raise SessionRepositoryError(
+                "repository changed while checking accepted authority"
+            )
+    except (canonical_plan.CanonicalPlanError, gitops.GitError, OSError) as exc:
+        raise SessionRepositoryError(
+            "stopped repository turn cannot safely resume: %s" % exc
+        ) from exc
 
 
 def sealed_range(session_state):

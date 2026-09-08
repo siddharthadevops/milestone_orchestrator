@@ -1363,7 +1363,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 None,
                 None,
                 None,
-                True,
                 None,
                 stabilizing=True,
                 dispatch_resolver=subject._dispatch_for_act("implementer"),

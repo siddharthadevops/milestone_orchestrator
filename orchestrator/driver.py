@@ -3182,7 +3182,7 @@ class Driver(object):
 
     def _call_implementation(
         self, family, prompt, raw_name, model, effort, extensions, roots,
-        validate_opts, start_session, base_tree, session_ref=None,
+        validate_opts, base_tree,
         stabilizing=False, dispatch_resolver=None,
         continuation_family=None, task_id=None, episode_refresher=None,
         prepare_author=None, author_recovery=None, episode_unit=None,
@@ -3207,8 +3207,6 @@ class Driver(object):
                 extensions=extensions,
                 roots=roots,
                 validate_opts=validate_opts,
-                start_session=start_session,
-                session_ref=session_ref,
                 active_control=None,
                 repeat_protocol=True,
                 dispatch_resolver=dispatch_resolver,
@@ -3251,8 +3249,6 @@ class Driver(object):
             extensions=extensions,
             roots=roots,
             validate_opts=validate_opts,
-            start_session=start_session,
-            session_ref=session_ref,
             active_control=control,
             dispatch_resolver=dispatch_resolver,
             continuation_family=continuation_family,
@@ -3406,9 +3402,8 @@ class Driver(object):
             extensions=recovery_extensions,
             roots=recovery_roots,
             validate_opts=validate_opts,
-            # An interrupted continuation cannot safely reuse its provider
-            # turn.  The stabilizer is deliberately a fresh conversation.
-            start_session=True,
+            # Recovery starts a fresh one-shot call from durable repository
+            # state; the interrupted provider conversation is not needed.
             # Recovery owns the delivery boundary now.  It is neither
             # size-monitored nor failed for an oversized coherent result.
             active_control=None,
@@ -9996,7 +9991,8 @@ class Driver(object):
                     else {}
                 ),
             } or None
-            start_session = kind in contracts.RETHINK_CONTINUATION_KINDS
+            # Worker results and recovery live in orchestrator state. Rethink
+            # re-enters this stage fresh, so no provider history is needed.
             # New reviewed calls run directly.  ``active_task`` is retained
             # only to drain a task admitted by an older driver.
             task = active_task
@@ -10019,7 +10015,6 @@ class Driver(object):
                         extensions,
                         roots,
                         validate_opts,
-                        start_session,
                         (implementation_attempt or {}).get("tree") or pre_tree,
                         stabilizing=stabilization_size is not None,
                         dispatch_resolver=dispatch_resolver,
@@ -10067,7 +10062,6 @@ class Driver(object):
                         extensions=extensions,
                         roots=roots,
                         validate_opts=validate_opts,
-                        start_session=start_session,
                         dispatch_resolver=dispatch_resolver,
                         task_id=(task or {}).get("id"),
                         prepare_call=call_preparation.author(
@@ -12241,7 +12235,6 @@ class Driver(object):
                     extensions=extensions,
                     roots=roots,
                     validate_opts=validate_opts,
-                    start_session=True,
                     dispatch_resolver=dispatch_resolver,
                     task_id=(task or {}).get("id"),
                     prepare_call=call_preparation.judgment(

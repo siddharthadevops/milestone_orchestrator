@@ -396,6 +396,44 @@ class StandaloneTaskStore:
         with registry.locked(self.home):
             return self.record_result_locked(task_id, result)
 
+    def recover_brainstorming_locked(self, task_id, session_id, expected_result):
+        """Retain an operationally failed discussion result before reopening.
+
+        The session lifecycle calls this only after its exact recovery
+        revision and repository boundary have been checked. The caller holds
+        the service registry lock, so Stop cannot race this owner change.
+        """
+        current, document = self._read_document(task_id)
+        record = document["record"]
+        if (tasks.stored_task_executor(record["order"]["task_executor"])
+                != "brainstorming" or document.get("stop_reason") is not None
+                or self.owner_stop_reason(task_id) is not None):
+            raise TaskControlConflict("this task cannot recover its discussion")
+        if record.get("result") != expected_result:
+            raise TaskControlConflict("task result changed before recovery")
+        if expected_result is None:
+            return copy.deepcopy(record)
+        native = expected_result.get("native_result")
+        if (expected_result.get("status") != "failure"
+                or not isinstance(native, dict)
+                or native.get("session_id") != session_id):
+            raise TaskControlConflict("task failure belongs to another discussion")
+        lifecycle = self._lifecycle(document)
+        lifecycle.update(status="running", revision=lifecycle["revision"] + 1,
+                         reason=None, source=None)
+        lifecycle["history"].append({
+            "status": "running", "at": _admission_stamp(),
+            "source": "recovery", "reason": "Recovered an operational discussion failure",
+            "attempt": copy.deepcopy(expected_result),
+        })
+        updated = copy.deepcopy(document)
+        updated["record"]["result"] = None
+        updated["lifecycle"] = lifecycle
+        self._validate_document(updated, task_key(task_id))
+        if not self._store.cas(task_key(task_id), current["revision"], updated).ok:
+            raise TaskControlConflict("task changed while recovering its discussion")
+        return copy.deepcopy(updated["record"])
+
     def record_result_locked(self, task_id, result):
         """Record a result while the caller holds the service registry lock."""
         key = task_key(task_id)

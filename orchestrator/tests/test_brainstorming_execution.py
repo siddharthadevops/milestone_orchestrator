@@ -169,6 +169,10 @@ class BrainstormingExecutionTest(unittest.TestCase):
             state_dir = args[args.index("--state-dir") + 1]
             is_codex = bool(args and args[0] == "exec")
             family = "codex" if is_codex else "claude"
+            ephemeral = (
+                "--ephemeral" in args if is_codex
+                else "--no-session-persistence" in args
+            )
             if is_codex:
                 mode = "continue" if len(args) > 1 and args[1] == "resume" else "start"
                 if mode == "continue":
@@ -182,7 +186,10 @@ class BrainstormingExecutionTest(unittest.TestCase):
                     session_ref = args[args.index("--resume") + 1]
                 else:
                     mode = "start"
-                    session_ref = args[args.index("--session-id") + 1]
+                    session_ref = (
+                        str(uuid.uuid4()) if ephemeral
+                        else args[args.index("--session-id") + 1]
+                    )
                 output_path = None
 
             path = os.path.join(state_dir, family + "-" + session_ref + ".json")
@@ -192,8 +199,9 @@ class BrainstormingExecutionTest(unittest.TestCase):
             else:
                 history = []
             history.append(prompt)
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(history, fh)
+            if not ephemeral:
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(history, fh)
 
             record = {
                 "family": family,
@@ -573,13 +581,7 @@ class BrainstormingExecutionTest(unittest.TestCase):
             "current-staffing", "editor", "second turn", {}
         )
 
-        self.assertEqual(
-            provider.session_calls,
-            [
-                ("start", "codex", "mock-session-1"),
-                ("start", "claude", "mock-session-2"),
-            ],
-        )
+        self.assertEqual(provider.session_calls, [])
         self.assertEqual(
             provider.call_meta,
             [
@@ -603,6 +605,58 @@ class BrainstormingExecutionTest(unittest.TestCase):
             ],
             {},
         )
+
+    def test_fresh_provider_calls_and_repairs_do_not_persist_sessions(self):
+        for family, participant_id, binding_ref in (
+            ("codex", "editor", "codex-primary"),
+            ("claude", "critic", "claude-reviewer"),
+        ):
+            with self.subTest(family=family):
+                session_id = "fresh-" + family
+                self._create_running(session_id, workspace_path=self.root)
+                provider = self._provider_runner()
+                binding = execution.RunnerParticipantExecutor(
+                    family, provider, model="test-model", effort="high",
+                    fresh_each_call=True,
+                )
+                subject = execution.ParticipantExecution(
+                    self.store, {binding_ref: binding}
+                )
+                context = {"caller": object()}
+                first, first_result = subject.exchange(
+                    session_id, participant_id, "missing-thread-id", context
+                )
+                repaired, repaired_result = subject.exchange(
+                    session_id, participant_id,
+                    "force-repair missing-thread-id", context,
+                )
+
+                self.assertIn("missing-thread-id", first["markdown"])
+                self.assertIn("REPAIR:", repaired["markdown"])
+                self.assertFalse(hasattr(first_result, "session_ref"))
+                self.assertFalse(hasattr(repaired_result, "session_ref"))
+                self.assertEqual(
+                    repaired_result.repair["raw_text"],
+                    "malformed" if family == "codex" else "malformed\n",
+                )
+                self.assertEqual(
+                    self.store.read(session_id).state["participant_sessions"],
+                    {},
+                )
+                self.assertTrue(all(
+                    item is context for item in self.launched_contexts[-3:]
+                ))
+                calls = self._provider_calls()[-3:]
+                self.assertEqual(len(calls), 3)
+                flag = (
+                    "--ephemeral" if family == "codex"
+                    else "--no-session-persistence"
+                )
+                for call in calls:
+                    self.assertIn(flag, call["args"])
+                    self.assertNotIn("--session-id", call["args"])
+                    self.assertNotIn("--resume", call["args"])
+                self.assertEqual(os.listdir(self.fake_state), ["calls.jsonl"])
 
     def test_same_family_participants_never_use_implicit_latest_session(self):
         participants = same_family_participants()
