@@ -241,9 +241,20 @@ executing the chosen initiative requires its own instruction.
 
 | Slice | Title |
 |---|---|
+| 01 | Order and per-job staffing contract |
+| 02 | Routed semantic jobs and contracts |
+| 03 | Search material and categorical genomes |
+| 04 | Selection, diversity, crossover, and mutation |
+| 05 | Concurrent physical-call control boundary |
+| 06 | Bounded concurrent evaluation waves |
+| 07 | Progress, rebaseline, stagnation, and expansion |
+| 08 | Durable creativity task lifecycle |
+| 09 | Public ordering and presentation |
+| 10 | Cross-domain evidence and baseline comparison |
 
 ## Units
 
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
-| skeleton | reviewed | 8 | satisfied | - |
+| skeleton | reviewed | 8 | satisfied | 846cada |
+| slice_doc-01 (Order and per-job staffing contract) | reviewed | 2 | satisfied | - |

@@ -28,3 +28,21 @@
 - `claude-creativity-skeleton-r5-002` (raised claude, cleared codex): The concurrency/durability/accounting row pins `orchestrator/task_api.py:724-766` as the authority for 'the task envelope sums recorded physical calls once', but those lines build accounting from one carrier and price all its payloads at a single family/model, performing no cross-call or cross-family summation. — The accounting pin at skeleton.md:147 points to task_api.py:724-766's single-family helper, creating a cost-correctness concern beyond citation hygiene despite P3, but explicit per-call staffing and summation requirements let a careful builder resolve the mismatch (medium risk), while retained per-c
 - `claude-creativity-skeleton-r5-003` (raised claude, cleared codex): The closed order configuration names no diversity authority for the shortlist and pins no relation between `diversity_count` and `shortlist_size`, while the skeleton promises final proposals are 'selected for score and configured structural diversity'. — skeleton.md:142,144,146 promises configured shortlist diversity without defining its relationship to survivor reservations, leaving a plausible uniqueness-only misreading that careful builders should flag, while correction requires a small selection-policy clarification and corresponding local code/
 
+## slice_doc-01 (Order and per-job staffing contract)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/creativity/slices/slice-01.md` (raw: `implementation/milestones/creativity/.run/raw/slice_doc-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-01-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/creativity/.run/raw/slice_doc-01-codex-r1.txt` |
+| slice_doc-01-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/creativity/.run/raw/slice_doc-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-01-codex-r1`, `slice_doc-01-claude-r1`
+
+**Deferred debt (independently classified):**
+- `claude-slice-01-job-binding-round-unpinned` (raised claude, cleared codex): F4 pins role, index and review breadth for the three job bindings but leaves `round` unpinned, although `round` is the one router input that drives step-up and therefore changes the resolved model and effort. — F4/T3 omit round rather than pin a false value, and staffing.py:2045 supplies round=1, so a careful builder can resolve the omission while generation-based inference remains plausible (medium risk); despite its P3 label this affects evaluator behaviour and evaluation-budget consumption, but correcti
+- `claude-slice-01-http-resolve-widened-without-consumer` (raised claude, cleared codex): F6 widens the sealed public resolve request contract (`POST /api/staffing/sessions/<id>/resolve`) to admit `rigor` and freezes it with test T5, although the skeleton grants slice 1 only the in-process router seam and nothing in the repository calls that route. — F6 and T5 explicitly direct an HTTP behavior change beyond skeleton.md:143's named resolver changes and staffing-router/slices/slice-05.md:113's closed request body, making this substantive contract and test drift despite P3, but correction is a small local removal from the allowlist, adapter, test,
+
