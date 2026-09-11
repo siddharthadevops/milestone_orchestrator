@@ -448,6 +448,31 @@ class PromptRouterTest(unittest.TestCase):
             self.assertIsNone(resolution.prompt_set_fallback)
             self.assert_prompt_marked(resolution.prompt, marker)
 
+    def test_repository_editing_seats_leave_commits_to_the_driver(self):
+        for job in (
+            prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+            "draft_slice_note@slice_doc",
+            "implement@slice_impl",
+            "rethink",
+        ):
+            with self.subTest(job=job):
+                prompt = prompt_router.assemble(
+                    self.prompt_set,
+                    job=job,
+                    executor="brainstorming",
+                    material="code",
+                    values=self.values(job),
+                    role="initial_position",
+                    lead=True,
+                    **({"artifact_type": "implementation"}
+                       if job == "rethink" else {}),
+                )
+                text = self.text(prompt)
+                self.assertIn("Leave your changes uncommitted.", text)
+                self.assertIn(
+                    "Do not create or amend commits or move HEAD.", text
+                )
+
     def test_invalid_charge_coordinates_and_raw_selectors_are_rejected(self):
         job = "implement@slice_impl"
         valid = {

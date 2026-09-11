@@ -4385,14 +4385,25 @@ def _start_brainstorming_session(
             )
             if blocked is not None:
                 return blocked
+            admission = {"check_sessions": False}
+            if reviewed_attachment is not None:
+                admission["excluded_task_id"] = reviewed_attachment["task_id"]
+            else:
+                milestone_attachment = _brainstorming_milestone_attachment(
+                    home, session_id, record, allow_missing=True
+                )
+                if milestone_attachment is not None:
+                    # The waiting driver owns this discussion, not a
+                    # competing worker. Other workspace owners still block.
+                    admission = {
+                        "excluded_run_id": milestone_attachment["run_id"]
+                    }
             _require_startable_workspace_locked(
                 home,
                 workspace,
                 task_host=task_host,
-                check_sessions=False,
-                excluded_task_id=(
-                    reviewed_attachment["task_id"] if reviewed_attachment else None
-                ),
+                excluded_session_id=session_id,
+                **admission,
             )
             return brainstorming_lifecycle.start_session(
                 home,

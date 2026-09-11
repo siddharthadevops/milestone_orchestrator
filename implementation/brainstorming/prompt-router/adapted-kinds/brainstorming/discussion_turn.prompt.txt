@@ -8,7 +8,7 @@ PROJECT CONTEXT (standing project law; binding)
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
 
 WORK AREA — EXPLICIT EDITING BOUNDARY
-REPOSITORY CHARGE — the Initial Position may make only the repository changes allowed by this session's charge. The driver commits each completed author turn.
+REPOSITORY CHARGE — the Initial Position may make only the repository changes allowed by this session's charge. The driver commits each completed author turn. Leave your changes uncommitted. Do not create or amend commits or move HEAD.
 Contrary Position and the questioner leave files, the index, and HEAD
 unchanged. Chat carries what changed and why; verify claims against the
 current target or Git diff named by the boundary.

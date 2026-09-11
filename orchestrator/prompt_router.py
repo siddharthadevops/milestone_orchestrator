@@ -52,7 +52,8 @@ STANDALONE_WORKAREA_BOUNDARY = (
 REPOSITORY_WORKAREA_BOUNDARY = (
     "REPOSITORY CHARGE — the Initial Position may make only the repository "
     "changes allowed by this session's charge. The driver commits each "
-    "completed author turn."
+    "completed author turn. Leave your changes uncommitted. Do not create "
+    "or amend commits or move HEAD."
 )
 _PRODUCER_SESSION_JOBS = frozenset((
     "draft_slice_note@slice_doc",

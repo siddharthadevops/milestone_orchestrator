@@ -250,6 +250,27 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(session["state"]["status"], "running")
         return session_id
 
+    def _attach_brainstorming_to_run(self, session_id, name):
+        status, body = self.request("POST", "/api/runs", {
+            "workspace": self.primary,
+            "goal": "own the stopped discussion",
+            "autostart": False,
+            "config": {"docs_dir": "milestones-%s" % name},
+        })
+        self.assertEqual(status, 201, body)
+        entry = registry.get(registry.load(self.home), body["run"]["id"])
+        run_state = st.load(entry["state_path"])
+        st.current_unit(run_state)["brainstorming_wait"] = {
+            "session_id": session_id,
+        }
+        st.save(entry["state_path"], run_state)
+        with brainstorming_lifecycle._locked_registry(self.home):
+            document = brainstorming_lifecycle._load_registry(self.home)
+            record = brainstorming_lifecycle._find_record(document, session_id)
+            record["caller"] = "milestone:%s:skeleton" % name
+            brainstorming_lifecycle._save_registry(self.home, document)
+        return entry
+
     def _waiting_manual_brainstorming(self, name):
         session_id, process = self._manual_brainstorming(name, max_rounds=1)
         process.terminate()
@@ -1735,6 +1756,122 @@ class TaskApiTest(unittest.TestCase):
         )
         self.assertIsNone(
             brainstorming_lifecycle._record_by_id(self.home, session_id)["pid"]
+        )
+
+    def test_owning_run_does_not_block_starting_its_stopped_brainstorming(self):
+        for live_owner in (False, True):
+            with self.subTest(live_owner=live_owner):
+                name = "start-owner-%s" % live_owner
+                session_id = self._pause_manual_brainstorming(name + ".md")
+                entry = self._attach_brainstorming_to_run(session_id, name)
+                if live_owner:
+                    owner_process = self._sleeper()
+
+                    def spawn(home, document, current):
+                        current["pid"] = owner_process.pid
+                        registry.save(home, document)
+                        return current
+
+                    with mock.patch.object(
+                        service, "_spawn_run_locked", side_effect=spawn
+                    ):
+                        status, body = self.request(
+                            "POST", "/api/runs/%s/start" % entry["id"], {}
+                        )
+                    self.assertEqual(status, 200, body)
+                owner_before = copy.deepcopy(registry.get(
+                    registry.load(self.home), entry["id"]
+                ))
+                state_before = st.load(entry["state_path"])
+                child_process = self._sleeper()
+
+                def launch(*_args, **_kwargs):
+                    return brainstorming_lifecycle.GatedLaunch(
+                        child_process, lambda: None, child_process.terminate
+                    )
+
+                with mock.patch.object(
+                    brainstorming_lifecycle,
+                    "_launch_lifecycle_process",
+                    side_effect=launch,
+                ) as launched, mock.patch.object(
+                    service, "_spawn_run_locked",
+                    side_effect=AssertionError("child Start cannot start its owner"),
+                ):
+                    status, body = self.request(
+                        "POST",
+                        "/api/brainstorming/sessions/%s/start" % session_id,
+                        {},
+                    )
+
+                self.assertEqual(status, 200, body)
+                self.assertEqual(body["session"]["id"], session_id)
+                self.assertEqual(body["session"]["process"], "running")
+                self.assertEqual(body["session"]["state"]["status"], "running")
+                launched.assert_called_once()
+                self.assertEqual(
+                    registry.get(registry.load(self.home), entry["id"]),
+                    owner_before,
+                )
+                self.assertEqual(st.load(entry["state_path"]), state_before)
+                brainstorming_lifecycle.stop_session(
+                    self.home, session_id, lambda _record: None
+                )
+
+    def test_unrelated_run_blocks_starting_attached_brainstorming(self):
+        session_id = self._pause_manual_brainstorming("attached-other-run.md")
+        owner = self._attach_brainstorming_to_run(session_id, "owner")
+        status, body = self.request("POST", "/api/runs", {
+            "workspace": self.primary,
+            "goal": "another owner of the workspace",
+            "autostart": False,
+            "config": {"docs_dir": "milestones-other"},
+        })
+        self.assertEqual(status, 201, body)
+        other_id = body["run"]["id"]
+        process = self._sleeper()
+
+        def spawn(home, document, current):
+            current["pid"] = process.pid
+            registry.save(home, document)
+            return current
+
+        with mock.patch.object(service, "_spawn_run_locked", side_effect=spawn):
+            status, body = self.request(
+                "POST", "/api/runs/%s/start" % other_id, {}
+            )
+        self.assertEqual(status, 200, body)
+        state_before = st.load(owner["state_path"])
+        with mock.patch.object(
+            brainstorming_lifecycle, "_launch_lifecycle_process",
+            side_effect=AssertionError("another owner must block Start"),
+        ) as launch:
+            status, body = self.request(
+                "POST", "/api/brainstorming/sessions/%s/start" % session_id, {}
+            )
+        self.assertEqual((status, body["error"]), (409, service.WORK_AREA_BUSY))
+        launch.assert_not_called()
+        self.assertEqual(st.load(owner["state_path"]), state_before)
+
+    def test_live_sibling_blocks_starting_attached_brainstorming(self):
+        session_id = self._pause_manual_brainstorming("attached-sibling.md")
+        self._attach_brainstorming_to_run(session_id, "owner")
+        sibling_id, sibling_process = self._manual_brainstorming("sibling.md")
+        with mock.patch.object(
+            brainstorming_lifecycle, "_launch_lifecycle_process",
+            side_effect=AssertionError("a live sibling must block Start"),
+        ) as launch:
+            status, body = self.request(
+                "POST", "/api/brainstorming/sessions/%s/start" % session_id, {}
+            )
+        self.assertEqual((status, body["error"]), (409, service.WORK_AREA_BUSY))
+        launch.assert_not_called()
+        self.assertIsNone(
+            brainstorming_lifecycle._record_by_id(self.home, session_id)["pid"]
+        )
+        self.assertEqual(
+            brainstorming_lifecycle._record_by_id(self.home, sibling_id)["pid"],
+            sibling_process.pid,
         )
 
     def test_owning_run_does_not_block_continuing_its_waiting_brainstorming(self):
