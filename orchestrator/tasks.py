@@ -894,6 +894,84 @@ def reviewed_policy_defaults(task_kind, config):
     return defaults
 
 
+_CREATIVITY_COUNTS = (
+    "population_size", "generation_limit", "max_evaluated_candidates",
+    "elite_count", "diversity_count", "patience_generations",
+    "max_stagnation_expansions", "evaluation_batch_size",
+    "evaluation_concurrency", "shortlist_size",
+)
+_CREATIVITY_RATES = ("mutation_rate", "minimum_improvement")
+_CREATIVITY_JOB_STAFFING = {
+    "create_genes": {"role": "plan", "index": 1},
+    "evaluate_candidates": {"role": "review", "index": 1, "review_breadth": 1},
+    "expand_genes": {"role": "brainstorm", "index": 1},
+}
+
+
+def resolve_creativity_configuration(value):
+    """Admit a complete creativity configuration without numeric defaults.
+
+    This preparatory contract does not add creativity to the public catalogue.
+    Omitted rigor remains inherited at call time, never frozen from a session.
+    """
+    try:
+        _exact_keys(
+            value, _CREATIVITY_COUNTS + _CREATIVITY_RATES, ("rigor",),
+            "configuration",
+        )
+        for name in _CREATIVITY_COUNTS:
+            if type(value[name]) is not int or value[name] <= 0:
+                raise ContractError(
+                    "configuration.%s must be a positive integer" % name
+                )
+        for name in _CREATIVITY_RATES:
+            number = value[name]
+            if (
+                isinstance(number, bool)
+                or not isinstance(number, (int, float))
+                or not 0 < number <= 1
+            ):
+                raise ContractError(
+                    "configuration.%s must be a finite number in (0, 1]" % name
+                )
+        population = value["population_size"]
+        if population < 2:
+            raise ContractError("configuration.population_size must be at least 2")
+        if value["elite_count"] + value["diversity_count"] > population:
+            raise ContractError(
+                "configuration elite and diversity counts exceed population"
+            )
+        for name in ("evaluation_batch_size", "shortlist_size"):
+            if value[name] > population:
+                raise ContractError("configuration.%s exceeds population" % name)
+        if value["max_evaluated_candidates"] < population:
+            raise ContractError("configuration evaluation budget must cover population")
+        if "rigor" in value:
+            _exact_keys(
+                value["rigor"], (), ("default",) + tuple(_CREATIVITY_JOB_STAFFING),
+                "configuration.rigor",
+            )
+            for name, choice in value["rigor"].items():
+                if choice not in staffing.RIGORS:
+                    raise ContractError(
+                        "configuration.rigor.%s must be one of %s"
+                        % (name, staffing.RIGORS)
+                    )
+        return _json_copy(value, "configuration")
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def creativity_job_staffing_request(job, configuration):
+    """Bind a creativity job using admitted configuration and existing roles."""
+    request = dict(_CREATIVITY_JOB_STAFFING[job])
+    rigor = configuration.get("rigor", {})
+    choice = rigor.get(job, rigor.get("default"))
+    if choice is not None:
+        request["rigor"] = choice
+    return request
+
+
 def resolve_reviewed_task_configuration(value, defaults=None):
     """Resolve a public reviewed-task configuration before admission."""
     try:

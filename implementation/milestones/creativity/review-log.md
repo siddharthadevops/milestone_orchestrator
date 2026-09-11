@@ -46,3 +46,17 @@
 - `claude-slice-01-job-binding-round-unpinned` (raised claude, cleared codex): F4 pins role, index and review breadth for the three job bindings but leaves `round` unpinned, although `round` is the one router input that drives step-up and therefore changes the resolved model and effort. — F4/T3 omit round rather than pin a false value, and staffing.py:2045 supplies round=1, so a careful builder can resolve the omission while generation-based inference remains plausible (medium risk); despite its P3 label this affects evaluator behaviour and evaluation-budget consumption, but correcti
 - `claude-slice-01-http-resolve-widened-without-consumer` (raised claude, cleared codex): F6 widens the sealed public resolve request contract (`POST /api/staffing/sessions/<id>/resolve`) to admit `rigor` and freezes it with test T5, although the skeleton grants slice 1 only the in-process router seam and nothing in the repository calls that route. — F6 and T5 explicitly direct an HTTP behavior change beyond skeleton.md:143's named resolver changes and staffing-router/slices/slice-05.md:113's closed request body, making this substantive contract and test drift despite P3, but correction is a small local removal from the allowlist, adapter, test,
 
+## slice_impl-01-a (Order and per-job staffing contract)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/creativity/.run/raw/slice_impl-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/creativity/.run/raw/slice_impl-01-codex-r1.txt` |
+| slice_impl-01-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/creativity/.run/raw/slice_impl-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-01-codex-r1`, `slice_impl-01-claude-r1`
+

@@ -1592,12 +1592,12 @@ STAFFING_FALLBACK_DEFAULT_DOCUMENT = "default_document"
 # material name: a document with no matching override simply keeps its base.
 DEFAULT_MATERIAL = "default"
 
-# The rigor an unreadable session resolves at. Rigor is chosen ON the
-# session, so when there is no session to read there is no choice to honour
-# and the middle of the three is the one the goal names.
+# The inherited rigor when a session cannot be read. A request-local rigor
+# still selects its own table when resolution uses the fallback document.
 FALLBACK_RIGOR = "medium"
 
 _REQUEST_CTX = "staffing request"
+_INHERIT_RIGOR = object()
 
 
 class StaffingConditionError(StaffingError):
@@ -2043,7 +2043,7 @@ def _effective(home, session, material, families):
 
 
 def resolve(home, session, role, index=1, round=1, material=None, brief=None,
-            families=(), review_breadth=None):
+            families=(), review_breadth=None, rigor=_INHERIT_RIGOR):
     """Staff one call: who runs it, on which model, at which effort.
 
     *session* is a stored session id, *role* one of :data:`ROLES`, *index*
@@ -2052,14 +2052,16 @@ def resolve(home, session, role, index=1, round=1, material=None, brief=None,
     and *brief* are optional; *families* are the CALLER'S own configured
     families and are used only when the session cannot be read, since that
     is the one case where the machine's families cannot be read either.
+    An optional *rigor* selects this call's tuning table only; omission uses
+    the live session's rigor. A supplied value must be low, medium or high.
 
     Returns a :data:`Resolution`: an answer of exactly ``agent``, ``model``
     and ``effort``, plus ``staffing_fallback`` when an input could not be
     read and the default document answered instead.
 
     It refuses in exactly three ways and no others. An unknown role, a
-    non-positive index or round, and a non-string material are INPUT errors
-    (:class:`StaffingError`), refused before resolution. `staffing_unavailable`
+    non-positive index or round, a non-string material, or invalid rigor are
+    INPUT errors (:class:`StaffingError`), refused before resolution. `staffing_unavailable`
     and `distinct_families_unsatisfiable` are the two surfaced conditions
     (:class:`StaffingConditionError`, carrying the token). Everything else
     answers: collapse, saturation, an unknown material, an unassigned seat,
@@ -2070,6 +2072,10 @@ def resolve(home, session, role, index=1, round=1, material=None, brief=None,
     nothing at all — no record, no history, no repair of a damaged file.
     """
     role, index, round_number, material = _admit(role, index, round, material)
+    if rigor is not _INHERIT_RIGOR and rigor not in RIGORS:
+        raise StaffingError(
+            "%s: rigor must be one of %s, got %s"
+            % (_REQUEST_CTX, ", ".join(RIGORS), _shown(rigor)))
     effective = _effective(home, session, material, families)
     if not effective.available:
         raise _unavailable(effective)
@@ -2093,8 +2099,10 @@ def resolve(home, session, role, index=1, round=1, material=None, brief=None,
     slot = _running_slot(
         _slot_for(effective.layers, role, index), effective.available)
     family = effective.document["families"][slot]
+    if rigor is _INHERIT_RIGOR:
+        rigor = effective.selection.rigor
     model_rank, effort_rank = _ranks(
-        effective.layers, effective.selection.rigor, slot, role)
+        effective.layers, rigor, slot, role)
     model, effort = _rungs(
         family, model_rank, effort_rank,
         _step_up_steps(effective.document, role, round_number))

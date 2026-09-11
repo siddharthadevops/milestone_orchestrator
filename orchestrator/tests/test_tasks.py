@@ -65,6 +65,26 @@ def task_order(task_executor="agent_call", **request_changes):
     }
 
 
+def creativity_configuration(**changes):
+    """Boundary fixture, not catalogue defaults."""
+    value = {
+        "population_size": 2,
+        "generation_limit": 1,
+        "max_evaluated_candidates": 2,
+        "elite_count": 1,
+        "diversity_count": 1,
+        "mutation_rate": 1,
+        "minimum_improvement": 1,
+        "patience_generations": 1,
+        "max_stagnation_expansions": 1,
+        "evaluation_batch_size": 2,
+        "evaluation_concurrency": 1,
+        "shortlist_size": 2,
+    }
+    value.update(changes)
+    return value
+
+
 def persisted_state(workspace):
     path = os.path.join(workspace, "state.json")
     state = st.new_state(
@@ -81,6 +101,115 @@ class TaskContractsTest(unittest.TestCase):
         with self.assertRaises(tasks.TaskRequestError) as caught:
             function(*args)
         self.assertEqual(caught.exception.code, code)
+
+    def test_creativity_configuration_contract(self):
+        base = creativity_configuration()
+        large = {key: 10 ** 6 for key in base}
+        large.update(
+            population_size=2 * 10 ** 6, max_evaluated_candidates=10 ** 100,
+            mutation_rate=0.125, minimum_improvement=0.0001,
+        )
+        for source in (base, large, dict(base, rigor={}), dict(base, rigor={
+            "default": "medium", "create_genes": "low",
+            "evaluate_candidates": "high", "expand_genes": "medium",
+        })):
+            with self.subTest(configuration=source):
+                resolved = tasks.resolve_creativity_configuration(source)
+                self.assertEqual(resolved, source)
+                self.assertIsNot(resolved, source)
+                for key in base:
+                    self.assertIs(type(resolved[key]), type(source[key]))
+                if "rigor" in source:
+                    self.assertIsNot(resolved["rigor"], source["rigor"])
+
+        invalid = [None, [], "configuration", {}, dict(base, extra=1)]
+        for key in base:
+            invalid.append({name: value for name, value in base.items() if name != key})
+            bad_values = (None, True, False, "1", [], {}, 0, -1, math.nan, math.inf)
+            bad_values += ((1.0,) if key not in ("mutation_rate", "minimum_improvement")
+                           else (-math.inf, 1.01, 10 ** 400))
+            invalid.extend(dict(base, **{key: value}) for value in bad_values)
+        invalid.extend(dict(base, **change) for change in (
+            {"population_size": 1}, {"elite_count": 2}, {"diversity_count": 2},
+            {"evaluation_batch_size": 3}, {"shortlist_size": 3},
+            {"max_evaluated_candidates": 1},
+        ))
+        invalid.extend(dict(base, rigor=value) for value in (
+            None, [], "high", {"unknown": "low"}, {"model": "chosen"},
+        ))
+        for job in ("default", "create_genes", "evaluate_candidates", "expand_genes"):
+            invalid.extend(dict(base, rigor={job: value}) for value in (
+                None, True, 1, [], {}, "", "HIGH", "maximum",
+            ))
+            for choice in ("low", "medium", "high"):
+                source = dict(base, rigor={job: choice})
+                self.assertEqual(tasks.resolve_creativity_configuration(source), source)
+        for value in invalid:
+            with self.subTest(invalid=value):
+                self.assert_request_error(
+                    tasks.INVALID_TASK_REQUEST, tasks.resolve_creativity_configuration,
+                    value,
+                )
+        self.assert_request_error(
+            tasks.UNKNOWN_TASK_EXECUTOR, tasks.validate_order,
+            dict(task_order("creativity"), configuration=base),
+        )
+
+    def test_creativity_job_staffing_contract(self):
+        from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
+
+        doc = resolver_doc()
+        doc["assignment"]["plan"] = {"1": 3}
+        for rank, rigor in enumerate(("low", "medium", "high"), 1):
+            for slot in doc["families"]:
+                doc["tuning"][rigor][slot] = {
+                    role: [rank, rank] for role in staffing.ROLES
+                }
+        bindings = {
+            "create_genes": {"role": "plan", "index": 1},
+            "evaluate_candidates": {"role": "review", "index": 1, "review_breadth": 1},
+            "expand_genes": {"role": "brainstorm", "index": 1},
+        }
+        with tempfile.TemporaryDirectory() as home:
+            staffing.save(home, doc)
+            session = staffing.create_session(home, session_body(document="matrix"))["id"]
+            for job, binding in bindings.items():
+                for choice, expected_rigor in (
+                    (None, "medium"), ({}, "medium"), ({"default": "low"}, "low"),
+                    ({job: "high"}, "high"),
+                    ({"default": "low", job: "high"}, "high"),
+                ):
+                    with self.subTest(job=job, rigor=choice):
+                        raw = creativity_configuration()
+                        if choice is not None:
+                            raw["rigor"] = choice
+                        config = tasks.resolve_creativity_configuration(raw)
+                        request = tasks.creativity_job_staffing_request(job, config)
+                        expected = dict(binding)
+                        if choice:
+                            expected["rigor"] = expected_rigor
+                        self.assertEqual(request, expected)
+                        resolved = staffing.resolve(home, session, **request)
+                        slot = "3" if job == "create_genes" else "2"
+                        family = doc["families"][slot]
+                        rank = ("low", "medium", "high").index(expected_rigor)
+                        self.assertEqual(resolved.answer, {
+                            "agent": family["name"], "model": family["models"][rank],
+                            "effort": family["efforts"][rank],
+                        })
+                        self.assertIsNone(resolved.staffing_fallback)
+
+            single = staffing.create_session(home, session_body(
+                document="matrix", families=["codex"],
+            ))["id"]
+            request = tasks.creativity_job_staffing_request(
+                "evaluate_candidates", tasks.resolve_creativity_configuration(
+                    creativity_configuration(rigor={"evaluate_candidates": "high"})
+                ),
+            )
+            self.assertEqual(staffing.resolve(home, single, **request).answer, {
+                "agent": "codex", "model": "gpt-5.6-sol", "effort": "high",
+            })
 
     def test_catalogue_has_exact_builtins_and_self_description(self):
         catalogue = tasks.task_executor_catalogue()

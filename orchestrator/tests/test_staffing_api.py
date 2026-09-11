@@ -533,6 +533,30 @@ class StaffingResolveRoute(StaffingApiTestCase):
             self.session_path(session_id or self.record["id"], "resolve"),
             body, headers=headers)
 
+    def test_request_rigor_contract(self):
+        before = (self.session_bytes(self.record["id"]),
+                  self.document_bytes("house"), self.catalogue_files())
+        for rigor, model, effort in (
+            ("low", "gpt-5.6-luna", "low"),
+            ("medium", "gpt-5.6-terra", "xhigh"),
+            ("high", "gpt-5.6-sol", "max"),
+        ):
+            with self.subTest(rigor=rigor):
+                self.assertEqual(self.resolve({"role": "implement", "rigor": rigor}), {
+                    "ok": True,
+                    "staffing": {"agent": "codex", "model": model, "effort": effort},
+                })
+        self.assertEqual(self.resolve({"role": "implement"})["staffing"], {
+            "agent": "codex", "model": "gpt-5.6-terra", "effort": "xhigh",
+        })
+        for invalid in (None, True, 1, [], {}, "", "HIGH", "maximum"):
+            with self.subTest(invalid=invalid):
+                self.refused(400, service.INVALID_STAFFING_REQUEST, "POST",
+                             self.session_path(self.record["id"], "resolve"),
+                             {"role": "implement", "rigor": invalid})
+        self.assertEqual((self.session_bytes(self.record["id"]),
+                          self.document_bytes("house"), self.catalogue_files()), before)
+
     def test_resolve_answer_defaults_fallback_and_error_mapping(self):
         """One request, exactly the router's three-value answer, and four
         refusals that keep their fixed status and token."""

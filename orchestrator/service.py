@@ -2131,8 +2131,8 @@ INVALID_STAFFING_SESSION = "invalid_staffing_session"
 UNKNOWN_STAFFING_SESSION = "unknown_staffing_session"
 
 #: A resolve body the router will not admit: malformed, an unknown key, an
-#: unknown role, a non-positive index or round, a non-string material. This
-#: rejects a request BEFORE resolution and is not a surfaced condition.
+#: unknown role, a non-positive index or round, non-string material or invalid
+#: rigor. This rejects a request BEFORE resolution and is not a surfaced condition.
 INVALID_STAFFING_REQUEST = "invalid_staffing_request"
 
 #: The two SURFACED conditions, as their HTTP statuses. The tokens are the
@@ -2147,7 +2147,7 @@ _STAFFING_CONDITION_STATUS = {
 #: never stored, so — as in the router itself — there is nothing about its
 #: value to refuse. `families` is deliberately absent: they are the
 #: session's own fact, never a caller's claim.
-STAFFING_RESOLVE_FIELDS = ("role", "index", "round", "material", "brief")
+STAFFING_RESOLVE_FIELDS = ("role", "index", "round", "material", "brief", "rigor")
 
 
 def _require_encodable(body, token):
@@ -2316,11 +2316,7 @@ def resolve_staffing_request(home, record, body):
         resolution = staffing.resolve(
             home,
             record["id"],
-            body["role"],
-            index=body.get("index", 1),
-            round=body.get("round", 1),
-            material=body.get("material"),
-            brief=body.get("brief"),
+            **body,
         )
     except staffing.StaffingConditionError as exc:
         raise ApiError(

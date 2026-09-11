@@ -257,4 +257,5 @@ executing the chosen initiative requires its own instruction.
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
 | skeleton | reviewed | 8 | satisfied | 846cada |
-| slice_doc-01 (Order and per-job staffing contract) | reviewed | 2 | satisfied | - |
+| slice_doc-01 (Order and per-job staffing contract) | reviewed | 2 | satisfied | 83c0c50 |
+| slice_impl-01-a (Order and per-job staffing contract) | reviewed | 2 | satisfied | - |

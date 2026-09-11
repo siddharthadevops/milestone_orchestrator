@@ -18,9 +18,11 @@ dispatch still reads model profiles until its own later slice.
 """
 
 import copy
+from concurrent import futures
 import json
 import os
 import tempfile
+import threading
 import unittest
 
 from orchestrator import staffing as stf
@@ -942,6 +944,83 @@ class StaffingResolutionTest(unittest.TestCase):
                          [1, 2])
 
     # -- live, and pure ----------------------------------------------------
+
+    def test_request_rigor_is_local_and_live(self):
+        doc = resolver_doc()
+        stf.save(self.home, doc)
+        session = self.open_session()
+        expected = {
+            "low": staffing("claude", "claude-sonnet-5", "low"),
+            "medium": staffing("claude", "claude-opus-5", "medium"),
+            "high": staffing("claude", "claude-fable-5", "max"),
+        }
+        before = self.snapshot()
+        overlap = threading.Barrier(3)
+
+        def resolve_together(rigor):
+            overlap.wait(timeout=5)
+            return stf.resolve(self.home, session, "implement", rigor=rigor)
+
+        with futures.ThreadPoolExecutor(max_workers=3) as pool:
+            answers = list(pool.map(resolve_together, ("low", "medium", "high")))
+        for rigor, resolved in zip(("low", "medium", "high"), answers):
+            self.assertEqual(resolved.answer, expected[rigor])
+            self.assertIsNone(resolved.staffing_fallback)
+        self.assertEqual(self.answer(session, "implement"), expected["medium"])
+        self.assertEqual(self.snapshot(), before)
+
+        for invalid in (None, True, 1, [], {}, "", "HIGH", "maximum"):
+            with self.subTest(invalid=invalid):
+                # Input errors remain input errors even with nobody available.
+                with self.assertRaises(stf.StaffingError) as caught:
+                    stf.resolve(self.home, "absent", "implement", rigor=invalid)
+                self.assertNotIsInstance(caught.exception, stf.StaffingConditionError)
+        self.assertEqual(self.snapshot(), before)
+
+        # A later owner edit changes inheritance, without rewriting old answers.
+        stf.edit_session(self.home, session, {"rigor": "low"})
+        self.assertEqual(self.answer(session, "implement"), expected["low"])
+        self.assertEqual(self.answer(session, "implement", rigor="high"), expected["high"])
+        self.assertEqual(answers[1].answer, expected["medium"])
+        doc["tuning"]["high"]["3"]["implement"] = [1, 4]
+        stf.save(self.home, doc)
+        before = self.snapshot()
+        self.assertEqual(self.answer(session, "implement", rigor="high"),
+                         staffing("claude", "claude-sonnet-5", "xhigh"))
+        self.assertEqual(self.answer(session, "implement"), expected["low"])
+        self.assertEqual(self.snapshot(), before)
+
+        # Scoped rigor uses the same material and session tuning layers.
+        doc["overrides"]["prose"]["tuning"]["high"] = {"2": {"draft": [2, 5]}}
+        stf.save(self.home, doc)
+        stf.edit_session(self.home, session, {"material": "prose"})
+        before = self.snapshot()
+        self.assertEqual(self.answer(session, "draft", rigor="high"),
+                         staffing("codex", "gpt-5.6-terra", "max"))
+        self.assertEqual(self.snapshot(), before)
+        stf.edit_session(self.home, session, {
+            "overrides": {"tuning": {"high": {"2": {"draft": [3, 2]}}}},
+        })
+        before = self.snapshot()
+        self.assertEqual(self.answer(session, "draft", rigor="high"),
+                         staffing("codex", "gpt-5.6-sol", "medium"))
+        self.assertEqual(self.answer(session, "draft"),
+                         staffing("codex", "gpt-5.6-luna", "low"))
+        self.assertEqual(self.snapshot(), before)
+
+        # Both fallback paths still apply a request's chosen tuning table.
+        stf.save(self.home, default_doc())
+        stf.edit_session(self.home, session, {"document": "gone"})
+        before = self.snapshot()
+        for selected_session in (session, "absent"):
+            resolved = stf.resolve(
+                self.home, selected_session, "implement", families=HERE, rigor="high",
+            )
+            self.assertEqual(resolved.answer,
+                             staffing("claude", "claude-fable-5", "high"))
+            self.assertEqual(resolved.staffing_fallback,
+                             stf.STAFFING_FALLBACK_DEFAULT_DOCUMENT)
+        self.assertEqual(self.snapshot(), before)
 
     def test_resolution_is_live_and_writes_nothing(self):
         """The last completed write governs the next call, through one
