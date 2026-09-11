@@ -11,6 +11,9 @@ This directory may remain empty when there is no active planning material.
 
 ## Active goals
 
+- [`creativity/goal.md`](creativity/goal.md) — generic evolutionary search
+  from LLM-derived genes, with scored candidates, stagnation-driven expansion,
+  material-specific prompts, and independently configurable staffing per job.
 - [`brainstorming-orchestrator/goal.md`](brainstorming-orchestrator/goal.md) —
   generic standalone brainstorming process, initially integrated with
   milestone `need_rethink` routing and designed for later Agent99 capability
