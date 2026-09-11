@@ -74,6 +74,96 @@ def fix_finding(disposition="rejected"):
 
 
 class PromptContractsTest(unittest.TestCase):
+    def test_create_genes_contextual_contract(self):
+        minimal = {"search_material": {
+            "objective": "Find a useful next step.", "context_summary": "Limited resources.",
+            "facts": [], "constraints": [], "assumptions": [], "unknowns": [],
+            "dimensions": [{"id": "approach", "meaning": "How to proceed",
+                            "variants": [{"id": "v1", "text": "Reuse what exists"}]}],
+            "composition_guidance": "Combine the chosen parts faithfully.",
+            "criteria": [{"id": "useful", "text": "Serves the objective"}],
+        }}
+        populated = copy.deepcopy(minimal)
+        material = populated["search_material"]
+        material.update(facts=["One room"], assumptions=["Access is available"],
+                        unknowns=["Interest"], constraints=[{"id": "budget", "text": "No spend"}])
+        material["dimensions"].append({
+            "id": "recipient", "meaning": "Who benefits",
+            "variants": [{"id": "v1", "text": "Current participants"}],
+        })
+
+        def replaced(path, value):
+            reply = copy.deepcopy(populated)
+            if not path:
+                return value
+            target = reply
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            return reply
+
+        objects = [
+            (), ("search_material",), ("search_material", "constraints", 0),
+            ("search_material", "criteria", 0), ("search_material", "dimensions", 0),
+            ("search_material", "dimensions", 0, "variants", 0),
+        ]
+        invalid = []
+        for path in objects:
+            record = populated
+            for key in path:
+                record = record[key]
+            invalid.append(replaced(path, []))
+            invalid.append(replaced(path, dict(record, unexpected="extra")))
+            for key, value in record.items():
+                invalid.append(replaced(path, {k: v for k, v in record.items() if k != key}))
+                invalid.append(replaced(path + (key,), None))
+                if isinstance(value, str):
+                    invalid.append(replaced(path + (key,), " \n"))
+        invalid.append(replaced(("search_material", "objective"), "A different objective"))
+        for key in ("facts", "assumptions", "unknowns"):
+            invalid.append(replaced(("search_material", key), [""]))
+            invalid.append(replaced(("search_material", key), [42]))
+        for path in (
+            ("search_material", "constraints"), ("search_material", "criteria"),
+            ("search_material", "dimensions"),
+            ("search_material", "dimensions", 0, "variants"),
+        ):
+            records = populated
+            for key in path:
+                records = records[key]
+            invalid.append(replaced(path, [records[0], records[0]]))
+            if path[-1] != "constraints":
+                invalid.append(replaced(path, []))
+        objective = minimal["search_material"]["objective"]
+        values = {"workspace": "/workspace", "objective": objective,
+                  "context": "", "references": "[]"}
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            for material_name in ("default", "literature", "business"):
+                served = prompt_router.resolve(
+                    home, job="create_genes@creativity", executor="agent_call",
+                    material=material_name, values=values,
+                ).prompt
+                bound = prompt_contracts.bind(served)
+                self.assertEqual(bound.registered_section_ids, ("create_genes_result",))
+                for reply in (minimal, populated):
+                    self.assertIs(prompt_contracts.validate(
+                        bound, reply, expected_objective=objective,
+                    ), reply)
+                for index, reply in enumerate(invalid):
+                    with self.subTest(material=material_name, invalid=index):
+                        with self.assertRaises(contracts.ContractError):
+                            prompt_contracts.validate(bound, reply, expected_objective=objective)
+                served["kind"] = "evaluate_candidates"
+                with self.assertRaisesRegex(contracts.ContractError, "prompt kind"):
+                    prompt_contracts.validate(
+                        prompt_contracts.bind(served), minimal, expected_objective=objective,
+                    )
+                served["output_contract"][0]["id"] = "operator_data_only"
+                self.assertEqual(prompt_contracts.validate(
+                    prompt_contracts.bind(served), {"operator": "reply"},
+                ), {"operator": "reply"})
+
     def test_shipped_contract_section_registry_is_complete(self):
         documents = prompt_sets.default_seed().documents
         shipped = set(documents["shared/shared.json"]["contract_sections"])

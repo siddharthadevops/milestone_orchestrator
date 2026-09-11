@@ -527,6 +527,55 @@ def _merge_repair(obj, bound, options, ctx):
         _require(obj, "notes", str, ctx)
 
 
+def _id_records(obj, key, fields, ctx, *, nonempty=False):
+    records = _require(obj, key, list, ctx)
+    if nonempty and not records:
+        raise contracts.ContractError("%s.%s must be non-empty" % (ctx, key))
+    seen = set()
+    for index, record in enumerate(records):
+        rctx = "%s.%s[%d]" % (ctx, key, index)
+        if not isinstance(record, dict):
+            raise contracts.ContractError("%s must be an object" % rctx)
+        _exact_keys(record, fields, rctx)
+        identifier = _text(record, "id", rctx)
+        if identifier in seen:
+            raise contracts.ContractError("%s has a duplicate id" % rctx)
+        seen.add(identifier)
+    return records
+
+
+def _create_genes(obj, bound, options, ctx):
+    _kind(bound, ("create_genes",))
+    _exact_keys(obj, ("search_material",), ctx)
+    material = _require(obj, "search_material", dict, ctx)
+    ctx += ".search_material"
+    _exact_keys(material, (
+        "objective", "context_summary", "facts", "constraints", "assumptions",
+        "unknowns", "dimensions", "composition_guidance", "criteria",
+    ), ctx)
+    for key in ("objective", "context_summary", "composition_guidance"):
+        _text(material, key, ctx)
+    if material["objective"] != options["expected_objective"]:
+        raise contracts.ContractError("%s.objective must echo the request" % ctx)
+    for key in ("facts", "assumptions", "unknowns"):
+        _paths(_require(material, key, list, ctx), "%s.%s" % (ctx, key))
+    for key in ("constraints", "criteria"):
+        for record in _id_records(
+            material, key, ("id", "text"), ctx, nonempty=key == "criteria"
+        ):
+            _text(record, "text", "%s.%s" % (ctx, key))
+    for dimension in _id_records(
+        material, "dimensions", ("id", "meaning", "variants"), ctx,
+        nonempty=True,
+    ):
+        dctx = "%s.dimensions[%s]" % (ctx, dimension["id"])
+        _text(dimension, "meaning", dctx)
+        for variant in _id_records(
+            dimension, "variants", ("id", "text"), dctx, nonempty=True
+        ):
+            _text(variant, "text", "%s.variants" % dctx)
+
+
 REGISTERED_SECTIONS = {
     "common_fields": _common,
     "draft_skeleton_result": _author_result("draft_skeleton", "artifact"),
@@ -547,6 +596,7 @@ REGISTERED_SECTIONS = {
     "questioner_readiness": _questioner_readiness,
     "reclassify_result": _reclassify,
     "suite_checkpoint_result": _suite_checkpoint,
+    "create_genes_result": _create_genes,
 }
 
 _PROTOCOL_FIELDS = frozenset({
@@ -789,8 +839,9 @@ def bind(prompt, consumer_sections=(), consumer_instructions=()):
 
 def validate(bound, obj, *, queued_findings=None,
              configured_suite_commands=None, workspace=None,
-             expected_artifact=None, extension_fields=()):
-    """Validate one parsed reply against one previously bound prompt."""
+             expected_artifact=None, extension_fields=(),
+             expected_objective=None):
+    """Validate a reply against served sections, using trusted caller context."""
     if not isinstance(bound, BoundContract):
         raise contracts.ContractError("bound must be a BoundContract")
     if not isinstance(obj, dict):
@@ -800,6 +851,7 @@ def validate(bound, obj, *, queued_findings=None,
         "configured_suite_commands": configured_suite_commands,
         "workspace": workspace,
         "expected_artifact": expected_artifact,
+        "expected_objective": expected_objective,
     }
     for section_id in bound.registered_section_ids:
         REGISTERED_SECTIONS[section_id](

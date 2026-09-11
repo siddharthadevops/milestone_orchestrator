@@ -34,6 +34,7 @@ MILESTONE_KINDS = (
     "fix_findings",
     "suite_checkpoint",
     "merge_repair",
+    "create_genes",
 )
 BRAINSTORMING_KINDS = ("discussion_turn", "questioner_turn")
 LEAD_TURN_CHARGE_KINDS = ("draft_slice_note", "implement")

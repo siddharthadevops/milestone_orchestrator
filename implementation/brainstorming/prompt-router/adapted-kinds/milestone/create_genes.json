@@ -1,0 +1,89 @@
+{
+  "kind": "create_genes",
+  "process": "milestone",
+  "description": "Create compact, problem-derived search material for the creativity driver.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "creativity_exploration"
+      },
+      {
+        "text": [
+          "TASK: turn the operator's problem into a compact repertoire of meaningful parts.",
+          "Read the context and referenced material in the supplied order. Preserve the exact",
+          "objective. Summarize relevant context and supplied facts; distinguish hard constraints",
+          "from assumptions and unknowns. Do not silently invent facts or relax constraints.",
+          "Derive dimensions from this problem, not a fixed domain template. Each dimension is",
+          "one aspect that can vary; give it a clear meaning and useful alternative variants.",
+          "Code will combine exactly one variant per dimension. Make variants interpretable",
+          "together; explain relationships and tensions in composition_guidance. Keep objective,",
+          "facts, constraints, assumptions, unknowns and evaluation criteria outside dimensions.",
+          "Supply explicit criteria for assessing proposals against this objective, including",
+          "usefulness and meaningful difference where relevant. Do not replace the objective",
+          "with novelty for its own sake. Semantic faithfulness and feasibility remain judgments."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "ADMITTED OBJECTIVE (echo exactly):",
+          "{{objective}}",
+          "CONTEXT:",
+          "{{context}}",
+          "ORDERED REFERENCE PATHS (JSON array; may be empty):",
+          "{{references}}"
+        ],
+        "variables": [
+          {
+            "name": "objective",
+            "required": true,
+            "description": "Exact admitted operator objective."
+          },
+          {
+            "name": "context",
+            "required": true,
+            "description": "Admitted context; may be empty."
+          },
+          {
+            "name": "references",
+            "required": true,
+            "description": "JSON array of admitted reference paths in operator order."
+          }
+        ]
+      }
+    ]
+  },
+  "questions": {
+    "intro": [],
+    "items": []
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "create_genes_result",
+        "text": [
+          "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+          "The only top-level key is search_material. No status, kind or questions envelope.",
+          "search_material has exactly objective, context_summary, facts, constraints,",
+          "assumptions, unknowns, dimensions, composition_guidance and criteria.",
+          "objective exactly echoes the admitted objective; objective, context_summary and",
+          "composition_guidance are non-blank strings. facts, assumptions and unknowns are",
+          "possibly empty lists of non-blank strings. constraints and criteria contain exactly",
+          "{\"id\":\"...\",\"text\":\"...\"} records. constraints may be empty; criteria must not be.",
+          "dimensions is non-empty. Each dimension is exactly {\"id\":\"...\",\"meaning\":\"...\",",
+          "\"variants\":[{\"id\":\"...\",\"text\":\"...\"}]}, with at least one variant.",
+          "All objects are closed. Every id, text and meaning is a non-blank string. IDs are",
+          "unique within the constraint, criterion and dimension lists and within each",
+          "dimension's variants. The same variant ID may occur in different dimensions."
+        ],
+        "variables": []
+      }
+    ]
+  }
+}

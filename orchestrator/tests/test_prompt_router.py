@@ -230,7 +230,7 @@ class PromptRouterTest(unittest.TestCase):
         self.assertTrue(prompt_router.render(prompt, values))
 
     def test_canonical_charge_matrix_and_session_target_mounts(self):
-        self.assertEqual(len(prompt_router.DIRECT_ROUTES), 15)
+        self.assertEqual(len(prompt_router.DIRECT_ROUTES), 16)
         for job, (kind, unused_target) in prompt_router.DIRECT_ROUTES.items():
             del unused_target
             with self.subTest(job=job):
@@ -1049,6 +1049,93 @@ class PromptRouterTest(unittest.TestCase):
         self.assertIn("Workspace: %s" % values["workspace"], rendered)
         self.assertNotIn("Workspace: later workspace", rendered)
         self.assertNotIn('"caller override"', rendered)
+
+    def test_creativity_jobs_and_materials(self):
+        values = {
+            "workspace": "/workspace", "objective": "Keep {{the voice}} abrasive.",
+            "context": "A tense encounter; preserve the supplied facts.",
+            "references": json.dumps(["notes/z-last.md", "notes/a-first.md"]),
+            "ecosystem_map": "ADDITIONAL ROOT /evidence — READ-ONLY",
+        }
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            resolved = {}
+            for material in ("default", "literature", "business", "unknown"):
+                selected = prompt_router.resolve(
+                    home, job="create_genes@creativity", executor="agent_call",
+                    material=material, values=values,
+                )
+                self.assertIsNone(selected.prompt_set_fallback)
+                rendered = prompt_router.render(selected.prompt, values)
+                for value in values.values():
+                    self.assertIn(value, rendered)
+                self.assertLess(rendered.index("z-last.md"), rendered.index("a-first.md"))
+                self.assertIn("Do not edit files or execute proposals", rendered)
+                self.assertIn("one variant per dimension", rendered)
+                self.assertEqual(selected.prompt["questions"]["items"], [])
+                self.assertEqual(
+                    [part["id"] for part in selected.prompt["output_contract"]],
+                    ["create_genes_result"],
+                )
+                resolved[material] = selected.prompt
+            self.assertEqual(resolved["default"], resolved["unknown"])
+            for material in ("literature", "business"):
+                self.assertEqual(
+                    resolved[material]["instructions"][:-1],
+                    resolved["default"]["instructions"],
+                )
+                self.assertIn(material.upper() + " REFINEMENT", self.text(resolved[material]))
+                self.assertEqual(
+                    resolved[material]["output_contract"],
+                    resolved["default"]["output_contract"],
+                )
+
+    def test_creativity_live_whole_set_resolution(self):
+        job = "create_genes@creativity"
+        values = self.values(job)
+        with tempfile.TemporaryDirectory() as home:
+            default = self.write_set(home, "default", self.marked_documents("DEFAULT"))
+            named = self.write_set(home, "operator", self.marked_documents("NAMED"))
+
+            def resolve(name="operator", route=job):
+                return prompt_router.resolve(
+                    home, job=route, executor="agent_call", material="literature",
+                    values=values, prompt_set=name,
+                )
+
+            first = resolve()
+            frozen = copy.deepcopy(first.prompt)
+            self.assertIsNone(first.prompt_set_fallback)
+            self.assert_prompt_marked(first.prompt, "NAMED")
+            direct_default = resolve("default")
+            self.assertIsNone(direct_default.prompt_set_fallback)
+            self.assert_prompt_marked(direct_default.prompt, "DEFAULT")
+            self.write_set(home, "operator", self.marked_documents("EDITED"))
+            second = resolve()
+            self.assertIsNone(second.prompt_set_fallback)
+            self.assert_prompt_marked(second.prompt, "EDITED")
+            self.assertEqual(first.prompt, frozen)
+            (named / "milestone/create_genes.json").unlink()
+            before = {path: path.read_bytes() for path in Path(home).rglob("*.json")}
+            for route in (job, "implement@slice_impl"):
+                fallback = resolve(route=route)
+                self.assertEqual(fallback.prompt_set_fallback, "stored_default")
+                self.assert_prompt_marked(fallback.prompt, "DEFAULT")
+                self.assertNotIn("EDITED", self.text(fallback.prompt))
+            self.assertEqual(before, {path: path.read_bytes() for path in before})
+            self.assertFalse(prompt_sets.ensure_default(home))
+            (default / "milestone/create_genes.json").unlink()
+            before = {path: path.read_bytes() for path in Path(home).rglob("*.json")}
+            for route in (job, "implement@slice_impl"):
+                fallback = resolve(route=route)
+                self.assertEqual(fallback.prompt_set_fallback, "in_code_seed")
+                self.assertEqual(fallback.prompt, prompt_router.assemble(
+                    self.prompt_set, job=route, executor="agent_call",
+                    material="literature", values=values,
+                ))
+            self.assertEqual(before, {path: path.read_bytes() for path in before})
+            self.assertFalse((named / "milestone/create_genes.json").exists())
+            self.assertFalse((default / "milestone/create_genes.json").exists())
 
     def test_material_layer_is_exact_and_data_only(self):
         documents = copy.deepcopy(self.prompt_set.documents)

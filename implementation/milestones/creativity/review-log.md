@@ -91,3 +91,20 @@
 **Deferred debt (independently classified):**
 - `claude-slice-02-contextual-validation-missing-context-unpinned` (raised claude, cleared codex): F8 introduces optional context keywords (`expected_objective`, `candidate_ids`, `constraint_ids`, `dimensions`) for the three new reply validators but never pins what a bound creativity section does when that context is absent; the only precedent in the same API (`queued_findings`) skips its contextual check when omitted, so the checks F9 declares strict can lawfully degrade to shape-only, and no acceptance test (T3-T5) covers the missing-context case. — F8’s optional-context wording, the skip precedent at orchestrator/prompt_contracts.py:283 and missing omission tests create a behavioral/test-coverage ambiguity beyond an editorial P3, but F5–F9 give a careful builder explicit contextual obligations, and correction requires only pinning omission beh
 
+## slice_impl-02-a (Routed semantic jobs and contracts)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/creativity/.run/raw/slice_impl-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/creativity/.run/raw/slice_impl-02-codex-r1.txt` |
+| slice_impl-02-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/creativity/.run/raw/slice_impl-02-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-codex-r1`, `slice_impl-02-claude-r1`
+
+**Deferred debt (independently classified):**
+- `claude-claude-slice-02-a-corpus-readme-and-golden-drift` (raised claude, cleared codex): The new `create_genes` corpus member is missing from the corpus README's kind inventory and has no rendered `.prompt.txt` example, and the README still claims the seed ships no real material overrides while the change adds literature/business layers. — The README incorrectly omits create_genes and denies shipped material overrides, while RUNS and EXPECTED_GOLDENS omit its rendered example—a real regression-coverage gap beyond cosmetic P3 documentation drift—but explicit F3 requirements and existing rendering/material tests give a careful builder c
+
