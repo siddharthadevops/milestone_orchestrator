@@ -259,4 +259,5 @@ executing the chosen initiative requires its own instruction.
 | skeleton | reviewed | 8 | satisfied | 846cada |
 | slice_doc-01 (Order and per-job staffing contract) | reviewed | 2 | satisfied | 83c0c50 |
 | slice_impl-01-a (Order and per-job staffing contract) | reviewed | 2 | satisfied | f46f4e0 |
-| slice_impl-01-b (Order and per-job staffing contract) | reviewed | 2 | satisfied | - |
+| slice_impl-01-b (Order and per-job staffing contract) | reviewed | 2 | satisfied | 1b6ba32 |
+| slice_doc-02 (Routed semantic jobs and contracts) | reviewed | 2 | satisfied | - |
