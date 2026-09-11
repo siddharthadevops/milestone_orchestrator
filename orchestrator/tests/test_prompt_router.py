@@ -7,8 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from orchestrator import prompt_router
-from orchestrator import prompt_sets
+from orchestrator import prompt_contracts, prompt_router, prompt_sets, staffing
 
 
 CORPUS = (
@@ -80,7 +79,7 @@ class PromptRouterTest(unittest.TestCase):
     @staticmethod
     def marked_documents(marker):
         documents = copy.deepcopy(prompt_sets.default_seed().documents)
-        documents["shared/shared.json"]["material_layers"] = {
+        documents["shared/shared.json"]["material_layers"].update({
             "implement@slice_impl": {
                 "code": {
                     "instructions": {"parts": [{
@@ -100,7 +99,7 @@ class PromptRouterTest(unittest.TestCase):
                     }]},
                 }
             }
-        }
+        })
 
         def mark(value):
             if isinstance(value, dict):
@@ -1051,91 +1050,147 @@ class PromptRouterTest(unittest.TestCase):
         self.assertNotIn('"caller override"', rendered)
 
     def test_creativity_jobs_and_materials(self):
-        values = {
-            "workspace": "/workspace", "objective": "Keep {{the voice}} abrasive.",
-            "context": "A tense encounter; preserve the supplied facts.",
-            "references": json.dumps(["notes/z-last.md", "notes/a-first.md"]),
-            "ecosystem_map": "ADDITIONAL ROOT /evidence — READ-ONLY",
+        search_material = {
+            "objective": "Find a useful {{next step}}.",
+            "context_summary": "One room is available to current participants.",
+            "facts": ["One room"], "constraints": [{"id": "budget", "text": "No spend"}],
+            "assumptions": [], "unknowns": ["Interest"],
+            "dimensions": [{"id": "approach", "meaning": "How to proceed", "variants": [
+                {"id": "v1", "text": "Share the room"},
+                {"id": "v2", "text": "Exchange time in the room"},
+            ]}],
+            "composition_guidance": "Interpret the chosen parts faithfully.",
+            "criteria": [{"id": "useful", "text": "Serves current participants"}],
+        }
+        candidates = [{"candidate_id": "c2", "components": {"approach": "v2"}},
+                      {"candidate_id": "c1", "components": {"approach": "v1"}}]
+        jobs = {
+            "create_genes": ("search_material", {
+                "objective": search_material["objective"],
+                "context": search_material["context_summary"],
+                "references": json.dumps(["notes/z-last.md", "notes/a-first.md"]),
+            }),
+            "evaluate_candidates": ("evaluations", {
+                "search_material": json.dumps(search_material),
+                "candidates": json.dumps(candidates),
+            }),
+            "expand_genes": ("additions", {
+                "objective": search_material["objective"],
+                "search_material": json.dumps(search_material),
+                "promising_candidates": json.dumps(candidates[:1]),
+                "explored_account": "Sharing and time exchange have been explored.",
+            }),
         }
         with tempfile.TemporaryDirectory() as home:
             prompt_sets.ensure_default(home)
-            resolved = {}
-            for material in ("default", "literature", "business", "unknown"):
-                selected = prompt_router.resolve(
-                    home, job="create_genes@creativity", executor="agent_call",
-                    material=material, values=values,
-                )
-                self.assertIsNone(selected.prompt_set_fallback)
-                rendered = prompt_router.render(selected.prompt, values)
-                for value in values.values():
-                    self.assertIn(value, rendered)
-                self.assertLess(rendered.index("z-last.md"), rendered.index("a-first.md"))
-                self.assertIn("Do not edit files or execute proposals", rendered)
-                self.assertIn("one variant per dimension", rendered)
-                self.assertEqual(selected.prompt["questions"]["items"], [])
-                self.assertEqual(
-                    [part["id"] for part in selected.prompt["output_contract"]],
-                    ["create_genes_result"],
-                )
-                resolved[material] = selected.prompt
-            self.assertEqual(resolved["default"], resolved["unknown"])
-            for material in ("literature", "business"):
-                self.assertEqual(
-                    resolved[material]["instructions"][:-1],
-                    resolved["default"]["instructions"],
-                )
-                self.assertIn(material.upper() + " REFINEMENT", self.text(resolved[material]))
-                self.assertEqual(
-                    resolved[material]["output_contract"],
-                    resolved["default"]["output_contract"],
-                )
+            for kind, (reply_key, inputs) in jobs.items():
+                values = dict(inputs, workspace="/workspace",
+                              ecosystem_map="ADDITIONAL ROOT /evidence — READ-ONLY")
+                resolved = {}
+                for material in ("default", "literature", "business", "unknown"):
+                    with self.subTest(kind=kind, material=material):
+                        selected = prompt_router.resolve(
+                            home, job=kind + "@creativity", executor="agent_call",
+                            material=material, values=values,
+                        )
+                        self.assertIsNone(selected.prompt_set_fallback)
+                        self.assertEqual(selected.prompt["kind"], kind)
+                        rendered = prompt_router.render(selected.prompt, values)
+                        for value in values.values():
+                            self.assertIn(value, rendered)
+                        if kind == "create_genes":
+                            self.assertLess(rendered.index("z-last.md"), rendered.index("a-first.md"))
+                        self.assertIn("Do not edit files or execute proposals", rendered)
+                        self.assertIn("one variant per dimension", rendered)
+                        self.assertIn("The only top-level key is " + reply_key, rendered)
+                        self.assertIn("No status, kind or questions envelope", rendered)
+                        self.assertEqual(selected.prompt["questions"]["items"], [])
+                        self.assertEqual([part["id"] for part in selected.prompt["output_contract"]],
+                                         [kind + "_result"])
+                        self.assertEqual(prompt_contracts.bind(selected.prompt).registered_section_ids,
+                                         (kind + "_result",))
+                        resolved[material] = selected.prompt
+                self.assertEqual(resolved["default"], resolved["unknown"])
+                for material in ("literature", "business"):
+                    with self.subTest(kind=kind, layer=material):
+                        self.assertEqual(resolved[material]["instructions"][:-1],
+                                         resolved["default"]["instructions"])
+                        self.assertIn(material.upper() + " REFINEMENT", self.text(resolved[material]))
+                        self.assertEqual(resolved[material]["output_contract"],
+                                         resolved["default"]["output_contract"])
 
     def test_creativity_live_whole_set_resolution(self):
-        job = "create_genes@creativity"
-        values = self.values(job)
+        kinds = ("create_genes", "evaluate_candidates", "expand_genes")
+        routes = tuple(kind + "@creativity" for kind in kinds) + ("implement@slice_impl",)
+        values = self.values(routes[0])
         with tempfile.TemporaryDirectory() as home:
             default = self.write_set(home, "default", self.marked_documents("DEFAULT"))
             named = self.write_set(home, "operator", self.marked_documents("NAMED"))
+            session = staffing.create_session(home, {
+                "work_area": {"project": "orchestrators", "work_area": "implementation"},
+                "families": ["codex"], "document": "prose-first", "rigor": "medium",
+            })
 
-            def resolve(name="operator", route=job):
+            def resolve(route, name="operator"):
                 return prompt_router.resolve(
-                    home, job=route, executor="agent_call", material="literature",
+                    home, job=route, executor="agent_call",
+                    material=staffing.session_material(home, session["id"]),
                     values=values, prompt_set=name,
                 )
 
-            first = resolve()
-            frozen = copy.deepcopy(first.prompt)
-            self.assertIsNone(first.prompt_set_fallback)
-            self.assert_prompt_marked(first.prompt, "NAMED")
-            direct_default = resolve("default")
-            self.assertIsNone(direct_default.prompt_set_fallback)
-            self.assert_prompt_marked(direct_default.prompt, "DEFAULT")
-            self.write_set(home, "operator", self.marked_documents("EDITED"))
-            second = resolve()
-            self.assertIsNone(second.prompt_set_fallback)
-            self.assert_prompt_marked(second.prompt, "EDITED")
-            self.assertEqual(first.prompt, frozen)
-            (named / "milestone/create_genes.json").unlink()
-            before = {path: path.read_bytes() for path in Path(home).rglob("*.json")}
-            for route in (job, "implement@slice_impl"):
-                fallback = resolve(route=route)
-                self.assertEqual(fallback.prompt_set_fallback, "stored_default")
-                self.assert_prompt_marked(fallback.prompt, "DEFAULT")
-                self.assertNotIn("EDITED", self.text(fallback.prompt))
-            self.assertEqual(before, {path: path.read_bytes() for path in before})
-            self.assertFalse(prompt_sets.ensure_default(home))
-            (default / "milestone/create_genes.json").unlink()
-            before = {path: path.read_bytes() for path in Path(home).rglob("*.json")}
-            for route in (job, "implement@slice_impl"):
-                fallback = resolve(route=route)
-                self.assertEqual(fallback.prompt_set_fallback, "in_code_seed")
-                self.assertEqual(fallback.prompt, prompt_router.assemble(
-                    self.prompt_set, job=route, executor="agent_call",
-                    material="literature", values=values,
-                ))
-            self.assertEqual(before, {path: path.read_bytes() for path in before})
-            self.assertFalse((named / "milestone/create_genes.json").exists())
-            self.assertFalse((default / "milestone/create_genes.json").exists())
+            def stored_bytes():
+                return {path: path.read_bytes() for path in Path(home).rglob("*.json")}
+
+            first = {route: resolve(route) for route in routes}
+            frozen = copy.deepcopy(first)
+            for route, selected in first.items():
+                with self.subTest(route=route, source="complete"):
+                    self.assertIsNone(selected.prompt_set_fallback)
+                    self.assert_prompt_marked(selected.prompt, "NAMED")
+                    direct_default = resolve(route, "default")
+                    self.assertIsNone(direct_default.prompt_set_fallback)
+                    self.assert_prompt_marked(direct_default.prompt, "DEFAULT")
+            edited = self.marked_documents("EDITED")
+            self.write_set(home, "operator", edited)
+            for material in ("literature", "business", "unknown", None):
+                staffing.edit_session(home, session["id"], {"material": material})
+                for route in routes:
+                    with self.subTest(route=route, material=material):
+                        selected = resolve(route)
+                        self.assertIsNone(selected.prompt_set_fallback)
+                        self.assert_prompt_marked(selected.prompt, "EDITED")
+                        self.assertEqual(selected.prompt, prompt_router.assemble(
+                            prompt_sets.PromptSet("operator", edited), job=route,
+                            executor="agent_call", material=material or "default", values=values,
+                        ))
+            self.assertEqual(first, frozen)
+            staffing.edit_session(home, session["id"], {"material": "literature"})
+            for missing_kind in kinds:
+                self.write_set(home, "operator", edited)
+                self.write_set(home, "default", self.marked_documents("DEFAULT"))
+                member = "milestone/" + missing_kind + ".json"
+                (named / member).unlink()
+                before = stored_bytes()
+                for route in routes:
+                    with self.subTest(missing=missing_kind, route=route, source="default"):
+                        fallback = resolve(route)
+                        self.assertEqual(fallback.prompt_set_fallback, "stored_default")
+                        self.assert_prompt_marked(fallback.prompt, "DEFAULT")
+                        self.assertNotIn("EDITED", self.text(fallback.prompt))
+                self.assertFalse(prompt_sets.ensure_default(home))
+                self.assertEqual(before, stored_bytes())
+                (default / member).unlink()
+                before = stored_bytes()
+                for route in routes:
+                    with self.subTest(missing=missing_kind, route=route, source="seed"):
+                        fallback = resolve(route)
+                        self.assertEqual(fallback.prompt_set_fallback, "in_code_seed")
+                        self.assertEqual(fallback.prompt, prompt_router.assemble(
+                            self.prompt_set, job=route, executor="agent_call",
+                            material="literature", values=values,
+                        ))
+                self.assertFalse(prompt_sets.ensure_default(home))
+                self.assertEqual(before, stored_bytes())
 
     def test_material_layer_is_exact_and_data_only(self):
         documents = copy.deepcopy(self.prompt_set.documents)

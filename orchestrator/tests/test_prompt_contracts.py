@@ -73,43 +73,118 @@ def fix_finding(disposition="rejected"):
     }
 
 
+def closed_object_defects(record):
+    defects = {"not_object": [], "extra_field": dict(record, unexpected="extra")}
+    for key, value in record.items():
+        defects["missing_" + key] = {k: v for k, v in record.items() if k != key}
+        defects["wrong_type_" + key] = dict(record, **{key: None})
+        if isinstance(value, str):
+            defects["blank_" + key] = dict(record, **{key: " \n"})
+    return defects
+
+
 class PromptContractsTest(unittest.TestCase):
-    def test_evaluation_and_expansion_contract_smoke(self):
-        evaluation = {
-            "candidate_id": "c1", "proposal": "Use paid space.",
-            "constraint_valid": False, "constraint_violations": ["budget"],
-            "reason": "Useful but exceeds the budget.", "assumptions": [], "score": 1,
-        }
-        addition = {"dimension_id": "approach", "variants": [
-            {"id": "v2", "text": "Borrow space", "reason": "Avoids rental cost"},
-        ]}
-        cases = (
-            ("evaluate_candidates", {"evaluations": [evaluation]},
-             {"evaluations": [evaluation, evaluation]},
-             {"candidate_ids": ["c1"], "constraint_ids": ["budget"]}),
-            ("expand_genes", {"additions": [addition]},
-             {"additions": [dict(addition, dimension_id="unknown")]},
-             {"dimensions": [{"id": "approach", "meaning": "How to proceed",
-                              "variants": [{"id": "v1", "text": "Rent space"}]}]}),
-        )
-        seed = prompt_sets.default_seed()
-        values = validation_values(seed)
+    def assert_creativity_replies(self, kind, accepted, rejected, **context):
+        values = validation_values(prompt_sets.default_seed())
         values.pop("task_executor_catalogue")
-        for kind, valid, invalid, context in cases:
-            with self.subTest(kind=kind):
-                served = prompt_router.assemble(
-                    seed, job=kind + "@creativity", executor="agent_call",
-                    material="default", values=values,
-                )
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            for material in ("default", "literature", "business"):
+                served = prompt_router.resolve(
+                    home, job=kind + "@creativity", executor="agent_call",
+                    material=material, values=values,
+                ).prompt
+                prompt_router.render(served, values)
                 bound = prompt_contracts.bind(served)
                 self.assertEqual(bound.registered_section_ids, (kind + "_result",))
-                self.assertIs(prompt_contracts.validate(bound, valid, **context), valid)
-                with self.assertRaises(contracts.ContractError):
-                    prompt_contracts.validate(bound, invalid, **context)
-                if kind == "expand_genes":
-                    self.assertEqual(prompt_contracts.validate(
-                        bound, {"additions": []}, **context,
-                    ), {"additions": []})
+                for case, reply in accepted.items():
+                    with self.subTest(material=material, accepted=case):
+                        self.assertIs(prompt_contracts.validate(bound, reply, **context), reply)
+                for case, reply in rejected.items():
+                    with self.subTest(material=material, rejected=case):
+                        with self.assertRaises(contracts.ContractError):
+                            prompt_contracts.validate(bound, reply, **context)
+
+    def test_evaluate_candidates_contextual_contract(self):
+        valid = {
+            "candidate_id": "c1", "proposal": "Share existing space.",
+            "constraint_valid": True, "constraint_violations": [],
+            "reason": "Uses available capacity without spending.", "assumptions": [], "score": 0,
+        }
+        invalid = {
+            "candidate_id": "c2", "proposal": "Rent a larger room.",
+            "constraint_valid": False, "constraint_violations": ["budget", "capacity"],
+            "reason": "Useful but exceeds the budget and available capacity.",
+            "assumptions": ["A larger room is available"], "score": 1,
+        }
+        reply = {"evaluations": [invalid, valid]}
+        rejected = closed_object_defects(reply)
+        rejected.update({
+            "empty_coverage": {"evaluations": []},
+            "missing_candidate": {"evaluations": [valid]},
+            "duplicate_candidate": {"evaluations": [invalid, valid, valid]},
+            "extra_candidate": {"evaluations": [invalid, valid, dict(valid, candidate_id="c3")]},
+        })
+        records = closed_object_defects(valid)
+        records["invalid_without_violations"] = dict(valid, constraint_valid=False)
+        records["valid_with_violations"] = dict(valid, constraint_violations=["budget"])
+        for label, violations in (
+            ("unknown", ["unknown"]), ("duplicate", ["budget", "budget"]),
+            ("blank", [" "]), ("non_string", [42]), ("not_list", "budget"),
+        ):
+            records["violations_" + label] = dict(
+                valid, constraint_valid=False, constraint_violations=violations,
+            )
+        for value in (0, 1, "false"):
+            records["validity_" + repr(value)] = dict(valid, constraint_valid=value)
+        for value in ([" "], [42], "assumed access"):
+            records["assumptions_" + repr(value)] = dict(valid, assumptions=value)
+        for score in (True, False, float("nan"), float("inf"), -float("inf"), -0.01, 1.01, "0.5"):
+            records["score_" + repr(score)] = dict(valid, score=score)
+        for case, record in records.items():
+            rejected["record_" + case] = {"evaluations": [invalid, record]}
+        self.assert_creativity_replies("evaluate_candidates", {
+            "reordered_with_high_scoring_invalid": reply,
+            "fractional_score": {"evaluations": [dict(valid, score=0.5), invalid]},
+        }, rejected, candidate_ids=["c1", "c2"], constraint_ids=["budget", "capacity"])
+        self.assert_creativity_replies("evaluate_candidates", {
+            "no_constraints": {"evaluations": [valid]},
+        }, {}, candidate_ids=["c1"], constraint_ids=[])
+
+    def test_expand_genes_contextual_contract(self):
+        dimensions = [
+            {"id": "approach", "meaning": "How to proceed",
+             "variants": [{"id": "v1", "text": "Reuse space"}]},
+            {"id": "recipient", "meaning": "Who benefits",
+             "variants": [{"id": "v2", "text": "Current participants"}]},
+        ]
+        # IDs are local to a dimension; identical text is not a structural defect.
+        variant = {"id": "v2", "text": "Reuse space", "reason": "Another arrangement"}
+        addition = {"dimension_id": "approach", "variants": [
+            variant, {"id": "v3", "text": "Share time", "reason": "Uses spare capacity"},
+        ]}
+        other = {"dimension_id": "recipient", "variants": [
+            {"id": "v3", "text": "Neighbors", "reason": "Extends access"},
+        ]}
+        reply = {"additions": [addition, other]}
+        rejected = closed_object_defects(reply)
+        rejected["duplicate_dimension"] = {"additions": [addition, addition]}
+        groups = closed_object_defects(addition)
+        groups.update({
+            "unknown_dimension": dict(addition, dimension_id="unknown"),
+            "empty_variants": dict(addition, variants=[]),
+            "duplicate_variant": dict(addition, variants=[variant, variant]),
+            "reused_variant": dict(addition, variants=[dict(variant, id="v1")]),
+        })
+        for case, group in groups.items():
+            rejected["addition_" + case] = {"additions": [group]}
+        for case, record in closed_object_defects(variant).items():
+            rejected["variant_" + case] = {"additions": [dict(addition, variants=[record])]}
+        self.assert_creativity_replies("expand_genes", {
+            "exhausted": {"additions": []},
+            "subset_of_dimensions": {"additions": [addition]},
+            "ids_scoped_to_dimensions": reply,
+        }, rejected, dimensions=dimensions)
 
     def test_create_genes_contextual_contract(self):
         minimal = {"search_material": {
@@ -149,13 +224,8 @@ class PromptContractsTest(unittest.TestCase):
             record = populated
             for key in path:
                 record = record[key]
-            invalid.append(replaced(path, []))
-            invalid.append(replaced(path, dict(record, unexpected="extra")))
-            for key, value in record.items():
-                invalid.append(replaced(path, {k: v for k, v in record.items() if k != key}))
-                invalid.append(replaced(path + (key,), None))
-                if isinstance(value, str):
-                    invalid.append(replaced(path + (key,), " \n"))
+            for defect in closed_object_defects(record).values():
+                invalid.append(replaced(path, defect))
         invalid.append(replaced(("search_material", "objective"), "A different objective"))
         for key in ("facts", "assumptions", "unknowns"):
             invalid.append(replaced(("search_material", key), [""]))
