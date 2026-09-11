@@ -1604,6 +1604,78 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'variables': []}]},
                                           'questions': {'intro': [],
                                                         'items': []},
+                                          'output_contract': {'sections': []}}},
+ 'evaluate_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: assess '
+                                                                                        'how the chosen components '
+                                                                                        'affect imagery, voice,',
+                                                                                        'rhythm, tension and character '
+                                                                                        'agency where these serve the '
+                                                                                        'objective. Interpret',
+                                                                                        'the combination faithfully; '
+                                                                                        'preserve continuity and '
+                                                                                        'stylistic constraints rather',
+                                                                                        'than smoothing away the '
+                                                                                        "work's character. Distinguish "
+                                                                                        'textual evidence from',
+                                                                                        'interpretive assumptions. '
+                                                                                        'Keep the generic objective '
+                                                                                        'and result contract '
+                                                                                        'unchanged.'],
+                                                                               'variables': []}]},
+                                                   'questions': {'intro': [], 'items': []},
+                                                   'output_contract': {'sections': []}},
+                                    'business': {'instructions': {'parts': [{'text': ['BUSINESS REFINEMENT: assess the '
+                                                                                      'chosen resources, recipients, '
+                                                                                      'agreements and',
+                                                                                      'alternative uses against the '
+                                                                                      'objective. Account for supplied '
+                                                                                      'budget and capacity;',
+                                                                                      'do not assume demand, access or '
+                                                                                      'willingness to agree. Explain '
+                                                                                      'feasibility limits',
+                                                                                      'and assumptions without '
+                                                                                      'executing a plan or treating '
+                                                                                      'scores as forecasts. Keep',
+                                                                                      'the generic objective and '
+                                                                                      'result contract unchanged.'],
+                                                                             'variables': []}]},
+                                                 'questions': {'intro': [], 'items': []},
+                                                 'output_contract': {'sections': []}}},
+ 'expand_genes@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: seek '
+                                                                                 'alternatives in imagery, voice, '
+                                                                                 'rhythm, tension and',
+                                                                                 'character agency only where the '
+                                                                                 'existing dimensions and objective '
+                                                                                 'support them.',
+                                                                                 'Preserve continuity and stylistic '
+                                                                                 'constraints; explain the useful '
+                                                                                 'difference',
+                                                                                 'rather than merely renaming a '
+                                                                                 'choice. Distinguish textual evidence '
+                                                                                 'from',
+                                                                                 'interpretive assumptions. Keep the '
+                                                                                 'generic objective and result '
+                                                                                 'contract unchanged.'],
+                                                                        'variables': []}]},
+                                            'questions': {'intro': [], 'items': []},
+                                            'output_contract': {'sections': []}},
+                             'business': {'instructions': {'parts': [{'text': ['BUSINESS REFINEMENT: seek alternative '
+                                                                               'resources, recipients, agreements or '
+                                                                               'uses',
+                                                                               'within the existing dimensions when '
+                                                                               'they serve the objective. Respect '
+                                                                               'supplied',
+                                                                               'budget and capacity; expose '
+                                                                               'assumptions about demand, access and '
+                                                                               'agreement.',
+                                                                               'Explain what each variant opens beyond '
+                                                                               'explored options without inventing a '
+                                                                               'new',
+                                                                               'business schema. Keep the generic '
+                                                                               'objective and result contract '
+                                                                               'unchanged.'],
+                                                                      'variables': []}]},
+                                          'questions': {'intro': [], 'items': []},
                                           'output_contract': {'sections': []}}}}},
  'milestone/draft_skeleton.json': {'kind': 'draft_skeleton',
                                    'process': 'milestone',
@@ -5922,4 +5994,204 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'in '
                                                                             'different '
                                                                             'dimensions.'],
+                                                                   'variables': []}]}},
+ 'milestone/evaluate_candidates.json': {'kind': 'evaluate_candidates',
+                                        'process': 'milestone',
+                                        'description': 'Interpret and assess a candidate batch against immutable '
+                                                       'search material.',
+                                        'instructions': {'parts': [{'ref': 'header'},
+                                                                   {'ref': 'project_context'},
+                                                                   {'ref': 'creativity_exploration'},
+                                                                   {'text': ['TASK: interpret and evaluate every '
+                                                                             'supplied candidate against the '
+                                                                             "operator's objective.",
+                                                                             'Read the immutable search material, '
+                                                                             'including its criteria and composition '
+                                                                             'guidance.',
+                                                                             'Each candidate combines one variant per '
+                                                                             'dimension. Interpret those chosen '
+                                                                             'components',
+                                                                             'faithfully as a concrete proposal; do '
+                                                                             'not substitute a better combination or '
+                                                                             'rewrite',
+                                                                             'the objective, supplied facts or hard '
+                                                                             'constraints to make a candidate succeed.',
+                                                                             'Assess each proposal on the supplied '
+                                                                             'criteria, usefulness and meaningful '
+                                                                             'difference',
+                                                                             'where relevant. Explain its strengths, '
+                                                                             'weaknesses and assumptions. Distinguish '
+                                                                             'supplied',
+                                                                             'facts from assumptions; do not invent '
+                                                                             'evidence of feasibility or success.',
+                                                                             'Check all hard constraints. Report '
+                                                                             'violated constraint IDs and explain the '
+                                                                             'violations',
+                                                                             'in reason. An invalid candidate is an '
+                                                                             'honest evaluation, even if it scores '
+                                                                             'highly.',
+                                                                             'Use a score from 0 (least meets the '
+                                                                             'criteria) to 1 (most meets them), '
+                                                                             'consistently within',
+                                                                             'this batch. A score ranks this '
+                                                                             'evaluation; it is not a probability or '
+                                                                             'promise of success.',
+                                                                             'Evaluate the unlabeled batch on its '
+                                                                             'content without historical scores, rank '
+                                                                             'or prestige.',
+                                                                             "Return every candidate's evaluation; do "
+                                                                             'not select survivors or repair candidate '
+                                                                             'genes.',
+                                                                             'Semantic faithfulness, feasibility and '
+                                                                             'score calibration remain model '
+                                                                             'judgments.'],
+                                                                    'variables': []},
+                                                                   {'text': ['IMMUTABLE SEARCH MATERIAL AND CRITERIA '
+                                                                             '(JSON):',
+                                                                             '{{search_material}}',
+                                                                             'CANDIDATE BATCH (JSON; IDs identify '
+                                                                             'candidates, not rank):',
+                                                                             '{{candidates}}'],
+                                                                    'variables': [{'name': 'search_material',
+                                                                                   'required': True,
+                                                                                   'description': 'Complete compact '
+                                                                                                  'problem, '
+                                                                                                  'dimensions, '
+                                                                                                  'variants, guidance '
+                                                                                                  'and criteria as '
+                                                                                                  'JSON.'},
+                                                                                  {'name': 'candidates',
+                                                                                   'required': True,
+                                                                                   'description': 'Candidate IDs and '
+                                                                                                  'chosen components '
+                                                                                                  'as JSON, without '
+                                                                                                  'historical scores '
+                                                                                                  'or prestige.'}]}]},
+                                        'questions': {'intro': [], 'items': []},
+                                        'output_contract': {'sections': [{'id': 'evaluate_candidates_result',
+                                                                          'text': ['OUTPUT CONTRACT: return exactly '
+                                                                                   'one JSON object and nothing else.',
+                                                                                   'The only top-level key is '
+                                                                                   'evaluations. No status, kind or '
+                                                                                   'questions envelope.',
+                                                                                   'evaluations is a list with exactly '
+                                                                                   'one record per supplied candidate '
+                                                                                   'ID, with no',
+                                                                                   'duplicates, omissions or extras. '
+                                                                                   'Reply order is immaterial. Each '
+                                                                                   'record is exactly',
+                                                                                   '{"candidate_id":"...","proposal":"...","constraint_valid":true,',
+                                                                                   '"constraint_violations":[],"reason":"...","assumptions":[],"score":0.5}.',
+                                                                                   'All objects are closed. '
+                                                                                   'candidate_id, proposal and reason '
+                                                                                   'are non-blank strings.',
+                                                                                   'constraint_valid is boolean. '
+                                                                                   'constraint_violations is a list of '
+                                                                                   'unique supplied',
+                                                                                   'constraint IDs, empty exactly when '
+                                                                                   'constraint_valid is true. '
+                                                                                   'assumptions is a',
+                                                                                   'possibly empty list of non-blank '
+                                                                                   'strings. score is a finite number '
+                                                                                   'in [0,1], never',
+                                                                                   'a boolean. Both valid and invalid '
+                                                                                   'evaluations are legitimate; score '
+                                                                                   'does not',
+                                                                                   'change reported validity. Return '
+                                                                                   'no additional envelope or fields.'],
+                                                                          'variables': []}]}},
+ 'milestone/expand_genes.json': {'kind': 'expand_genes',
+                                 'process': 'milestone',
+                                 'description': 'Offer new variants within existing search dimensions after '
+                                                'stagnation.',
+                                 'instructions': {'parts': [{'ref': 'header'},
+                                                            {'ref': 'project_context'},
+                                                            {'ref': 'creativity_exploration'},
+                                                            {'text': ['TASK: expand the repertoire after exploration '
+                                                                      'has stalled, using the original objective.',
+                                                                      'Read the complete search material, promising '
+                                                                      'valid candidates and compact explored',
+                                                                      'account. Identify useful alternatives that the '
+                                                                      'existing repertoire leaves unexplored.',
+                                                                      'Suggest new variants only within existing '
+                                                                      'dimensions, keeping their meanings intact.',
+                                                                      'Do not add, rename or remove dimensions, edit '
+                                                                      'existing variants, or change the objective,',
+                                                                      'facts, constraints, assumptions, unknowns, '
+                                                                      'composition guidance or evaluation criteria.',
+                                                                      'Make each addition concrete and compatible with '
+                                                                      'combining one variant per dimension.',
+                                                                      'Explain why it may open a useful direction '
+                                                                      'toward the objective while respecting hard',
+                                                                      'constraints. Distinguish evidence from '
+                                                                      'assumptions in that reason; do not invent '
+                                                                      'facts.',
+                                                                      'Use promising candidates as context without '
+                                                                      'historical scores, rank or prestige; their',
+                                                                      'presence is not proof of quality. Use the '
+                                                                      'explored account to avoid merely relabeling',
+                                                                      'existing choices. Seek meaningful alternatives, '
+                                                                      'not novelty for its own sake.',
+                                                                      'Return an empty additions list when no useful '
+                                                                      'new variant is apparent. The driver owns',
+                                                                      'applying additions, selection and stopping. New '
+                                                                      'IDs do not prove semantic novelty;',
+                                                                      'usefulness, feasibility and meaningful '
+                                                                      'difference remain model judgments.'],
+                                                             'variables': []},
+                                                            {'text': ['ORIGINAL OBJECTIVE:',
+                                                                      '{{objective}}',
+                                                                      'COMPLETE SEARCH MATERIAL (JSON):',
+                                                                      '{{search_material}}',
+                                                                      'PROMISING VALID CANDIDATES (JSON; no historical '
+                                                                      'scores or prestige):',
+                                                                      '{{promising_candidates}}',
+                                                                      'COMPACT EXPLORED ACCOUNT:',
+                                                                      '{{explored_account}}'],
+                                                             'variables': [{'name': 'objective',
+                                                                            'required': True,
+                                                                            'description': 'Original admitted operator '
+                                                                                           'objective.'},
+                                                                           {'name': 'search_material',
+                                                                            'required': True,
+                                                                            'description': 'Complete current search '
+                                                                                           'material as JSON, '
+                                                                                           'including all existing '
+                                                                                           'dimensions and variants.'},
+                                                                           {'name': 'promising_candidates',
+                                                                            'required': True,
+                                                                            'description': 'Promising valid candidates '
+                                                                                           'as JSON, without '
+                                                                                           'historical scores or '
+                                                                                           'prestige; may be empty.'},
+                                                                           {'name': 'explored_account',
+                                                                            'required': True,
+                                                                            'description': 'Compact account of '
+                                                                                           'combinations and '
+                                                                                           'directions already '
+                                                                                           'explored.'}]}]},
+                                 'questions': {'intro': [], 'items': []},
+                                 'output_contract': {'sections': [{'id': 'expand_genes_result',
+                                                                   'text': ['OUTPUT CONTRACT: return exactly one JSON '
+                                                                            'object and nothing else.',
+                                                                            'The only top-level key is additions. No '
+                                                                            'status, kind or questions envelope.',
+                                                                            'additions is a possibly empty list of '
+                                                                            'exactly {"dimension_id":"...",',
+                                                                            '"variants":[{"id":"...","text":"...","reason":"..."}]} '
+                                                                            'entries.',
+                                                                            'All objects are closed. Every '
+                                                                            'dimension_id, id, text and reason is a '
+                                                                            'non-blank string.',
+                                                                            'Each entry names an existing dimension '
+                                                                            'once and contains at least one variant.',
+                                                                            'Variant IDs must be new within that '
+                                                                            'dimension and unique in the reply for it; '
+                                                                            'IDs',
+                                                                            'may be reused across different '
+                                                                            'dimensions. No changed dimensions, '
+                                                                            'existing variants',
+                                                                            'or extra fields are allowed. Empty '
+                                                                            'additions is an honest exhausted '
+                                                                            'repertoire.'],
                                                                    'variables': []}]}}}

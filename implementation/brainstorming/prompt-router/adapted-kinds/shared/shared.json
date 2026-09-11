@@ -724,6 +724,102 @@
         "questions": {"intro": [], "items": []},
         "output_contract": {"sections": []}
       }
+    },
+    "evaluate_candidates@creativity": {
+      "literature": {
+        "instructions": {
+          "parts": [
+            {
+              "text": [
+                "LITERATURE REFINEMENT: assess how the chosen components affect imagery, voice,",
+                "rhythm, tension and character agency where these serve the objective. Interpret",
+                "the combination faithfully; preserve continuity and stylistic constraints rather",
+                "than smoothing away the work's character. Distinguish textual evidence from",
+                "interpretive assumptions. Keep the generic objective and result contract unchanged."
+              ],
+              "variables": []
+            }
+          ]
+        },
+        "questions": {
+          "intro": [],
+          "items": []
+        },
+        "output_contract": {
+          "sections": []
+        }
+      },
+      "business": {
+        "instructions": {
+          "parts": [
+            {
+              "text": [
+                "BUSINESS REFINEMENT: assess the chosen resources, recipients, agreements and",
+                "alternative uses against the objective. Account for supplied budget and capacity;",
+                "do not assume demand, access or willingness to agree. Explain feasibility limits",
+                "and assumptions without executing a plan or treating scores as forecasts. Keep",
+                "the generic objective and result contract unchanged."
+              ],
+              "variables": []
+            }
+          ]
+        },
+        "questions": {
+          "intro": [],
+          "items": []
+        },
+        "output_contract": {
+          "sections": []
+        }
+      }
+    },
+    "expand_genes@creativity": {
+      "literature": {
+        "instructions": {
+          "parts": [
+            {
+              "text": [
+                "LITERATURE REFINEMENT: seek alternatives in imagery, voice, rhythm, tension and",
+                "character agency only where the existing dimensions and objective support them.",
+                "Preserve continuity and stylistic constraints; explain the useful difference",
+                "rather than merely renaming a choice. Distinguish textual evidence from",
+                "interpretive assumptions. Keep the generic objective and result contract unchanged."
+              ],
+              "variables": []
+            }
+          ]
+        },
+        "questions": {
+          "intro": [],
+          "items": []
+        },
+        "output_contract": {
+          "sections": []
+        }
+      },
+      "business": {
+        "instructions": {
+          "parts": [
+            {
+              "text": [
+                "BUSINESS REFINEMENT: seek alternative resources, recipients, agreements or uses",
+                "within the existing dimensions when they serve the objective. Respect supplied",
+                "budget and capacity; expose assumptions about demand, access and agreement.",
+                "Explain what each variant opens beyond explored options without inventing a new",
+                "business schema. Keep the generic objective and result contract unchanged."
+              ],
+              "variables": []
+            }
+          ]
+        },
+        "questions": {
+          "intro": [],
+          "items": []
+        },
+        "output_contract": {
+          "sections": []
+        }
+      }
     }
   }
 }

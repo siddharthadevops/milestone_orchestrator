@@ -74,6 +74,43 @@ def fix_finding(disposition="rejected"):
 
 
 class PromptContractsTest(unittest.TestCase):
+    def test_evaluation_and_expansion_contract_smoke(self):
+        evaluation = {
+            "candidate_id": "c1", "proposal": "Use paid space.",
+            "constraint_valid": False, "constraint_violations": ["budget"],
+            "reason": "Useful but exceeds the budget.", "assumptions": [], "score": 1,
+        }
+        addition = {"dimension_id": "approach", "variants": [
+            {"id": "v2", "text": "Borrow space", "reason": "Avoids rental cost"},
+        ]}
+        cases = (
+            ("evaluate_candidates", {"evaluations": [evaluation]},
+             {"evaluations": [evaluation, evaluation]},
+             {"candidate_ids": ["c1"], "constraint_ids": ["budget"]}),
+            ("expand_genes", {"additions": [addition]},
+             {"additions": [dict(addition, dimension_id="unknown")]},
+             {"dimensions": [{"id": "approach", "meaning": "How to proceed",
+                              "variants": [{"id": "v1", "text": "Rent space"}]}]}),
+        )
+        seed = prompt_sets.default_seed()
+        values = validation_values(seed)
+        values.pop("task_executor_catalogue")
+        for kind, valid, invalid, context in cases:
+            with self.subTest(kind=kind):
+                served = prompt_router.assemble(
+                    seed, job=kind + "@creativity", executor="agent_call",
+                    material="default", values=values,
+                )
+                bound = prompt_contracts.bind(served)
+                self.assertEqual(bound.registered_section_ids, (kind + "_result",))
+                self.assertIs(prompt_contracts.validate(bound, valid, **context), valid)
+                with self.assertRaises(contracts.ContractError):
+                    prompt_contracts.validate(bound, invalid, **context)
+                if kind == "expand_genes":
+                    self.assertEqual(prompt_contracts.validate(
+                        bound, {"additions": []}, **context,
+                    ), {"additions": []})
+
     def test_create_genes_contextual_contract(self):
         minimal = {"search_material": {
             "objective": "Find a useful next step.", "context_summary": "Limited resources.",

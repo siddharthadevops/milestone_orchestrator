@@ -108,3 +108,17 @@
 **Deferred debt (independently classified):**
 - `claude-claude-slice-02-a-corpus-readme-and-golden-drift` (raised claude, cleared codex): The new `create_genes` corpus member is missing from the corpus README's kind inventory and has no rendered `.prompt.txt` example, and the README still claims the seed ships no real material overrides while the change adds literature/business layers. — The README incorrectly omits create_genes and denies shipped material overrides, while RUNS and EXPECTED_GOLDENS omit its rendered example—a real regression-coverage gap beyond cosmetic P3 documentation drift—but explicit F3 requirements and existing rendering/material tests give a careful builder c
 
+## slice_impl-02-b (Routed semantic jobs and contracts)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/creativity/.run/raw/slice_impl-02-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-b-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/creativity/.run/raw/slice_impl-02-b-codex-r1.txt` |
+| slice_impl-02-b-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/creativity/.run/raw/slice_impl-02-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-b-codex-r1`, `slice_impl-02-b-claude-r1`
+

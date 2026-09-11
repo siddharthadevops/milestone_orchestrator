@@ -1,0 +1,84 @@
+{
+  "kind": "evaluate_candidates",
+  "process": "milestone",
+  "description": "Interpret and assess a candidate batch against immutable search material.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "creativity_exploration"
+      },
+      {
+        "text": [
+          "TASK: interpret and evaluate every supplied candidate against the operator's objective.",
+          "Read the immutable search material, including its criteria and composition guidance.",
+          "Each candidate combines one variant per dimension. Interpret those chosen components",
+          "faithfully as a concrete proposal; do not substitute a better combination or rewrite",
+          "the objective, supplied facts or hard constraints to make a candidate succeed.",
+          "Assess each proposal on the supplied criteria, usefulness and meaningful difference",
+          "where relevant. Explain its strengths, weaknesses and assumptions. Distinguish supplied",
+          "facts from assumptions; do not invent evidence of feasibility or success.",
+          "Check all hard constraints. Report violated constraint IDs and explain the violations",
+          "in reason. An invalid candidate is an honest evaluation, even if it scores highly.",
+          "Use a score from 0 (least meets the criteria) to 1 (most meets them), consistently within",
+          "this batch. A score ranks this evaluation; it is not a probability or promise of success.",
+          "Evaluate the unlabeled batch on its content without historical scores, rank or prestige.",
+          "Return every candidate's evaluation; do not select survivors or repair candidate genes.",
+          "Semantic faithfulness, feasibility and score calibration remain model judgments."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "IMMUTABLE SEARCH MATERIAL AND CRITERIA (JSON):",
+          "{{search_material}}",
+          "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):",
+          "{{candidates}}"
+        ],
+        "variables": [
+          {
+            "name": "search_material",
+            "required": true,
+            "description": "Complete compact problem, dimensions, variants, guidance and criteria as JSON."
+          },
+          {
+            "name": "candidates",
+            "required": true,
+            "description": "Candidate IDs and chosen components as JSON, without historical scores or prestige."
+          }
+        ]
+      }
+    ]
+  },
+  "questions": {
+    "intro": [],
+    "items": []
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "evaluate_candidates_result",
+        "text": [
+          "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+          "The only top-level key is evaluations. No status, kind or questions envelope.",
+          "evaluations is a list with exactly one record per supplied candidate ID, with no",
+          "duplicates, omissions or extras. Reply order is immaterial. Each record is exactly",
+          "{\"candidate_id\":\"...\",\"proposal\":\"...\",\"constraint_valid\":true,",
+          "\"constraint_violations\":[],\"reason\":\"...\",\"assumptions\":[],\"score\":0.5}.",
+          "All objects are closed. candidate_id, proposal and reason are non-blank strings.",
+          "constraint_valid is boolean. constraint_violations is a list of unique supplied",
+          "constraint IDs, empty exactly when constraint_valid is true. assumptions is a",
+          "possibly empty list of non-blank strings. score is a finite number in [0,1], never",
+          "a boolean. Both valid and invalid evaluations are legitimate; score does not",
+          "change reported validity. Return no additional envelope or fields."
+        ],
+        "variables": []
+      }
+    ]
+  }
+}

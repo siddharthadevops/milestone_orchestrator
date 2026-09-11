@@ -42,6 +42,8 @@ DIRECT_ROUTES = {
     "suite_checkpoint@workspace": ("suite_checkpoint", None),
     "merge_repair@workspace": ("merge_repair", None),
     "create_genes@creativity": ("create_genes", None),
+    "evaluate_candidates@creativity": ("evaluate_candidates", None),
+    "expand_genes@creativity": ("expand_genes", None),
 }
 STANDALONE_SESSION_JOB = "standalone@document"
 STANDALONE_REPOSITORY_SESSION_JOB = "standalone@repository"

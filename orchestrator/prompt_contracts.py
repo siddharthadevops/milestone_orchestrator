@@ -527,7 +527,7 @@ def _merge_repair(obj, bound, options, ctx):
         _require(obj, "notes", str, ctx)
 
 
-def _id_records(obj, key, fields, ctx, *, nonempty=False):
+def _id_records(obj, key, fields, ctx, *, nonempty=False, id_key="id"):
     records = _require(obj, key, list, ctx)
     if nonempty and not records:
         raise contracts.ContractError("%s.%s must be non-empty" % (ctx, key))
@@ -537,9 +537,9 @@ def _id_records(obj, key, fields, ctx, *, nonempty=False):
         if not isinstance(record, dict):
             raise contracts.ContractError("%s must be an object" % rctx)
         _exact_keys(record, fields, rctx)
-        identifier = _text(record, "id", rctx)
+        identifier = _text(record, id_key, rctx)
         if identifier in seen:
-            raise contracts.ContractError("%s has a duplicate id" % rctx)
+            raise contracts.ContractError("%s has a duplicate %s" % (rctx, id_key))
         seen.add(identifier)
     return records
 
@@ -576,6 +576,55 @@ def _create_genes(obj, bound, options, ctx):
             _text(variant, "text", "%s.variants" % dctx)
 
 
+def _evaluate_candidates(obj, bound, options, ctx):
+    _kind(bound, ("evaluate_candidates",))
+    _exact_keys(obj, ("evaluations",), ctx)
+    evaluations = _id_records(obj, "evaluations", (
+        "candidate_id", "proposal", "constraint_valid", "constraint_violations",
+        "reason", "assumptions", "score",
+    ), ctx, id_key="candidate_id")
+    if {item["candidate_id"] for item in evaluations} != set(options["candidate_ids"]):
+        raise contracts.ContractError("%s.evaluations must cover exactly the supplied candidates" % ctx)
+    constraint_ids = set(options["constraint_ids"])
+    for item in evaluations:
+        ectx = "%s.evaluations[%s]" % (ctx, item["candidate_id"])
+        for key in ("proposal", "reason"):
+            _text(item, key, ectx)
+        valid = _require(item, "constraint_valid", bool, ectx)
+        violations = _paths(item["constraint_violations"], ectx + ".constraint_violations")
+        if len(violations) != len(set(violations)) or not set(violations) <= constraint_ids:
+            raise contracts.ContractError("%s: violations must name unique supplied constraint IDs" % ectx)
+        if valid != (not violations):
+            raise contracts.ContractError("%s: violations must be empty exactly when valid" % ectx)
+        _paths(item["assumptions"], ectx + ".assumptions")
+        score = _require(item, "score", (int, float), ectx)
+        if isinstance(score, bool) or not 0 <= score <= 1:
+            raise contracts.ContractError("%s.score must be a finite number in [0, 1]" % ectx)
+
+
+def _expand_genes(obj, bound, options, ctx):
+    _kind(bound, ("expand_genes",))
+    _exact_keys(obj, ("additions",), ctx)
+    dimensions = {
+        dimension["id"]: {variant["id"] for variant in dimension["variants"]}
+        for dimension in options["dimensions"]
+    }
+    for addition in _id_records(
+        obj, "additions", ("dimension_id", "variants"), ctx, id_key="dimension_id",
+    ):
+        dimension_id = addition["dimension_id"]
+        actx = "%s.additions[%s]" % (ctx, dimension_id)
+        if dimension_id not in dimensions:
+            raise contracts.ContractError("%s must name an existing dimension" % actx)
+        for variant in _id_records(
+            addition, "variants", ("id", "text", "reason"), actx, nonempty=True,
+        ):
+            if variant["id"] in dimensions[dimension_id]:
+                raise contracts.ContractError("%s: variant ID must be new within the dimension" % actx)
+            for key in ("text", "reason"):
+                _text(variant, key, actx + ".variants")
+
+
 REGISTERED_SECTIONS = {
     "common_fields": _common,
     "draft_skeleton_result": _author_result("draft_skeleton", "artifact"),
@@ -597,6 +646,8 @@ REGISTERED_SECTIONS = {
     "reclassify_result": _reclassify,
     "suite_checkpoint_result": _suite_checkpoint,
     "create_genes_result": _create_genes,
+    "evaluate_candidates_result": _evaluate_candidates,
+    "expand_genes_result": _expand_genes,
 }
 
 _PROTOCOL_FIELDS = frozenset({
@@ -840,7 +891,8 @@ def bind(prompt, consumer_sections=(), consumer_instructions=()):
 def validate(bound, obj, *, queued_findings=None,
              configured_suite_commands=None, workspace=None,
              expected_artifact=None, extension_fields=(),
-             expected_objective=None):
+             expected_objective=None, candidate_ids=None, constraint_ids=None,
+             dimensions=None):
     """Validate a reply against served sections, using trusted caller context."""
     if not isinstance(bound, BoundContract):
         raise contracts.ContractError("bound must be a BoundContract")
@@ -852,6 +904,9 @@ def validate(bound, obj, *, queued_findings=None,
         "workspace": workspace,
         "expected_artifact": expected_artifact,
         "expected_objective": expected_objective,
+        "candidate_ids": candidate_ids,
+        "constraint_ids": constraint_ids,
+        "dimensions": dimensions,
     }
     for section_id in bound.registered_section_ids:
         REGISTERED_SECTIONS[section_id](
