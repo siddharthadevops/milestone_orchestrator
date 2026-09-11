@@ -972,6 +972,100 @@ def creativity_job_staffing_request(job, configuration):
     return request
 
 
+def validate_creativity_native_result(result, *, dimensions, shortlist_size):
+    """Validate and detach the creativity producer's terminal representation.
+
+    The producer supplies trusted search_material['dimensions'] and the
+    admitted shortlist_size; their schemas are not re-admitted here. Component
+    order is preserved. These checks establish representation, not valid-candidate
+    selection, truthful counters/stop reasons, or semantic quality. The common
+    task envelope continues to treat native_result as executor-opaque.
+    """
+    context = "creativity native_result"
+    counts = (
+        "generations_completed", "evaluated_candidates", "expansion_interventions",
+    )
+    _exact_keys(result, ("outcome", "proposals", "stop_reason") + counts, (), context)
+    for name in counts:
+        _reviewed_non_negative_int(result[name], "%s.%s" % (context, name))
+    stop_reasons = (
+        "generation_limit", "evaluation_budget", "persistent_stagnation",
+        "repertoire_exhausted",
+    )
+    if result["stop_reason"] not in stop_reasons:
+        raise ContractError("%s.stop_reason must be one of %s" % (context, stop_reasons))
+    proposals = result["proposals"]
+    if not isinstance(proposals, list) or len(proposals) > shortlist_size:
+        raise ContractError(
+            "%s.proposals must be a list of at most %s proposals"
+            % (context, shortlist_size)
+        )
+    outcome = "proposals" if proposals else "no_valid_candidates"
+    if result["outcome"] != outcome:
+        raise ContractError("%s.outcome must be %s for this shortlist" % (context, outcome))
+
+    material = {
+        dimension["id"]: (
+            dimension["meaning"],
+            {variant["id"]: variant["text"] for variant in dimension["variants"]},
+        )
+        for dimension in dimensions
+    }
+    candidate_ids = set()
+    genomes = set()
+    for index, proposal in enumerate(proposals):
+        proposal_context = "%s.proposals[%d]" % (context, index)
+        _exact_keys(
+            proposal,
+            ("candidate_id", "components", "proposal", "reason", "assumptions", "score"),
+            (), proposal_context,
+        )
+        for name in ("candidate_id", "proposal", "reason"):
+            _text(proposal[name], "%s.%s" % (proposal_context, name))
+        candidate_id = proposal["candidate_id"]
+        if candidate_id in candidate_ids:
+            raise ContractError("%s has a duplicate candidate_id" % proposal_context)
+        candidate_ids.add(candidate_id)
+        assumptions = proposal["assumptions"]
+        if not isinstance(assumptions, list):
+            raise ContractError("%s.assumptions must be a list" % proposal_context)
+        for assumption in assumptions:
+            _text(assumption, "%s.assumptions item" % proposal_context)
+        score = proposal["score"]
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not 0 <= score <= 1
+        ):
+            raise ContractError("%s.score must be a finite number in [0, 1]" % proposal_context)
+
+        components = proposal["components"]
+        if not isinstance(components, list) or len(components) != len(material):
+            raise ContractError("%s.components must cover every dimension once" % proposal_context)
+        genome = {}
+        for component_index, component in enumerate(components):
+            component_context = "%s.components[%d]" % (proposal_context, component_index)
+            fields = ("dimension_id", "dimension", "variant_id", "variant")
+            _exact_keys(component, fields, (), component_context)
+            for name in fields:
+                _text(component[name], "%s.%s" % (component_context, name))
+            dimension_id = component["dimension_id"]
+            if dimension_id not in material or dimension_id in genome:
+                raise ContractError("%s has an unknown or duplicate dimension_id" % component_context)
+            dimension_text, variants = material[dimension_id]
+            if (
+                component["dimension"] != dimension_text
+                or variants.get(component["variant_id"]) != component["variant"]
+            ):
+                raise ContractError("%s must match the selected dimension and variant material" % component_context)
+            genome[dimension_id] = component["variant_id"]
+        genome_key = frozenset(genome.items())
+        if genome_key in genomes:
+            raise ContractError("%s has a duplicate genome" % proposal_context)
+        genomes.add(genome_key)
+    return _json_copy(result, context)
+
+
 def resolve_reviewed_task_configuration(value, defaults=None):
     """Resolve a public reviewed-task configuration before admission."""
     try:

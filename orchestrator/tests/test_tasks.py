@@ -155,6 +155,162 @@ class TaskContractsTest(unittest.TestCase):
             dict(task_order("creativity"), configuration=base),
         )
 
+    def test_creativity_native_result_contract(self):
+        dimensions = [
+            {"id": "channel", "meaning": "Delivery channel", "variants": [
+                {"id": "a", "text": "Library reading"},
+                {"id": "b", "text": "Online reading"},
+            ]},
+            {"id": "format", "meaning": "Reading format", "variants": [
+                {"id": "a", "text": "Full story"},
+                {"id": "b", "text": "Excerpt"},
+            ]},
+        ]
+        first = {
+            "candidate_id": "candidate-1",
+            "components": [
+                {"dimension_id": "channel", "dimension": "Delivery channel",
+                 "variant_id": "a", "variant": "Library reading"},
+                {"dimension_id": "format", "dimension": "Reading format",
+                 "variant_id": "b", "variant": "Excerpt"},
+            ],
+            "proposal": "Read an excerpt at a library.",
+            "reason": "Uses an existing place to meet readers.",
+            "assumptions": ["A library will host a reading."],
+            "score": 0.75,
+        }
+        second = {
+            "candidate_id": "candidate-2",
+            # Variant ids are scoped to dimensions; component order is retained.
+            "components": [
+                {"dimension_id": "format", "dimension": "Reading format",
+                 "variant_id": "a", "variant": "Full story"},
+                {"dimension_id": "channel", "dimension": "Delivery channel",
+                 "variant_id": "b", "variant": "Online reading"},
+            ],
+            "proposal": "Share a complete reading online.",
+            "reason": "Reaches readers beyond the local venue.",
+            "assumptions": [],
+            "score": 1,
+        }
+        native = {
+            "outcome": "proposals", "proposals": [first, second],
+            "stop_reason": "generation_limit", "generations_completed": 2,
+            "evaluated_candidates": 4, "expansion_interventions": 1,
+        }
+
+        def validate(value, shortlist_size=2):
+            return tasks.validate_creativity_native_result(
+                value, dimensions=dimensions, shortlist_size=shortlist_size,
+            )
+
+        def replaced(path, value):
+            if not path:
+                return value
+            result = copy.deepcopy(native)
+            target = result
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            return result
+
+        empty = dict(
+            native, outcome="no_valid_candidates", proposals=[],
+            generations_completed=0, evaluated_candidates=0,
+            expansion_interventions=0,
+        )
+        for stop_reason in (
+            "generation_limit", "evaluation_budget", "persistent_stagnation",
+            "repertoire_exhausted",
+        ):
+            for source in (native, empty):
+                with self.subTest(stop_reason=stop_reason, outcome=source["outcome"]):
+                    source = dict(source, stop_reason=stop_reason)
+                    checked = validate(source)
+                    self.assertEqual(checked, source)
+                    envelope = tasks.validate_result(task_result(native_result=checked))
+                    self.assertEqual(envelope["status"], "success")
+                    self.assertEqual(envelope["native_result"], source)
+        single = dict(native, proposals=[first])
+        self.assertEqual(validate(single, shortlist_size=1), single)
+        with self.assertRaises(tasks.ContractError):
+            validate(native, shortlist_size=1)
+        for score in (0, 0.0, 0.5, 1, 1.0):
+            source = replaced(("proposals", 0, "score"), score)
+            checked = validate(source)
+            self.assertEqual(checked, source)
+            self.assertIs(type(checked["proposals"][0]["score"]), type(score))
+        for name in (
+            "generations_completed", "evaluated_candidates", "expansion_interventions",
+        ):
+            for count in (0, 10 ** 100):
+                source = dict(native, **{name: count})
+                self.assertEqual(validate(source), source)
+
+        source = copy.deepcopy(native)
+        material_before = copy.deepcopy(dimensions)
+        checked = validate(source)
+        source["proposals"][0]["components"][0]["variant"] = "Changed after validation"
+        source["proposals"][0]["assumptions"].append("Another assumption")
+        self.assertEqual(checked, native)
+        self.assertEqual(dimensions, material_before)
+
+        invalid = []
+        for path, record in (
+            ((), native), (("proposals", 0), first),
+            (("proposals", 0, "components", 0), first["components"][0]),
+        ):
+            for key in record:
+                invalid.append(replaced(path, {
+                    name: value for name, value in record.items() if name != key
+                }))
+            invalid.extend(replaced(path, value) for value in (
+                None, [], "record", dict(record, extra=True), {**record, 1: "extra"},
+            ))
+        for name in (
+            "generations_completed", "evaluated_candidates", "expansion_interventions",
+        ):
+            invalid.extend(replaced((name,), value) for value in (
+                -1, 0.0, True, False, None, "0", [], {}, math.nan, math.inf,
+            ))
+        invalid.extend(replaced(("proposals",), value) for value in (
+            None, {}, "shortlist", tuple(native["proposals"]), [],
+        ))
+        invalid.extend(replaced(("outcome",), value) for value in (
+            None, [], {}, "", "success", "failure", "no_valid_candidates",
+        ))
+        invalid.extend(replaced(("stop_reason",), value) for value in (
+            None, [], {}, "", "score_target", "failure", "cancelled",
+        ))
+        for name in ("candidate_id", "proposal", "reason"):
+            invalid.extend(replaced(("proposals", 0, name), value) for value in (
+                None, 1, [], "", "  ",
+            ))
+        invalid.extend(replaced(("proposals", 0, "assumptions"), value) for value in (
+            None, "assumption", {}, (), [None], [1], [""], ["  "], [[]],
+        ))
+        invalid.extend(replaced(("proposals", 0, "score"), value) for value in (
+            None, True, False, "0.5", [], {}, -0.01, 1.01,
+            math.nan, math.inf, -math.inf, 10 ** 400,
+        ))
+        components = first["components"]
+        invalid.extend(replaced(("proposals", 0, "components"), value) for value in (
+            None, {}, "components", tuple(components), [], components[:1],
+            components + components[:1], [components[0], components[0]],
+        ))
+        for name in ("dimension_id", "dimension", "variant_id", "variant"):
+            invalid.extend(replaced(("proposals", 0, "components", 0, name), value)
+                           for value in (None, 1, [], "", "  ", "unknown material"))
+        # Known readable text from another dimension is still the wrong selection.
+        invalid.append(replaced(("proposals", 0, "components", 0, "variant"), "Full story"))
+        invalid.append(replaced(("proposals", 1, "candidate_id"), first["candidate_id"]))
+        for duplicate in (components, list(reversed(components))):
+            invalid.append(replaced(("proposals", 1, "components"), duplicate))
+        for value in invalid:
+            with self.subTest(invalid=value):
+                with self.assertRaises(tasks.ContractError):
+                    validate(value)
+
     def test_creativity_job_staffing_contract(self):
         from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
 
