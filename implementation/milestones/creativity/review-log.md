@@ -164,3 +164,21 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-03-codex-r1`, `slice_impl-03-claude-r1`
 
+## slice_doc-04 (Selection, diversity, crossover, and mutation)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/creativity/slices/slice-04.md` (raw: `implementation/milestones/creativity/.run/raw/slice_doc-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-04-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/creativity/.run/raw/slice_doc-04-codex-r1.txt` |
+| slice_doc-04-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/creativity/.run/raw/slice_doc-04-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-04-codex-r1`, `slice_doc-04-claude-r1`
+
+**Deferred debt (independently classified):**
+- `claude-claude-slice-04-generation-size-unowned` (raised claude, cleared codex): F4's strict "Returned populations never exceed population_size" and F6/T5's "reserving all survivor places does not disable bounded offspring production" cannot both hold: the note never pins how survivors and offspring compose one generation, and the minimum admissible configuration (population_size 2, elite_count 1, diversity_count 1) always reserves every place. — F4–F6 and T5 (slice-04.md:45–47,78–84) permit bounded offspring followed by bounded selection from evaluated children and retained candidates, making the alleged contradiction context-resolvable, although ambiguous population terminology could cause incorrect composition requiring bounded motor and 
+- `claude-claude-slice-04-mutation-rate-unit` (raised claude, cleared codex): F6 fixes mutation_rate's observable meaning only for a genome with one mutable dimension, so for realistic multi-dimension material the operator-facing knob admits both a per-dimension probability and a single per-offspring probability, which differ observably even at rate 1, and no test T1-T5 distinguishes them. — F6 and T4 leave the multi-dimension probability unit unspecified—a behavioral and test-contract gap beyond mere P3 wording—but state no false unit that the stipulated builder should silently trust, and clarification plus a focused mutation/test adjustment is local, inexpensive correction.
+
