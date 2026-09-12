@@ -6,6 +6,7 @@ The caller supplies comparable evaluations and explored genome identities.
 Fixed problem fields stay with the caller and never become candidate state.
 """
 
+import copy
 from fractions import Fraction
 from itertools import chain, product
 import random
@@ -174,7 +175,7 @@ def new_progress():
         "consecutive_expansions": 0, "expansion_interventions": 0,
         "generations_completed": 0, "evaluated_candidates": 0,
         "progress_made": False, "window_complete": False,
-        "stop_reason": None, "pending": None,
+        "stop_reason": None, "pending": None, "expansions": [],
     }
 
 
@@ -288,3 +289,49 @@ def accept_evaluation_wave(progress, wave, configuration):
     )
     if progress["generations_completed"] == configuration["generation_limit"]:
         progress["stop_reason"] = "generation_limit"
+
+
+def expansion_due(progress, configuration):
+    """Decide the completed window's intervention or exact limiting stop.
+
+    Pending comparisons cannot request expansion. Generation completion has
+    already chosen its stop; no intervention can bypass evaluation capacity.
+    """
+    if progress["stop_reason"] is not None or progress["pending"] is not None:
+        return False
+    if not progress["window_complete"]:
+        return False
+    if progress["evaluated_candidates"] == configuration["max_evaluated_candidates"]:
+        progress["stop_reason"] = "evaluation_budget"
+    elif progress["consecutive_expansions"] == configuration["max_stagnation_expansions"]:
+        progress["stop_reason"] = "persistent_stagnation"
+    else:
+        return True
+    return False
+
+
+def accept_expansion(progress, search_material, expansion, configuration, *, explored):
+    """Incorporate one allowed, validated intervention and retain its evidence.
+
+    The owner supplies explored genome keys across all regimes. The existing
+    population supplier settles exhaustion independently of parent validity or
+    random collisions. Accepted additions are structural novelty only.
+    """
+    material = copy.deepcopy(search_material)
+    dimensions = {dimension["id"]: dimension for dimension in material["dimensions"]}
+    for addition in expansion["additions"]:
+        dimensions[addition["dimension_id"]]["variants"].extend(
+            {"id": variant["id"], "text": variant["text"]}
+            for variant in addition["variants"]
+        )
+    progress["expansions"].append(expansion)
+    progress["consecutive_expansions"] += 1
+    progress["expansion_interventions"] += 1
+    progress["reference_score"] = progress["best_score"]
+    progress["stagnant_generations"] = 0
+    progress["window_complete"] = progress["progress_made"] = False
+    if not expansion["additions"] and not make_population(
+        material["dimensions"], 1, configuration, explored=explored,
+    ):
+        progress["stop_reason"] = "repertoire_exhausted"
+    return material

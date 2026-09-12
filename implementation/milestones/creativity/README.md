@@ -277,4 +277,5 @@ executing the chosen initiative requires its own instruction.
 | slice_impl-06-a (Bounded concurrent evaluation waves) | reviewed | 1 | satisfied | aafd08d |
 | slice_impl-06-b (Bounded concurrent evaluation waves) | reviewed | 1 | satisfied | 613da73 |
 | slice_doc-07 (Progress, rebaseline, stagnation, and expansion) | reviewed | 1 | satisfied | 7ea1d6e |
-| slice_impl-07-a (Progress, rebaseline, stagnation, and expansion) | reviewed | 4 | satisfied | - |
+| slice_impl-07-a (Progress, rebaseline, stagnation, and expansion) | reviewed | 4 | satisfied | 4dab9bb |
+| slice_impl-07-b (Progress, rebaseline, stagnation, and expansion) | reviewed | 1 | satisfied | - |

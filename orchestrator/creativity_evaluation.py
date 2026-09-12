@@ -1,4 +1,4 @@
-"""Bounded evaluation waves for the task-owned creativity search.
+"""Evaluation waves and routed expansion for the task-owned creativity search.
 
 The owner supplies admitted material, configuration and candidate genomes, and
 a DirectTaskHost-created TaskCallGroup. This caller owns semantic invocation,
@@ -44,44 +44,12 @@ def call_evaluation_batch(
     )
     context = {"job": "evaluate_candidates", "generation": generation, "batch": batch}
     constraint_ids = [constraint["id"] for constraint in search_material["constraints"]]
-
-    def prepare_call(error):
-        context["material"] = staffing.session_material(home, session)
-        selected = prompt_router.resolve(
-            home, job="evaluate_candidates@creativity", executor="agent_call",
-            material=context["material"], values=values, prompt_set=prompt_set,
-        )
-        bound = prompt_contracts.bind(selected.prompt)
-        prompt = prompt_router.render(bound.prompt, values)
-        if error is not None:
-            prompt += runners.REPAIR_SUFFIX % error
-        return SimpleNamespace(
-            prompt=prompt,
-            validate=lambda reply: prompt_contracts.validate(
-                bound, reply, candidate_ids=list(genomes), constraint_ids=constraint_ids,
-            ),
-            prompt_set_fallback=selected.prompt_set_fallback,
-        )
-
-    def resolve_dispatch():
-        answer = staffing.resolve(
-            home, session, material=context["material"],
-            **tasks.creativity_job_staffing_request("evaluate_candidates", configuration),
-        ).answer
-        return answer["agent"], answer["model"], answer["effort"]
-
-    def before_dispatch(agent, model, effort, _fallback):
-        if record_dispatch is not None:
-            context["regime_revision"] = record_dispatch({
-                "material": context["material"], "agent": agent,
-                "model": model, "effort": effort,
-            })
-
-    reply, result = group.call_worker(
-        runner, None, "", "evaluate_candidates", workspace,
-        prepare_call=prepare_call, resolve_dispatch=resolve_dispatch,
-        call_context=context, execution_context=execution_context,
-        before_dispatch=before_dispatch,
+    reply, result = _call_semantic_job(
+        group, runner, job="evaluate_candidates", home=home, session=session,
+        workspace=workspace, configuration=configuration, values=values,
+        validation_context={"candidate_ids": list(genomes), "constraint_ids": constraint_ids},
+        context=context, execution_context=execution_context, prompt_set=prompt_set,
+        record_dispatch=record_dispatch,
     )
     if isinstance(result, runners.ControlledInterruptionResult):
         return None, result
@@ -98,6 +66,99 @@ def call_evaluation_batch(
         "genomes": genomes,
         "evaluations": reply["evaluations"],
     }, result
+
+
+def _call_semantic_job(
+    group, runner, *, job, home, session, workspace, configuration, values,
+    validation_context, context, execution_context, prompt_set, record_dispatch=None,
+):
+    """Share live routing, served validation and correction preparation."""
+
+    def prepare_call(error):
+        context["material"] = staffing.session_material(home, session)
+        selected = prompt_router.resolve(
+            home, job=job + "@creativity", executor="agent_call",
+            material=context["material"], values=values, prompt_set=prompt_set,
+        )
+        bound = prompt_contracts.bind(selected.prompt)
+        prompt = prompt_router.render(bound.prompt, values)
+        if error is not None:
+            prompt += runners.REPAIR_SUFFIX % error
+        return SimpleNamespace(
+            prompt=prompt,
+            validate=lambda reply: prompt_contracts.validate(
+                bound, reply, **validation_context,
+            ),
+            prompt_set_fallback=selected.prompt_set_fallback,
+        )
+
+    def resolve_dispatch():
+        answer = staffing.resolve(
+            home, session, material=context["material"],
+            **tasks.creativity_job_staffing_request(job, configuration),
+        ).answer
+        return answer["agent"], answer["model"], answer["effort"]
+
+    def before_dispatch(agent, model, effort, _fallback):
+        if record_dispatch is not None:
+            context["regime_revision"] = record_dispatch({
+                "material": context["material"], "agent": agent,
+                "model": model, "effort": effort,
+            })
+
+    return group.call_worker(
+        runner, None, "", job, workspace,
+        prepare_call=prepare_call, resolve_dispatch=resolve_dispatch,
+        call_context=context, execution_context=execution_context,
+        before_dispatch=before_dispatch,
+    )
+
+
+def expand_progress(
+    group, runner, *, progress, search_material, explored, explored_account,
+    home, session, workspace, configuration, execution_context,
+    prompt_set="default", prompt_values=None,
+):
+    """Apply one due intervention; return (current material, runner result).
+
+    No due intervention returns no runner result. Interruptions preserve the
+    old material; faults raise. The task owner persists accepted search state.
+    ``explored_account`` is the owner's compact account of explored directions.
+    """
+    if not creativity_search.expansion_due(progress, configuration):
+        return search_material, None
+    group.ensure_quiescent()
+    values = dict(prompt_values or {})
+    values.update(
+        workspace=workspace, objective=search_material["objective"],
+        search_material=json.dumps(search_material, ensure_ascii=False),
+        promising_candidates=json.dumps([
+            dict(candidate_id=item["candidate_id"], proposal=item["proposal"],
+                 assumptions=item["assumptions"], components=creativity_search.genome_components(
+                     search_material["dimensions"], genome,
+                 ))
+            for genome, item in progress["archive"]
+        ], ensure_ascii=False),
+        explored_account=explored_account,
+    )
+    context = {"job": "expand_genes", "generation": progress["generations_completed"],
+               "batch": uuid.uuid4().hex}
+    try:
+        reply, result = _call_semantic_job(
+            group, runner, job="expand_genes", home=home, session=session,
+            workspace=workspace, configuration=configuration, values=values,
+            validation_context={"dimensions": search_material["dimensions"]},
+            context=context, execution_context=execution_context, prompt_set=prompt_set,
+        )
+    finally:
+        group.ensure_quiescent()
+    if isinstance(result, runners.ControlledInterruptionResult):
+        return search_material, result
+    material = creativity_search.accept_expansion(progress, search_material, {
+        "generation": context["generation"], "batch": context["batch"],
+        "call_id": result.call_id, "additions": reply["additions"],
+    }, configuration, explored=explored)
+    return material, result
 
 
 def _current_evaluations(state):

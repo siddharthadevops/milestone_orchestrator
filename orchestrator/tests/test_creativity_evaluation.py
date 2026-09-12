@@ -48,6 +48,7 @@ class CreativityEvaluationTest(unittest.TestCase):
         for slot in ("2", "3"):
             for rigor, cell in (("low", [1, 1]), ("medium", [2, 2]), ("high", [3, 4])):
                 self.document["tuning"][rigor][slot]["review"] = cell
+                self.document["tuning"][rigor][slot]["brainstorm"] = cell
         staffing.save(self.home, self.document)
         self.session = staffing.create_session(
             self.home, session_body(document="matrix", rigor="low"),
@@ -114,12 +115,178 @@ class CreativityEvaluationTest(unittest.TestCase):
         return [event["physical_dispatch"] for event in lifecycle["history"]
                 if "physical_dispatch" in event], lifecycle["accounting"]
 
-    def write_prompt(self, marker):
+    def write_prompt(self, marker, kind="evaluate_candidates"):
         documents = copy.deepcopy(prompt_sets.default_seed().documents)
-        documents["milestone/evaluate_candidates.json"]["instructions"]["parts"].append(
+        documents["milestone/" + kind + ".json"]["instructions"]["parts"].append(
             {"text": [marker], "variables": []},
         )
         return router_fixture.PromptRouterTest.write_set(self.home, "operator", documents)
+
+    def stagnant_progress(self):
+        self.configuration = dict(self.configuration, generation_limit=20,
+                                  max_evaluated_candidates=40, max_stagnation_expansions=2)
+        progress = evaluation.creativity_search.new_progress()
+        for candidates in (self.candidates, {}):
+            evaluation.creativity_search.begin_generation(progress, candidates, self.configuration)
+            self.progress_wave(progress)
+        return progress
+
+    def expand(self, progress, physical, **changes):
+        options = dict(
+            home=self.home, session=self.session, workspace=self.workspace,
+            configuration=self.configuration, search_material=self.material,
+            explored={evaluation.creativity_search.genome_key(g) for g in self.candidates.values()},
+            explored_account="Explored a full story online and an excerpt at a library.",
+            execution_context=None,
+            prompt_values={"ecosystem_map": "ADDITIONAL ROOT /reference — READ-ONLY"},
+        )
+        options.update(changes)
+        return evaluation.expand_progress(self.group, SimpleNamespace(call=physical), progress=progress, **options)
+
+    def test_expansion_uses_live_routed_contract(self):
+        progress = self.stagnant_progress()
+        self.write_prompt("FIRST PROMPT", "expand_genes")
+        staffing.edit_session(self.home, self.session, {"material": "literature"})
+        addition = {"additions": [{"dimension_id": "format", "variants": [
+            {"id": "new", "text": "Full story", "reason": "Another arrangement."},
+        ]}]}
+        dispatched = []
+
+        def physical(family, prompt, workspace, model=None, effort=None, **_kwargs):
+            dispatched.append((family, model, effort, prompt, workspace))
+            if len(dispatched) == 1:
+                self.document["assignment"]["brainstorm"]["1"] = 3
+                staffing.save(self.home, self.document)
+                staffing.edit_session(self.home, self.session, {"material": "business", "rigor": "high"})
+                self.write_prompt("SECOND PROMPT", "expand_genes")
+                return self.result({"additions": [dict(addition["additions"][0], dimension_id="unknown")]})
+            # The later intervention must reject an ID incorporated by the first.
+            return self.result(addition if len(dispatched) in (2, 3) else {"additions": []})
+
+        expanded, carrier = self.expand(progress, physical, prompt_set="operator")
+        self.assertEqual(progress["expansion_interventions"], 1)
+        self.assertEqual(progress["evaluated_candidates"], 2)
+        self.assertEqual(progress["expansions"][0]["call_id"], carrier.call_id)
+        self.assertEqual(progress["expansions"][0]["additions"], addition["additions"])
+        self.assertEqual(dispatched[0][:3], ("codex", "gpt-5.6-luna", "low"))
+        self.assertEqual(dispatched[1][:3], ("claude", "claude-fable-5", "xhigh"))
+        self.assertIn("FIRST PROMPT", dispatched[0][3])
+        self.assertIn("LITERATURE REFINEMENT", dispatched[0][3])
+        self.assertIn("SECOND PROMPT", dispatched[1][3])
+        self.assertIn("BUSINESS REFINEMENT", dispatched[1][3])
+        self.assertIn("REPAIR:", dispatched[1][3])
+        # No second intervention until the next full window.
+        self.assertIsNone(self.expand(progress, physical, search_material=expanded)[1])
+        evaluation.creativity_search.begin_generation(progress, {}, self.configuration)
+        self.progress_wave(progress, search_material=expanded)
+        self.write_prompt("THIRD PROMPT", "expand_genes")
+        self.document["assignment"]["brainstorm"]["1"] = 2
+        staffing.save(self.home, self.document)
+        staffing.edit_session(self.home, self.session, {"material": "unlayered"})
+        before = staffing.read_session(self.home, self.session)
+        current, _ = self.expand(progress, physical, search_material=expanded, prompt_set="operator",
+                                configuration=dict(self.configuration, rigor={
+                                    "default": "medium", "expand_genes": "low",
+                                }))
+        self.assertEqual(current, expanded)
+        self.assertIsNone(progress["stop_reason"])
+        self.assertEqual(progress["expansion_interventions"], 2)
+        self.assertEqual(dispatched[-1][:3], ("codex", "gpt-5.6-luna", "low"))
+        self.assertIn("THIRD PROMPT", dispatched[-1][3])
+        self.assertNotIn("REFINEMENT", dispatched[-1][3])
+        self.assertEqual(staffing.read_session(self.home, self.session), before)
+        for index, (_family, _model, _effort, prompt, workspace) in enumerate(dispatched):
+            self.assertEqual(workspace, self.workspace)
+            self.assertIn("KIND: expand_genes", prompt)
+            self.assertIn("ADDITIONAL ROOT /reference — READ-ONLY", prompt)
+            self.assertIn("Do not edit files or execute proposals", prompt)
+            self.assertIn("ORIGINAL OBJECTIVE:\n" + self.material["objective"], prompt)
+            self.assertIn("Explored a full story online and an excerpt at a library.", prompt)
+            supplied = json.loads(prompt.split("COMPLETE SEARCH MATERIAL (JSON):\n")[1].splitlines()[0])
+            self.assertEqual(supplied, self.material if index < 2 else expanded)
+            promising = json.loads(prompt.split(
+                "PROMISING VALID CANDIDATES (JSON; no historical scores or prestige):\n",
+            )[1].splitlines()[0])
+            self.assertEqual(len(promising), 1)
+            self.assertEqual(set(promising[0]), {"candidate_id", "proposal", "assumptions", "components"})
+            self.assertEqual(promising[0]["candidate_id"], "c-0")
+        records, accounting = self.evidence()
+        expansions = records[1:]
+        self.assertEqual(len(expansions), 4)
+        self.assertEqual(len({record["call_id"] for record in expansions}), 4)
+        self.assertEqual(expansions[0]["call_context"]["batch"], expansions[1]["call_context"]["batch"])
+        self.assertEqual(expansions[2]["call_context"]["batch"], expansions[3]["call_context"]["batch"])
+        self.assertEqual([r["call_context"]["generation"] for r in expansions], [2, 2, 3, 3])
+        self.assertEqual([r["call_context"]["material"] for r in expansions],
+                         ["literature", "business", "unlayered", "unlayered"])
+        self.assertTrue(all(r["call_context"]["job"] == "expand_genes" for r in expansions))
+        self.assertEqual(accounting["token_usage"]["input_tokens"], 50)
+        expected_cost = sum((pricing.codex_api_cost if r["family"] == "codex" else pricing.claude_api_cost)(
+            r["model"], r["cost_payloads"][0],
+        ) for r in records)
+        self.assertAlmostEqual(accounting["cost"]["api_usd"], expected_cost)
+        evaluation.creativity_search.begin_generation(progress, {}, self.configuration)
+        self.progress_wave(progress, search_material=current)
+        self.assertIsNone(self.expand(progress, physical, search_material=current)[1])
+        self.assertEqual(progress["stop_reason"], "persistent_stagnation")
+        self.assertEqual(self.evidence(), (records, accounting))
+
+    def test_expansion_faults_keep_shared_controls_and_evidence(self):
+        progress = self.stagnant_progress()
+        original = copy.deepcopy(progress)
+        records_before = len(self.evidence()[0])
+        reused = {"additions": [{"dimension_id": "format", "variants": [
+            {"id": "a", "text": "Full story", "reason": "Already present."},
+        ]}]}
+        with self.assertRaises(runners.WorkerProtocolError):
+            self.expand(progress, lambda *_args, **_kwargs: self.result(reused))
+        self.assertEqual(len(self.evidence()[0]) - records_before, 2)
+        session = staffing.create_session(self.home, session_body(document="matrix", families=[]))["id"]
+        with self.assertRaises(staffing.StaffingConditionError) as caught:
+            self.expand(progress, lambda *_a, **_kw: self.fail("unavailable dispatch"), session=session)
+        self.assertEqual(caught.exception.code, "staffing_unavailable")
+        self.document["roles"]["brainstorm"] = {"distinct_families": True}
+        staffing.save(self.home, self.document)
+        with self.assertRaises(staffing.StaffingConditionError) as caught:
+            self.expand(progress, lambda *_a, **_kw: self.fail("unsatisfiable dispatch"))
+        self.assertEqual(caught.exception.code, "distinct_families_unsatisfiable")
+        self.document["roles"]["brainstorm"] = {}
+        staffing.save(self.home, self.document)
+
+        def failed(*_args, **_kwargs):
+            raise runners.ProviderResponseError("expansion failed")
+
+        with self.assertRaisesRegex(runners.ProviderResponseError, "expansion failed"):
+            self.expand(progress, failed)
+        self.assertEqual(len(self.evidence()[0]) - records_before, 3)
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def physical(_family, _prompt, _workspace, active_control=None, **_kwargs):
+            active_control._bind(lambda _text: False, lambda _reason: release.set() or True)
+            try:
+                entered.set()
+                self.assertTrue(release.wait(5))
+                return runners.ControlledInterruptionResult("", 0, 0.1, "stopped")
+            finally:
+                active_control._close()
+
+        with ThreadPoolExecutor(1) as pool:
+            future = pool.submit(self.expand, progress, physical)
+            self.assertTrue(entered.wait(5))
+            self.host.stop(self.identity)
+            material, result = future.result(5)
+        self.assertEqual(material, self.material)
+        self.assertEqual(result.interrupt_reason, "stopped")
+        self.assertEqual(progress, original)
+        self.group.ensure_quiescent()
+        with self.assertRaises(runners.RunnerError):
+            self.expand(progress, lambda *_a, **_kw: self.fail("stopped dispatch"))
+        records, accounting = self.evidence()
+        self.assertEqual(len(records) - records_before, 4)
+        self.assertTrue(all(r["call_context"]["job"] == "expand_genes" for r in records[records_before:]))
+        self.assertTrue(accounting["token_usage_partial"])
+        self.assertTrue(accounting["cost_partial"])
 
     def test_each_attempt_reads_live_authorities(self):
         self.write_prompt("FIRST PROMPT")

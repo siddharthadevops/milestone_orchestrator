@@ -94,6 +94,17 @@ class CreativitySearchTest(unittest.TestCase):
                 [(dimension["id"], genome[dimension["id"]]) for dimension in dimensions],
             )
 
+    def observe_generation(self, progress, pairs, configuration):
+        search.begin_generation(progress, {
+            item["candidate_id"]: genome for genome, item in pairs
+        }, configuration)
+        search.accept_evaluation_wave(progress, {
+            "accepted_count": progress["evaluated_candidates"] + len(pairs),
+            "regime_revision": 1, "rebaseline_required": False,
+            "comparison_ready": True, "unfinished": [], "interruption": None,
+            "evaluated": progress["archive"] + pairs,
+        }, configuration)
+
     def test_population_bounds_and_explored_identity(self):
         dimensions = self.accepted_material()["dimensions"]
         configuration = tasks.resolve_creativity_configuration(creativity_configuration(
@@ -357,6 +368,116 @@ class CreativitySearchTest(unittest.TestCase):
         self.assertEqual(empty["stagnant_generations"], 0)
         self.assertFalse(empty["progress_made"])
         self.assertEqual(empty["consecutive_expansions"], 1)
+
+    def test_full_windows_bound_expansion(self):
+        configuration = creativity_configuration(
+            generation_limit=20, max_evaluated_candidates=40,
+            minimum_improvement=0.125, patience_generations=2,
+        )
+        material = self.accepted_material()
+        progress = search.new_progress()
+        choices = [{"format": f, "channel": c} for f in "ab" for c in "abc"]
+        for index in range(3):
+            self.observe_generation(progress, self.evaluated(
+                choices[index:index + 1], [0.25], prefix=str(index),
+            ), configuration)
+            self.assertEqual(search.expansion_due(progress, configuration), index == 2)
+        addition = {"additions": [{"dimension_id": "format", "variants": [
+            {"id": "c", "text": "Serial reading", "reason": "Build repeated attendance."},
+        ]}]}
+        material = search.accept_expansion(progress, material, addition, configuration, explored=[])
+        self.assertEqual(progress["reference_score"], 0.25)
+        self.assertFalse(progress["progress_made"])
+        self.assertFalse(search.expansion_due(progress, configuration))
+        self.assertEqual(progress["consecutive_expansions"], 1)
+        for index, score in enumerate((0.3125, 0.375), start=3):
+            self.observe_generation(progress, self.evaluated(
+                choices[index:index + 1], [score], prefix=str(index),
+            ), configuration)
+            self.assertFalse(search.expansion_due(progress, configuration))
+        self.assertTrue(progress["progress_made"])
+        self.assertEqual(progress["consecutive_expansions"], 0)
+        self.assertEqual(progress["expansion_interventions"], 1)
+        parent = progress["archive"][:1]
+        child = search.reproduce(material["dimensions"], parent, 1, configuration)[0]
+        self.assertTrue(all(child[key] != parent[0][0][key] for key in child))
+        for index in range(2):
+            self.observe_generation(progress, [], configuration)
+            self.assertEqual(search.expansion_due(progress, configuration), index == 1)
+        search.accept_expansion(progress, material, {"additions": []}, configuration, explored=[])
+        for index in range(2):
+            self.observe_generation(progress, [], configuration)
+            self.assertFalse(search.expansion_due(progress, configuration))
+            self.assertEqual(progress["stop_reason"], "persistent_stagnation" if index == 1 else None)
+        self.assertEqual(progress["expansion_interventions"], 2)
+        self.assertEqual(progress["generations_completed"], 9)
+        self.assertEqual(progress["evaluated_candidates"], 5)
+
+    def test_expansion_preserves_material_and_archive(self):
+        material = self.accepted_material()
+        original = copy.deepcopy(material)
+        configuration = creativity_configuration(generation_limit=10, max_evaluated_candidates=20)
+        progress = search.new_progress()
+        population = search.make_population(material["dimensions"], 2, configuration)
+        self.observe_generation(progress, self.evaluated(population, [0.5, 0.25]), configuration)
+        self.observe_generation(progress, [], configuration)
+        archive = copy.deepcopy(progress["archive"])
+        self.assertTrue(search.expansion_due(progress, configuration))
+        expansion = {"generation": 2, "call_id": "expansion", "additions": [{
+            "dimension_id": "format", "variants": [
+                {"id": "new", "text": "Full story", "reason": "Another arrangement."},
+            ],
+        }]}
+        expanded = search.accept_expansion(progress, material, expansion, configuration, explored=[])
+        self.assertEqual(material, original)
+        expected = copy.deepcopy(original)
+        expected["dimensions"][0]["variants"].append({"id": "new", "text": "Full story"})
+        self.assertEqual(expanded, expected)
+        self.assertEqual(progress["archive"], archive)
+        self.assertEqual(progress["expansions"], [expansion])
+        self.assertEqual(progress["reference_score"], 0.5)
+        self.assertFalse(progress["progress_made"])
+        explored = {search.genome_key({"format": f, "channel": c}) for f in "ab" for c in "abc"}
+        children = search.reproduce(expanded["dimensions"], archive, 2, configuration, explored=explored)
+        self.assertEqual(len(children), 2)
+        self.assertTrue(all(child["format"] == "new" for child in children))
+
+    def test_exact_search_stop_reasons(self):
+        material = self.accepted_material(dimensions=[{
+            "id": "d", "meaning": "Direction", "variants": [
+                {"id": "a", "text": "First"}, {"id": "b", "text": "Second"},
+            ],
+        }])
+        choices = [{"d": "a"}, {"d": "b"}]
+        all_keys = {search.genome_key(genome) for genome in choices}
+        for explored in (set(), {search.genome_key(choices[0])}, all_keys):
+            with self.subTest(explored=explored):
+                configuration = creativity_configuration(generation_limit=10, max_evaluated_candidates=20)
+                progress = search.new_progress()
+                pairs = self.evaluated(choices[:len(explored)], [1] * len(explored), invalid=(0, 1))
+                self.observe_generation(progress, pairs, configuration)
+                self.assertTrue(search.expansion_due(progress, configuration))
+                self.assertEqual(search.reproduce(material["dimensions"], progress["archive"],
+                                                  2, configuration, explored=explored), [])
+                with mock.patch.object(search.random, "randrange", return_value=0):
+                    search.accept_expansion(progress, material, {"additions": []},
+                                            configuration, explored=explored)
+                self.assertEqual(progress["stop_reason"],
+                                 "repertoire_exhausted" if explored == all_keys else None)
+                self.assertEqual(progress["archive"], [])
+                self.assertIsNone(progress["best_score"])
+                self.assertEqual(progress["evaluated_candidates"], len(explored))
+                self.assertEqual(progress["generations_completed"], 1)
+                self.assertEqual(progress["expansion_interventions"], 1)
+        for reason, limits in (("generation_limit", {"generation_limit": 1}),
+                               ("evaluation_budget", {"max_evaluated_candidates": 2})):
+            configuration = creativity_configuration(generation_limit=10, max_evaluated_candidates=20)
+            configuration.update(limits)
+            progress = search.new_progress()
+            self.observe_generation(progress, self.evaluated(choices, [1, 1], invalid=(0, 1)), configuration)
+            self.assertFalse(search.expansion_due(progress, configuration))
+            self.assertEqual(progress["stop_reason"], reason)
+            self.assertEqual(progress["expansion_interventions"], 0)
 
     def test_problem_is_not_candidate_state(self):
         material = self.accepted_material()
