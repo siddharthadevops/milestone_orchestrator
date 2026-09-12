@@ -1551,6 +1551,7 @@ class DirectTaskHost:
             config.get("timeouts", {}),
             stall_window_s=config.get("worker_stall_window_s"),
             stall_min_cpu_s=config.get("worker_stall_min_cpu_s"),
+            participant_process_factory=brainstorming_tasks.lifecycle._spawn_participant,
         )
 
     def _recover_worker_attempt_locked(self, task_id):

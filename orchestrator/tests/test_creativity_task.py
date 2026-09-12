@@ -3,13 +3,16 @@
 import copy
 import json
 import os
+import sys
 import tempfile
+import textwrap
 import threading
 import unittest
 import uuid
 from types import SimpleNamespace
 from unittest import mock
 
+from orchestrator import brainstorming_lifecycle
 from orchestrator import kvstore, prompt_sets, runners, staffing, task_api, tasks
 from orchestrator.tests import test_creativity_evaluation as evaluation_fixture
 from orchestrator.tests import test_creativity_search as search_fixture
@@ -152,6 +155,74 @@ class CreativityTaskTest(unittest.TestCase):
                     self.assertIn("expand_genes", [call["job"] for call in self.calls])
         self.assertEqual(tasks.task_executor_catalogue(), catalogue)
         self.assertNotIn("creativity", [item["id"] for item in catalogue])
+
+    def test_creativity_default_runner_composes_with_execution_context(self):
+        replies = os.path.join(self.primary, "replies.json")
+        with open(replies, "w", encoding="utf-8") as handle:
+            json.dump({"create_genes": {"search_material": self.material},
+                       "expand_genes": {"additions": self.additions}}, handle)
+        worker = os.path.join(self.primary, "fake-creativity-cli.py")
+        with open(worker, "w", encoding="utf-8") as handle:
+            handle.write(textwrap.dedent(r'''
+                import json, sys
+
+                live = "--input-format" in sys.argv
+                prompt = (json.loads(sys.stdin.readline())["message"]["content"][0]["text"]
+                          if live else sys.stdin.read())
+                job = next(job for job in ("create_genes", "evaluate_candidates", "expand_genes")
+                           if "KIND: " + job in prompt)
+                with open(sys.argv[1], encoding="utf-8") as handle:
+                    replies = json.load(handle)
+                if job == "evaluate_candidates":
+                    batch = json.loads(prompt.split(
+                        "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n"
+                    )[1].splitlines()[0])
+                    reply = {"evaluations": [{
+                        "candidate_id": item["candidate_id"], "proposal": "Use this combination.",
+                        "constraint_valid": True, "constraint_violations": [],
+                        "reason": "Assessment against the objective.", "assumptions": [], "score": 0.4,
+                    } for item in batch]}
+                else:
+                    reply = replies[job]
+                answer = json.dumps(reply)
+                print(json.dumps({"type": "result", "result": answer, "is_error": False})
+                      if live else answer, flush=True)
+            '''))
+        for family, flags in (("codex", []), ("claude", ["-p"])):
+            with self.subTest(family=family):
+                self.session = staffing.create_session(
+                    self.home, session_body(document="matrix", families=[family]),
+                )["id"]
+                config = dict(self.config(), commands={family: [sys.executable, worker, replies] + flags})
+                record = self.admit(generation_limit=3, max_evaluated_candidates=12)
+                host = task_api.DirectTaskHost(self.home, poll_interval=0.001)
+                with mock.patch.object(brainstorming_lifecycle, "_spawn_participant",
+                                       wraps=brainstorming_lifecycle._spawn_participant) as spawn:
+                    host.start(record, lambda: config)
+                    result = self._terminal(host, record["id"])["result"]
+                self.assertEqual(result["status"], "success", result)
+                native = result["native_result"]
+                self.assertEqual(native["stop_reason"], "generation_limit")
+                self.assertEqual(native["generations_completed"], 3)
+                self.assertEqual(native["evaluated_candidates"], 6)
+                self.assertEqual(native["expansion_interventions"], 1)
+                self.assertTrue(native["proposals"])
+                self.assertEqual(self.checkpoint(record)["native_result"], native)
+                self.assertEqual(spawn.call_count, 5)
+                for call in spawn.call_args_list:
+                    context, argv, kwargs = call.args
+                    self.assertEqual(context, {
+                        "workspace_path": self.primary, "primary": {"path": self.primary},
+                        "additional": [{"path": self.additional}], "project": None, "work_area": None,
+                    })
+                    self.assertEqual("--input-format" in argv, family == "claude")
+                    self.assertEqual(kwargs["cwd"], self.primary)
+                    self.assertTrue(kwargs["start_new_session"])
+                    self.assertTrue(kwargs["pass_fds"])
+                self.assertFalse(host.owns_workspace(self.primary))
+                self.assertFalse(os.path.exists(os.path.join(
+                    self.home, "task-runtime", record["id"], "execution.json",
+                )))
 
     def test_creativity_resume_keeps_saved_work(self):
         for boundary in ("genes", "batch", "generation", "expansion", "result"):

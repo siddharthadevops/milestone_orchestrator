@@ -279,4 +279,5 @@ executing the chosen initiative requires its own instruction.
 | slice_doc-07 (Progress, rebaseline, stagnation, and expansion) | reviewed | 1 | satisfied | 7ea1d6e |
 | slice_impl-07-a (Progress, rebaseline, stagnation, and expansion) | reviewed | 4 | satisfied | 4dab9bb |
 | slice_impl-07-b (Progress, rebaseline, stagnation, and expansion) | reviewed | 1 | satisfied | 44eea28 |
-| slice_doc-08 (Durable creativity task lifecycle) | reviewed | 4 | satisfied | - |
+| slice_doc-08 (Durable creativity task lifecycle) | reviewed | 4 | satisfied | 39e4fd9 |
+| slice_impl-08-a (Durable creativity task lifecycle) | reviewed | 4 | satisfied | - |
