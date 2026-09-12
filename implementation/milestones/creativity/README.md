@@ -285,4 +285,5 @@ executing the chosen initiative requires its own instruction.
 | slice_doc-09 (Public ordering and presentation) | reviewed | 1 | satisfied | 7043a8b |
 | slice_impl-09-a (Public ordering and presentation) | reviewed | 1 | satisfied | edf8c18 |
 | slice_impl-09-b (Public ordering and presentation) | reviewed | 1 | satisfied | cb3cc9d |
-| slice_doc-10 (Cross-domain evidence and baseline comparison) | reviewed | 1 | satisfied | - |
+| slice_doc-10 (Cross-domain evidence and baseline comparison) | reviewed | 1 | satisfied | 83823d7 |
+| slice_impl-10-a (Cross-domain evidence and baseline comparison) | reviewed | 1 | satisfied | - |

@@ -155,6 +155,216 @@ class CreativityTaskTest(unittest.TestCase):
         self.assertEqual(tasks.task_executor_catalogue(), catalogue)
         self.assertIn("creativity", [item["id"] for item in catalogue])
 
+    def test_creativity_cross_domain_contracts(self):
+        examples = os.path.join(os.path.dirname(__file__), "..", "..", "implementation",
+                                "milestones", "creativity", "examples")
+        # Scripted model material, deliberately separate from the common inputs
+        # used by the real comparison. These are not domain templates or defaults.
+        dimensions = {
+            "language": [
+                ("action", "What the daughter does", [
+                    "Tightens a knot", "Hides a torn net", "Counts her father's stitches", "Unties a knot",
+                ]),
+                ("trace", "Sensory trace of the missing minute", [
+                    "A cooling cup", "A stopped bell", "A wet handprint", "A thread pulled taut",
+                ]),
+            ],
+            "business": [
+                ("offer", "Paid service to test", [
+                    "Brake adjustment", "Puncture clinic", "Commuter safety check", "Chain care lesson",
+                ]),
+                ("delivery", "Bounded delivery arrangement", [
+                    "Two booked counter slots", "One small workshop", "Three short appointments", "One demo",
+                ]),
+            ],
+        }
+        document = resolver_doc()
+        document["assignment"]["plan"] = {"1": 3}
+        document["assignment"]["brainstorm"]["1"] = 3
+        document["tuning"]["high"]["3"]["plan"] = [3, 5]
+        document["tuning"]["medium"]["3"]["brainstorm"] = [2, 2]
+        staffing.save(self.home, document)
+        configuration = {
+            "population_size": 4, "generation_limit": 4, "max_evaluated_candidates": 16,
+            "elite_count": 2, "diversity_count": 1, "mutation_rate": 0.5,
+            "minimum_improvement": 0.1, "patience_generations": 2,
+            "max_stagnation_expansions": 1, "evaluation_batch_size": 2,
+            "evaluation_concurrency": 2, "shortlist_size": 3,
+            "rigor": {"default": "medium", "create_genes": "high", "evaluate_candidates": "low"},
+        }
+        expected_staffing = {
+            "create_genes": ("claude", "claude-fable-5", "max"),
+            "evaluate_candidates": ("codex", "gpt-5.6-luna", "low"),
+            "expand_genes": ("claude", "claude-opus-5", "medium"),
+        }
+        for domain, layer in (("language", "literature"), ("business", "business")):
+            with open(os.path.join(examples, domain + ".json"), encoding="utf-8") as handle:
+                problem = json.load(handle)
+            for material in ("default", layer):
+                with self.subTest(domain=domain, material=material):
+                    self.calls.clear()
+                    staffing.edit_session(self.home, self.session, {"rigor": "high", "material": material})
+                    session = staffing.read_session(self.home, self.session)
+                    self.material = dict(copy.deepcopy(problem["context"]), objective=problem["request"],
+                                         dimensions=[{
+                                             "id": key, "meaning": meaning, "variants": [
+                                                 {"id": "v" + str(i), "text": text}
+                                                 for i, text in enumerate(variants)
+                                             ],
+                                         } for key, meaning, variants in dimensions[domain]])
+                    self.additions = [{"dimension_id": dimensions[domain][0][0], "variants": [{
+                        "id": "expanded", "text": ("Cuts a remembered stitch" if domain == "language"
+                                                   else "Wheel care lesson"),
+                        "reason": "Adds a different action within the existing dimension.",
+                    }]}]
+                    active, peak, entered = 0, 0, 0
+                    evaluated_ids, invalid_ids, best_ids = [], [], []
+                    lock, overlap = threading.Lock(), threading.Barrier(2, timeout=5)
+
+                    def physical(family, prompt, workspace, **kwargs):
+                        nonlocal active, peak, entered
+                        if "KIND: evaluate_candidates" not in prompt:
+                            return self.physical(family, prompt, workspace, **kwargs)
+                        with lock:
+                            active += 1
+                            peak = max(peak, active)
+                            entered += 1
+                            first_wave = entered <= 2
+                        try:
+                            result = self.physical(family, prompt, workspace, **kwargs)
+                            reply = json.loads(result.text)
+                            with lock:
+                                for item in reply["evaluations"]:
+                                    identity = item["candidate_id"]
+                                    evaluated_ids.append(identity)
+                                    if not invalid_ids:
+                                        invalid_ids.append(identity)
+                                        item.update(constraint_valid=False, score=1.0,
+                                                    constraint_violations=[self.material["constraints"][0]["id"]])
+                                    elif not best_ids:
+                                        best_ids.append(identity)
+                                        item["score"] = 0.6
+                            if first_wave:
+                                overlap.wait()
+                            return self.result(reply)
+                        finally:
+                            with lock:
+                                active -= 1
+
+                    host = self.host(physical)
+                    self.start_server(host)
+                    code, catalogue = self.request("GET", "/api/task-executors")
+                    self.assertEqual(code, 200)
+                    self.assertIn("creativity", [item["id"] for item in catalogue["task_executors"]])
+                    order = self.order("creativity", **problem)
+                    order.update(configuration=configuration, staffing_session=self.session)
+                    with mock.patch.object(service, "_direct_task_config", return_value=self.config()):
+                        code, response = self.request("POST", "/api/tasks", order)
+                    self.assertEqual(code, 201, response)
+                    record = self._terminal(host, response["task"]["id"])
+                    code, public = self.request("GET", "/api/tasks/" + record["id"])
+                    self.assertEqual(code, 200)
+                    self.assertEqual(public["task"], record)
+                    result, checkpoint = record["result"], self.checkpoint(record)
+                    self.assertEqual(result["status"], "success", result)
+                    self.assertEqual(record["order"]["configuration"], configuration)
+                    for key, value in problem.items():
+                        self.assertEqual(record["order"]["request"][key], value)
+                    self.assertEqual(staffing.read_session(self.home, self.session), session)
+                    self.assertEqual((active, peak), (0, configuration["evaluation_concurrency"]))
+
+                    native = result["native_result"]
+                    self.assertEqual(native["stop_reason"], "generation_limit")
+                    self.assertEqual(native["outcome"], "proposals")
+                    self.assertEqual(native["generations_completed"], configuration["generation_limit"])
+                    self.assertEqual(native["evaluated_candidates"], len(evaluated_ids))
+                    self.assertEqual(len(evaluated_ids), configuration["max_evaluated_candidates"])
+                    self.assertEqual(len(set(evaluated_ids)), len(evaluated_ids))
+                    self.assertEqual(native["expansion_interventions"], 1)
+                    self.assertEqual(checkpoint["progress"]["expansions"][0]["generation"], 3)
+                    expanded = copy.deepcopy(self.material)
+                    expanded["dimensions"][0]["variants"].append({
+                        key: self.additions[0]["variants"][0][key] for key in ("id", "text")
+                    })
+                    self.assertEqual(checkpoint["search_material"], expanded)
+                    for genome in checkpoint["candidates"].values():
+                        self.assertEqual(set(genome), {dimension["id"] for dimension in expanded["dimensions"]})
+                        for dimension in expanded["dimensions"]:
+                            self.assertIn(genome[dimension["id"]], [variant["id"]
+                                                                   for variant in dimension["variants"]])
+
+                    proposals = native["proposals"]
+                    self.assertLessEqual(len(proposals), configuration["shortlist_size"])
+                    final_ids = {item["candidate_id"] for item in proposals}
+                    self.assertTrue(final_ids.isdisjoint(invalid_ids))
+                    self.assertTrue(set(best_ids) <= final_ids)
+                    genomes = []
+                    for item in proposals:
+                        parts = item["components"]
+                        self.assertEqual(len(parts), len(expanded["dimensions"]))
+                        for part, dimension in zip(parts, expanded["dimensions"]):
+                            self.assertEqual(part["dimension_id"], dimension["id"])
+                            self.assertEqual(part["dimension"], dimension["meaning"])
+                            self.assertIn({"id": part["variant_id"], "text": part["variant"]},
+                                          dimension["variants"])
+                        genomes.append(tuple(part["variant_id"] for part in parts))
+                    self.assertEqual(len(set(genomes)), len(genomes))
+
+                    for call in self.calls:
+                        job, prompt = call["job"], call["prompt"]
+                        self.assertEqual(tuple(call[key] for key in ("family", "model", "effort")),
+                                         expected_staffing[job])
+                        self.assertEqual(layer.upper() + " REFINEMENT" in prompt, material == layer)
+                        self.assertIn("Do not edit files or execute proposals", prompt)
+                        if job == "create_genes":
+                            self.assertIn(problem["request"], prompt)
+                            self.assertEqual(json.loads(prompt.split("\nCONTEXT:\n")[1].splitlines()[0]),
+                                             problem["context"])
+                            self.assertIn("ORDERED REFERENCE PATHS (JSON array; may be empty):\n[]", prompt)
+                        elif job == "evaluate_candidates":
+                            self.assertLessEqual(len(call["ids"]), configuration["evaluation_batch_size"])
+                        else:
+                            self.assertEqual(json.loads(prompt.split(
+                                "COMPLETE SEARCH MATERIAL (JSON):\n",
+                            )[1].splitlines()[0]), self.material)
+                            promising = json.loads(prompt.split(
+                                "PROMISING VALID CANDIDATES (JSON; no historical scores or prestige):\n",
+                            )[1].splitlines()[0])
+                            promising_ids = {item["candidate_id"] for item in promising}
+                            self.assertTrue(promising_ids.isdisjoint(invalid_ids))
+                            self.assertTrue(set(best_ids) <= promising_ids)
+                            self.assertTrue(all("score" not in item for item in promising))
+
+                    receipts = [event for event in public["lifecycle"]["history"] if "physical_dispatch" in event]
+                    self.assertEqual(len(receipts), len(self.calls))
+                    self.assertEqual(len({event["call_id"] for event in receipts}), len(receipts))
+                    self.assertEqual(len(receipts), 10)  # Genes, eight batches, one expansion.
+                    batches = {batch["call_id"]: batch for batch in checkpoint["evaluation"]["batches"]}
+                    self.assertEqual(len(batches), 8)
+                    self.assertEqual({call["job"] for call in self.calls}, set(expected_staffing))
+                    for event in receipts:
+                        dispatch = event["physical_dispatch"]
+                        context = dispatch["call_context"]
+                        self.assertEqual(context["material"], material)
+                        self.assertIsNone(dispatch["prompt_set_fallback"])
+                        self.assertEqual(tuple(dispatch[key] for key in ("family", "model", "effort")),
+                                         expected_staffing[context["job"]])
+                        if context["job"] == "evaluate_candidates":
+                            batch = batches[event["call_id"]]
+                            self.assertEqual((batch["batch"], batch["generation"]),
+                                             (context["batch"], context["generation"]))
+                            self.assertCountEqual(batch["genomes"], [item["candidate_id"]
+                                                                    for item in batch["evaluations"]])
+                    attempts = [event["attempt"] for event in receipts]
+                    self.assertAlmostEqual(result["duration_s"], sum(item["duration_s"] for item in attempts))
+                    for key in ("input_tokens", "output_tokens"):
+                        self.assertEqual(result["token_usage"][key],
+                                         sum(item["token_usage"][key] for item in attempts))
+                    for key in ("api_usd", "real_usd"):
+                        self.assertAlmostEqual(result["cost"][key], sum(item["cost"][key] for item in attempts))
+                    self.assertFalse(result["token_usage_partial"])
+                    self.assertFalse(result["cost_partial"])
+
     def test_creativity_default_runner_composes_with_execution_context(self):
         replies = os.path.join(self.primary, "replies.json")
         with open(replies, "w", encoding="utf-8") as handle:
