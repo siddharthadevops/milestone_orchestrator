@@ -1,0 +1,14 @@
+{
+ "document": "slice10-evidence",
+ "families": [
+  "codex",
+  "claude"
+ ],
+ "id": "stf-300959a23751c28afab987a25ba20dde",
+ "material": "literature",
+ "rigor": "high",
+ "work_area": {
+  "project": "orchestrators",
+  "work_area": "implementation"
+ }
+}

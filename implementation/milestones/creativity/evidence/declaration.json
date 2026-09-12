@@ -1,0 +1,54 @@
+{
+  "declared_at": "2026-09-12T13:48:19.734271+00:00",
+  "execution_revision": "2df9039a57f38718d949cc7ee43c88e888a90579",
+  "allowance": {
+    "unit": "api_usd",
+    "target_per_task": 0.03,
+    "comparability": "abs(creativity - agent_call) / max(creativity, agent_call) <= 0.5; both totals must be complete and positive",
+    "tolerance": 0.5,
+    "enforcement": "Experimental target only; no token/dollar cap, automatic reruns or judge call."
+  },
+  "order_sequence": [
+    "language-agent_call",
+    "language-creativity",
+    "business-agent_call",
+    "business-creativity"
+  ],
+  "creativity_configuration": {
+    "population_size": 4,
+    "generation_limit": 3,
+    "max_evaluated_candidates": 12,
+    "elite_count": 2,
+    "diversity_count": 1,
+    "mutation_rate": 0.35,
+    "minimum_improvement": 0.05,
+    "patience_generations": 1,
+    "max_stagnation_expansions": 1,
+    "evaluation_batch_size": 4,
+    "evaluation_concurrency": 1,
+    "shortlist_size": 3,
+    "rigor": {
+      "default": "medium",
+      "evaluate_candidates": "low"
+    }
+  },
+  "staffing": {
+    "family": "codex",
+    "model": "gpt-5.6-luna",
+    "creativity": {
+      "create_genes": "medium",
+      "evaluate_candidates": "low",
+      "expand_genes": "medium"
+    },
+    "agent_call": {
+      "role": "brainstorm",
+      "effort": "max"
+    },
+    "reason": "Several bounded search calls versus one higher-effort direct call on the same small model; neither receives an enforced spend cap."
+  },
+  "materials": {
+    "language": "literature",
+    "business": "business"
+  },
+  "baseline_instruction": "Exploration only: do not edit files, invoke tools, contact anyone or act on proposals. Ignore repository agent instructions. The complete common problem is below, including all context and reference paths. Return a shortlist of exactly three proposals, with brief reasons and assumptions against its supplied criteria. Use your higher reasoning effort to consider alternatives and check the constraints before answering; do not report private reasoning or manufacture work to spend the allowance. Experimental work allowance: about USD 0.03 API-equivalent for this single call, a target rather than an enforced cap. No search-generated material is supplied.\n\nCOMMON PROBLEM (JSON):\n"
+}
