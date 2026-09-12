@@ -1,6 +1,9 @@
 """Focused static contract checks for task ordering and plan display."""
 
+import json
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -14,6 +17,114 @@ class TaskPanelTests(unittest.TestCase):
         cls.task_ui = cls.panel.split(
             "/* ---- standalone task ordering", 1
         )[1].split("/* ---- new brainstorming:", 1)[0]
+
+    def test_creativity_schema_form_submits_public_order(self):
+        from orchestrator import staffing
+        from orchestrator.tests.test_staffing_sessions import session_body
+        from orchestrator.tests.test_task_api import TaskApiTest
+        from orchestrator.tests.test_tasks import creativity_configuration
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for executable panel checks")
+        server = TaskApiTest()
+        server.setUp()
+        self.addCleanup(server.doCleanups)
+        server.project("mine", server.primary)
+        binding = {"project": "mine", "work_area": "main"}
+        session = staffing.create_session(server.home, session_body(work_area=binding))["id"]
+        configuration = creativity_configuration(mutation_rate=0.25, minimum_improvement=0.02)
+        names = (
+            "esc", "taskExecutorEntry", "taskConfigurationApplicable", "taskConfigurationValue",
+            "taskConfigurationOption", "renderTaskConfigurationSchema", "taskUsesExecutionBinding",
+            "setTaskConfigurationValue", "currentTaskConfiguration", "submitTaskForm",
+            "snapshotTaskExecutorConfiguration", "onTaskConfigurationChange",
+        )
+        sources = [re.search(r"(?:async )?function " + name + r"\([^\n]*\) \{.*?\n\}",
+                             self.panel, re.S).group(0) for name in names]
+        setup = "const fixture = " + json.dumps({
+            "base": server.base, "binding": binding, "session": session, "configuration": configuration,
+        }) + ";\n"
+        checks = r"""
+const assert = require('node:assert/strict');
+let taskExecutorSelected = 'creativity', taskDialogSeq = 1, taskSubmitPending = false;
+let taskExecutorCatalogue, taskExecutorDrafts = {}, closed = 0, refusal = null;
+const taskProjects = [{families_order: ['codex', 'claude']}];
+const taskReferences = ['second.md', 'first.md'], posts = [];
+const fields = Object.fromEntries(Object.entries({
+  t_request: 'Find a useful possibility.', t_context: 'Facts and constraints.',
+  t_output: '', t_project: '0', t_prompt_set: 'default',
+}).map(([id, value]) => [id, {value}]));
+fields.task_error = {textContent: '', style: {}};
+fields.taskform = {close: () => closed++};
+const taskBinding = () => fixture.binding;
+const standaloneStaffingSession = async () => fixture.session;
+const syncTaskSubmitDisabled = () => {};
+const renderTaskExecutorEditor = () => {};
+async function postJSON(path, payload) {
+  posts.push(payload);
+  if (refusal) throw new Error(refusal);
+  const response = await fetch(fixture.base + path, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(body));
+  assert.deepEqual(body.task.order.configuration, payload.configuration);
+}
+(async () => {
+  taskExecutorCatalogue = (await (await fetch(fixture.base + '/api/task-executors')).json()).task_executors;
+  const html = renderTaskConfigurationSchema(taskExecutorEntry('creativity').configuration_schema, {});
+  // Supply DOM controls from the actual rendered markup; native input validity is browser-owned.
+  const controls = [...html.matchAll(/<(?:input|select)\b[^>]*>/g)].map(([tag]) => {
+    const attrs = Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1], m[2]]));
+    const dataset = Object.fromEntries(Object.entries(attrs).filter(([k]) => k.startsWith('data-'))
+      .map(([k, v]) => [k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v]));
+    return {dataset, value: attrs.value || '', min: attrs.min || '', max: attrs.max || '', checkValidity: () => true};
+  });
+  global.document = {getElementById: id => fields[id], querySelectorAll: () => controls};
+  const control = path => controls.find(c => c.dataset.taskConfig === path);
+  assert.equal(controls.length, 16);
+  assert(controls.every(c => c.value === ''));
+  assert.equal(control('mutation_rate').max, '1');
+  await submitTaskForm();
+  assert.equal(posts.length, 0);
+  assert(fields.task_error.textContent);
+  for (const [key, value] of Object.entries(fixture.configuration)) control(key).value = String(value);
+  control('rigor.default').value = 'low';
+  control('rigor.evaluate_candidates').value = 'high';
+  const expected = {...fixture.configuration, rigor: {default: 'low', evaluate_candidates: 'high'}};
+  assert.deepEqual(currentTaskConfiguration().configuration, expected);
+  for (const key of Object.keys(fixture.configuration)) {
+    const input = control(key), saved = input.value;
+    input.value = '';
+    await submitTaskForm();
+    assert.equal(posts.length, 0, key);
+    input.value = saved;
+  }
+  control('population_size').value = '0';
+  onTaskConfigurationChange(control('population_size'));
+  assert.equal(control('population_size').value, '0');
+  control('population_size').value = '2';
+  await submitTaskForm();
+  assert.deepEqual(posts[0], {task_executor: 'creativity', configuration: expected,
+    staffing_session: fixture.session, prompt_set: 'default', request: {
+      work_area: fixture.binding, request: fields.t_request.value, context: fields.t_context.value,
+      reference_documents: taskReferences,
+    }});
+  assert.equal(closed, 1);
+  assert.equal(taskSubmitPending, false);
+  control('rigor.default').value = control('rigor.evaluate_candidates').value = '';
+  assert.deepEqual(currentTaskConfiguration().configuration, fixture.configuration);
+  refusal = 'invalid_task_request';
+  await submitTaskForm();
+  assert.equal(fields.task_error.textContent, refusal);
+  assert.equal(closed, 1);
+  assert.equal(taskSubmitPending, false);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        result = subprocess.run([node, "-e", setup + "\n".join(sources) + checks],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_one_catalogue_drives_options_and_configuration(self):
         self.assertEqual(self.task_ui.count('api("/api/task-executors")'), 1)

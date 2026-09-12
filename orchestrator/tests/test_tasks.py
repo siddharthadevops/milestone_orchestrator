@@ -150,10 +150,36 @@ class TaskContractsTest(unittest.TestCase):
                     tasks.INVALID_TASK_REQUEST, tasks.resolve_creativity_configuration,
                     value,
                 )
-        self.assert_request_error(
-            tasks.UNKNOWN_TASK_EXECUTOR, tasks.validate_order,
-            dict(task_order("creativity"), configuration=base),
-        )
+
+    def test_creativity_public_catalogue_and_configuration(self):
+        entry = next(item for item in tasks.task_executor_catalogue() if item["id"] == "creativity")
+        self.assertEqual(entry["execution_bindings"], {
+            "staffing": True, "prompt_set": True, "strategy_profile": False,
+        })
+        schema = entry["configuration_schema"]
+        base = creativity_configuration(mutation_rate=0.25, minimum_improvement=0.02)
+        self.assertEqual(set(schema), set(base) | {"rigor"})
+        for key in base:
+            self.assertNotIn("default", schema[key])
+            self.assertFalse(schema[key].get("optional", False))
+        self.assertEqual(set(schema["rigor"]["properties"]), {
+            "default", "create_genes", "evaluate_candidates", "expand_genes",
+        })
+        for definition in schema["rigor"]["properties"].values():
+            self.assertTrue(definition["optional"])
+            self.assertEqual(definition["choices"], ["low", "medium", "high"])
+        self.assertEqual([item["id"] for item in tasks.producer_task_executor_catalogue()], ["agent_call"])
+        for configuration in (base, dict(base, rigor={}), dict(base, rigor={"create_genes": "high"})):
+            order = dict(task_order("creativity"), configuration=configuration)
+            self.assertEqual(tasks.validate_order(order)["configuration"], configuration)
+        for configuration in ({}, dict(base, population_size=0), dict(base, mutation_rate=1.1),
+                              dict(base, elite_count=2), dict(base, max_evaluated_candidates=1),
+                              dict(base, evaluation_batch_size=3), dict(base, shortlist_size=3)):
+            self.assert_request_error(
+                tasks.INVALID_TASK_REQUEST, tasks.validate_order,
+                dict(task_order("creativity"), configuration=configuration),
+            )
+        self.assert_request_error(tasks.INVALID_TASK_REQUEST, tasks.validate_order, task_order("creativity"))
 
     def test_creativity_native_result_contract(self):
         dimensions = [
@@ -372,7 +398,7 @@ class TaskContractsTest(unittest.TestCase):
         self.assertIsInstance(catalogue, list)
         self.assertEqual(
             [entry["id"] for entry in catalogue],
-            ["agent_call", "brainstorming", "reviewed_task", "deep_task"],
+            ["agent_call", "brainstorming", "reviewed_task", "deep_task", "creativity"],
         )
         producer_catalogue = tasks.producer_task_executor_catalogue()
         self.assertEqual(
@@ -432,6 +458,11 @@ class TaskContractsTest(unittest.TestCase):
                 "deep_task": {
                     "staffing": True,
                     "strategy_profile": True,
+                    "prompt_set": True,
+                },
+                "creativity": {
+                    "staffing": True,
+                    "strategy_profile": False,
                     "prompt_set": True,
                 },
             },

@@ -8,7 +8,6 @@ import tempfile
 import textwrap
 import threading
 import unittest
-import uuid
 from types import SimpleNamespace
 from unittest import mock
 
@@ -67,20 +66,13 @@ class CreativityTaskTest(unittest.TestCase):
         return {"billing": {"codex": "api", "claude": "api"}}
 
     def admit(self, prompt_set="default", work_area=None, **configuration):
-        # Seed an admitted internal order: public catalogue admission is Slice 9.
         order = self.order("creativity", work_area=work_area, request=search_fixture.OBJECTIVE,
                            reference_documents=self.references)
         order.update(
-            request=tasks.validate_request(order["request"]), staffing_session=self.session, prompt_set=prompt_set,
-            configuration=tasks.resolve_creativity_configuration(creativity_configuration(**configuration)),
+            staffing_session=self.session, prompt_set=prompt_set,
+            configuration=creativity_configuration(**configuration),
         )
-        record = {"id": uuid.uuid4().hex, "order": order, "resolved_staffing": {}, "result": None}
-        store = task_api.StandaloneTaskStore(self.home)
-        self.assertTrue(store._store.cas(
-            task_api.task_key(record["id"]), None,
-            store._document(record, task_api._admission_stamp()),
-        ).ok)
-        return record
+        return task_api.StandaloneTaskStore(self.home).admit(order, {}, self.primary)
 
     def host(self, physical=None):
         return task_api.DirectTaskHost(
@@ -161,7 +153,7 @@ class CreativityTaskTest(unittest.TestCase):
                     self.assertEqual(native["expansion_interventions"], 1)
                     self.assertIn("expand_genes", [call["job"] for call in self.calls])
         self.assertEqual(tasks.task_executor_catalogue(), catalogue)
-        self.assertNotIn("creativity", [item["id"] for item in catalogue])
+        self.assertIn("creativity", [item["id"] for item in catalogue])
 
     def test_creativity_default_runner_composes_with_execution_context(self):
         replies = os.path.join(self.primary, "replies.json")

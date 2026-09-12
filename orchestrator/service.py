@@ -5437,7 +5437,7 @@ def _direct_task_lifecycle(home, record, host=None):
     """Control metadata beside, never inside, the canonical task record."""
     if tasks.stored_task_executor(
         (record.get("order") or {}).get("task_executor")
-    ) not in ("agent_call", "reviewed_task", "deep_task"):
+    ) not in task_api.RECOVERABLE_EXECUTORS:
         return None
     try:
         reader = getattr(host, "lifecycle", None)

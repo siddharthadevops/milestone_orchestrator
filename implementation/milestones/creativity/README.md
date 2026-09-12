@@ -282,4 +282,5 @@ executing the chosen initiative requires its own instruction.
 | slice_doc-08 (Durable creativity task lifecycle) | reviewed | 4 | satisfied | 39e4fd9 |
 | slice_impl-08-a (Durable creativity task lifecycle) | reviewed | 4 | satisfied | d0015d9 |
 | slice_impl-08-b (Durable creativity task lifecycle) | reviewed | 1 | satisfied | 0e68db1 |
-| slice_doc-09 (Public ordering and presentation) | reviewed | 1 | satisfied | - |
+| slice_doc-09 (Public ordering and presentation) | reviewed | 1 | satisfied | 7043a8b |
+| slice_impl-09-a (Public ordering and presentation) | reviewed | 1 | satisfied | - |

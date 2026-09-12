@@ -332,6 +332,106 @@ class TaskApiTest(unittest.TestCase):
             self.assertEqual(tasks.resolve_configuration("brainstorming")
                              ["max_rounds"], 27)
 
+    def test_creativity_public_order_and_controls(self):
+        from orchestrator.tests.test_creativity_task import CreativityTaskTest
+        from orchestrator.tests.test_staffing_sessions import session_body
+        from orchestrator.tests.test_task_controls_api import HeldHost
+        from orchestrator.tests.test_tasks import creativity_configuration
+
+        search = CreativityTaskTest()
+        search.setUp()
+        self.addCleanup(search.doCleanups)
+        self.home, self.primary, self.additional = search.home, search.primary, search.additional
+        held = HeldHost(self.home)
+        self.start_server(held)
+        self.project("orchestrators", self.primary, [access.USER_EMAILS[0]])
+        self.project("private", self.directory("private"))
+        private_session = staffing.create_session(self.home, session_body(
+            work_area={"project": "private", "work_area": "main"},
+        ))["id"]
+        order = self.order("creativity", request=search.material["objective"],
+                           reference_documents=search.references)
+        configuration = creativity_configuration(
+            generation_limit=3, max_evaluated_candidates=8,
+            rigor={"default": "low", "create_genes": "high", "evaluate_candidates": "medium"},
+        )
+        order.update(configuration=configuration, staffing_session=search.session, prompt_set="operator")
+        search.write_prompt("PUBLIC CREATION PROMPT", "create_genes")
+        project_order = dict(order, request=dict(order["request"], reference_documents=[],
+                             work_area={"project": "orchestrators", "work_area": "main"}))
+        for invalid, headers, expected in (
+            (dict(order, configuration={}), None, (400, tasks.INVALID_TASK_REQUEST)),
+            (dict(order, configuration=dict(configuration, mutation_rate=0)), None,
+             (400, tasks.INVALID_TASK_REQUEST)),
+            (dict(project_order, request=dict(project_order["request"],
+                  work_area={"project": "private", "work_area": "main"})), self.member(),
+             (403, service.FORBIDDEN)),
+            (dict(project_order, staffing_session=private_session), self.member(), (403, service.FORBIDDEN)),
+        ):
+            code, response = self.request("POST", "/api/tasks", invalid, headers)
+            self.assertEqual((code, response["error"]), expected)
+            self.assertEqual(held.store.records(), [])
+            self.assertEqual(held.started, [])
+
+        code, response = self.request("POST", "/api/tasks", order)
+        self.assertEqual(code, 201, response)
+        record = response["task"]
+        path = "/api/tasks/" + record["id"]
+        self.assertEqual(self.request("GET", path)[1]["task"], record)
+        self.assertEqual(self.request("GET", "/api/tasks")[1]["tasks"], [record])
+        for key in ("request", "context", "reference_documents"):
+            self.assertEqual(record["order"]["request"][key], order["request"][key])
+        self.assertEqual(record["order"]["configuration"], configuration)
+        self.assertEqual(record["order"]["prompt_set"], "operator")
+        self.assertTrue(self.request("GET", path)[1]["lifecycle"]["can_pause"])
+        self.assertEqual(self.request("DELETE", path)[0], 409)
+        code, paused = self.request("POST", path + "/pause", {"reason": "Inspect before running"})
+        self.assertEqual(code, 200, paused)
+        paused = paused["lifecycle"]
+        self.assertTrue(paused["can_resume"])
+        self.assertEqual(self.request("GET", path)[1]["lifecycle"], paused)
+        rows = self.request("GET", "/api/tasks?scope=direct")[1]["rows"]
+        self.assertEqual(rows[0]["lifecycle"]["status"], "paused")
+        code, refused = self.request("POST", path + "/resume", {"revision": paused["revision"] - 1})
+        self.assertEqual(code, 409, refused)
+        self.assertTrue(refused["error"])
+        self.assertEqual(held.started, [record["id"]])
+
+        host = search.host()
+        self.start_server(host)
+        code, resumed = self.request("POST", path + "/resume", {"revision": paused["revision"]})
+        self.assertEqual(code, 200, resumed)
+        terminal = search._terminal(host, record["id"])
+        self.assertEqual(terminal["result"]["status"], "success", terminal)
+        self.assertEqual(self.request("GET", path)[1]["task"], terminal)
+        self.assertIn("PUBLIC CREATION PROMPT", search.calls[0]["prompt"])
+        self.assertIn(order["request"]["request"], search.calls[0]["prompt"])
+        self.assertIn(json.dumps(order["request"]["context"]), search.calls[0]["prompt"])
+        self.assertIn(json.dumps(search.references), search.calls[0]["prompt"])
+        for job, role, rigor in (("create_genes", "plan", "high"),
+                                 ("evaluate_candidates", "review", "medium"),
+                                 ("expand_genes", "brainstorm", "low")):
+            expected = staffing.resolve(self.home, search.session, role=role, index=1, rigor=rigor).answer
+            calls = [call for call in search.calls if call["job"] == job]
+            self.assertTrue(calls, job)
+            for call in calls:
+                self.assertEqual((call["family"], call["model"], call["effort"]),
+                                 (expected["agent"], expected["model"], expected["effort"]))
+        self.assertEqual(staffing.read_session(self.home, search.session)["rigor"], "medium")
+        self.assertEqual(self.request("DELETE", path)[0], 200)
+        self.assertEqual(self.request("GET", path)[0], 404)
+        self.assertFalse(os.path.exists(task_api.creativity_checkpoint_store(self.home, record["id"]).directory))
+
+        self.start_server(held)
+        record = self.request("POST", "/api/tasks", order)[1]["task"]
+        path = "/api/tasks/" + record["id"]
+        self.start_server(host)
+        self.assertEqual(self.request("POST", path + "/stop", {})[0], 200)
+        cancelled = search._terminal(host, record["id"])
+        self.assertEqual(cancelled["result"]["status"], "failure")
+        self.assertIn("stopped by", cancelled["result"]["reason"])
+        self.assertEqual(self.request("DELETE", path)[0], 200)
+
     def test_direct_brainstorming_requires_git_and_service_owns_its_mode(self):
         nonrepo = self.directory("brainstorming-nonrepo")
         order = self.order(

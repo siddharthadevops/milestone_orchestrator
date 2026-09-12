@@ -380,6 +380,51 @@ _TASK_EXECUTORS += (
         },
     },
 )
+_CREATIVITY_COUNTS = (
+    "population_size", "generation_limit", "max_evaluated_candidates",
+    "elite_count", "diversity_count", "patience_generations",
+    "max_stagnation_expansions", "evaluation_batch_size",
+    "evaluation_concurrency", "shortlist_size",
+)
+_CREATIVITY_RATES = ("mutation_rate", "minimum_improvement")
+_CREATIVITY_JOB_STAFFING = {
+    "create_genes": {"role": "plan", "index": 1},
+    "evaluate_candidates": {"role": "review", "index": 1, "review_breadth": 1},
+    "expand_genes": {"role": "brainstorm", "index": 1},
+}
+
+_TASK_EXECUTORS += (
+    {
+        "id": "creativity",
+        "name": "Creativity",
+        "description": "Explores combinations and returns proposals for human assessment.",
+        "operating_mode": "Bounded evolutionary search with model evaluations.",
+        "usage_examples": ["exploring a literary objective", "finding constrained business options"],
+        "available_agent_configurations": (
+            "Gene creation uses the first plan seat, evaluation the first review "
+            "seat, and expansion the first brainstorm seat. Optional per-job "
+            "rigor overrides the task default, then the live staffing session."
+        ),
+        "execution_bindings": {
+            "staffing": True, "prompt_set": True, "strategy_profile": False,
+        },
+        "configuration_schema": {
+            **{name: {"type": "integer", "exclusive_minimum": 0}
+               for name in _CREATIVITY_COUNTS},
+            "population_size": {"type": "integer", "exclusive_minimum": 1},
+            **{name: {"type": "number", "exclusive_minimum": 0, "maximum": 1}
+               for name in _CREATIVITY_RATES},
+            "rigor": {
+                "type": "object", "optional": True,
+                "properties": {
+                    name: {"type": "choice", "optional": True,
+                           "choices": list(staffing.RIGORS)}
+                    for name in ("default",) + tuple(_CREATIVITY_JOB_STAFFING)
+                },
+            },
+        },
+    },
+)
 _TASK_EXECUTOR_BY_ID = {
     entry["id"]: entry for entry in _TASK_EXECUTORS
 }
@@ -580,6 +625,8 @@ def _resolve_configuration(
         return resolve_deep_task_configuration(
             configuration, defaults=reviewed_defaults
         )
+    if task_executor == "creativity":
+        return resolve_creativity_configuration(configuration)
 
     schema = entry["configuration_schema"]
     _exact_keys(configuration, (), schema, "configuration")
@@ -894,24 +941,9 @@ def reviewed_policy_defaults(task_kind, config):
     return defaults
 
 
-_CREATIVITY_COUNTS = (
-    "population_size", "generation_limit", "max_evaluated_candidates",
-    "elite_count", "diversity_count", "patience_generations",
-    "max_stagnation_expansions", "evaluation_batch_size",
-    "evaluation_concurrency", "shortlist_size",
-)
-_CREATIVITY_RATES = ("mutation_rate", "minimum_improvement")
-_CREATIVITY_JOB_STAFFING = {
-    "create_genes": {"role": "plan", "index": 1},
-    "evaluate_candidates": {"role": "review", "index": 1, "review_breadth": 1},
-    "expand_genes": {"role": "brainstorm", "index": 1},
-}
-
-
 def resolve_creativity_configuration(value):
     """Admit a complete creativity configuration without numeric defaults.
 
-    This preparatory contract does not add creativity to the public catalogue.
     Omitted rigor remains inherited at call time, never frozen from a session.
     """
     try:

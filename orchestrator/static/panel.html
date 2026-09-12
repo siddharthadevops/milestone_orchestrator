@@ -6176,6 +6176,8 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
     if (definition.type === "integer" || definition.type === "number") {
       const minimum = definition.minimum === undefined
         ? "" : `min="${esc(definition.minimum)}"`;
+      const maximum = definition.maximum === undefined
+        ? "" : `max="${esc(definition.maximum)}"`;
       const exclusive = definition.exclusive_minimum === undefined
         ? "" : `data-task-config-exclusive-minimum="${esc(definition.exclusive_minimum)}"`;
       const parent = path.split(".").slice(0, -1);
@@ -6183,7 +6185,7 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
         ? `data-task-config-greater-than="${esc(parent.concat(definition.greater_than).join("."))}"`
         : "";
       return `<label>${esc(name)}</label><input type="number"
-        step="${definition.type === "integer" ? "1" : "any"}" ${minimum}
+        step="${definition.type === "integer" ? "1" : "any"}" ${minimum} ${maximum}
         value="${esc(value)}" data-task-config="${esc(path)}"
         data-task-config-type="${esc(definition.type)}" ${optional}
         ${exclusive} ${greaterThan} ${change}>`;
