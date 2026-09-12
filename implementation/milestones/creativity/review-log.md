@@ -213,3 +213,17 @@
 **Deferred debt (independently classified):**
 - `claude-slice-05-unresolvable-stdlib-authority` (raised claude, cleared codex): The enforceability row pins F2's bounded-admission evidence to a machine-local Python 3.12 install path that lies outside every granted root and above the project's declared 3.9 floor, so that one authority is unverifiable anywhere but this checkout. — The host-local citation does not plausibly mislead the specified builder because F1 explicitly retains Python 3.9+ and slice-05's own cheaper_alternative row already links the applicable public BoundedSemaphore authority; correction is a single citation replacement with no code, test, or cross-slice
 
+## slice_impl-05-a (Concurrent physical-call control boundary)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/creativity/.run/raw/slice_impl-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/creativity/.run/raw/slice_impl-05-codex-r1.txt` |
+| slice_impl-05-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/creativity/.run/raw/slice_impl-05-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-codex-r1`, `slice_impl-05-claude-r1`
+
