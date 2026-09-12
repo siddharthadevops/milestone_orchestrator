@@ -266,4 +266,5 @@ executing the chosen initiative requires its own instruction.
 | slice_impl-02-c (Routed semantic jobs and contracts) | reviewed | 2 | satisfied | af9f096 |
 | slice_doc-03 (Search material and categorical genomes) | reviewed | 2 | satisfied | 7b825b6 |
 | slice_impl-03 (Search material and categorical genomes) | reviewed | 2 | satisfied | 0a37ac2 |
-| slice_doc-04 (Selection, diversity, crossover, and mutation) | reviewed | 2 | satisfied | - |
+| slice_doc-04 (Selection, diversity, crossover, and mutation) | reviewed | 2 | satisfied | 7aca59e |
+| slice_impl-04 (Selection, diversity, crossover, and mutation) | reviewed | 2 | satisfied | - |

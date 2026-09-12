@@ -1,6 +1,7 @@
 """Categorical representation and evolution over accepted creativity replies."""
 
 import copy
+import json
 import random
 import tempfile
 import unittest
@@ -29,7 +30,11 @@ class CreativitySearchTest(unittest.TestCase):
         self.bound = prompt_contracts.bind(served)
         self.evaluation_bound = prompt_contracts.bind(prompt_router.resolve(
             home.name, job="evaluate_candidates@creativity", executor="agent_call",
-            material="default", values={},
+            material="default", values={
+                "workspace": "/workspace",
+                "search_material": json.dumps(self.accepted_material()),
+                "candidates": "[]",
+            },
         ).prompt)
 
     def accepted_material(self, dimensions=None):
