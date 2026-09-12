@@ -18,7 +18,7 @@ from orchestrator import brainstorming_coordination as coordination
 from orchestrator import kvstore, pricing, profiles, prompt_sets
 from orchestrator import registry, runners, session_repository, staffing, tasks
 from orchestrator import state as st
-from orchestrator.task_execution import ExecutionBusy, TaskExecutionLease
+from orchestrator.task_execution import ExecutionBusy, TaskCallGroup, TaskExecutionLease
 
 
 TASKS_DIRNAME = "tasks"
@@ -907,6 +907,18 @@ class DirectTaskHost:
         self._leases = {}
         self._lock = threading.Lock()
 
+    def create_call_group(self, task_id, concurrency):
+        """Attach concurrent calls to this task's existing owner and controls."""
+        with registry.locked(self.home), self._lock:
+            if (self.store.lifecycle(task_id)["status"] != "running"
+                    or self.store.owner_stop_reason(task_id) is not None):
+                raise TaskControlConflict("task control already fences new calls")
+            if task_id in self._controls:
+                raise TaskControlConflict("task already has an active call control")
+            group = TaskCallGroup(self._leases[task_id], concurrency)
+            self._controls[task_id] = group
+            return group
+
     def _family(self, task_id):
         root = self.store.owner_chain(task_id)[-1]
         family = [root]
@@ -976,7 +988,11 @@ class DirectTaskHost:
                     # Resume releases unused child reservations concurrently
                     # with the root's startup checks. Keep the owned descriptor
                     # alive for the entire journal inspection/clear operation.
-                    lease.ensure_quiescent()
+                    control = self._controls.get(identity)
+                    if isinstance(control, TaskCallGroup):
+                        control.ensure_quiescent()
+                    else:
+                        lease.ensure_quiescent()
                     continue
             with self._lease(identity):
                 pass
@@ -1029,6 +1045,10 @@ class DirectTaskHost:
                         member["id"], reason,
                         pending=pending,
                     )
+                    with self._lock:
+                        control = self._controls.get(member["id"])
+                    if isinstance(control, TaskCallGroup):
+                        control.interrupt(reason)
             if pending:
                 self._start_pause_settlement(
                     [member for member in family if member["result"] is None], lambda: {})

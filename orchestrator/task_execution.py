@@ -6,6 +6,8 @@ the durable dispatch journal also protects against workers closing unknown FDs.
 Neither acquiring nor releasing a lease signals an existing worker.
 """
 
+import copy
+from contextlib import contextmanager
 import errno
 import fcntl
 import json
@@ -246,3 +248,76 @@ class _TaskExecutionMember:
 
     def finish_spawn(self, worker_quiescent):
         self.lease._finish_spawn(worker_quiescent, self.member_id)
+
+
+class TaskCallGroup:
+    """Bound caller-owned calls; retain no waiting work or execution threads.
+
+    A slot covers one logical call, including its sequential response repair
+    and outcome fence. Full admission raises ExecutionBusy for the caller to
+    handle. Each transport gets its own binding to the task's existing lease.
+    """
+
+    def __init__(self, lease, concurrency):
+        self.lease = lease
+        self._capacity = threading.BoundedSemaphore(concurrency)
+        self._lock = threading.RLock()
+        self._controls = {}
+        self._reason = None
+
+    def check_dispatch(self):
+        with self._lock:
+            if self._reason is not None:
+                from .runners import RunnerError
+                error = RunnerError(self._reason)
+                error.provider_dispatch_started = False
+                raise error
+
+    @contextmanager
+    def _admit(self):
+        from .runners import ActiveCallControl
+        with self._lock:
+            self.check_dispatch()
+            member = self.lease.member()
+            control = ActiveCallControl()
+            if not self._capacity.acquire(blocking=False):
+                raise ExecutionBusy("call group is at its admitted bound")
+            self._controls[member.member_id] = control
+        try:
+            yield member, control
+        finally:
+            with self._lock:
+                del self._controls[member.member_id]
+                self._capacity.release()
+
+    def call_worker(self, runner, *args, **kwargs):
+        """Use the existing worker boundary with group-owned lease/control."""
+        from .runners import call_worker
+        before_dispatch = kwargs.pop("before_dispatch", None)
+
+        def fence(*dispatch):
+            self.check_dispatch()
+            if before_dispatch is not None:
+                before_dispatch(*dispatch)
+            self.check_dispatch()
+
+        with self._admit() as (member, control):
+            bound_runner = copy.copy(runner)
+            bound_runner.execution_lease = member
+            return call_worker(
+                bound_runner, *args, active_control=control,
+                before_dispatch=fence, **kwargs,
+            )
+
+    def interrupt(self, reason):
+        with self._lock:
+            self._reason = reason
+            for control in self._controls.values():
+                control.interrupt_when_bound(reason)
+        return True
+
+    def ensure_quiescent(self):
+        with self._lock:
+            if self._controls:
+                raise ExecutionBusy("task call group still has active members")
+            self.lease.ensure_quiescent()

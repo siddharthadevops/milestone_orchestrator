@@ -568,6 +568,8 @@ class ActiveCallControl(object):
         self._interrupt_state = _interrupt_state or {
             "lock": threading.Lock(),
             "reason": None,
+            "pending": None,
+            "bound": None,
         }
 
     @property
@@ -652,6 +654,15 @@ class ActiveCallControl(object):
         reason = str(reason or "controlled interruption").strip()
         return self._request("interrupt", reason)
 
+    def interrupt_when_bound(self, reason):
+        """Retain accepted task-group control across dispatch and renewal."""
+        with self._interrupt_state["lock"]:
+            self._interrupt_state["pending"] = reason
+            self._interrupt_state["reason"] = reason
+            bound = self._interrupt_state["bound"]
+        if bound is not None:
+            bound.interrupt(reason)
+
     def _request(self, kind, value):
         with self._lock:
             if self.closed:
@@ -709,6 +720,11 @@ class ActiveCallControl(object):
             if self.closed:
                 return
             self._functions = {"steer": steer_fn, "interrupt": interrupt_fn}
+        with self._interrupt_state["lock"]:
+            self._interrupt_state["bound"] = self
+            pending = self._interrupt_state["pending"]
+        if pending is not None:
+            self.interrupt(pending)
         if self._observer is None:
             return
         self._thread = threading.Thread(
@@ -730,6 +746,9 @@ class ActiveCallControl(object):
         with self._lock:
             self._functions = {}
             self._closed.set()
+        with self._interrupt_state["lock"]:
+            if self._interrupt_state["bound"] is self:
+                self._interrupt_state["bound"] = None
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join(timeout=PS_SAMPLE_TIMEOUT)
 
