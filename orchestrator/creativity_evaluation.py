@@ -209,3 +209,20 @@ def evaluate_wave(
         ),
         "interruption": interruption,
     }
+
+
+def evaluate_progress_wave(group, runner, *, progress, configuration, **call_options):
+    """Advance one search comparison through the existing bounded wave.
+
+    The task owner opens generations with creativity_search.begin_generation
+    and decides when to call again. No loop, retry or task lifecycle is added.
+    The returned wave preserves interruption and accepted-work evidence.
+    """
+    request = creativity_search.progress_evaluation_request(progress)
+    if request is None:
+        return None
+    wave = evaluate_wave(
+        group, runner, configuration=configuration, **request, **call_options,
+    )
+    creativity_search.accept_evaluation_wave(progress, wave, configuration)
+    return wave

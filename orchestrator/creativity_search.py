@@ -158,3 +158,127 @@ def reproduce(dimensions, parents, count, configuration, *, explored=(), rng=ran
         for _ in range(count)
     )
     return _fill_population(dimensions, proposals, count, excluded)
+
+
+def new_progress():
+    """Task-owned search-progress handoff; persistence belongs to the task owner.
+
+    Archive entries use the selector's (genome, evaluation) pairs. A pending
+    generation retains score-free candidate identities across bounded waves.
+    Only a complete comparison may update selection or the progress window.
+    """
+    return {
+        "archive": [], "best_score": None, "reference_score": None,
+        "reference_revision": None, "stagnant_generations": 0,
+        "consecutive_expansions": 0, "expansion_interventions": 0,
+        "generations_completed": 0, "evaluated_candidates": 0,
+        "progress_made": False, "window_complete": False,
+        "stop_reason": None, "pending": None,
+    }
+
+
+def begin_generation(progress, candidates, configuration):
+    """Open one generation with owner-supplied fresh candidate ids and genomes.
+
+    The owner calls this after the previous comparison completes. An empty
+    population can observe stagnation, but does not itself prove exhaustion.
+    """
+    if progress["stop_reason"] is not None:
+        return
+    if candidates and progress["evaluated_candidates"] == configuration["max_evaluated_candidates"]:
+        progress["stop_reason"] = "evaluation_budget"
+        return
+    retained = {item["candidate_id"]: dict(genome) for genome, item in progress["archive"]}
+    progress["pending"] = {
+        "phase": "generation", "survivor_ids": list(retained),
+        "candidates": dict(retained, **{key: dict(genome) for key, genome in candidates.items()}),
+        "unfinished": list(candidates),
+    }
+    progress["progress_made"] = False
+    progress["window_complete"] = False
+
+
+def progress_evaluation_request(progress):
+    """Arguments for evaluate_wave, including required survivor reassessment.
+
+    The wave remains the sole owner of score eligibility and accepted work;
+    passing these ids does not force it to repeat current-regime evaluations.
+    A rebaseline compares only retained survivors before the pending generation
+    can compare its new candidates against that reference.
+    """
+    pending = progress["pending"]
+    if progress["stop_reason"] is not None or pending is None:
+        return None
+    candidates = pending["candidates"]
+    if pending["phase"] == "rebaseline":
+        candidates = {key: candidates[key] for key in pending["survivor_ids"]}
+    return {
+        "candidates": candidates, "comparison_ids": list(candidates),
+        "reference_revision": progress["reference_revision"],
+    }
+
+
+def accept_evaluation_wave(progress, wave, configuration):
+    """Consume the trusted wave handoff without rechecking its eligibility.
+
+    Reassessment is a separate comparison, not a generation or progress event.
+    The original generation remains pending through any number of bounded
+    waves; only the wave's accepted count charges the evaluation allowance.
+    Interruptions remain task-control outcomes, never normal search stops.
+    """
+    pending = progress["pending"]
+    progress["evaluated_candidates"] = wave["accepted_count"]
+    progress["progress_made"] = False
+    pending["unfinished"] = wave["unfinished"]
+    changed = wave["rebaseline_required"] and pending["phase"] == "generation"
+    if changed:
+        pending["phase"] = "rebaseline"
+        # Keep only the identities needed for reassessment, not an eligible
+        # archive or reference carrying the previous evaluator's scores.
+        progress["archive"] = []
+        progress["best_score"] = progress["reference_score"] = None
+    if wave["interruption"] is not None:
+        return
+    if not wave["comparison_ready"]:
+        if wave["unfinished"] and wave["accepted_count"] == configuration["max_evaluated_candidates"]:
+            progress["stop_reason"] = "evaluation_budget"
+        return
+    if changed:
+        return
+
+    progress["archive"] = select_survivors(wave["evaluated"], configuration)
+    best = progress["archive"][0][1]["score"] if progress["archive"] else None
+    progress["best_score"] = best
+    progress["reference_revision"] = wave["regime_revision"]
+    if pending["phase"] == "rebaseline":
+        progress["reference_score"] = best
+        progress["stagnant_generations"] = 0
+        old_survivors = pending["survivor_ids"]
+        retained = {item["candidate_id"]: genome for genome, item in progress["archive"]}
+        pending["candidates"] = {
+            key: genome for key, genome in pending["candidates"].items()
+            if key not in old_survivors
+        }
+        pending["candidates"].update(retained)
+        pending["survivor_ids"] = list(retained)
+        pending["phase"] = "generation"
+        return
+
+    reference = progress["reference_score"]
+    if reference is None and best is not None:
+        progress["reference_score"] = best
+        progress["stagnant_generations"] = 0
+    elif best is not None and best - reference >= configuration["minimum_improvement"]:
+        progress["reference_score"] = best
+        progress["stagnant_generations"] = 0
+        progress["consecutive_expansions"] = 0
+        progress["progress_made"] = True
+    else:
+        progress["stagnant_generations"] += 1
+    progress["generations_completed"] += 1
+    progress["pending"] = None
+    progress["window_complete"] = (
+        progress["stagnant_generations"] >= configuration["patience_generations"]
+    )
+    if progress["generations_completed"] == configuration["generation_limit"]:
+        progress["stop_reason"] = "generation_limit"

@@ -77,6 +77,18 @@ class CreativityEvaluationTest(unittest.TestCase):
             self.reply["evaluations"][0 if key == "c-1" else 1], candidate_id=key,
         ) for key in reversed(ids)]})
 
+    def progress_wave(self, progress, physical=None, **changes):
+        options = dict(
+            home=self.home, session=self.session, workspace=self.workspace,
+            configuration=self.configuration, search_material=self.material,
+            generation=progress["generations_completed"] + 1, execution_context=None,
+            store=self.store, checkpoint_key="checkpoint",
+        )
+        options.update(changes)
+        return evaluation.evaluate_progress_wave(
+            self.group, SimpleNamespace(call=physical or self.batch_result), progress=progress, **options,
+        )
+
     def checkpoint(self):
         return kvstore.LocalKVClient(self.store.directory).get("checkpoint")
 
@@ -536,6 +548,199 @@ class CreativityEvaluationTest(unittest.TestCase):
                                   reference_revision=3, prompt_set="operator")
                 self.assertTrue(ready["comparison_ready"])
                 self.assertFalse(ready["rebaseline_required"])
+
+    def test_rebaseline_without_progress_credit(self):
+        search = evaluation.creativity_search
+        self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+            generation_limit=10, max_evaluated_candidates=20, minimum_improvement=0.125,
+            patience_generations=3, evaluation_batch_size=1, evaluation_concurrency=2,
+        ))
+        progress = search.new_progress()
+        assessments = {"c-0": (0.25, True), "c-1": (0.125, True),
+                       "c-2": (0.5, True), "c-3": (0.8125, True)}
+        inputs = []
+
+        def physical(*args, **kwargs):
+            batch = args[1].split("CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n")[1]
+            inputs.extend(json.loads(batch.splitlines()[0]))
+            reply = json.loads(self.batch_result(*args, **kwargs).text)
+            for item in reply["evaluations"]:
+                item["score"], item["constraint_valid"] = assessments[item["candidate_id"]]
+                item["constraint_violations"] = [] if item["constraint_valid"] else ["budget"]
+            return self.result(reply)
+
+        search.begin_generation(progress, self.candidates, self.configuration)
+        self.progress_wave(progress, physical)
+        self.assertEqual(progress["reference_score"], 0.25)
+        self.assertEqual(progress["generations_completed"], 1)
+        progress.update(consecutive_expansions=1, expansion_interventions=2)
+        search.begin_generation(progress, {"c-2": {"format": "a", "channel": "a"}}, self.configuration)
+        staffing.edit_session(self.home, self.session, {"rigor": "high"})
+        assessments.update({"c-0": (0.75, True), "c-1": (0.9375, False)})
+        changed = self.progress_wave(progress, physical)
+        self.assertTrue(changed["rebaseline_required"])
+        self.assertEqual(progress["archive"], [])
+        self.assertIsNone(progress["best_score"])
+        self.assertIsNone(progress["reference_score"])
+        self.assertEqual(progress["generations_completed"], 1)
+        self.assertEqual(search.progress_evaluation_request(progress)["candidates"], self.candidates)
+
+        self.progress_wave(progress, physical)
+        self.assertEqual(progress["reference_score"], 0.75)
+        self.assertEqual(progress["stagnant_generations"], 0)
+        self.assertFalse(progress["progress_made"])
+        self.assertEqual(progress["consecutive_expansions"], 1)
+        self.assertEqual(progress["expansion_interventions"], 2)
+        self.assertEqual(progress["generations_completed"], 1)
+        self.assertEqual(progress["evaluated_candidates"], 5)
+        self.assertEqual([item["candidate_id"] for _, item in progress["archive"]], ["c-0"])
+        self.assertNotIn("c-1", search.progress_evaluation_request(progress)["comparison_ids"])
+        before = self.evidence()
+        self.progress_wave(progress, physical)
+        self.assertEqual(self.evidence(), before)
+        self.assertEqual(progress["generations_completed"], 2)
+        self.assertEqual(progress["stagnant_generations"], 1)
+        self.assertFalse(progress["progress_made"])
+
+        self.write_prompt("PROMPT ONLY")
+        search.begin_generation(progress, {"c-3": {"format": "b", "channel": "b"}}, self.configuration)
+        ready = self.progress_wave(progress, physical, prompt_set="operator")
+        self.assertFalse(ready["rebaseline_required"])
+        self.assertEqual(progress["best_score"], 0.8125)
+        self.assertEqual(progress["reference_score"], 0.75)
+        self.assertEqual(progress["generations_completed"], 3)
+        self.assertEqual(progress["evaluated_candidates"], 6)
+        self.assertEqual(progress["consecutive_expansions"], 1)
+        for item in inputs:
+            self.assertEqual(set(item), {"candidate_id", "components"})
+
+    def test_progress_rebaseline_ignores_late_old_regime_completion(self):
+        search = evaluation.creativity_search
+        self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+            generation_limit=10, max_evaluated_candidates=20, minimum_improvement=0.125,
+            patience_generations=3, evaluation_batch_size=1, evaluation_concurrency=2,
+        ))
+        progress = search.new_progress()
+        search.begin_generation(progress, self.candidates, self.configuration)
+        self.progress_wave(progress)
+        search.begin_generation(progress, {
+            "c-2": {"format": "a", "channel": "a"},
+            "c-3": {"format": "b", "channel": "b"},
+        }, self.configuration)
+        entered, accepted, release = (threading.Event() for _ in range(3))
+        self.addCleanup(release.set)
+        original_call, original_put = evaluation.call_evaluation_batch, self.store.put
+
+        def gated(*args, **kwargs):
+            if "c-3" in kwargs["candidates"]:
+                self.assertTrue(entered.wait(5))
+            return original_call(*args, **kwargs)
+
+        def observe(key, value):
+            revision = original_put(key, value)
+            if value["evaluation"]["accepted_count"] == 3:
+                accepted.set()
+            return revision
+
+        def physical(*args, **kwargs):
+            if '"candidate_id": "c-2"' in args[1] and not entered.is_set():
+                staffing.edit_session(self.home, self.session, {"rigor": "high"})
+                entered.set()
+                self.assertTrue(release.wait(5))
+            return self.batch_result(*args, **kwargs)
+
+        with mock.patch.object(evaluation, "call_evaluation_batch", side_effect=gated), \
+                mock.patch.object(self.store, "put", side_effect=observe), ThreadPoolExecutor(1) as pool:
+            future = pool.submit(self.progress_wave, progress, physical)
+            try:
+                self.assertTrue(accepted.wait(5))
+                self.assertFalse(future.done())
+            finally:
+                release.set()
+            changed = future.result(5)
+        self.assertEqual(set(changed["unfinished"]), {"c-0", "c-2"})
+        self.assertEqual(progress["archive"], [])
+        request = search.progress_evaluation_request(progress)
+        self.assertEqual(request["candidates"], {"c-0": self.candidates["c-0"]})
+        self.progress_wave(progress)
+        self.assertEqual(progress["generations_completed"], 1)
+        self.assertFalse(progress["progress_made"])
+        ready = self.progress_wave(progress)
+        self.assertTrue(ready["comparison_ready"])
+        self.assertEqual(progress["generations_completed"], 2)
+        self.assertEqual(progress["evaluated_candidates"], 6)
+        records, _ = self.evidence()
+        self.assertEqual([record["call_context"]["generation"] for record in records].count(2), 4)
+
+    def test_progress_limits_and_interrupted_reassessment(self):
+        search = evaluation.creativity_search
+        self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+            generation_limit=1, max_evaluated_candidates=20,
+        ))
+        progress = search.new_progress()
+        search.begin_generation(progress, self.candidates, self.configuration)
+        self.progress_wave(progress)
+        self.assertEqual(progress["stop_reason"], "generation_limit")
+        self.assertEqual(progress["generations_completed"], 1)
+        self.assertEqual(progress["evaluated_candidates"], 2)
+        before = self.evidence()
+        search.begin_generation(progress, {"c-2": {"format": "a", "channel": "a"}}, self.configuration)
+        self.assertIsNone(self.progress_wave(progress))
+        self.assertEqual(self.evidence(), before)
+
+        self.store.put("checkpoint", {"search_material": self.material})
+        self.configuration = dict(self.configuration, generation_limit=10, max_evaluated_candidates=3)
+        progress = search.new_progress()
+        search.begin_generation(progress, self.candidates, self.configuration)
+        self.progress_wave(progress)
+        search.begin_generation(progress, {"c-2": {"format": "a", "channel": "a"}}, self.configuration)
+        staffing.edit_session(self.home, self.session, {"rigor": "high"})
+        interrupted = runners.ControlledInterruptionResult("", 0, 0.1, "paused")
+        wave = self.progress_wave(progress, lambda *_args, **_kwargs: interrupted)
+        self.assertIs(wave["interruption"], interrupted)
+        self.assertIsNone(progress["stop_reason"])
+        self.assertEqual(progress["archive"], [])
+        self.assertEqual(progress["evaluated_candidates"], 2)
+        # Explicitly complete the survivor reassessment, spending the last place.
+        self.progress_wave(progress)
+        self.assertEqual(progress["reference_score"], 0.4)
+        self.assertEqual(progress["generations_completed"], 1)
+        before = self.evidence()
+        self.progress_wave(progress)
+        self.assertEqual(progress["stop_reason"], "evaluation_budget")
+        self.assertEqual(progress["evaluated_candidates"], 3)
+        self.assertEqual(progress["generations_completed"], 1)
+        self.assertIsNone(self.progress_wave(progress))
+        self.assertEqual(self.evidence(), before)
+
+    def test_progress_budget_stops_incomplete_rebaseline(self):
+        search = evaluation.creativity_search
+        self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+            generation_limit=10, max_evaluated_candidates=4,
+            evaluation_batch_size=1, evaluation_concurrency=2,
+        ))
+        for item in self.reply["evaluations"]:
+            item.update(score=0.25, constraint_valid=True, constraint_violations=[])
+        progress = search.new_progress()
+        search.begin_generation(progress, self.candidates, self.configuration)
+        self.progress_wave(progress)
+        self.assertEqual(len(progress["archive"]), 2)
+        search.begin_generation(progress, {"c-2": {"format": "a", "channel": "a"}}, self.configuration)
+        staffing.edit_session(self.home, self.session, {"rigor": "high"})
+        self.progress_wave(progress)
+        self.assertEqual(progress["evaluated_candidates"], 3)
+        self.assertEqual(search.progress_evaluation_request(progress)["candidates"], self.candidates)
+        wave = self.progress_wave(progress)
+        self.assertFalse(wave["comparison_ready"])
+        self.assertEqual(len(wave["unfinished"]), 1)
+        self.assertEqual(progress["stop_reason"], "evaluation_budget")
+        self.assertEqual(progress["evaluated_candidates"], 4)
+        self.assertEqual(progress["generations_completed"], 1)
+        self.assertEqual(progress["archive"], [])
+        self.assertIsNone(progress["reference_score"])
+        before = self.evidence()
+        self.assertIsNone(self.progress_wave(progress))
+        self.assertEqual(self.evidence(), before)
 
     def test_wave_faults_keep_accepted_siblings_and_checkpoint_failure_is_unfinished(self):
         def malformed(*args, **kwargs):

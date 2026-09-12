@@ -300,6 +300,64 @@ class CreativitySearchTest(unittest.TestCase):
         # Shared ids across dimensions and equal text under different ids remain distinct.
         self.assertEqual(len(identities), 6)
 
+    def test_cumulative_best_valid_progress(self):
+        configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+            generation_limit=12, max_evaluated_candidates=24,
+            minimum_improvement=0.125, patience_generations=3,
+        ))
+        genomes = [{"format": f, "channel": c}
+                   for f in ("a", "b") for c in ("a", "b", "c")]
+
+        def observe(progress, choices, scores, invalid=()):
+            pairs = self.evaluated(choices, scores, invalid, prefix=str(progress["generations_completed"]))
+            candidates = {item["candidate_id"]: genome for genome, item in pairs}
+            search.begin_generation(progress, candidates, configuration)
+            search.accept_evaluation_wave(progress, {
+                "accepted_count": progress["evaluated_candidates"] + len(pairs),
+                "regime_revision": 1, "rebaseline_required": False,
+                "comparison_ready": True, "unfinished": [], "interruption": None,
+                "evaluated": progress["archive"] + pairs,
+            }, configuration)
+
+        progress = search.new_progress()
+        observe(progress, genomes[:2], [0.25, 0.24])
+        self.assertEqual(progress["reference_score"], 0.25)
+        self.assertFalse(progress["progress_made"])
+        # Prior intervention usage is part of the task-owned progress handoff.
+        progress.update(consecutive_expansions=1, expansion_interventions=2)
+        observe(progress, genomes[2:3], [0.3125])
+        self.assertEqual(progress["best_score"], 0.3125)
+        self.assertEqual(progress["reference_score"], 0.25)
+        self.assertEqual(progress["stagnant_generations"], 1)
+        # A poor round and an invalid high score do not finish a longer window.
+        observe(progress, genomes[3:5], [0.01, 1], invalid=(1,))
+        self.assertEqual(progress["best_score"], 0.3125)
+        self.assertEqual(progress["reference_score"], 0.25)
+        self.assertEqual(progress["stagnant_generations"], 2)
+        self.assertFalse(progress["window_complete"])
+        observe(progress, genomes[5:], [0.375])
+        self.assertTrue(progress["progress_made"])
+        self.assertEqual(progress["reference_score"], 0.375)
+        self.assertEqual(progress["stagnant_generations"], 0)
+        self.assertEqual(progress["consecutive_expansions"], 0)
+        self.assertEqual(progress["expansion_interventions"], 2)
+        self.assertEqual(progress["generations_completed"], 4)
+        self.assertEqual(progress["evaluated_candidates"], 6)
+
+        empty = search.new_progress()
+        empty.update(consecutive_expansions=1, expansion_interventions=1)
+        for index in range(3):
+            observe(empty, genomes[index:index + 1], [1], invalid=(0,))
+            self.assertIsNone(empty["reference_score"])
+            self.assertIsNone(empty["best_score"])
+            self.assertEqual(empty["archive"], [])
+            self.assertEqual(empty["window_complete"], index == 2)
+        observe(empty, genomes[3:4], [0.25])
+        self.assertEqual(empty["reference_score"], 0.25)
+        self.assertEqual(empty["stagnant_generations"], 0)
+        self.assertFalse(empty["progress_made"])
+        self.assertEqual(empty["consecutive_expansions"], 1)
+
     def test_problem_is_not_candidate_state(self):
         material = self.accepted_material()
         original = copy.deepcopy(material)
