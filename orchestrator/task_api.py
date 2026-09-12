@@ -65,6 +65,40 @@ def creativity_checkpoint_store(home, task_id):
     ))
 
 
+def _creativity_proposals(checkpoint, limit):
+    return [dict(
+        **{key: item[key] for key in (
+            "candidate_id", "proposal", "reason", "assumptions", "score",
+        )},
+        components=creativity_search.genome_components(
+            checkpoint["search_material"]["dimensions"], genome),
+    ) for genome, item in checkpoint["progress"]["archive"][:limit]]
+
+
+def creativity_view(home, record):
+    """Read saved work; only the common task result publishes completion."""
+    checkpoint = creativity_checkpoint_store(home, record["id"]).get("checkpoint")
+    if checkpoint is kvstore.ABSENT:
+        return None
+    progress = checkpoint["progress"]
+    configuration = record["order"]["configuration"]
+    view = {key: progress[key] for key in (
+        "best_score", "reference_score", "stagnant_generations",
+        "consecutive_expansions", "expansion_interventions",
+        "generations_completed", "window_complete",
+    )}
+    view.update(
+        job=checkpoint["job"], generation=checkpoint["generation"],
+        phase=progress["pending"]["phase"] if progress["pending"] else None,
+        # Accepted siblings are saved before the completed comparison handoff.
+        evaluated_candidates=(checkpoint["evaluation"]["accepted_count"]
+                              if "evaluation" in checkpoint else progress["evaluated_candidates"]),
+        evaluation_budget=configuration["max_evaluated_candidates"],
+        best_candidates=_creativity_proposals(checkpoint, configuration["shortlist_size"]),
+    )
+    return view
+
+
 def task_key(task_id):
     """`tasks/task:<id>` — one namespace beside runs and Brainstorming."""
     return _TASK_KEY_PREFIX + kvstore.validate_fragment(task_id, "task_id")
@@ -2610,12 +2644,7 @@ class DirectTaskHost:
                 return
             progress, material = checkpoint["progress"], checkpoint["search_material"]
             if progress["stop_reason"] is not None:
-                proposals = [dict(
-                    **{key: item[key] for key in (
-                        "candidate_id", "proposal", "reason", "assumptions", "score",
-                    )},
-                    components=creativity_search.genome_components(material["dimensions"], genome),
-                ) for genome, item in progress["archive"][:configuration["shortlist_size"]]]
+                proposals = _creativity_proposals(checkpoint, configuration["shortlist_size"])
                 checkpoint["native_result"] = tasks.validate_creativity_native_result({
                     "outcome": "proposals" if proposals else "no_valid_candidates",
                     "proposals": proposals,

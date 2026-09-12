@@ -432,6 +432,126 @@ class TaskApiTest(unittest.TestCase):
         self.assertIn("stopped by", cancelled["result"]["reason"])
         self.assertEqual(self.request("DELETE", path)[0], 200)
 
+    def creativity_projection_pages(self):
+        """Replay owner-produced checkpoints through the ordinary detail route."""
+        from orchestrator import kvstore
+        from orchestrator.tests.test_creativity_task import CreativityTaskTest
+        from orchestrator.tests.test_task_controls_api import HeldHost
+
+        search = CreativityTaskTest()
+        search.setUp()
+        self.addCleanup(search.doCleanups)
+        self.home, self.primary, self.additional = search.home, search.primary, search.additional
+        record = search.admit(prompt_set="operator", generation_limit=3, max_evaluated_candidates=20,
+                              evaluation_batch_size=1, evaluation_concurrency=2)
+        checkpoint_store = task_api.creativity_checkpoint_store(self.home, record["id"])
+        store = task_api.StandaloneTaskStore(self.home)
+        snapshots = {"no_progress": (kvstore.ABSENT, store._read_document(record["id"])[1])}
+        put = kvstore.LocalKVClient.put
+        switched = threading.Event()
+
+        def capture(client, key, value):
+            revision = put(client, key, value)
+            if client.directory != checkpoint_store.directory:
+                return revision
+            progress = value["progress"]
+            stages = {
+                "genes": value["search_material"] is None,
+                "batch": value.get("evaluation", {}).get("accepted_count", 0) > progress["evaluated_candidates"],
+                "comparison": progress["generations_completed"] == 1 and progress["pending"] is None,
+                "rebaseline": bool(progress["pending"] and progress["pending"]["phase"] == "rebaseline"),
+                "expansion": value["job"] == "expand_genes",
+                "expanded": progress["expansion_interventions"] > 0,
+                "prepared": value["native_result"] is not None,
+            }
+            for stage, reached in stages.items():
+                if reached and stage not in snapshots:
+                    snapshots[stage] = (copy.deepcopy(value), store._read_document(record["id"])[1])
+            if stages["comparison"] and not switched.is_set():
+                switched.set()
+                staffing.edit_session(self.home, search.session, {"material": "business"})
+            return revision
+
+        def physical(*args, **kwargs):
+            result = search.physical(*args, **kwargs)
+            if search.calls[-1]["job"] == "create_genes":
+                return runners.RunnerResult(result.text, 0, 1.0)  # No provider usage/price.
+            reply = json.loads(result.text)
+            for item in reply.get("evaluations", []):
+                item.update(proposal='<img src=x onerror="alert(1)"> A useful proposal.\nA second line.',
+                            reason="Fits the objective & constraints.", assumptions=["Readers have time.", "Budget holds."])
+            return search.result(reply)
+
+        host = search.host(physical)
+        with mock.patch.object(kvstore.LocalKVClient, "put", new=capture):
+            host.start(record, search.config)
+            terminal = search._terminal(host, record["id"])
+        self.assertEqual(terminal["result"]["status"], "success", terminal)
+        snapshots["terminal"] = (search.checkpoint(record), store._read_document(record["id"])[1])
+        snapshots["paused"] = copy.deepcopy(snapshots["expansion"])
+        held = HeldHost(self.home)
+        self.start_server(held)
+        pages = {}
+        calls_before = copy.deepcopy(search.calls)
+        for stage, (checkpoint, document) in snapshots.items():
+            if checkpoint is kvstore.ABSENT:
+                os.unlink(checkpoint_store.path)
+            else:
+                checkpoint_store.put("checkpoint", checkpoint)
+            current, _ = store._read_document(record["id"])
+            self.assertTrue(store._store.cas(task_api.task_key(record["id"]), current["revision"], document).ok)
+            if stage == "paused":
+                with registry.locked(self.home):
+                    store.pause_locked(record["id"], "Provider quota <exhausted>", source="error")
+            path = "/api/tasks/" + record["id"]
+            code, page = self.request("GET", path)
+            self.assertEqual(code, 200, page)
+            self.assertEqual(self.request("GET", path), (code, page))
+            self.assertEqual(checkpoint_store.get("checkpoint"), checkpoint)
+            self.assertEqual(page["lifecycle"]["history"], store.lifecycle(record["id"])["history"])
+            if "accounting" in page["lifecycle"]:
+                self.assertEqual(page["lifecycle"]["accounting"], store.lifecycle(record["id"])["accounting"])
+            pages[stage] = page
+        self.assertEqual(search.calls, calls_before)
+        self.assertEqual(held.started, [])
+        return pages, snapshots
+
+    def test_creativity_projection_tracks_saved_work(self):
+        pages, snapshots = self.creativity_projection_pages()
+        self.assertIsNone(pages["no_progress"]["creativity"])
+        self.assertIsNone(pages["genes"]["creativity"]["best_score"])
+        self.assertEqual(pages["batch"]["creativity"]["evaluated_candidates"], 1)
+        self.assertEqual(pages["batch"]["creativity"]["best_candidates"], [])
+        for stage, page in pages.items():
+            view, checkpoint = page["creativity"], snapshots[stage][0]
+            if view is None:
+                continue
+            for key in ("job", "generation"):
+                self.assertEqual(view[key], checkpoint[key])
+            for key in ("best_score", "reference_score", "stagnant_generations", "window_complete",
+                        "consecutive_expansions", "expansion_interventions", "generations_completed"):
+                self.assertEqual(view[key], checkpoint["progress"][key])
+            self.assertEqual(view["evaluation_budget"], 20)
+        self.assertEqual(pages["comparison"]["creativity"]["best_score"], 0.4)
+        self.assertEqual(pages["rebaseline"]["creativity"]["best_candidates"], [])
+        self.assertIsNone(pages["rebaseline"]["creativity"]["reference_score"])
+        self.assertEqual(pages["expanded"]["creativity"]["expansion_interventions"], 1)
+        self.assertEqual(pages["paused"]["lifecycle"]["status"], "paused")
+        self.assertTrue(pages["paused"]["lifecycle"]["can_resume"])
+        self.assertIsNone(pages["prepared"]["task"]["result"])
+        self.assertEqual(pages["prepared"]["lifecycle"]["status"], "running")
+        terminal = pages["terminal"]["task"]["result"]
+        self.assertEqual(terminal["native_result"], snapshots["prepared"][0]["native_result"])
+        self.assertEqual(pages["terminal"]["creativity"]["best_candidates"], terminal["native_result"]["proposals"])
+        self.assertTrue(terminal["token_usage_partial"])
+        self.assertTrue(terminal["cost_partial"])
+        empty = copy.deepcopy(terminal)
+        empty["native_result"].update(outcome="no_valid_candidates", proposals=[])
+        record = copy.deepcopy(pages["terminal"]["task"])
+        record["result"] = empty
+        self._age_stored_record(task_api.StandaloneTaskStore(self.home), record)
+        self.assertEqual(self.request("GET", "/api/tasks/" + record["id"])[1]["task"]["result"], empty)
+
     def test_direct_brainstorming_requires_git_and_service_owns_its_mode(self):
         nonrepo = self.directory("brainstorming-nonrepo")
         order = self.order(

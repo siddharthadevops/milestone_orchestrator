@@ -1,5 +1,6 @@
 """Execute the task control presenters, not only their source spelling."""
 
+import json
 import re
 import shutil
 import subprocess
@@ -22,7 +23,9 @@ class TaskControlsPanelTest(unittest.TestCase):
             "taskStateClassName", "taskStaffingLine", "taskSessionId",
             "renderTaskPage", "taskState", "taskRow", "sidebarItems",
             "taskStatusClock", "deepTaskPipeline", "reviewedTaskPipeline",
-            "taskControlHistory",
+            "taskControlHistory", "creativityProgress", "creativityProposals",
+            "creativityResult", "taskPhysicalCalls", "esc", "fmtTokenCount",
+            "fmtTokenUsage", "costReading", "costHtml", "tokenUsageHtml",
         ) + functions
         sources = []
         for name in names:
@@ -34,18 +37,11 @@ class TaskControlsPanelTest(unittest.TestCase):
             sources.append(match.group(0))
         setup = r"""
 const assert = require('node:assert/strict');
-const esc = value => String(value == null ? '' : value)
-  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-  .replaceAll('"', '&quot;');
 const escJsSq = value => String(value).replaceAll("'", "\\'");
 const requestTitle = esc;
 const spinEl = () => '<spin/>';
 const fmtAdmitted = value => value;
 const fmtDHMS = value => String(value);
-const fmtTokenUsage = () => '';
-const costHtml = () => '';
-const tokenUsageHtml = () => '';
-const costReading = () => ({known: true, text: '$3.20'});
 const liveClock = (completed, inFlight) => JSON.stringify({completed, inFlight});
 const ICONS = {task: 'task', brainstorm: 'brainstorm', ellipsis: '...'};
 let fullRequestText, lastBilling, lastWebBase;
@@ -72,8 +68,8 @@ function record(executor = 'agent_call') {
 
     def test_paused_types_render_resume_cancel_and_failure_without_spinner(self):
         self.javascript(r"""
-for (const executor of ['agent_call', 'reviewed_task', 'deep_task']) {
-  lastTaskLifecycle = {status: 'paused', revision: 7, source: 'error',
+for (const executor of ['agent_call', 'reviewed_task', 'deep_task', 'creativity']) {
+  lastTaskLifecycle = {status: 'paused', revision: 7, source: 'error', history: [],
     reason: 'review quota <exhausted>', can_resume: true};
   const html = renderTaskPage(record(executor), 'today');
   assert(html.includes('>Resume</button>'));
@@ -88,9 +84,9 @@ for (const executor of ['agent_call', 'reviewed_task', 'deep_task']) {
 
     def test_pausing_and_live_worker_block_do_not_offer_unsafe_resume(self):
         self.javascript(r"""
-lastTaskLifecycle = {status: 'pausing', revision: 2, source: 'operator',
+lastTaskLifecycle = {status: 'pausing', revision: 2, source: 'operator', history: [],
   reason: 'Please wait', can_resume: false};
-for (const executor of ['agent_call', 'reviewed_task', 'deep_task']) {
+for (const executor of ['agent_call', 'reviewed_task', 'deep_task', 'creativity']) {
   const html = renderTaskPage(record(executor), null);
   assert(html.includes('<spin/>'));
   assert(html.includes('Pausing safely'));
@@ -215,7 +211,7 @@ lastTaskLifecycle = {status: 'paused', revision: 3, source: 'error',
   history: [{status: 'paused', at: '2026-09-06', source: 'error', reason: 'quota <limit>',
     attempt: {native_result: 'HUGE SECRET OUTPUT'}},
     {status: 'running', at: '2026-09-07'}],
-  accounting: {duration_s: 12, cost: {api_usd: 3.2}, cost_partial: false}};
+  accounting: {duration_s: 12, cost: {api_usd: 3.2, real_usd: 3.2}, cost_partial: false}};
 const html = renderTaskPage(record(), null);
 assert(html.includes('Pause and recovery history (2)'));
 assert(html.includes('quota &lt;limit&gt;'));
@@ -245,6 +241,115 @@ const refreshRuns = () => {};
   assert.equal(taskControlPending, null);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """, ("controlSelectedTask",))
+
+    def test_creativity_task_page_presents_progress_results_and_controls(self):
+        from orchestrator.tests.test_task_api import TaskApiTest
+
+        source = TaskApiTest()
+        self.addCleanup(source.doCleanups)
+        pages, _ = source.creativity_projection_pages()
+        self.javascript("const pages = " + json.dumps(pages) + ";\n" + r"""
+function render(data) {
+  lastTaskLifecycle = data.lifecycle;
+  return renderTaskPage(data.task, 'today', data.creativity);
+}
+assert(render(pages.no_progress).includes('No saved progress available'));
+assert(render(pages.genes).includes('Best evaluation: unavailable · reference: unavailable'));
+assert(render(pages.batch).includes('Accepted candidate evaluations: 1 / 20'));
+assert(render(pages.comparison).includes('Best evaluation: 0.4 · reference: 0.4'));
+assert(render(pages.rebaseline).includes('Reassessing candidates'));
+assert(render(pages.rebaseline).includes('Best evaluation: unavailable'));
+assert(render(pages.expansion).includes('Job: expand genes'));
+assert(render(pages.expansion).includes('patience window complete'));
+assert(render(pages.expanded).includes('Expansion interventions: 1 · consecutive: 1 / 1'));
+assert(render(pages.paused).includes('Provider quota &lt;exhausted&gt;'));
+assert(render(pages.paused).includes('>Resume</button>'));
+assert(render(pages.prepared).includes('awaiting task completion'));
+assert(!render(pages.prepared).includes('<h3>Result</h3>'));
+assert(render(pages.prepared).includes('>Pause</button>'));
+let html = render(pages.terminal);
+for (const text of ['proposals', 'generation_limit', 'not probabilities of success',
+    '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;', 'A second line.',
+    'Fits the objective &amp; constraints.', 'Readers have time.', 'Budget holds.',
+    'tokens unknown', 'cost unknown', 'some calls are still unpriced, so this is a floor'])
+  assert(html.includes(text), text);
+assert(!html.includes('<img'));
+const native = pages.terminal.task.result.native_result;
+let previous = -1;
+for (const proposal of native.proposals) {
+  const position = html.indexOf(esc(proposal.candidate_id), previous + 1);
+  assert(position > previous);
+  previous = position;
+  for (const part of proposal.components) {
+    const component = html.indexOf(`<li><b>${esc(part.dimension)}</b> · ${esc(part.variant)}`, previous);
+    assert(component > previous);
+    previous = component;
+  }
+}
+const receipts = pages.terminal.lifecycle.history.filter(event => event.physical_dispatch);
+assert(html.includes(`Physical calls (${receipts.length})`));
+assert(!html.includes('Pause and recovery history'));
+for (const event of receipts) {
+  const call = event.physical_dispatch, context = call.call_context, attempt = event.attempt;
+  for (const value of [event.call_id, context.job, `generation ${context.generation}`,
+      `batch ${context.batch}`, call.family, call.model, call.effort,
+      `prompt-set fallback: ${call.prompt_set_fallback}`, `duration ${attempt.duration_s}`,
+      fmtTokenUsage(attempt.token_usage, attempt.token_usage_partial),
+      costReading(attempt.cost, attempt.cost_partial).text]) assert(html.includes(esc(value)), value);
+}
+const unconfirmed = structuredClone(pages.paused);
+const pendingCall = unconfirmed.lifecycle.history.find(event => event.physical_dispatch);
+Object.assign(pendingCall.physical_dispatch, {completed: false, duration_s: null});
+pendingCall.attempt.duration_s = 0; // Pending receipts contribute no known duration yet.
+html = render(unconfirmed);
+assert(html.includes('duration unknown'));
+assert(html.includes('completion unconfirmed'));
+assert(!html.includes('in flight'));
+for (const reason of ['generation_limit', 'evaluation_budget', 'persistent_stagnation', 'repertoire_exhausted']) {
+  const ended = structuredClone(pages.terminal);
+  ended.task.result.native_result.stop_reason = reason;
+  assert(render(ended).includes(`Stop reason: ${reason}`));
+  ended.task.result.native_result.outcome = 'no_valid_candidates';
+  ended.task.result.native_result.proposals = [];
+  html = render(ended);
+  assert(html.includes('No valid proposal was found.'));
+  assert(html.includes('success'));
+  assert(!html.includes('A useful proposal'));
+}
+const failed = structuredClone(pages.terminal);
+failed.task.result = {...failed.task.result, status: 'failure', native_result: null, reason: 'Cancelled by operator'};
+taskMenuOpen = true;
+html = render(failed);
+assert(html.includes('Cancelled by operator'));
+assert(html.includes('Delete task…'));
+assert(!html.includes('>Resume</button>'));
+const sent = [], polls = [pages.batch, pages.rebaseline, pages.prepared, pages.terminal];
+const api = async path => { sent.push({method: 'GET', path}); return polls.shift(); };
+const postJSON = async (path, body) => { sent.push({method: 'POST', path, body}); throw Error('stale Resume'); };
+const detail = {innerHTML: '', querySelectorAll: () => []};
+const document = {getElementById: () => detail};
+const syncRequestMore = () => {}, updateBottomJump = () => {}, refreshRuns = () => {};
+const requestAnimationFrame = callback => callback();
+let lastTaskPage = null, lastTaskPipeline = null, taskPageSeq = 0, pendingLanding = null;
+const lastTaskRows = [];
+selectedTask = pages.terminal.task.id;
+(async () => {
+  for (const expected of ['evaluations: 1 / 20', 'Reassessing candidates', 'awaiting task completion', '<h3>Result</h3>']) {
+    await refreshTaskPage();
+    assert(detail.innerHTML.includes(expected), expected);
+  }
+  await refreshTaskPage();
+  assert.equal(sent.length, 4);
+  assert(sent.every(item => item.method === 'GET'));
+  lastTaskPage = pages.paused.task;
+  lastTaskLifecycle = pages.paused.lifecycle;
+  polls.push(pages.paused);
+  await controlSelectedTask('resume');
+  assert.deepEqual(sent[4], {method: 'POST', path: `/api/tasks/${selectedTask}/resume`,
+    body: {revision: pages.paused.lifecycle.revision}});
+  assert(detail.innerHTML.includes('stale Resume'));
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""", ("refreshTaskPage", "paintTaskPage", "controlSelectedTask"))
 
 
 if __name__ == "__main__":

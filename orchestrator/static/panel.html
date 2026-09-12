@@ -5590,13 +5590,80 @@ function reviewedTaskPipeline(view) {
   return `<div class="card"><h3>Pipeline</h3>${rows}</div>`;
 }
 function taskControlHistory(lifecycle) {
-  const history = lifecycle && Array.isArray(lifecycle.history) ? lifecycle.history : [];
+  const history = (lifecycle && Array.isArray(lifecycle.history) ? lifecycle.history : [])
+    .filter(event => !event.physical_dispatch);
   if (!history.length) return "";
   return `<details class="card"><summary>Pause and recovery history (${history.length})</summary>` +
     history.map(event => `<div class="story-meta"><b>${esc(event.status || "")}</b>` +
       ` · ${esc([event.at, event.source].filter(Boolean).join(" · "))}` +
       (event.reason ? `<div class="story-note">${esc(event.reason)}</div>` : "") +
       `</div>`).join("") + `</details>`;
+}
+function creativityProposals(proposals) {
+  return proposals.map((proposal, index) => `<div class="card"><h4>Proposal ${index + 1}` +
+    ` · evaluation ${esc(proposal.score)}</h4>` +
+    `<div class="story-meta">${esc(proposal.candidate_id)}</div>` +
+    `<div class="story-note">${esc(proposal.proposal)}</div>` +
+    `<ol>${proposal.components.map(part => `<li><b>${esc(part.dimension)}</b>` +
+      ` · ${esc(part.variant)}</li>`).join("")}</ol>` +
+    `<div class="story-note"><b>Reason</b> · ${esc(proposal.reason)}</div>` +
+    `<div class="story-note"><b>Assumptions</b> · ${esc(proposal.assumptions.length
+      ? proposal.assumptions.join("\n") : "None stated")}</div></div>`).join("");
+}
+function creativityProgress(view, configuration, open) {
+  if (!view) return `<div class="card"><h3>Search progress</h3>` +
+    `<div class="story-note">No saved progress available.</div></div>`;
+  const score = value => value === null ? "unavailable" : value;
+  let html = `<div class="card"><h3>Search progress</h3>` +
+    `<div class="story-note">Job: ${esc(view.job.replace(/_/g, " "))}` +
+    ` · generation ${esc(view.generation)} / ${esc(configuration.generation_limit)}` +
+    ` · ${esc(view.generations_completed)} completed</div>` +
+    `<div class="story-note">Accepted candidate evaluations: ${esc(view.evaluated_candidates)}` +
+    ` / ${esc(view.evaluation_budget)}</div>` +
+    `<div class="story-note">Best evaluation: ${esc(score(view.best_score))}` +
+    ` · reference: ${esc(score(view.reference_score))}</div>` +
+    `<div class="story-note">Generations without required improvement: ${esc(view.stagnant_generations)}` +
+    ` / ${esc(configuration.patience_generations)}` +
+    ` · patience window ${view.window_complete ? "complete" : "in progress"}</div>` +
+    `<div class="story-note">Expansion interventions: ${esc(view.expansion_interventions)}` +
+    ` · consecutive: ${esc(view.consecutive_expansions)}` +
+    ` / ${esc(configuration.max_stagnation_expansions)}</div>` +
+    `<div class="amend-hint">Scores are evaluations against this objective, not probabilities of success.</div>`;
+  if (view.phase === "rebaseline")
+    html += `<div class="story-note">Reassessing candidates under the current evaluator.</div>`;
+  if (open && view.job === "complete")
+    html += `<div class="story-note">Search result prepared; awaiting task completion.</div>`;
+  if (open) html += `<h4>Best candidates from the last completed comparison</h4>` +
+    (view.best_candidates.length ? creativityProposals(view.best_candidates)
+      : `<div class="story-note">No candidates available from a completed comparison.</div>`);
+  return html + `</div>`;
+}
+function creativityResult(native) {
+  return `<div class="story-note"><b>${native.outcome === "no_valid_candidates"
+    ? "No valid proposal was found." : "Proposals"}</b></div>` +
+    `<div class="story-note">Stop reason: ${esc(native.stop_reason)}</div>` +
+    `<div class="story-note">Generations completed: ${esc(native.generations_completed)}` +
+    ` · accepted candidate evaluations: ${esc(native.evaluated_candidates)}` +
+    ` · expansion interventions: ${esc(native.expansion_interventions)}</div>` +
+    `<div class="amend-hint">Scores are evaluations against this objective, not probabilities of success.</div>` +
+    creativityProposals(native.proposals);
+}
+function taskPhysicalCalls(lifecycle) {
+  const calls = lifecycle ? lifecycle.history.filter(event => event.physical_dispatch) : [];
+  return `<details class="card"><summary>Physical calls (${calls.length})</summary>` +
+    calls.map(event => {
+      const call = event.physical_dispatch, context = call.call_context, attempt = event.attempt;
+      const meta = [context.job, `generation ${context.generation}`, `batch ${context.batch}`,
+        `family ${call.family ?? "unknown"}`, `model ${call.model ?? "unknown"}`,
+        `effort ${call.effort ?? "unknown"}`, `prompt-set fallback: ${call.prompt_set_fallback ?? "none"}`,
+        call.duration_s === null ? "duration unknown" : `duration ${fmtDHMS(call.duration_s)}`];
+      return `<div class="card"><div class="story-meta">${esc(event.call_id)}` +
+        ` · ${call.completed ? "completed" : "completion unconfirmed"}</div>` +
+        `<div class="story-note">${esc(meta.join(" · "))}</div>` +
+        (call.error ? `<div class="failure">${esc(call.error)}</div>` : "") +
+        costHtml(attempt.cost, attempt.cost_partial) +
+        tokenUsageHtml(attempt.token_usage, attempt.token_usage_partial) + `</div>`;
+    }).join("") + `</details>`;
 }
 function renderTaskPage(record, admittedAt, taskPipeline = null) {
   const result = record.result;
@@ -5614,7 +5681,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
   const stateCls = taskStateClassName(record, lifecycle);
   const standalone = !taskPageRunId;
   const controllable = standalone &&
-    ["agent_call", "reviewed_task", "deep_task"].includes(executor);
+    ["agent_call", "reviewed_task", "deep_task", "creativity"].includes(executor);
   let html = `<div class="run-sticky-head">`;
   // Project line with the page menu at the far right: the few actions on
   // a task (delete) live there, out of the way, red where they must be.
@@ -5691,11 +5758,15 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
   }
   if (!open && result.reason)
     html += `<div class="failure">${esc(result.reason)}</div>`;
-  if (open && executor === "agent_call" && accounting)
+  if (open && ["agent_call", "creativity"].includes(executor) && accounting)
     html += `<div class="card"><h3>Work so far</h3>` +
       costHtml(accounting.cost, accounting.cost_partial) +
       tokenUsageHtml(accounting.token_usage, accounting.token_usage_partial) + `</div>`;
   html += taskControlHistory(lifecycle);
+  if (executor === "creativity") {
+    html += creativityProgress(taskPipeline, configuration, open);
+    html += taskPhysicalCalls(lifecycle);
+  }
   if (executor === "deep_task") html += deepTaskPipeline(taskPipeline);
   if (executor === "reviewed_task")
     html += reviewedTaskPipeline(taskPipeline);
@@ -5708,7 +5779,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
   if (request.output_directory) ctxRows.push(["output directory", request.output_directory]);
   if (Object.keys(configuration).length)
     ctxRows.push(["configuration", Object.entries(configuration)
-      .map(([k, v]) => `${k}: ${v}`).join(" · ")]);
+      .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ")]);
   if ((record.order || {}).prompt_set)
     ctxRows.push(["prompt set", record.order.prompt_set]);
   const staffing = taskStaffingLine(record);
@@ -5722,6 +5793,8 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
     html += `<div class="card"><h3>Result</h3>` +
       costHtml(result.cost, result.cost_partial) +
       tokenUsageHtml(result.token_usage, result.token_usage_partial) +
+      (executor === "creativity" && result.status === "success"
+        ? creativityResult(result.native_result) : "") +
       `<details><summary class="amend-hint">Native result (opaque TaskExecutor output)</summary>
        <pre class="story-note mono">${esc(typeof result.native_result === "string"
          ? result.native_result : JSON.stringify(result.native_result, null, 2))}</pre></details></div>`;
@@ -5798,7 +5871,7 @@ async function refreshTaskPage() {
     if (seq !== taskPageSeq || id !== selectedTask) return;
     lastTaskPage = data.task;
     lastTaskLifecycle = data.lifecycle || null;
-    lastTaskPipeline = data.deep_task || data.reviewed_task || null;
+    lastTaskPipeline = data.deep_task || data.reviewed_task || data.creativity || null;
     if (data.session_id) lastTaskPageSession = data.session_id;
     if (data.task.result !== null) taskStopping = false;
     const det = document.getElementById("detail");

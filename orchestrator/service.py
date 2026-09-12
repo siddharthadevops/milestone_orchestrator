@@ -5930,6 +5930,8 @@ def make_handler(home, task_host=None):
                                         home, record, task_host
                                     )
                                 )
+                            elif executor == "creativity":
+                                payload["creativity"] = task_api.creativity_view(home, record)
                             session_id = task_api.task_session_id(
                                 home, record, task_host
                             )

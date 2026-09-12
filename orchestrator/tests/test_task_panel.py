@@ -514,7 +514,7 @@ async function postJSON(path, payload) {
         self.assertIn("renderSlicePipeline(", deep)
         self.assertIn("lastTaskPipeline", self.panel)
         self.assertIn(
-            "data.deep_task || data.reviewed_task || null", self.panel
+            "data.deep_task || data.reviewed_task || data.creativity || null", self.panel
         )
 
         reviewed = re.search(
