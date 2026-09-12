@@ -267,4 +267,5 @@ executing the chosen initiative requires its own instruction.
 | slice_doc-03 (Search material and categorical genomes) | reviewed | 2 | satisfied | 7b825b6 |
 | slice_impl-03 (Search material and categorical genomes) | reviewed | 2 | satisfied | 0a37ac2 |
 | slice_doc-04 (Selection, diversity, crossover, and mutation) | reviewed | 2 | satisfied | 7aca59e |
-| slice_impl-04 (Selection, diversity, crossover, and mutation) | reviewed | 2 | satisfied | - |
+| slice_impl-04 (Selection, diversity, crossover, and mutation) | reviewed | 2 | satisfied | a0fc59b |
+| slice_doc-05 (Concurrent physical-call control boundary) | reviewed | 2 | satisfied | - |
