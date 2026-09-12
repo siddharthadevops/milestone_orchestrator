@@ -274,4 +274,5 @@ executing the chosen initiative requires its own instruction.
 | slice_impl-05-c (Concurrent physical-call control boundary) | reviewed | 2 | satisfied | bd1a65b |
 | milestone_verification-1 (?) | reviewed | 0 | satisfied | bae6e37 |
 | slice_doc-06 (Bounded concurrent evaluation waves) | reviewed | 1 | satisfied | e842c13 |
-| slice_impl-06-a (Bounded concurrent evaluation waves) | reviewed | 1 | satisfied | - |
+| slice_impl-06-a (Bounded concurrent evaluation waves) | reviewed | 1 | satisfied | aafd08d |
+| slice_impl-06-b (Bounded concurrent evaluation waves) | reviewed | 1 | satisfied | - |

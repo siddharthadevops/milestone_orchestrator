@@ -1,11 +1,15 @@
-"""Routed evaluation batches for the task-owned creativity search.
+"""Bounded evaluation waves for the task-owned creativity search.
 
 The owner supplies admitted material, configuration and candidate genomes, and
-a DirectTaskHost-created TaskCallGroup. This adapter owns semantic invocation
-and accepted batch attribution; the group owns controls and physical evidence.
+a DirectTaskHost-created TaskCallGroup. This caller owns semantic invocation,
+accepted checkpoints and comparison eligibility; the group owns controls and
+physical evidence.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import threading
+import uuid
 from types import SimpleNamespace
 
 from . import creativity_search, prompt_contracts, prompt_router, runners, staffing, tasks
@@ -14,7 +18,7 @@ from . import creativity_search, prompt_contracts, prompt_router, runners, staff
 def call_evaluation_batch(
     group, runner, *, home, session, workspace, configuration, search_material,
     candidates, generation, batch, execution_context, prompt_set="default",
-    prompt_values=None,
+    prompt_values=None, record_dispatch=None,
 ):
     """Evaluate one owner-admitted batch, including the runner's one correction.
 
@@ -23,6 +27,8 @@ def call_evaluation_batch(
     (None, ControlledInterruptionResult). Operational and protocol faults raise.
     The batch is input for checkpointing, not a selection-ready comparison.
     Its caller must enforce wave/budget bounds and commit accepted work.
+    A wave's optional ``record_dispatch`` returns the current regime revision
+    immediately before each attempt, so completion order cannot choose it.
     """
     genomes = {candidate_id: dict(genome) for candidate_id, genome in candidates.items()}
     values = dict(prompt_values or {})
@@ -64,10 +70,18 @@ def call_evaluation_batch(
         ).answer
         return answer["agent"], answer["model"], answer["effort"]
 
+    def before_dispatch(agent, model, effort, _fallback):
+        if record_dispatch is not None:
+            context["regime_revision"] = record_dispatch({
+                "material": context["material"], "agent": agent,
+                "model": model, "effort": effort,
+            })
+
     reply, result = group.call_worker(
         runner, None, "", "evaluate_candidates", workspace,
         prepare_call=prepare_call, resolve_dispatch=resolve_dispatch,
         call_context=context, execution_context=execution_context,
+        before_dispatch=before_dispatch,
     )
     if isinstance(result, runners.ControlledInterruptionResult):
         return None, result
@@ -84,3 +98,114 @@ def call_evaluation_batch(
         "genomes": genomes,
         "evaluations": reply["evaluations"],
     }, result
+
+
+def _current_evaluations(state):
+    return {
+        item["candidate_id"]: (batch["genomes"][item["candidate_id"]], item)
+        for batch in state["batches"]
+        if batch["regime_revision"] == state["regime_revision"]
+        for item in batch["evaluations"]
+    }
+
+
+def evaluate_wave(
+    group, runner, *, store, checkpoint_key, candidates, comparison_ids,
+    reference_revision=None, **call_options,
+):
+    """Assess at most batch_size * concurrency candidates, then hand off.
+
+    The owner supplies the existing whole task checkpoint in ``store`` (a
+    LocalKVClient) and retains sole write ownership during the wave. Only its
+    ``evaluation`` portion is changed. Stable candidate ids keep their genomes
+    across waves; ``candidates`` is the work the owner requests, whereas
+    ``comparison_ids`` includes every requested id and the retained survivors.
+
+    Same-regime accepted work is skipped on explicit re-entry. Old-regime work
+    is assessed again only when the owner includes it in ``candidates``; a live
+    regime change never causes automatic reassessment inside this wave.
+    ``reference_revision`` is the regime revision of the owner's progress
+    reference, or None before its first reference. A revision counts regime
+    changes at dispatch, including corrections, never prompt edits.
+
+    The returned handoff has selection pairs only for a complete comparison,
+    plus unfinished ids and an optional ControlledInterruptionResult. Faults
+    raise after siblings settle; their accepted checkpoints remain available.
+    Re-entry and return both use the group's existing quiescence boundary.
+    """
+    group.ensure_quiescent()
+    checkpoint = store.get(checkpoint_key)
+    if "evaluation" not in checkpoint:
+        checkpoint["evaluation"] = {
+            "accepted_count": 0, "regime": None, "regime_revision": 0, "batches": [],
+        }
+        store.put(checkpoint_key, checkpoint)
+    state = checkpoint["evaluation"]
+    current = _current_evaluations(state)
+    configuration = call_options["configuration"]
+    capacity = configuration["max_evaluated_candidates"] - state["accepted_count"]
+    batch_size = configuration["evaluation_batch_size"]
+    concurrency = configuration["evaluation_concurrency"]
+    pending = [candidate_id for candidate_id in candidates if candidate_id not in current]
+    # Reserve the entire wave before dispatch: siblings and correction attempts
+    # cannot spend these same places again. There is no waiting batch queue.
+    pending = pending[:min(capacity, batch_size * concurrency)]
+    lock = threading.Lock()
+
+    def record_dispatch(regime):
+        with lock:
+            checkpoint = store.get(checkpoint_key)
+            state = checkpoint["evaluation"]
+            if regime != state["regime"]:
+                state["regime"] = regime
+                state["regime_revision"] += 1
+                # Keep invalidation even if this attempt is interrupted or its
+                # reply is rejected, so explicit re-entry cannot revive scores.
+                store.put(checkpoint_key, checkpoint)
+            return state["regime_revision"]
+
+    def run_batch(ids, batch_id):
+        accepted, result = call_evaluation_batch(
+            group, runner, candidates={key: candidates[key] for key in ids},
+            batch=batch_id, record_dispatch=record_dispatch, **call_options,
+        )
+        if accepted is not None:
+            accepted["regime_revision"] = result.call_context["regime_revision"]
+            with lock:
+                checkpoint = store.get(checkpoint_key)
+                state = checkpoint["evaluation"]
+                state["batches"].append(accepted)
+                state["accepted_count"] += len(ids)
+                store.put(checkpoint_key, checkpoint)
+        else:
+            return result
+
+    interruption = None
+    if pending:
+        try:
+            with ThreadPoolExecutor(max_workers=concurrency) as pool:
+                futures = [pool.submit(
+                    run_batch, pending[offset:offset + batch_size],
+                    uuid.uuid4().hex,
+                ) for offset in range(0, len(pending), batch_size)]
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result is not None:
+                        interruption = result
+        finally:
+            group.ensure_quiescent()
+
+    state = store.get(checkpoint_key)["evaluation"]
+    current = _current_evaluations(state)
+    unfinished = [candidate_id for candidate_id in comparison_ids if candidate_id not in current]
+    ready = not unfinished and interruption is None
+    return {
+        "regime": state["regime"], "regime_revision": state["regime_revision"],
+        "accepted_count": state["accepted_count"], "unfinished": unfinished,
+        "comparison_ready": ready,
+        "evaluated": [current[key] for key in comparison_ids] if ready else [],
+        "rebaseline_required": state["regime_revision"] > (
+            1 if reference_revision is None else reference_revision
+        ),
+        "interruption": interruption,
+    }
