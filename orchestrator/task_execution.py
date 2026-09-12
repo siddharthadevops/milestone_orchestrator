@@ -258,8 +258,9 @@ class TaskCallGroup:
     handle. Each transport gets its own binding to the task's existing lease.
     """
 
-    def __init__(self, lease, concurrency):
+    def __init__(self, lease, concurrency, on_attempt=None):
         self.lease = lease
+        self.on_attempt = on_attempt
         self._capacity = threading.BoundedSemaphore(concurrency)
         self._lock = threading.RLock()
         self._controls = {}
@@ -304,9 +305,10 @@ class TaskCallGroup:
         with self._admit() as (member, control):
             bound_runner = copy.copy(runner)
             bound_runner.execution_lease = member
+            kwargs.setdefault("call_context", {})
             return call_worker(
                 bound_runner, *args, active_control=control,
-                before_dispatch=fence, **kwargs,
+                before_dispatch=fence, on_attempt=self.on_attempt, **kwargs,
             )
 
     def interrupt(self, reason):

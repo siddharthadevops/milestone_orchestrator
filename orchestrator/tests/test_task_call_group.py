@@ -11,7 +11,7 @@ from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest import mock
 
-from orchestrator import registry, runners, task_api
+from orchestrator import pricing, registry, runners, task_api, tasks
 from orchestrator.task_execution import ExecutionBusy, TaskCallGroup, TaskExecutionLease
 from orchestrator.tests import test_task_execution as execution_fixture
 from orchestrator.tests import test_task_api as api_fixture
@@ -389,6 +389,8 @@ class TaskCallGroupControlTests(unittest.TestCase):
             for boundary in ("handoff", "binding", "repair-preparation", "repair-running"):
                 with self.subTest(transport=transport, boundary=boundary):
                     group = self._group(transport + boundary, 2)
+                    receipts = {}
+                    group.on_attempt = lambda dispatch: receipts.update({dispatch["call_id"]: dispatch})
                     runner = GroupRunner(transport)
                     entered, release = threading.Event(), threading.Event()
                     sibling = self._start(group, runner, "sibling")
@@ -414,6 +416,7 @@ class TaskCallGroupControlTests(unittest.TestCase):
                             self._release(group, "repair1")
                         target = self._start(
                             group, runner, "repair", prepare_call=prepare,
+                            call_context={"job": "evaluate_candidates", "generation": 3, "batch": "b2"},
                             before_dispatch=lambda *_args: gate() if boundary == "handoff" else None,
                         )
                         try:
@@ -433,6 +436,7 @@ class TaskCallGroupControlTests(unittest.TestCase):
                             if boundary == "repair-preparation":
                                 self.assertEqual(caught.exception.token_usage["input_tokens"], 7)
                                 self.assertEqual(len(caught.exception.physical_dispatches), 1)
+                                self.assertIn(caught.exception.physical_dispatches[0]["call_id"], receipts)
                         else:
                             output, result = target.result(5)
                             self.assertIsNone(output)
@@ -440,13 +444,24 @@ class TaskCallGroupControlTests(unittest.TestCase):
                                 self.assertEqual(result.repair["token_usage"]["input_tokens"], 7)
                                 self.assertEqual(result.repair["cost_payloads"][0]["total_cost_usd"], 0.02)
                                 self.assertIsNot(runner.calls["repair1"][0], runner.calls["repair2"][0])
+                                self.assertEqual(len(result.physical_dispatches), 2)
+                                self.assertNotEqual(result.call_id, result.repair["call_id"])
+                                self.assertEqual(result.physical_dispatches[0]["call_id"], result.repair["call_id"])
                         self.assertIsNone(sibling.result(5)[0])
+                    target_receipts = [entry for entry in receipts.values() if entry["call_context"]]
+                    expected = {"handoff": 0, "binding": 1, "repair-preparation": 1, "repair-running": 2}
+                    self.assertEqual(len(target_receipts), expected[boundary])
+                    for receipt in target_receipts:
+                        self.assertTrue(receipt["completed"])
+                        self.assertEqual(receipt["call_context"], {
+                            "job": "evaluate_candidates", "generation": 3, "batch": "b2",
+                        })
                     with self.assertRaises(runners.RunnerError):
                         self._call(group, runner, "later")
                     self.assertNotIn("later1", runner.calls)
                     group.ensure_quiescent()
 
-    def _owned_group(self, host, name):
+    def _owned_group(self, host, name, config=None):
         workspace = os.path.join(host.home, name)
         os.makedirs(workspace)
         order = self.order(work_area={
@@ -466,7 +481,179 @@ class TaskCallGroupControlTests(unittest.TestCase):
                 lease.close()
 
         self.addCleanup(cleanup)
-        return identity, host.create_call_group(identity, 2)
+        return identity, host.create_call_group(identity, 2, config=config)
+
+    def test_group_accounting_keeps_each_physical_attempt(self):
+        for unknown in (False, True):
+            with self.subTest(unknown_usage=unknown):
+                host = task_api.DirectTaskHost(os.path.join(self.temporary.name, "cost-" + str(unknown)))
+                identity, group = self._owned_group(host, "work", config={
+                    "billing": {"claude": "api", "codex": "subscription"},
+                })
+                contexts = {
+                    "success": {"job": "create_genes", "generation": 0, "batch": "initial"},
+                    "failed": {"job": "expand_genes", "generation": 2, "batch": "expansion"},
+                    "repair": {"job": "evaluate_candidates", "generation": 2, "batch": "b7"},
+                }
+                usage = lambda inputs, outputs: {"input_tokens": inputs, "output_tokens": outputs}
+                failure = runners.ProviderResponseError(
+                    "paid operational failure", token_usage=usage(30, 4),
+                    cost_payloads=[{"total_cost_usd": 0.05}],
+                )
+                failure.duration_s = 5.0
+                correction_usage = usage(40, 5)
+                correction = runners.ControlledInterruptionResult(
+                    "", 0, 7.0, "stopped by operator",
+                    token_usage=None if unknown else correction_usage,
+                    cost_payloads=[] if unknown else [correction_usage],
+                )
+                outcomes = {
+                    "repair1": runners.RunnerResult("not json", 0, 2.0, token_usage=usage(10, 2),
+                                                    cost_payloads=[{"total_cost_usd": 0.02}]),
+                    "repair2": correction,
+                    "success": runners.RunnerResult('{"answer":"own success"}', 0, 3.0,
+                                                   token_usage=usage(20, 3), cost_payloads=[{"total_cost_usd": 0.03}]),
+                    "failed": failure,
+                }
+                ready = {name: threading.Event() for name in outcomes}
+                release = {name: threading.Event() for name in outcomes}
+                staffing = {name: ("claude", "claude-fable-5", "high") for name in outcomes}
+                staffing["repair2"] = ("codex", "gpt-5.6-luna", "low")
+                actual_staffing = {}
+
+                def physical(family, prompt, _workspace, model=None, effort=None, active_control=None):
+                    actual_staffing[prompt] = (family, model, effort)
+                    active_control._bind(lambda _text: False, lambda _reason: release[prompt].set() or True)
+                    try:
+                        ready[prompt].set()
+                        self.assertTrue(release[prompt].wait(5))
+                        outcome = outcomes[prompt]
+                        if isinstance(outcome, BaseException):
+                            raise outcome
+                        if prompt == "repair2":
+                            self.assertTrue(active_control.interrupted)
+                        return outcome
+                    finally:
+                        active_control._close()
+
+                runner = SimpleNamespace(call=physical)
+                def start(name):
+                    current = {}
+
+                    def prepare(error):
+                        label = name if name != "repair" else "repair" + ("2" if error else "1")
+                        current["label"] = label
+                        return SimpleNamespace(prompt=label, validate=lambda value: value,
+                                               prompt_set_fallback={"fixture": label})
+
+                    return self._start(group, runner, name, prepare_call=prepare,
+                                       call_context=contexts[name],
+                                       resolve_dispatch=lambda: staffing[current["label"]])
+
+                repaired, success = start("repair"), start("success")
+                self.assertTrue(ready["repair1"].wait(5))
+                self.assertTrue(ready["success"].wait(5))
+                # Reread while active: unfinished dispatch evidence stays partial.
+                reread = task_api.StandaloneTaskStore(host.home)
+                pending = reread.lifecycle(identity)["accounting"]
+                self.assertTrue(pending["token_usage_partial"])
+                self.assertTrue(pending["cost_partial"])
+                release["success"].set()
+                self.assertEqual(success.result(5)[0], {"answer": "own success"})
+                failed = start("failed")
+                self.assertTrue(ready["failed"].wait(5))
+                release["repair1"].set()
+                self.assertTrue(ready["repair2"].wait(5))
+                history = reread.lifecycle(identity)["history"]
+                first = next(event for event in history if
+                             event.get("physical_dispatch", {}).get("prompt_set_fallback") == {"fixture": "repair1"})
+                self.assertEqual(first["attempt"]["cost"]["api_usd"], 0.02)
+                self.assertEqual(first["attempt"]["status"], "failure")
+                self.assertEqual(first["attempt"]["token_usage"]["input_tokens"], 10)
+                release["failed"].set()
+                with self.assertRaisesRegex(runners.ProviderResponseError, "paid operational failure") as caught:
+                    failed.result(5)
+                self.assertIs(caught.exception, failure)
+                host.stop(identity)
+                self.assertIsNone(repaired.result(5)[0])
+                group.ensure_quiescent()
+
+                lifecycle = reread.lifecycle(identity)
+                events = [event for event in lifecycle["history"] if "physical_dispatch" in event]
+                self.assertEqual(len(events), 4)
+                self.assertEqual(len({event["call_id"] for event in events}), 4)
+                self.assertEqual(actual_staffing, staffing)
+                for event in events:
+                    evidence = event["physical_dispatch"]
+                    label = evidence["prompt_set_fallback"]["fixture"]
+                    self.assertTrue(evidence["completed"])
+                    self.assertEqual((evidence["family"], evidence["model"], evidence["effort"]), staffing[label])
+                    self.assertEqual(evidence["call_context"], contexts["repair" if label.startswith("repair") else label])
+                    self.assertEqual(evidence["call_id"], outcomes[label].call_id)
+                    self.assertEqual(event["attempt"]["duration_s"], {"repair1": 2, "repair2": 7, "success": 3, "failed": 5}[label])
+                aggregate = tasks.deep_task_result("failure", [event["attempt"] for event in events], "stopped by operator")
+                self.assertEqual(aggregate["duration_s"], 17.0)
+                self.assertEqual(aggregate["token_usage"]["input_tokens"], 60 if unknown else 100)
+                self.assertEqual(aggregate["token_usage"]["output_tokens"], 9 if unknown else 14)
+                extra = 0 if unknown else pricing.quote("codex", "gpt-5.6-luna", correction_usage).api_usd
+                self.assertAlmostEqual(aggregate["cost"]["api_usd"], 0.10 + extra)
+                self.assertAlmostEqual(aggregate["cost"]["real_usd"], 0.10)
+                self.assertEqual(aggregate["token_usage_partial"], unknown)
+                self.assertEqual(aggregate["cost_partial"], unknown)
+                # A logical aggregate carries no additional physical charge.
+                with registry.locked(host.home):
+                    host.store.pause_locked(identity, "Retain the group outcome", source="error", attempt=aggregate)
+                self.assertEqual(reread.lifecycle(identity)["accounting"], lifecycle["accounting"])
+                host.store.record_result(identity, aggregate)
+                self.assertEqual(reread.record(identity)["result"], aggregate)
+                self.assertEqual(reread.lifecycle(identity)["accounting"], lifecycle["accounting"])
+
+    def test_group_repair_outcomes_keep_actual_identity(self):
+        for outcome in ("success", "failure", "spawn-refused"):
+            with self.subTest(outcome=outcome):
+                host = task_api.DirectTaskHost(os.path.join(self.temporary.name, outcome))
+                identity, group = self._owned_group(host, "work")
+                first = runners.RunnerResult("not json", 0, 2.0, token_usage={"input_tokens": 10},
+                                             cost_payloads=[{"total_cost_usd": 0.02}])
+                calls = []
+
+                def physical(family, prompt, workspace, **_kwargs):
+                    calls.append(family)
+                    if len(calls) == 1:
+                        return first
+                    if outcome == "spawn-refused":
+                        return runners.SubprocessRunner({}, {})._call_template(
+                            family, prompt, workspace, [os.path.join(workspace, "absent-cli")],
+                        )
+                    if outcome == "failure":
+                        raise runners.ProviderResponseError("second provider failed")
+                    return runners.RunnerResult('{"retained":"repaired"}', 0, 3.0)
+
+                dispatches = iter([("claude", "claude-fable-5", "high"), ("codex", None, None)])
+                context = {"job": "evaluate_candidates", "generation": 1, "batch": "b1"}
+                arguments = dict(resolve_dispatch=lambda: next(dispatches), call_context=context,
+                                 model="initial-model", effort="initial-effort")
+                if outcome == "success":
+                    output, carrier = self._call(group, SimpleNamespace(call=physical), "repair", **arguments)
+                    self.assertEqual(output, {"retained": "repaired"})
+                else:
+                    with self.assertRaises(runners.RunnerError) as caught:
+                        self._call(group, SimpleNamespace(call=physical), "repair", **arguments)
+                    carrier = caught.exception
+                evidence = carrier.physical_dispatches
+                self.assertEqual(len(evidence), 1 if outcome == "spawn-refused" else 2)
+                self.assertEqual(evidence[0]["call_id"], first.call_id)
+                self.assertEqual(evidence[0]["call_context"], context)
+                if len(evidence) == 2:
+                    self.assertNotEqual(evidence[0]["call_id"], evidence[1]["call_id"])
+                    self.assertEqual(evidence[1]["call_context"], context)
+                    self.assertEqual(evidence[1]["family"], "codex")
+                    self.assertIsNone(evidence[1]["model"])
+                    self.assertIsNone(evidence[1]["effort"])
+                events = [event for event in host.store.lifecycle(identity)["history"] if "physical_dispatch" in event]
+                self.assertEqual({event["call_id"] for event in events}, {item["call_id"] for item in evidence})
+                self.assertEqual(host.store.lifecycle(identity)["accounting"]["cost"]["api_usd"], 0.02)
+                group.ensure_quiescent()
 
     def test_group_pause_and_stop_reach_all_members(self):
         for transport in ("template", "live"):

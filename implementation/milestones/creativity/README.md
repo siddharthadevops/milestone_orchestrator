@@ -270,4 +270,5 @@ executing the chosen initiative requires its own instruction.
 | slice_impl-04 (Selection, diversity, crossover, and mutation) | reviewed | 2 | satisfied | a0fc59b |
 | slice_doc-05 (Concurrent physical-call control boundary) | reviewed | 2 | satisfied | 3132637 |
 | slice_impl-05-a (Concurrent physical-call control boundary) | reviewed | 2 | satisfied | c935415 |
-| slice_impl-05-b (Concurrent physical-call control boundary) | reviewed | 2 | satisfied | - |
+| slice_impl-05-b (Concurrent physical-call control boundary) | reviewed | 2 | satisfied | bf3f908 |
+| slice_impl-05-c (Concurrent physical-call control boundary) | reviewed | 2 | satisfied | - |

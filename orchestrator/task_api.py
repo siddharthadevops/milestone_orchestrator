@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import uuid
+from types import SimpleNamespace
 
 from orchestrator import brainstorming, brainstorming_tasks, contracts, driver, gitsync
 from orchestrator import brainstorming_coordination as coordination
@@ -145,7 +146,8 @@ class StandaloneTaskStore:
             if (
                 not isinstance(event, dict)
                 or not {"status", "at"} <= set(event)
-                or set(event) - {"status", "at", "reason", "source", "attempt", "call_id"}
+                or set(event) - {"status", "at", "reason", "source", "attempt", "call_id",
+                                "physical_dispatch"}
                 or event["status"] not in ("running", "pausing", "paused")
                 or not isinstance(event["at"], str) or not event["at"].strip()
             ):
@@ -192,11 +194,13 @@ class StandaloneTaskStore:
         result = document["record"].get("result")
         if result is not None:
             lifecycle["status"] = result["status"]
+        grouped = any("physical_dispatch" in event for event in lifecycle["history"])
         if tasks.stored_task_executor(
             document["record"]["order"]["task_executor"]
-        ) == "agent_call":
+        ) == "agent_call" or grouped:
             attempts = [event["attempt"] for event in lifecycle["history"]
-                        if isinstance(event.get("attempt"), dict)]
+                        if isinstance(event.get("attempt"), dict)
+                        and (not grouped or "physical_dispatch" in event)]
             if attempts:
                 aggregate = result or tasks.deep_task_result("success", attempts)
                 lifecycle["accounting"] = {
@@ -211,6 +215,36 @@ class StandaloneTaskStore:
         if not self._store.cas(task_key(task_id), current["revision"], updated).ok:
             raise TaskControlConflict("task changed while applying control")
         return copy.deepcopy(lifecycle)
+
+    def record_physical_attempt_locked(self, task_id, dispatch, accounting):
+        """Update one group receipt in the existing task accounting history."""
+        current, document = self._read_document(task_id)
+        lifecycle = self._lifecycle(document)
+        history = lifecycle["history"]
+        previous = next((event for event in history
+                         if event.get("call_id") == dispatch["call_id"]), None)
+        if dispatch.get("provider_dispatch_started") is False:
+            if previous is None:
+                return
+            history.remove(previous)
+        else:
+            reason = dispatch["error"] or (
+                None if dispatch["completed"] else "Physical attempt outcome is not yet known"
+            )
+            event = {
+                "status": lifecycle["status"], "at": _admission_stamp(),
+                "call_id": dispatch["call_id"], "physical_dispatch": copy.deepcopy(dispatch),
+                "attempt": {"status": "failure" if reason else "success",
+                            "native_result": None, **accounting,
+                            **({"reason": reason} if reason else {})},
+            }
+            if lifecycle["status"] != "running":
+                event.update(reason=lifecycle["reason"], source=lifecycle["source"])
+            if previous is None:
+                history.append(event)
+            else:
+                history[history.index(previous)] = event
+        self._write_lifecycle_locked(task_id, current, document, lifecycle)
 
     def pause_locked(self, task_id, reason, source="operator", pending=False,
                      attempt=None, completed_result=None, attempt_id=None):
@@ -441,7 +475,17 @@ class StandaloneTaskStore:
         if not current["exists?"]:
             raise tasks.TaskRecordError("unknown task %r" % task_id)
         document = self._validate_document(current["value"], key)
-        if tasks.stored_task_executor(
+        history = self._lifecycle(document)["history"]
+        if any("physical_dispatch" in event for event in history):
+            # A group result is a view of these receipts, never another charge.
+            aggregate = tasks.deep_task_result(
+                result["status"], [event["attempt"] for event in history if "physical_dispatch" in event],
+                result.get("reason"),
+            )
+            result = dict(result, **{name: aggregate[name] for name in (
+                "duration_s", "token_usage", "token_usage_partial", "cost", "cost_partial",
+            )})
+        elif tasks.stored_task_executor(
             document["record"]["order"]["task_executor"]
         ) == "agent_call":
             result = copy.deepcopy(result)
@@ -907,7 +951,7 @@ class DirectTaskHost:
         self._leases = {}
         self._lock = threading.Lock()
 
-    def create_call_group(self, task_id, concurrency):
+    def create_call_group(self, task_id, concurrency, config=None):
         """Attach concurrent calls to this task's existing owner and controls."""
         with registry.locked(self.home), self._lock:
             if (self.store.lifecycle(task_id)["status"] != "running"
@@ -915,9 +959,24 @@ class DirectTaskHost:
                 raise TaskControlConflict("task control already fences new calls")
             if task_id in self._controls:
                 raise TaskControlConflict("task already has an active call control")
-            group = TaskCallGroup(self._leases[task_id], concurrency)
+            group = TaskCallGroup(
+                self._leases[task_id], concurrency,
+                on_attempt=lambda dispatch: self._record_group_attempt(task_id, dispatch, config or {}),
+            )
             self._controls[task_id] = group
             return group
+
+    def _record_group_attempt(self, task_id, dispatch, config):
+        try:
+            accounting = _accounting(
+                SimpleNamespace(**dispatch), dispatch["family"], dispatch["model"], config, 0.0,
+            )
+            with registry.locked(self.home):
+                self.store.record_physical_attempt_locked(task_id, dispatch, accounting)
+        except Exception:
+            # Like the single-call marker, auxiliary evidence is best-effort.
+            # A lost completion update leaves any pending receipt visibly partial.
+            pass
 
     def _family(self, task_id):
         root = self.store.owner_chain(task_id)[-1]

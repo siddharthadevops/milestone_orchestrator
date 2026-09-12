@@ -2979,10 +2979,10 @@ def _physical_dispatch(result, family=None, model=None, effort=None,
                        error=None):
     """Describe one provider invocation for generic incident accounting."""
     usage = normalize_token_usage(getattr(result, "token_usage", None))
-    return {
-        "family": getattr(result, "resolved_family", None) or family,
-        "model": getattr(result, "resolved_model", None) or model,
-        "effort": getattr(result, "resolved_effort", None) or effort,
+    dispatch = {
+        "family": getattr(result, "resolved_family", family),
+        "model": getattr(result, "resolved_model", model),
+        "effort": getattr(result, "resolved_effort", effort),
         "prompt_set_fallback": getattr(
             result, "prompt_set_fallback", None
         ),
@@ -2996,6 +2996,10 @@ def _physical_dispatch(result, family=None, model=None, effort=None,
         ),
         "error": str(error) if error is not None else None,
     }
+    if hasattr(result, "call_id"):
+        dispatch.update(call_id=result.call_id, call_context=result.call_context,
+                        completed=True)
+    return dispatch
 
 
 def call_worker(runner, family, prompt, kind, workspace,
@@ -3005,7 +3009,7 @@ def call_worker(runner, family, prompt, kind, workspace,
                 active_control=None, resolve_dispatch=None,
                 continuation_family=None, on_dispatch=None,
                 prepare_call=None, before_dispatch=None,
-                single_attempt=False):
+                single_attempt=False, call_context=None, on_attempt=None):
     """Run the CLI and return (validated_output, RunnerResult).
 
     By default, exactly one repair retry follows a contract violation; then
@@ -3044,8 +3048,25 @@ def call_worker(runner, family, prompt, kind, workspace,
     single_attempt: disable the ordinary contract-correction call. A malformed
     or contract-invalid first reply raises WorkerProtocolError with that one
     attempt's raw output and accounting.
+
+    call_context / on_attempt: group callers retain physical identities and
+    their job/generation/batch context. The observer receives pending dispatch
+    evidence, then its completed accounting after the transport's quiescence
+    fence. A known pre-provider refusal removes the pending receipt. Repair
+    has a new identity; the returned carrier includes all physical dispatches.
     """
     opts = dict(validate_opts or {})
+    physical_dispatches = []
+    retain_attempts = call_context is not None or on_attempt is not None
+
+    def observe_attempt(dispatch):
+        if on_attempt is not None:
+            on_attempt(dict(dispatch))
+
+    def record_contract_error(error):
+        if retain_attempts:
+            physical_dispatches[-1]["error"] = str(error)
+            observe_attempt(physical_dispatches[-1])
     if start_session and session_ref is not None:
         raise RunnerError(
             "a worker call cannot both start and continue a session"
@@ -3153,7 +3174,7 @@ def call_worker(runner, family, prompt, kind, workspace,
             )
             for name in (
                 "resolved_family", "resolved_model", "resolved_effort",
-                "prompt_set_fallback",
+                "prompt_set_fallback", "call_id", "call_context",
             ):
                 if hasattr(outcome, name):
                     setattr(error, name, getattr(outcome, name))
@@ -3186,7 +3207,7 @@ def call_worker(runner, family, prompt, kind, workspace,
             )
             for name in (
                 "resolved_family", "resolved_model", "resolved_effort",
-                "prompt_set_fallback",
+                "prompt_set_fallback", "call_id", "call_context",
             ):
                 if hasattr(outcome, name):
                     setattr(error, name, getattr(outcome, name))
@@ -3318,6 +3339,19 @@ def call_worker(runner, family, prompt, kind, workspace,
 
         def compatible_call(method, *args):
             kwargs = {"model": call_model, "effort": call_effort}
+            attempt = None
+
+            def retain_outcome(outcome, error=None):
+                outcome.call_id = attempt["call_id"]
+                outcome.call_context = attempt["call_context"]
+                outcome.prompt_set_fallback = prompt_set_fallback
+                if getattr(outcome, "duration_s", None) is None:
+                    outcome.duration_s = time.monotonic() - started
+                dispatch = dict(_physical_dispatch(outcome, error=error), completed=True)
+                physical_dispatches.append(dispatch)
+                outcome.physical_dispatches = list(physical_dispatches)
+                observe_attempt(dispatch)
+
             accepts_control = False
             if call_control is not None:
                 try:
@@ -3353,6 +3387,14 @@ def call_worker(runner, family, prompt, kind, workspace,
                         error.resolved_effort = call_effort
                         error.provider_dispatch_started = False
                         raise error from exc
+                if retain_attempts:
+                    attempt = dict(
+                        _physical_dispatch(None, call_family, call_model, call_effort),
+                        call_id=uuid.uuid4().hex, call_context=dict(call_context or {}),
+                        prompt_set_fallback=prompt_set_fallback, completed=False,
+                    )
+                    observe_attempt(attempt)
+                started = time.monotonic()
                 result = method(*args, **kwargs)
             except BaseException as exc:
                 exc.resolved_family = call_family
@@ -3360,11 +3402,18 @@ def call_worker(runner, family, prompt, kind, workspace,
                 exc.resolved_effort = call_effort
                 if not hasattr(exc, "provider_dispatch_started"):
                     exc.provider_dispatch_started = True
+                if attempt is not None:
+                    if exc.provider_dispatch_started:
+                        retain_outcome(exc, error=exc)
+                    else:
+                        observe_attempt(dict(attempt, provider_dispatch_started=False))
                 raise
             else:
                 result.resolved_family = call_family
                 result.resolved_model = call_model
                 result.resolved_effort = call_effort
+                if attempt is not None:
+                    retain_outcome(result, error=getattr(result, "interrupt_reason", None))
                 return result
             finally:
                 if call_control is not None and not accepts_control:
@@ -3461,6 +3510,7 @@ def call_worker(runner, family, prompt, kind, workspace,
         return validated, result
     except (ValueError, contracts.ContractError) as exc:
         first_error = str(exc)
+        record_contract_error(first_error)
     except BaseException as exc:
         if isinstance(exc, verifiers.VerifierError):
             _attach_call_accounting(exc, result)
@@ -3573,6 +3623,8 @@ def call_worker(runner, family, prompt, kind, workspace,
     if isinstance(result2, ControlledInterruptionResult):
         result2.repair = {
             "error": first_error,
+            **({"call_id": result.call_id, "call_context": result.call_context}
+               if retain_attempts else {}),
             "raw_text": diagnostic_text(result),
             "family": getattr(result, "resolved_family", family),
             "model": getattr(result, "resolved_model", model),
@@ -3599,6 +3651,8 @@ def call_worker(runner, family, prompt, kind, workspace,
         # the malformed text and its cost, not just the happy ending).
         result2.repair = {
             "error": first_error,
+            **({"call_id": result.call_id, "call_context": result.call_context}
+               if retain_attempts else {}),
             "raw_text": diagnostic_text(result),
             "family": getattr(result, "resolved_family", family),
             "model": getattr(result, "resolved_model", model),
@@ -3616,6 +3670,7 @@ def call_worker(runner, family, prompt, kind, workspace,
         }
         return validated, result2
     except (ValueError, contracts.ContractError) as exc:
+        record_contract_error(exc)
         token_usage = add_token_usage(result.token_usage, result2.token_usage)
         first_family = getattr(result, "resolved_family", family)
         second_family = getattr(result2, "resolved_family", family)
