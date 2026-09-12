@@ -6,6 +6,7 @@ The caller supplies comparable evaluations and explored genome identities.
 Fixed problem fields stay with the caller and never become candidate state.
 """
 
+from fractions import Fraction
 from itertools import chain, product
 import random
 
@@ -264,11 +265,16 @@ def accept_evaluation_wave(progress, wave, configuration):
         pending["phase"] = "generation"
         return
 
+    # Compare decimal spellings exactly: binary subtraction can put a gain
+    # that reaches the threshold just below it.
     reference = progress["reference_score"]
     if reference is None and best is not None:
         progress["reference_score"] = best
         progress["stagnant_generations"] = 0
-    elif best is not None and best - reference >= configuration["minimum_improvement"]:
+    elif best is not None and (
+        Fraction(str(best)) - Fraction(str(reference))
+        >= Fraction(str(configuration["minimum_improvement"]))
+    ):
         progress["reference_score"] = best
         progress["stagnant_generations"] = 0
         progress["consecutive_expansions"] = 0

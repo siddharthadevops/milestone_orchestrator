@@ -549,6 +549,46 @@ class CreativityEvaluationTest(unittest.TestCase):
                 self.assertTrue(ready["comparison_ready"])
                 self.assertFalse(ready["rebaseline_required"])
 
+    def test_decimal_cumulative_progress_at_threshold(self):
+        search = evaluation.creativity_search
+        genomes = [{"format": "a", "channel": channel} for channel in ("a", "b", "c")]
+        for final_score, expected_progress in (
+            (0.42, True),
+            (0.41999999999999993, False),
+            (0.42000000000000004, True),
+        ):
+            with self.subTest(final_score=final_score):
+                self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+                    generation_limit=8, max_evaluated_candidates=20,
+                    minimum_improvement=0.02, patience_generations=2,
+                ))
+                self.store.put("checkpoint", {"search_material": self.material})
+                progress = search.new_progress()
+                for generation, (score, genome) in enumerate(zip((0.40, 0.41, final_score), genomes)):
+                    self.reply["evaluations"][1]["score"] = score
+                    search.begin_generation(progress, {"decimal-%s" % generation: genome}, self.configuration)
+                    wave = self.progress_wave(progress)
+                    self.assertTrue(wave["comparison_ready"])
+                    self.assertFalse(wave["rebaseline_required"])
+                    self.assertEqual(wave["regime_revision"], 1)
+                    if generation < 2:
+                        self.assertEqual(progress["reference_score"], 0.40)
+                        self.assertFalse(progress["progress_made"])
+                        self.assertEqual(progress["stagnant_generations"], generation)
+                        self.assertFalse(progress["window_complete"])
+                    if generation == 0:
+                        progress.update(consecutive_expansions=1, expansion_interventions=2)
+
+                self.assertEqual(progress["best_score"], final_score)
+                self.assertEqual(progress["progress_made"], expected_progress)
+                self.assertEqual(progress["reference_score"], final_score if expected_progress else 0.40)
+                self.assertEqual(progress["stagnant_generations"], 0 if expected_progress else 2)
+                self.assertEqual(progress["consecutive_expansions"], 0 if expected_progress else 1)
+                self.assertEqual(progress["window_complete"], not expected_progress)
+                self.assertEqual(progress["expansion_interventions"], 2)
+                self.assertEqual(progress["generations_completed"], 3)
+                self.assertEqual(progress["evaluated_candidates"], 3)
+
     def test_rebaseline_without_progress_credit(self):
         search = evaluation.creativity_search
         self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
