@@ -3337,8 +3337,8 @@ def call_worker(runner, family, prompt, kind, workspace,
                 error.provider_dispatch_started = False
                 raise error from exc
 
-        def compatible_call(method, *args):
-            kwargs = {"model": call_model, "effort": call_effort}
+        def compatible_call(method, *args, **kwargs):
+            kwargs.update(model=call_model, effort=call_effort)
             attempt = None
 
             def retain_outcome(outcome, error=None):
@@ -3426,6 +3426,8 @@ def call_worker(runner, family, prompt, kind, workspace,
             and continuation_bound_family is not None
             and call_family != continuation_bound_family
         )
+        context_kwargs = ({} if execution_context is _AMBIENT_EXECUTION
+                          else {"execution_context": execution_context})
         if continuation_ref is not None and not force_fresh:
             continuation = getattr(runner, "continue_session", None)
             if not callable(continuation):
@@ -3460,6 +3462,7 @@ def call_worker(runner, family, prompt, kind, workspace,
                         call_family,
                         call_prompt,
                         workspace,
+                        **context_kwargs,
                     )
             if callable(starter):
                 return compatible_call(
@@ -3470,7 +3473,7 @@ def call_worker(runner, family, prompt, kind, workspace,
                     execution_context,
                 )
         return compatible_call(
-            runner.call, call_family, call_prompt, workspace
+            runner.call, call_family, call_prompt, workspace, **context_kwargs
         )
 
     first_prompt, first_validate, first_fallback, first_complete = (

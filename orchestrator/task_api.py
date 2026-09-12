@@ -16,7 +16,8 @@ from types import SimpleNamespace
 
 from orchestrator import brainstorming, brainstorming_tasks, contracts, driver, gitsync
 from orchestrator import brainstorming_coordination as coordination
-from orchestrator import kvstore, pricing, profiles, prompt_sets
+from orchestrator import creativity_evaluation, creativity_search
+from orchestrator import kvstore, pricing, profiles, prompt_sets, prompts
 from orchestrator import registry, runners, session_repository, staffing, tasks
 from orchestrator import state as st
 from orchestrator.task_execution import ExecutionBusy, TaskCallGroup, TaskExecutionLease
@@ -26,7 +27,7 @@ TASKS_DIRNAME = "tasks"
 REVIEWED_DIRNAME = "reviewed"
 _TASK_KEY_PREFIX = "tasks/task:"
 _DOCUMENT_SCHEMA_VERSION = 1
-RECOVERABLE_EXECUTORS = frozenset(("agent_call", "reviewed_task", "deep_task"))
+RECOVERABLE_EXECUTORS = frozenset(("agent_call", "reviewed_task", "deep_task", "creativity"))
 
 
 class TaskControlConflict(RuntimeError):
@@ -54,6 +55,14 @@ def reviewed_state_directory(home, task_id):
 
 def reviewed_state_path(home, task_id):
     return os.path.join(reviewed_state_directory(home, task_id), "state.json")
+
+
+def creativity_checkpoint_store(home, task_id):
+    """Private search continuation; the task lease grants its write ownership."""
+    return kvstore.LocalKVClient(os.path.join(
+        os.path.abspath(home), TASKS_DIRNAME, "creativity",
+        kvstore.validate_fragment(task_id, "task_id"),
+    ))
 
 
 def task_key(task_id):
@@ -571,6 +580,8 @@ def forget_task_evidence(home, record):
         shutil.rmtree(
             reviewed_state_directory(home, task_id), ignore_errors=True
         )
+    if (record.get("order") or {}).get("task_executor") == "creativity":
+        shutil.rmtree(creativity_checkpoint_store(home, task_id).directory, ignore_errors=True)
     if (record.get("order") or {}).get("task_executor") == "brainstorming":
         try:
             work_area, _parent, _target = (
@@ -1811,7 +1822,7 @@ class DirectTaskHost:
             if executor in RECOVERABLE_EXECUTORS:
                 self._pause_boundary(task_id)
                 if (self._stop_reason(task_id) is not None and
-                        (executor == "agent_call" or (
+                        (executor in ("agent_call", "creativity") or (
                             executor == "reviewed_task" and not os.path.isfile(
                                 reviewed_state_path(self.home, task_id))))):
                     with registry.locked(self.home):
@@ -1830,6 +1841,8 @@ class DirectTaskHost:
                     )
             if executor == "agent_call":
                 self._run_worker(record, config_resolver)
+            elif executor == "creativity":
+                self._run_creativity(record, config_resolver)
             elif executor == "brainstorming":
                 self._run_brainstorming(record, config_resolver)
             elif executor == "deep_task":
@@ -1845,6 +1858,8 @@ class DirectTaskHost:
             if (record["result"] is None and tasks.stored_task_executor(
                     record["order"]["task_executor"]) in RECOVERABLE_EXECUTORS):
                 self._pause_failure(task_id, str(exc).strip() or type(exc).__name__)
+                if executor == "creativity" and self._stop_reason(task_id) is not None:
+                    self._publish_creativity_terminal(record, None)
                 # A newly accepted Cancel can win while an error pause is
                 # quiescing a discussion. Settle it after releasing this host.
                 if not already_cancelling and self._stop_reason(task_id) is not None:
@@ -2551,6 +2566,137 @@ class DirectTaskHost:
                     % (str(exc).strip() or type(exc).__name__),
                 ),
             )
+
+    def _publish_creativity_terminal(self, record, native):
+        task_id = record["id"]
+        self._pause_boundary(task_id)
+        if self._stop_reason(task_id) is not None:
+            self._settle_pause(task_id)
+        with registry.locked(self.home):
+            reason = self._stop_reason(task_id)
+            if reason is None and self.store.lifecycle(task_id)["status"] != "running":
+                raise _TaskPaused()
+            self.store.record_result_locked(task_id, {
+                "status": "failure" if reason else "success",
+                "native_result": None if reason else native,
+                **brainstorming_tasks._zero_accounting(),
+                **({"reason": reason} if reason else {}),
+            })
+
+    def _run_creativity(self, record, config_resolver):
+        """Compose saved search handoffs under the ordinary task lifecycle."""
+        task_id = record["id"]
+        order = record["order"]
+        request, configuration = order["request"], order["configuration"]
+        store = creativity_checkpoint_store(self.home, task_id)
+        checkpoint = store.get("checkpoint")
+        if checkpoint is kvstore.ABSENT:
+            checkpoint = {
+                "search_material": None, "candidates": {},
+                "progress": creativity_search.new_progress(),
+                "job": "create_genes", "generation": 0, "native_result": None,
+            }
+            store.put("checkpoint", checkpoint)
+        runner = None
+        while True:
+            self._pause_boundary(task_id)
+            checkpoint = store.get("checkpoint")
+            if self._stop_reason(task_id) is not None or checkpoint["native_result"] is not None:
+                self._publish_creativity_terminal(record, checkpoint["native_result"])
+                return
+            progress, material = checkpoint["progress"], checkpoint["search_material"]
+            if progress["stop_reason"] is not None:
+                proposals = [dict(
+                    **{key: item[key] for key in (
+                        "candidate_id", "proposal", "reason", "assumptions", "score",
+                    )},
+                    components=creativity_search.genome_components(material["dimensions"], genome),
+                ) for genome, item in progress["archive"][:configuration["shortlist_size"]]]
+                checkpoint["native_result"] = tasks.validate_creativity_native_result({
+                    "outcome": "proposals" if proposals else "no_valid_candidates",
+                    "proposals": proposals,
+                    **{key: progress[key] for key in (
+                        "stop_reason", "generations_completed", "evaluated_candidates",
+                        "expansion_interventions",
+                    )},
+                }, dimensions=material["dimensions"], shortlist_size=configuration["shortlist_size"])
+                checkpoint["job"] = "complete"
+                store.put("checkpoint", checkpoint)
+                continue
+            if runner is None:
+                config = config_resolver()
+                group = self.create_call_group(task_id, configuration["evaluation_concurrency"], config)
+                context = brainstorming_tasks._execution_context(request)
+                runner = self.runner_factory(config, _workspace(record))
+                options = dict(
+                    home=self.home, session=order["staffing_session"], workspace=_workspace(record),
+                    configuration=configuration, execution_context=context,
+                    prompt_set=order.get("prompt_set", prompt_sets.DEFAULT_SET_NAME),
+                    prompt_values={"ecosystem_map": prompts.project_context_body(context)},
+                )
+            interruption = None
+            if material is None:
+                material, result = creativity_evaluation.create_genes(
+                    group, runner, objective=request["request"], context=request["context"],
+                    references=request["reference_documents"], **options,
+                )
+                if isinstance(result, runners.ControlledInterruptionResult):
+                    interruption = result
+                else:
+                    checkpoint.update(search_material=material, job="evolve", generation=1)
+            elif progress["pending"] is not None:
+                wave = creativity_evaluation.evaluate_progress_wave(
+                    group, runner, progress=progress, store=store, checkpoint_key="checkpoint",
+                    search_material=material, generation=checkpoint["generation"], **options,
+                )
+                # The wave saved accepted siblings. Retain that whole checkpoint
+                # while committing its progress handoff, including JSON pair lists.
+                checkpoint = store.get("checkpoint")
+                progress["archive"] = [list(pair) for pair in progress["archive"]]
+                checkpoint["progress"] = progress
+                if progress["pending"] is None:
+                    checkpoint["job"] = "evolve"
+                interruption = wave["interruption"]
+            else:
+                explored = {creativity_search.genome_key(genome)
+                            for genome in checkpoint["candidates"].values()}
+                if creativity_search.expansion_due(progress, configuration):
+                    checkpoint["job"] = "expand_genes"
+                    store.put("checkpoint", checkpoint)
+                    material, result = creativity_evaluation.expand_progress(
+                        group, runner, progress=progress, search_material=material, explored=explored,
+                        explored_account=json.dumps({
+                            "generations_completed": progress["generations_completed"],
+                            "distinct_genomes": len(explored),
+                            "used_variants": {dimension["id"]: sorted({
+                                genome[dimension["id"]] for genome in checkpoint["candidates"].values()
+                            }) for dimension in material["dimensions"]},
+                        }, ensure_ascii=False), **options,
+                    )
+                    checkpoint["search_material"] = material
+                    if isinstance(result, runners.ControlledInterruptionResult):
+                        interruption = result
+                    else:
+                        checkpoint["job"] = "evolve"
+                elif progress["stop_reason"] is None:
+                    if progress["archive"]:
+                        population = creativity_search.reproduce(
+                            material["dimensions"], progress["archive"],
+                            configuration["population_size"], configuration, explored=explored,
+                        )
+                    else:
+                        population = creativity_search.make_population(
+                            material["dimensions"], configuration["population_size"],
+                            configuration, explored=explored,
+                        )
+                    candidates = {uuid.uuid4().hex: genome for genome in population}
+                    checkpoint["candidates"].update(candidates)
+                    creativity_search.begin_generation(progress, candidates, configuration)
+                    checkpoint.update(job="evaluate_candidates", generation=progress["generations_completed"] + 1)
+            store.put("checkpoint", checkpoint)
+            if interruption is not None:
+                self._pause_failure(task_id, interruption.interrupt_reason)
+                return
 
     def _run_worker(self, record, config_resolver):
         task_id = record["id"]

@@ -4984,7 +4984,7 @@ def _controllable_task(home, who, task_id):
         raise ApiError(409, "milestone tasks are controlled through their run") from exc
     if tasks.stored_task_executor(
         (record.get("order") or {}).get("task_executor")
-    ) not in ("agent_call", "reviewed_task", "deep_task"):
+    ) not in task_api.RECOVERABLE_EXECUTORS:
         raise ApiError(409, "use the discussion controls for this task")
     return record
 
