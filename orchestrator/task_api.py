@@ -1858,7 +1858,10 @@ class DirectTaskHost:
             record = self.store.record(task_id)
             if (record["result"] is None and tasks.stored_task_executor(
                     record["order"]["task_executor"]) in RECOVERABLE_EXECUTORS):
-                self._pause_failure(task_id, str(exc).strip() or type(exc).__name__)
+                reason = str(exc).strip() or type(exc).__name__
+                if executor == "creativity" and isinstance(exc, staffing.StaffingConditionError):
+                    reason = "staffing refused this call (%s): %s" % (exc.code, exc)
+                self._pause_failure(task_id, reason)
                 if executor == "creativity" and self._stop_reason(task_id) is not None:
                     self._publish_creativity_terminal(record, None)
                 # A newly accepted Cancel can win while an error pause is

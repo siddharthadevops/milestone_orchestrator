@@ -13,11 +13,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 from orchestrator import brainstorming_lifecycle
-from orchestrator import kvstore, prompt_sets, runners, staffing, task_api, tasks
+from orchestrator import kvstore, prompt_sets, registry, runners, service, staffing, task_api, tasks
 from orchestrator.tests import test_creativity_evaluation as evaluation_fixture
 from orchestrator.tests import test_creativity_search as search_fixture
 from orchestrator.tests import test_task_api as api_fixture
 from orchestrator.tests import test_task_recovery as recovery_fixture
+from orchestrator.tests import test_task_call_group as group_fixture
+from orchestrator.tests import test_task_cancel_recovery as cancel_fixture
+from orchestrator.tests import test_task_controls_api as controls_fixture
 from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
 from orchestrator.tests.test_tasks import creativity_configuration
 
@@ -29,6 +32,10 @@ class CreativityTaskTest(unittest.TestCase):
     _terminal = recovery_fixture.TaskRecoveryTest._terminal
     result = evaluation_fixture.CreativityEvaluationTest.result
     write_prompt = evaluation_fixture.CreativityEvaluationTest.write_prompt
+    start_server = api_fixture.TaskApiTest.start_server
+    request = api_fixture.TaskApiTest.request
+    project = api_fixture.TaskApiTest.project
+    member = staticmethod(api_fixture.TaskApiTest.member)
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="creativity-task-")
@@ -59,9 +66,9 @@ class CreativityTaskTest(unittest.TestCase):
     def config():
         return {"billing": {"codex": "api", "claude": "api"}}
 
-    def admit(self, prompt_set="default", **configuration):
+    def admit(self, prompt_set="default", work_area=None, **configuration):
         # Seed an admitted internal order: public catalogue admission is Slice 9.
-        order = self.order("creativity", request=search_fixture.OBJECTIVE,
+        order = self.order("creativity", work_area=work_area, request=search_fixture.OBJECTIVE,
                            reference_documents=self.references)
         order.update(
             request=tasks.validate_request(order["request"]), staffing_session=self.session, prompt_set=prompt_set,
@@ -326,6 +333,415 @@ class CreativityTaskTest(unittest.TestCase):
         self.assertEqual([item["call_context"]["material"] for item in receipts[:2]], ["default", "business"])
         self.assertEqual(result["native_result"]["evaluated_candidates"], 2)
         self.assertEqual(result["token_usage"]["input_tokens"], 30)
+
+    def test_creativity_resume_reads_live_authorities_and_accounts_once(self):
+        for regime_change, cancel in ((False, False), (True, False), (True, True)):
+            with self.subTest(regime_change=regime_change, cancel=cancel):
+                self.calls.clear()
+                document = resolver_doc()
+                document["tuning"]["high"]["2"]["plan"] = [3, 4]
+                document["tuning"]["medium"]["2"]["brainstorm"] = [2, 2]
+                staffing.save(self.home, document)
+                staffing.edit_session(self.home, self.session, {"rigor": "high", "material": "default"})
+                self.write_prompt("BEFORE RESUME")
+                record = self.admit(
+                    prompt_set="operator", generation_limit=3, max_evaluated_candidates=8,
+                    minimum_improvement=0.1,
+                    rigor={"default": "medium", "create_genes": "high", "evaluate_candidates": "low"},
+                )
+
+                def interrupted(*args, **kwargs):
+                    result = self.physical(*args, **kwargs)
+                    if len(self.calls) == 1:
+                        # Provider returned no usage/price with its rejected reply.
+                        return runners.RunnerResult("{}", 0, 1.0)
+                    if self.calls[-1]["job"] == "expand_genes":
+                        failure = runners.ProviderResponseError(
+                            "paid expansion fault", token_usage={"input_tokens": 7, "output_tokens": 3},
+                            cost_payloads=[{"input_tokens": 7, "output_tokens": 3, "total_cost_usd": 0.07}],
+                        )
+                        failure.duration_s = 0.375
+                        raise failure
+                    return result
+
+                host = self.host(interrupted)
+                host.start(record, self.config)
+                paused = self._paused(host, record["id"])
+                self.assertIn("paid expansion fault", paused["reason"])
+                before = self.checkpoint(record)
+                self.assertEqual((before["progress"]["generations_completed"],
+                                  before["progress"]["evaluated_candidates"]), (2, 4))
+                self.assertEqual(before["progress"]["expansion_interventions"], 0)
+                survivors = {item["candidate_id"] for _, item in before["progress"]["archive"]}
+                prior_calls = copy.deepcopy(self.calls)
+                self.write_prompt("AFTER RESUME")
+                if regime_change:
+                    document["assignment"]["review"]["1"] = 3
+                    document["tuning"]["low"]["3"]["review"] = [3, 5]
+                    staffing.save(self.home, document)
+                    staffing.edit_session(self.home, self.session, {"material": "business"})
+
+                def resumed(*args, **kwargs):
+                    result = self.physical(*args, **kwargs)
+                    if self.calls[-1]["job"] == "evaluate_candidates":
+                        reply = json.loads(result.text)
+                        for item in reply["evaluations"]:
+                            item["score"] = 0.9
+                        return self.result(reply)
+                    return result
+
+                fresh = self.host(resumed)
+                fresh.adopt_open_tasks(lambda _record: self.config)
+                self.assertEqual(self.calls, prior_calls)
+                self.assertEqual(self.checkpoint(record), before)
+                rebased = []
+                directory = task_api.creativity_checkpoint_store(self.home, record["id"]).directory
+                put = kvstore.LocalKVClient.put
+
+                def observe_rebaseline(store, key, value):
+                    revision = put(store, key, value)
+                    if store.directory == directory:
+                        progress = value["progress"]
+                        if progress["generations_completed"] == 2 and progress["reference_score"] == 0.9:
+                            rebased.append(copy.deepcopy(progress))
+                    return revision
+
+                with mock.patch.object(kvstore.LocalKVClient, "put", new=observe_rebaseline), \
+                        mock.patch.object(fresh.store, "record_result_locked", side_effect=OSError("hold publication")):
+                    fresh.resume(record["id"], self.config, paused["revision"])
+                    self._paused(fresh, record["id"])
+                saved = self.checkpoint(record)
+                native = saved["native_result"]
+                self.assertEqual(native["evaluated_candidates"], 8 if regime_change else 6)
+                self.assertEqual(native["generations_completed"], 3)
+                self.assertEqual(native["expansion_interventions"], 1)
+                self.assertEqual(bool(rebased), regime_change)
+                for progress in rebased:
+                    self.assertFalse(progress["progress_made"])
+                    self.assertEqual(progress["stagnant_generations"], 0)
+                    self.assertEqual(progress["consecutive_expansions"], 1)
+                    self.assertEqual(progress["evaluated_candidates"], 8)
+                later = self.calls[len(prior_calls):]
+                evaluations = [call for call in later if call["job"] == "evaluate_candidates"]
+                self.assertEqual(len(evaluations), 2 if regime_change else 1)
+                self.assertTrue(survivors.isdisjoint(evaluations[0]["ids"]))
+                if regime_change:
+                    self.assertEqual(set(evaluations[1]["ids"]), survivors)
+                for call in evaluations:
+                    self.assertIn("AFTER RESUME", call["prompt"])
+                    self.assertEqual((call["family"], call["model"], call["effort"]),
+                                     ("claude", "claude-fable-5", "max") if regime_change
+                                     else ("codex", "gpt-5.6-luna", "low"))
+                self.assertEqual((self.calls[0]["model"], self.calls[0]["effort"]), ("gpt-5.6-sol", "xhigh"))
+                self.assertEqual((later[0]["model"], later[0]["effort"]), ("gpt-5.6-terra", "medium"))
+                self.assertEqual(staffing.read_session(self.home, self.session)["rigor"], "high")
+                receipts = [event for event in fresh.store.lifecycle(record["id"])["history"]
+                            if "physical_dispatch" in event]
+                self.assertEqual(len({event["call_id"] for event in receipts}), len(self.calls))
+                self.assertEqual(len(receipts), len(self.calls))
+                for event, call in zip(receipts, self.calls):
+                    dispatch = event["physical_dispatch"]
+                    self.assertEqual(dispatch["call_context"]["job"], call["job"])
+                    for field in ("family", "model", "effort"):
+                        self.assertEqual(dispatch[field], call[field])
+                    self.assertIsInstance(dispatch["call_context"]["generation"], int)
+                    self.assertTrue(dispatch["call_context"]["batch"])
+                    self.assertEqual(dispatch["call_context"]["material"],
+                                     "business" if regime_change and call in later else "default")
+                    self.assertIsNone(dispatch["prompt_set_fallback"])
+                completed_calls = copy.deepcopy(self.calls)
+                final = self.host()
+                final.adopt_open_tasks(lambda _record: self.config)
+                if cancel:
+                    final.stop(record["id"], "cancel accounted search")
+                else:
+                    final.resume(record["id"], self.config, self._paused(final, record["id"])["revision"])
+                result = self._terminal(final, record["id"])["result"]
+                self.assertEqual(result["status"], "failure" if cancel else "success")
+                self.assertEqual(result["native_result"], None if cancel else native)
+                self.assertEqual(self.calls, completed_calls)
+                final_receipts = [event for event in final.store.lifecycle(record["id"])["history"]
+                                  if "physical_dispatch" in event]
+                self.assertEqual(final_receipts, receipts)
+                attempts = [event["attempt"] for event in receipts]
+                self.assertAlmostEqual(result["duration_s"], sum(item["duration_s"] for item in attempts))
+                for key in ("input_tokens", "output_tokens"):
+                    self.assertEqual(result["token_usage"][key],
+                                     sum(item["token_usage"][key] for item in attempts if item["token_usage"]))
+                for key in ("api_usd", "real_usd"):
+                    self.assertAlmostEqual(result["cost"][key],
+                                           sum(item["cost"][key] for item in attempts if item["cost"]))
+                known_successes = len(self.calls) - 2  # Unknown correction plus the paid fault.
+                self.assertEqual(result["token_usage"]["input_tokens"], 10 * known_successes + 7)
+                self.assertEqual(result["token_usage"]["output_tokens"], 2 * known_successes + 3)
+                paid = next(event["attempt"] for event in receipts
+                            if event["physical_dispatch"]["error"] == "paid expansion fault")
+                self.assertIsNotNone(paid["cost"])
+                self.assertGreater(paid["cost"]["api_usd"], 0)
+                self.assertTrue(result["token_usage_partial"])
+                self.assertTrue(result["cost_partial"])
+                for key, value in final.store.lifecycle(record["id"])["accounting"].items():
+                    self.assertEqual(result[key], value)
+
+    def test_creativity_provider_and_protocol_faults_keep_saved_work(self):
+        for job in ("create_genes", "evaluate_candidates", "expand_genes"):
+            for fault in ("provider", "protocol"):
+                with self.subTest(job=job, fault=fault):
+                    self.calls.clear()
+                    failed_ids, lock = [], threading.Lock()
+
+                    def physical(*args, **kwargs):
+                        result = self.physical(*args, **kwargs)
+                        if "KIND: " + job not in args[1]:
+                            return result
+                        if job == "evaluate_candidates":
+                            identity = json.loads(result.text)["evaluations"][0]["candidate_id"]
+                            with lock:
+                                if not failed_ids:
+                                    failed_ids.append(identity)
+                            if identity != failed_ids[0]:
+                                return result
+                        if fault == "provider":
+                            raise runners.ProviderResponseError("provider unavailable")
+                        return self.result({})
+
+                    record = self.admit(prompt_set="missing", generation_limit=3, max_evaluated_candidates=12,
+                                        evaluation_batch_size=1, evaluation_concurrency=2)
+                    host = self.host(physical)
+                    host.start(record, self.config)
+                    paused = self._paused(host, record["id"])
+                    self.assertEqual(paused["source"], "error")
+                    before = self.checkpoint(record)
+                    self.assertEqual(before["job"], job)
+                    self.assertIsNone(before["native_result"])
+                    self.assertEqual(before["search_material"] is None, job == "create_genes")
+                    accepted = before.get("evaluation", {}).get("batches", [])
+                    accepted_ids = {item["candidate_id"] for batch in accepted for item in batch["evaluations"]}
+                    self.assertEqual(len(accepted_ids), {"create_genes": 0, "evaluate_candidates": 1,
+                                                        "expand_genes": 4}[job])
+                    failed_calls = [call for call in self.calls if call["job"] == job
+                                    and (job != "evaluate_candidates" or call["ids"] == failed_ids)]
+                    self.assertEqual(len(failed_calls), 1 if fault == "provider" else 2)
+                    previous_calls = copy.deepcopy(self.calls)
+                    fresh = self.host()
+                    fresh.adopt_open_tasks(lambda _record: self.config)
+                    self.assertEqual(self.calls, previous_calls)
+                    self.assertEqual(self.checkpoint(record), before)
+                    fresh.resume(record["id"], self.config, paused["revision"])
+                    result = self._terminal(fresh, record["id"])["result"]
+                    self.assertEqual(result["status"], "success", result)
+                    self.assertEqual(result["native_result"]["evaluated_candidates"], 6)
+                    resumed_ids = {identity for call in self.calls[len(previous_calls):]
+                                   for identity in call.get("ids", [])}
+                    self.assertTrue(accepted_ids.isdisjoint(resumed_ids))
+                    receipts = [event["physical_dispatch"] for event in fresh.store.lifecycle(record["id"])["history"]
+                                if "physical_dispatch" in event]
+                    self.assertEqual(len(receipts), len(self.calls))
+                    self.assertTrue(all(item["prompt_set_fallback"] == "stored_default" for item in receipts))
+
+    def test_creativity_staffing_faults_pause_without_dispatch(self):
+        for code in ("staffing_unavailable", "distinct_families_unsatisfiable"):
+            with self.subTest(code=code):
+                self.calls.clear()
+                document = resolver_doc()
+                if code == "distinct_families_unsatisfiable":
+                    document["roles"]["brainstorm"] = {"distinct_families": True}
+                else:
+                    for slot in ("2", "3"):
+                        document["families"][slot]["name"] = "unavailable-" + slot
+                staffing.save(self.home, document)
+                record, host = self.admit(generation_limit=3, max_evaluated_candidates=12), self.host()
+                host.start(record, self.config)
+                paused = self._paused(host, record["id"])
+                self.assertIn(code, paused["reason"])
+                self.assertEqual(len(self.calls), 0 if code == "staffing_unavailable" else 3)
+                self.assertNotIn("expand_genes", [call["job"] for call in self.calls])
+                receipts = [event for event in host.store.lifecycle(record["id"])["history"]
+                            if "physical_dispatch" in event]
+                self.assertEqual(len(receipts), len(self.calls))
+                before = self.checkpoint(record)
+                staffing.save(self.home, resolver_doc())
+                fresh = self.host()
+                fresh.adopt_open_tasks(lambda _record: self.config)
+                self.assertEqual(self.checkpoint(record), before)
+                fresh.resume(record["id"], self.config, paused["revision"])
+                result = self._terminal(fresh, record["id"])["result"]
+                self.assertEqual(result["status"], "success", result)
+                self.assertEqual([call["job"] for call in self.calls].count("create_genes"), 1)
+
+    def test_creativity_controls_wait_for_quiescence(self):
+        for job in ("create_genes", "evaluate_candidates", "expand_genes"):
+            for action in ("pause", "stop"):
+                with self.subTest(job=job, action=action):
+                    label = job + "-" + action
+
+                    class HeldJob(group_fixture.GroupRunner):
+                        def call(worker, family, prompt, workspace, **kwargs):
+                            if "KIND: " + job in prompt:
+                                return super().call(family, label, workspace, **kwargs)
+                            return self.physical(family, prompt, workspace, **kwargs)
+
+                    held = HeldJob("template")
+                    record = self.admit(generation_limit=3, max_evaluated_candidates=12,
+                                        evaluation_batch_size=1, evaluation_concurrency=2)
+                    host = task_api.DirectTaskHost(self.home, runner_factory=lambda *_args: held,
+                                                   poll_interval=0.005)
+                    fixture = group_fixture.TaskCallGroupControlTests()
+                    self.addCleanup(fixture.doCleanups)
+                    other_id, other = fixture._owned_group(host, "unrelated-" + label)
+                    outsider_runner = group_fixture.GroupRunner("template")
+                    outsider = fixture._start(other, outsider_runner, "other")
+                    fixture._started(other, "other1")
+                    release = threading.Event()
+                    real_observe = runners._process_group_quiescent
+
+                    def observe(pgid):
+                        if pgid in held.pids.values() and not release.is_set():
+                            return None
+                        return real_observe(pgid)
+
+                    with mock.patch.object(runners, "_process_group_quiescent", side_effect=observe), \
+                            mock.patch.object(runners, "_wait_for_process_group_quiescence", side_effect=observe):
+                        thread = host.start(record, self.config)
+                        count = 2 if job == "evaluate_candidates" else 1
+                        try:
+                            self._wait(lambda: len(held.calls) == count and all(os.path.exists(
+                                os.path.join(self.primary, name + ".started")) for name in held.calls),
+                                "semantic workers did not start")
+                            getattr(host, action)(record["id"])
+                            lifecycle = host.lifecycle(record["id"])
+                            self.assertFalse(lifecycle["can_resume"])
+                            if action == "pause":
+                                self.assertEqual(lifecycle["status"], "pausing")
+                            else:
+                                self.assertEqual(host.store.stop_reason(record["id"]), "stopped by operator")
+                            self.assertIsNone(host.store.record(record["id"])["result"])
+                            self.assertTrue(all(control.interrupted for control, _ in held.calls.values()))
+                            self.assertTrue(thread.is_alive())
+                            with self.assertRaises(task_api.TaskControlConflict):
+                                host.resume(record["id"], self.config, lifecycle["revision"])
+                            self.assertEqual(len(held.calls), count)
+                            self.assertFalse(outsider.done())
+                            self.assertFalse(outsider_runner.calls["other1"][0].interrupted)
+                            self.assertIs(real_observe(outsider_runner.pids["other1"]), False)
+                        finally:
+                            release.set()
+                            thread.join(10)
+                            fixture._release(other, "other1")
+                        self.assertFalse(thread.is_alive())
+                    self.assertEqual(outsider.result(5)[0], {"retained": "other1"})
+                    if action == "pause":
+                        paused = self._paused(host, record["id"])
+                        self.assertTrue(host.lifecycle(record["id"])["can_resume"])
+                        host.runner_factory = lambda *_args: SimpleNamespace(call=self.physical)
+                        host.resume(record["id"], self.config, paused["revision"])
+                    result = self._terminal(host, record["id"])["result"]
+                    self.assertEqual(result["status"], "success" if action == "pause" else "failure")
+                    fixture.doCleanups()
+                    host.store.record_result(other_id, {
+                        "status": "success", "native_result": "unrelated call finished",
+                        **host.store.lifecycle(other_id)["accounting"],
+                    })
+
+    def test_creativity_restart_waits_for_surviving_worker(self):
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                record, host = self.admit(), self.host()
+                with mock.patch.object(host.store, "record_result_locked", side_effect=OSError("hold publication")):
+                    host.start(record, self.config)
+                    self._paused(host, record["id"])
+                before, calls = self.checkpoint(record), copy.deepcopy(self.calls)
+                worker = cancel_fixture.TaskCancelRecoveryTest._surviving_lease_worker(self, record)
+                if cancel:
+                    with registry.locked(self.home):
+                        host.store.record_stop_locked(record["id"], "cancel before restart")
+                fresh = self.host()
+                fresh.adopt_open_tasks(lambda _record: self.config)
+                self._wait(lambda: fresh.store.lifecycle(record["id"])["status"] == "pausing",
+                           "surviving worker did not block settlement")
+                self.assertFalse(fresh.lifecycle(record["id"])["can_resume"])
+                self.assertIsNone(fresh.store.record(record["id"])["result"])
+                self.assertIsNone(worker.poll())
+                self.assertTrue(fresh.owns_workspace(self.primary))
+                with self.assertRaises(task_api.TaskControlConflict):
+                    fresh.resume(record["id"], self.config, fresh.lifecycle(record["id"])["revision"])
+                worker.communicate(input=b"release", timeout=5)
+                if not cancel:
+                    paused = self._paused(fresh, record["id"])
+                    self.assertEqual(self.calls, calls)
+                    self.assertEqual(self.checkpoint(record), before)
+                    fresh.resume(record["id"], self.config, paused["revision"])
+                result = self._terminal(fresh, record["id"])["result"]
+                self.assertEqual(result["status"], "failure" if cancel else "success")
+                self.assertEqual(self.calls, calls)
+                self.assertFalse(fresh.owns_workspace(self.primary))
+
+    def test_creativity_ownership_and_deletion(self):
+        other, other_host = self.admit(), self.host()
+        other_host.start(other, self.config)
+        other_record = self._terminal(other_host, other["id"])
+        other_checkpoint = self.checkpoint(other)
+        host = self.host()
+        self.start_server(host)
+        self.project("private", self.primary)
+        area = dict(self.order()["request"]["work_area"], project="private", work_area="main")
+        record = self.admit(work_area=area)
+        path = "/api/tasks/" + record["id"]
+        kept = os.path.join(self.primary, "keep.md")
+        with open(kept, "w") as handle:
+            handle.write("Workspace content belongs to the operator.")
+        originals = {}
+        for filename in [kept] + self.references:
+            with open(filename) as handle:
+                originals[filename] = handle.read()
+        self.assertEqual(self.request("DELETE", path)[0], 409)
+        with mock.patch.object(host.store, "record_result_locked", side_effect=OSError("hold publication")):
+            host.start(record, self.config)
+            self._paused(host, record["id"])
+        checkpoint = self.checkpoint(record)
+        held = controls_fixture.HeldHost(self.home)
+        self.start_server(held)
+        status, response = self.request("POST", path + "/pause", {})
+        self.assertEqual(status, 200, response)
+        paused = response["lifecycle"]
+        self.assertTrue(paused["can_resume"])
+        self.assertTrue(held.owns_workspace(self.primary))
+        for action, body in (("pause", {}), ("resume", {"revision": paused["revision"]}), ("stop", {})):
+            self.assertEqual(self.request("POST", path + "/" + action, body, self.member())[0], 403)
+        self.assertEqual(self.request("DELETE", path, headers=self.member())[0], 403)
+        self.assertEqual(held.lifecycle(record["id"]), paused)
+        self.assertEqual(self.request("DELETE", path)[0], 409)
+        with mock.patch.object(held, "owns_workspace_except", return_value=True) as owns:
+            status, response = self.request("POST", path + "/resume", {"revision": paused["revision"]})
+        self.assertEqual((status, response["error"]), (409, service.WORK_AREA_BUSY))
+        owns.assert_called_once_with(self.primary, record["id"])
+        self.assertEqual(self.request("POST", path + "/resume", {"revision": paused["revision"] - 1})[0], 409)
+        self.assertEqual(held.started, [])
+        self.assertEqual(self.request("POST", path + "/resume", {"revision": paused["revision"]})[0], 200)
+        self.assertEqual(self.request("POST", path + "/resume", {"revision": paused["revision"]})[0], 409)
+        self.assertEqual(held.started, [record["id"]])
+        self.assertEqual(self.request("DELETE", path)[0], 409)
+        self.assertEqual(self.request("POST", path + "/pause", {})[0], 200)
+        self.assertEqual(self.checkpoint(record), checkpoint)
+        final = self.host()
+        final.adopt_open_tasks(lambda _record: self.config)
+        self.start_server(final)
+        self.assertEqual(self.request("POST", path + "/stop", {})[0], 200)
+        result = self._terminal(final, record["id"])["result"]
+        self.assertEqual(result["status"], "failure")
+        with final._lease(record["id"]):
+            status, response = self.request("DELETE", path)
+            self.assertEqual(status, 409, response)
+            self.assertIn("not quiescent", response["error"])
+            self.assertEqual(final.store.record(record["id"])["result"], result)
+        self.assertEqual(self.request("DELETE", path)[0], 200)
+        self.assertEqual(self.request("GET", path)[0], 404)
+        self.assertFalse(os.path.exists(task_api.creativity_checkpoint_store(self.home, record["id"]).directory))
+        self.assertEqual(final.store.record(other["id"]), other_record)
+        self.assertEqual(self.checkpoint(other), other_checkpoint)
+        for filename, content in originals.items():
+            with open(filename) as handle:
+                self.assertEqual(handle.read(), content)
 
     def test_creativity_failed_checkpoint_never_accepts_work(self):
         for cancel in (False, True):
