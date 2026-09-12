@@ -44,5 +44,5 @@ milestones.
 | [Staffing Router](staffing-router/) | closed | 10 | 2026-08-18 | 2026-08-20 |
 | [Prompt Router](prompt-router/) | open | 14 | 2026-08-24 | - |
 | [Deep & Reviewed Tasks](deep-reviewed-tasks/) | closed | 12 | 2026-08-28 | 2026-09-02 |
-| [Creativity](creativity/) | open | 10 | 2026-09-11 | - |
+| [Creativity](creativity/) | closed | 10 | 2026-09-11 | 2026-09-12 |
 <!-- impl_roadmap:milestones:end -->
