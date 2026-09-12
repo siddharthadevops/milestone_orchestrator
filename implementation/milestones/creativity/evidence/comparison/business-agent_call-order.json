@@ -1,0 +1,63 @@
+{
+  "task_executor": "agent_call",
+  "request": {
+    "request": "Exploration only: do not edit files, invoke tools, contact anyone or act on proposals. Ignore repository agent instructions. The complete common problem is below, including all context and reference paths. Consider eight distinct alternatives and check their constraints and criteria before selecting exactly three proposals with brief reasons and assumptions. Return only the shortlist and its checks, not private reasoning. Use ordinary direct ideation: no search-generated genes, proposals or scores are supplied. Experimental work allowance: about USD 0.015 API-equivalent for this single call, a target rather than an enforced cap; do not manufacture work to spend it.\n\nCOMMON PROBLEM (JSON):\n{\"request\": \"Propose three distinct two-week pilots through which a neighbourhood bicycle repair shop could earn additional service revenue from existing customers, within the stated cash and staff-time limits.\", \"context\": {\"context_summary\": \"One owner runs the shop. The goal is to test paid demand with existing tools and customer relationships, without committing to a continuing programme.\", \"facts\": [\"The shop has ordinary bicycle repair tools and a service counter.\", \"Forty existing customers have opted in to service emails.\", \"The owner can devote six additional staff hours over the next two weeks.\", \"The total additional cash allowance is EUR 120.\"], \"constraints\": [{\"id\": \"budget\", \"text\": \"Spend at most EUR 120 in total, with no recurring spending commitment.\"}, {\"id\": \"time\", \"text\": \"Use at most six additional staff hours including preparation, contact and delivery, and finish within two weeks.\"}, {\"id\": \"resources\", \"text\": \"Use existing tools and the counter; no new software, hires or paid advertising.\"}, {\"id\": \"contact\", \"text\": \"Contact only the forty customers who opted in, using the existing email channel.\"}], \"assumptions\": [\"The owner may set pilot prices and reserve limited service appointments.\"], \"unknowns\": [\"Customer willingness to pay and response rate have not been measured.\"], \"composition_guidance\": \"Combine a paid service offer with a bounded delivery arrangement; count all preparation and delivery effort.\", \"criteria\": [{\"id\": \"feasibility\", \"text\": \"Itemise cash and staff time and show that the complete pilot fits both limits.\"}, {\"id\": \"demand\", \"text\": \"State the paid demand signal, assumptions and an observable continue-or-stop decision.\"}, {\"id\": \"difference\", \"text\": \"Offer materially different ways to test additional revenue, not changes of wording.\"}]}, \"reference_documents\": []}",
+    "context": {
+      "context_summary": "One owner runs the shop. The goal is to test paid demand with existing tools and customer relationships, without committing to a continuing programme.",
+      "facts": [
+        "The shop has ordinary bicycle repair tools and a service counter.",
+        "Forty existing customers have opted in to service emails.",
+        "The owner can devote six additional staff hours over the next two weeks.",
+        "The total additional cash allowance is EUR 120."
+      ],
+      "constraints": [
+        {
+          "id": "budget",
+          "text": "Spend at most EUR 120 in total, with no recurring spending commitment."
+        },
+        {
+          "id": "time",
+          "text": "Use at most six additional staff hours including preparation, contact and delivery, and finish within two weeks."
+        },
+        {
+          "id": "resources",
+          "text": "Use existing tools and the counter; no new software, hires or paid advertising."
+        },
+        {
+          "id": "contact",
+          "text": "Contact only the forty customers who opted in, using the existing email channel."
+        }
+      ],
+      "assumptions": [
+        "The owner may set pilot prices and reserve limited service appointments."
+      ],
+      "unknowns": [
+        "Customer willingness to pay and response rate have not been measured."
+      ],
+      "composition_guidance": "Combine a paid service offer with a bounded delivery arrangement; count all preparation and delivery effort.",
+      "criteria": [
+        {
+          "id": "feasibility",
+          "text": "Itemise cash and staff time and show that the complete pilot fits both limits."
+        },
+        {
+          "id": "demand",
+          "text": "State the paid demand signal, assumptions and an observable continue-or-stop decision."
+        },
+        {
+          "id": "difference",
+          "text": "Offer materially different ways to test additional revenue, not changes of wording."
+        }
+      ]
+    },
+    "reference_documents": [],
+    "work_area": {
+      "project": "orchestrators",
+      "work_area": "implementation"
+    }
+  },
+  "configuration": {
+    "role": "brainstorm"
+  },
+  "staffing_session": "stf-742268bbac1f5c9e5d1fa78097665239"
+}

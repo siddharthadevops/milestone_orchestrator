@@ -360,7 +360,7 @@ class TaskApiTest(unittest.TestCase):
         project_order = dict(order, request=dict(order["request"], reference_documents=[],
                              work_area={"project": "orchestrators", "work_area": "main"}))
         for invalid, headers, expected in (
-            (dict(order, configuration={}), None, (400, tasks.INVALID_TASK_REQUEST)),
+            (dict(order, configuration={"population_size": 2}), None, (400, tasks.INVALID_TASK_REQUEST)),
             (dict(order, configuration=dict(configuration, mutation_rate=0)), None,
              (400, tasks.INVALID_TASK_REQUEST)),
             (dict(project_order, request=dict(project_order["request"],
@@ -431,6 +431,24 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(cancelled["result"]["status"], "failure")
         self.assertIn("stopped by", cancelled["result"]["reason"])
         self.assertEqual(self.request("DELETE", path)[0], 200)
+
+        schema = next(entry for entry in self.request("GET", "/api/task-executors")[1]["task_executors"]
+                      if entry["id"] == "creativity")["configuration_schema"]
+        defaults = {key: definition["default"] for key, definition in schema.items() if key != "rigor"}
+        omitted = {key: value for key, value in order.items() if key != "configuration"}
+        for submitted in (omitted, dict(order, configuration={}),
+                          dict(order, configuration={"mutation_rate": 0.2}),
+                          dict(order, configuration={"rigor": {"evaluate_candidates": "high"}})):
+            with self.subTest(configuration=submitted.get("configuration")):
+                code, response = self.request("POST", "/api/tasks", submitted)
+                self.assertEqual(code, 201, response)
+                record = response["task"]
+                expected = dict(defaults, **submitted.get("configuration", {}))
+                self.assertEqual(record["order"]["configuration"], expected)
+                path = "/api/tasks/" + record["id"]
+                self.assertEqual(self.request("GET", path)[1]["task"]["order"]["configuration"], expected)
+                self.assertEqual(search._terminal(host, record["id"])["result"]["status"], "success")
+                self.assertEqual(self.request("DELETE", path)[0], 200)
 
     def creativity_projection_pages(self):
         """Replay owner-produced checkpoints through the ordinary detail route."""

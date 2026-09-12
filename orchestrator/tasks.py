@@ -409,11 +409,19 @@ _TASK_EXECUTORS += (
             "staffing": True, "prompt_set": True, "strategy_profile": False,
         },
         "configuration_schema": {
-            **{name: {"type": "integer", "exclusive_minimum": 0}
-               for name in _CREATIVITY_COUNTS},
-            "population_size": {"type": "integer", "exclusive_minimum": 1},
-            **{name: {"type": "number", "exclusive_minimum": 0, "maximum": 1}
-               for name in _CREATIVITY_RATES},
+            # Workload evidence: implementation/milestones/creativity/evidence.md.
+            **{name: {"type": "integer", "default": default,
+                      "exclusive_minimum": 1 if name == "population_size" else 0}
+               for name, default in {
+                   "population_size": 4, "generation_limit": 2,
+                   "max_evaluated_candidates": 8, "elite_count": 2,
+                   "diversity_count": 1, "patience_generations": 1,
+                   "max_stagnation_expansions": 1, "evaluation_batch_size": 4,
+                   "evaluation_concurrency": 1, "shortlist_size": 3,
+               }.items()},
+            **{name: {"type": "number", "exclusive_minimum": 0, "maximum": 1,
+                      "default": default}
+               for name, default in {"mutation_rate": 0.35, "minimum_improvement": 0.05}.items()},
             "rigor": {
                 "type": "object", "optional": True,
                 "properties": {
@@ -942,15 +950,20 @@ def reviewed_policy_defaults(task_kind, config):
 
 
 def resolve_creativity_configuration(value):
-    """Admit a complete creativity configuration without numeric defaults.
+    """Fill omitted numeric controls from the catalogue, then admit strictly.
 
     Omitted rigor remains inherited at call time, never frozen from a session.
     """
     try:
         _exact_keys(
-            value, _CREATIVITY_COUNTS + _CREATIVITY_RATES, ("rigor",),
+            value, (), _CREATIVITY_COUNTS + _CREATIVITY_RATES + ("rigor",),
             "configuration",
         )
+        schema = _TASK_EXECUTOR_BY_ID["creativity"]["configuration_schema"]
+        value = {
+            **{name: schema[name]["default"] for name in _CREATIVITY_COUNTS + _CREATIVITY_RATES},
+            **value,
+        }
         for name in _CREATIVITY_COUNTS:
             if type(value[name]) is not int or value[name] <= 0:
                 raise ContractError(

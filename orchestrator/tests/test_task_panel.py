@@ -22,6 +22,7 @@ class TaskPanelTests(unittest.TestCase):
         from orchestrator import staffing
         from orchestrator.tests.test_staffing_sessions import session_body
         from orchestrator.tests.test_task_api import TaskApiTest
+        from orchestrator.tests.test_task_controls_api import HeldHost
         from orchestrator.tests.test_tasks import creativity_configuration
 
         node = shutil.which("node")
@@ -30,6 +31,12 @@ class TaskPanelTests(unittest.TestCase):
         server = TaskApiTest()
         server.setUp()
         self.addCleanup(server.doCleanups)
+        host = HeldHost(server.home)
+        # Admission holds the registry lock; close each fixture before the next order.
+        host.start = lambda record, _resolve: host.store.record_result_locked(
+            record["id"], host._deep_failure("Admission-only fixture completed"),
+        )
+        server.start_server(host)
         server.project("mine", server.primary)
         binding = {"project": "mine", "work_area": "main"}
         session = staffing.create_session(server.home, session_body(work_area=binding))["id"]
@@ -73,7 +80,10 @@ async function postJSON(path, payload) {
 }
 (async () => {
   taskExecutorCatalogue = (await (await fetch(fixture.base + '/api/task-executors')).json()).task_executors;
-  const html = renderTaskConfigurationSchema(taskExecutorEntry('creativity').configuration_schema, {});
+  const schema = taskExecutorEntry('creativity').configuration_schema;
+  const defaults = Object.fromEntries(Object.entries(schema).filter(([key]) => key !== 'rigor')
+    .map(([key, definition]) => [key, definition.default]));
+  const html = renderTaskConfigurationSchema(schema, {});
   // Supply DOM controls from the actual rendered markup; native input validity is browser-owned.
   const controls = [...html.matchAll(/<(?:input|select)\b[^>]*>/g)].map(([tag]) => {
     const attrs = Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1], m[2]]));
@@ -84,11 +94,15 @@ async function postJSON(path, payload) {
   global.document = {getElementById: id => fields[id], querySelectorAll: () => controls};
   const control = path => controls.find(c => c.dataset.taskConfig === path);
   assert.equal(controls.length, 16);
-  assert(controls.every(c => c.value === ''));
+  for (const [key, value] of Object.entries(defaults)) assert.equal(control(key).value, String(value));
+  assert(controls.filter(c => c.dataset.taskConfig.startsWith('rigor.')).every(c => c.value === ''));
   assert.equal(control('mutation_rate').max, '1');
+  assert.deepEqual(currentTaskConfiguration().configuration, defaults);
   await submitTaskForm();
-  assert.equal(posts.length, 0);
-  assert(fields.task_error.textContent);
+  assert.equal(posts.length, 1);
+  assert.deepEqual(posts[0].configuration, defaults);
+  assert.equal(fields.task_error.textContent, '');
+  assert.equal(closed, 1);
   for (const [key, value] of Object.entries(fixture.configuration)) control(key).value = String(value);
   control('rigor.default').value = 'low';
   control('rigor.evaluate_candidates').value = 'high';
@@ -98,7 +112,7 @@ async function postJSON(path, payload) {
     const input = control(key), saved = input.value;
     input.value = '';
     await submitTaskForm();
-    assert.equal(posts.length, 0, key);
+    assert.equal(posts.length, 1, key);
     input.value = saved;
   }
   control('population_size').value = '0';
@@ -106,19 +120,19 @@ async function postJSON(path, payload) {
   assert.equal(control('population_size').value, '0');
   control('population_size').value = '2';
   await submitTaskForm();
-  assert.deepEqual(posts[0], {task_executor: 'creativity', configuration: expected,
+  assert.deepEqual(posts[1], {task_executor: 'creativity', configuration: expected,
     staffing_session: fixture.session, prompt_set: 'default', request: {
       work_area: fixture.binding, request: fields.t_request.value, context: fields.t_context.value,
       reference_documents: taskReferences,
     }});
-  assert.equal(closed, 1);
+  assert.equal(closed, 2);
   assert.equal(taskSubmitPending, false);
   control('rigor.default').value = control('rigor.evaluate_candidates').value = '';
   assert.deepEqual(currentTaskConfiguration().configuration, fixture.configuration);
   refusal = 'invalid_task_request';
   await submitTaskForm();
   assert.equal(fields.task_error.textContent, refusal);
-  assert.equal(closed, 1);
+  assert.equal(closed, 2);
   assert.equal(taskSubmitPending, false);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """

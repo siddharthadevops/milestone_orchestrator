@@ -1,0 +1,14 @@
+{
+  "id": "stf-742268bbac1f5c9e5d1fa78097665239",
+  "work_area": {
+    "project": "orchestrators",
+    "work_area": "implementation"
+  },
+  "families": [
+    "codex",
+    "claude"
+  ],
+  "document": "slice10-evidence",
+  "rigor": "high",
+  "material": "business"
+}

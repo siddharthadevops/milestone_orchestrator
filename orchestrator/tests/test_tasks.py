@@ -104,6 +104,16 @@ class TaskContractsTest(unittest.TestCase):
 
     def test_creativity_configuration_contract(self):
         base = creativity_configuration()
+        schema = next(item for item in tasks.task_executor_catalogue()
+                      if item["id"] == "creativity")["configuration_schema"]
+        defaults = {key: schema[key]["default"] for key in base}
+        self.assertEqual(tasks.resolve_creativity_configuration({}), defaults)
+        for key in defaults:
+            partial = {name: value for name, value in defaults.items() if name != key}
+            self.assertEqual(tasks.resolve_creativity_configuration(partial), defaults)
+        partial = {"mutation_rate": 0.2, "rigor": {"evaluate_candidates": "high"}}
+        self.assertEqual(tasks.resolve_creativity_configuration(partial), dict(defaults, **partial))
+        self.assertEqual(partial, {"mutation_rate": 0.2, "rigor": {"evaluate_candidates": "high"}})
         large = {key: 10 ** 6 for key in base}
         large.update(
             population_size=2 * 10 ** 6, max_evaluated_candidates=10 ** 100,
@@ -122,9 +132,10 @@ class TaskContractsTest(unittest.TestCase):
                 if "rigor" in source:
                     self.assertIsNot(resolved["rigor"], source["rigor"])
 
-        invalid = [None, [], "configuration", {}, dict(base, extra=1)]
+        invalid = [None, [], "configuration", dict(base, extra=1),
+                   {"population_size": 2}, {"max_evaluated_candidates": defaults["population_size"] - 1},
+                   {"elite_count": defaults["population_size"]}]
         for key in base:
-            invalid.append({name: value for name, value in base.items() if name != key})
             bad_values = (None, True, False, "1", [], {}, 0, -1, math.nan, math.inf)
             bad_values += ((1.0,) if key not in ("mutation_rate", "minimum_improvement")
                            else (-math.inf, 1.01, 10 ** 400))
@@ -160,8 +171,14 @@ class TaskContractsTest(unittest.TestCase):
         base = creativity_configuration(mutation_rate=0.25, minimum_improvement=0.02)
         self.assertEqual(set(schema), set(base) | {"rigor"})
         for key in base:
-            self.assertNotIn("default", schema[key])
+            self.assertIn("default", schema[key])
             self.assertFalse(schema[key].get("optional", False))
+        defaults = {key: schema[key]["default"] for key in base}
+        self.assertNotIn("default", schema["rigor"])
+        self.assertEqual(tasks.validate_order(task_order("creativity"))["configuration"], defaults)
+        for partial in ({}, {"generation_limit": 4}, {"rigor": {"default": "low"}}):
+            resolved = tasks.validate_order(dict(task_order("creativity"), configuration=partial))
+            self.assertEqual(resolved["configuration"], dict(defaults, **partial))
         self.assertEqual(set(schema["rigor"]["properties"]), {
             "default", "create_genes", "evaluate_candidates", "expand_genes",
         })
@@ -172,14 +189,13 @@ class TaskContractsTest(unittest.TestCase):
         for configuration in (base, dict(base, rigor={}), dict(base, rigor={"create_genes": "high"})):
             order = dict(task_order("creativity"), configuration=configuration)
             self.assertEqual(tasks.validate_order(order)["configuration"], configuration)
-        for configuration in ({}, dict(base, population_size=0), dict(base, mutation_rate=1.1),
+        for configuration in ({"population_size": 2}, dict(base, population_size=0), dict(base, mutation_rate=1.1),
                               dict(base, elite_count=2), dict(base, max_evaluated_candidates=1),
                               dict(base, evaluation_batch_size=3), dict(base, shortlist_size=3)):
             self.assert_request_error(
                 tasks.INVALID_TASK_REQUEST, tasks.validate_order,
                 dict(task_order("creativity"), configuration=configuration),
             )
-        self.assert_request_error(tasks.INVALID_TASK_REQUEST, tasks.validate_order, task_order("creativity"))
 
     def test_creativity_native_result_contract(self):
         dimensions = [

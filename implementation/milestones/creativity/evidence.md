@@ -2,15 +2,14 @@
 
 ## Current evidence boundary
 
-Controlled checks T1 and T3 pass. The earlier language pilot below remains
-incomplete, partial and unmatched. A replacement comparison now has a completed
-language baseline under a new declaration made before dispatch. Its creativity
-task and both business tasks remain unrun. M1 and the evidenced catalogue
-defaults/admission/form checks (T2) remain incomplete. Controlled numbers remain
-fixture limits and simulated accounting, separate from real evidence. No
-catalogue defaults are published by this cut.
+The replacement language and business pairs are complete and matched under their
+predeclared accounting tolerance. M1 records their outputs, charges and limitations
+below, and the twelve measured numeric controls are published as catalogue
+defaults. T1, T2 and T3 pass; controlled checks establish mechanical contracts
+separately from model quality. The earlier language pilot remains incomplete, partial and
+unmatched; its unknown charge is not erased by the replacement comparison.
 
-Executed on 2026-09-12 against base revision
+Initial controlled checks executed on 2026-09-12 against base revision
 `83823d73524dcb1ab22c5cf35367f17f1eb2fc2e` plus this implementation's examples
 and `test_creativity_cross_domain_contracts` change.
 
@@ -25,11 +24,11 @@ Each file supplies the ordinary request text, context (including facts,
 constraints, assumptions, unknowns and criteria), and an empty ordered reference
 list. These fictional problems need no external source material. Neither file
 contains genes, generated proposals or scores. Scripted dimensions and expansion
-replies live only in the conformance test. In the eventual direct comparison,
+replies live only in the conformance test. In each direct comparison,
 the complete common input appears in the `agent_call` request text itself;
 its separate context field alone does not reach that worker.
 
-## Replacement comparison: completed language baseline
+## Replacement comparison
 
 The [replacement declaration](evidence/comparison/declaration.json) was written
 at 2026-09-12T14:08:24.400825Z against revision
@@ -39,8 +38,9 @@ requiring complete positive totals for both members of each pair. The proposed
 search allowance is two generations and eight evaluations in batches of four;
 the direct request asks it to consider eight alternatives and return three.
 This reduces the third-generation overhead exposed by the pilot. These are
-experimental work targets and explicit trial controls, not defaults or enforced
-spend caps. The old pilot's missing charge and failed comparison are preserved.
+experimental work targets and explicit trial controls at dispatch, not enforced
+spend caps. The defaults review below adopts the measured numeric values.
+The old pilot's missing charge and failed comparison are preserved.
 
 The [submitted order](evidence/comparison/language-agent_call-order.json),
 [session](evidence/comparison/language-agent_call-session.json),
@@ -71,7 +71,8 @@ another physical call; the terminal envelope contains its accounting once.
 The [task store](evidence/comparison/task-store.json) preserves the final store
 bytes. The temporary service home is
 `/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-slice10-comparison-f92_3y8d`;
-the service is stopped and has no active task. No remaining pair member ran.
+the service was reopened for the remaining declared tasks below and is now
+stopped with all four replacement tasks terminal.
 
 Human inspection: the three openings count holes in a net, pocket a thread
 after a forgotten embrace, and cut a thread after a forgotten farewell. They
@@ -83,17 +84,131 @@ anchors net repair; the latter two add assumed intimate events. The first's
 forgotten knot is less clearly an emotional cost. These observations assess the
 supplied criteria without treating a model self-check as an independent judge.
 
-This is one complete baseline, not a matched pair or M1 completion. The next
-work is the declared language creativity order and both business orders, then
-comparison/defaults review and T2. Provisional defaults and T2 edits were
-withdrawn at the cutoff because neither pair yet supports publication.
-
-Cut verification: all eight retained JSON files parse; common-input equality,
+Baseline-cut verification: all eight retained JSON files parse; common-input equality,
 dispatch/session evidence, original store/worker bytes and one-charge result
 handoff agree. Existing `test_agent_call_success_during_pause_is_retained_until_resume`
 and `test_public_pause_waits_for_active_call_and_resume_reuses_its_result` passed
 (two tests, 2.252 seconds). `git diff --check` passed. The complete suite remains
 reserved for the scheduled checkpoint.
+
+### Completed pairs and M1 review
+
+The remaining three tasks ran on 2026-09-12 against
+`2e143944e0514c60e5994ccc3201b598eb7e6c57`, before the default-admission edit,
+using the same service home, staffing document, public routes and declaration.
+No allowance, tolerance, problem input or trial control changed after dispatch.
+The baseline always preceded its search and received the complete common problem
+in its request text, with no search-produced genes, proposals or scores.
+
+| Task and actual output | Task ID | Submitted order / session / checkpoint |
+| --- | --- | --- |
+| [Language creativity](evidence/comparison/language-creativity-task.json) | `c3c0c52a-d86a-4656-9fe4-ede209576707` | [Order](evidence/comparison/language-creativity-order.json), [session](evidence/comparison/language-creativity-session.json), [checkpoint](evidence/comparison/language-creativity-checkpoint.json) |
+| [Business direct](evidence/comparison/business-agent_call-task.json) | `38b8bf77-df64-4a2e-b028-8b15e78b3c7a` | [Order](evidence/comparison/business-agent_call-order.json), [session](evidence/comparison/business-agent_call-session.json), [worker receipt](evidence/comparison/business-agent_call-worker.json) |
+| [Business creativity](evidence/comparison/business-creativity-task.json) | `1a0c772a-1a35-421d-ab3e-c43435e5a6b6` | [Order](evidence/comparison/business-creativity-order.json), [session](evidence/comparison/business-creativity-session.json), [checkpoint](evidence/comparison/business-creativity-checkpoint.json) |
+
+Every task succeeded. Both searches returned three unique, evaluator-reported
+valid proposals after two generations and eight accepted candidate evaluations,
+with zero expansions and stop reason `generation_limit`. Language dimensions are
+daughter action, sensory trace, emotional stake and opening rhythm; business
+dimensions are revenue offer, delivery arrangement, customer selection,
+commitment model and pilot boundary. All final components name known variants.
+
+Actual calls used Codex `gpt-5.6-luna`: creation at medium effort, evaluation at
+low and direct ideation at max. The search configuration selects task-default
+medium and evaluation-specific low; sessions retain high. Search calls record
+`literature` or `business` material and null prompt-set fallback. Ordinary direct
+calls supply no routed job, generation, batch or prompt-fallback record. Actual
+call IDs and batch IDs are retained in the linked task histories and direct
+worker receipts; resolved orders are in each task response.
+
+| Physical transcript | Job / generation | Duration s, rounded | Input / cached / output / reasoning tokens | API USD |
+| --- | --- | ---: | --- | ---: |
+| [Language 02](evidence/comparison/language-creativity-call-02.json) | create_genes / 0 | 20.952918 | 18948 / 9984 / 972 / 73 | 0.00315888 |
+| [Language 03](evidence/comparison/language-creativity-call-03.json) | evaluate_candidates / 1 | 28.380546 | 20748 / 5888 / 1379 / 707 | 0.00474456 |
+| [Language 04](evidence/comparison/language-creativity-call-04.json) | evaluate_candidates / 2, malformed JSON | 19.497340 | 20761 / 15104 / 822 / 179 | 0.00241988 |
+| [Language 05](evidence/comparison/language-creativity-call-05.json) | evaluate_candidates / 2, contract correction | 24.036040 | 20802 / 2816 / 1116 / 487 | 0.00499272 |
+| [Business 06](evidence/comparison/business-agent_call-call-06.json) | direct ideation | 99.759118 | 18376 / 5888 / 5297 / 4660 | 0.00897176 |
+| [Business 07](evidence/comparison/business-creativity-call-07.json) | create_genes / 0 | 39.475680 | 21403 / 19200 / 1422 / 345 | 0.00253100 |
+| [Business 08](evidence/comparison/business-creativity-call-08.json) | evaluate_candidates / 1 | 43.876126 | 27838 / 26368 / 1599 / 402 | 0.00274016 |
+| [Business 09](evidence/comparison/business-creativity-call-09.json) | evaluate_candidates / 2 | 29.888722 | 21116 / 9984 / 1460 / 431 | 0.00417808 |
+
+All these attempts have token/cost partial flags false and subscription real cost
+USD 0. Cached input is included in input, reasoning output in output. The failed
+language reply contributes its charge once; only its corrected four-candidate
+reply is accepted. Language search totals 92.866844 seconds and 85,548 tokens;
+business direct totals 23,673 tokens; business search totals 113.240528 seconds
+and 74,838 tokens. Each evaluation batch has four candidates, with exact accepted
+ID coverage and one simultaneous call. T1 supplies the separate overlap and
+expansion evidence; neither occurred in these modest real runs.
+
+| Pair | Direct / creativity API USD | Direct / creativity share of USD 0.015 target | Relative difference | Declared result |
+| --- | --- | --- | ---: | --- |
+| Language | 0.01433528 / 0.01531604 | 95.6% / 102.1% | 6.4% | matched, below 50% |
+| Business | 0.00897176 / 0.00944924 | 59.8% / 63.0% | 5.1% | matched, below 50% |
+
+The common USD unit has complete positive totals for all four tasks, including
+the unsuccessful language attempt. The language search slightly exceeded its
+target; the target is not a cap. Different cache usage and variable reasoning
+work affect these amounts. Matching spend does not establish equal useful work.
+
+Language review: the search openings contain 23, 24 and 22 whitespace-delimited
+words, each one Spanish sentence with concrete action and no explanatory cause,
+new name or final question. All retain net-related action. Tying a net, marking
+one after a tug and holding the father's hand offer different emotional stakes.
+The wet thread requires an assumption to signal lost time; the second opening
+does not itself make the missing minute clear; the third assumes a hidden truth.
+The direct openings and their limitations are inspected above. Neither set
+establishes superiority or eliminates the operator's editorial judgment.
+
+Business review: direct ideation itemises three different offers: five EUR 35
+tune-ups (EUR 0, four hours), a four-seat EUR 25 clinic (up to EUR 25, four hours),
+and eight EUR 18 inspections (EUR 0, 4.84 hours). Each includes day-seven paid
+demand thresholds and a continue/stop decision. Clinic space, zero consumable
+costs and delivery timings remain assumptions, not verified shop feasibility.
+The search instead returns a maintenance check and two repair bundles, varying
+prepaid appointments, targeting and drop-off windows. Its reasons acknowledge
+that price, slot counts, cash and complete labour itemisation are missing.
+Those outputs do not demonstrate the requested feasibility criterion; their
+continue/stop thresholds are also unspecified, and two offers sell the same
+service value. Evaluator-reported validity and structural difference do not
+prove feasibility or materially different offers. No semantic repair or judge
+call was added to improve this recorded comparison.
+
+### Evidenced catalogue defaults
+
+The catalogue adopts exactly the twelve measured numeric controls. This is a
+small initial exploration allowance, not a tuned optimum or a quality guarantee.
+Both examples completed it and produced inspectable shortlists; the business
+weakness above remains visible. The earlier third-generation pilot exposed
+additional overhead, supporting a modest two-generation starting point.
+
+| Control | Default | Workload rationale |
+| --- | ---: | --- |
+| population_size | 4 | Four alternatives per generation in both examples. |
+| generation_limit | 2 | Initial exploration plus one evolved generation. |
+| max_evaluated_candidates | 8 | Covers both four-candidate generations; rebaselining shares this allowance. |
+| elite_count | 2 | Retains two strong valid combinations in the measured search. |
+| diversity_count | 1 | Reserves one structurally different survivor alongside the elites. |
+| mutation_rate | 0.35 | Measured nonzero ordinary mutation; this sample does not calibrate its optimum. |
+| minimum_improvement | 0.05 | Measured cumulative-gain threshold; scores remain objective-relative. |
+| patience_generations | 1 | One full stagnant window before an eligible expansion; larger limits are needed to explore beyond these completed runs. |
+| max_stagnation_expansions | 1 | Bounds a consecutive intervention sequence; T1 verifies its mechanics, not an empirical optimum. |
+| evaluation_batch_size | 4 | One bounded evaluation call per generation avoids additional prompt overhead. |
+| evaluation_concurrency | 1 | Serial dispatch sufficed for these small examples; T1 separately proves configured overlap. |
+| shortlist_size | 3 | Matches both common problems and both direct requests. |
+
+Omitted rigor stays inherited; the measured session and job rigor choices are
+not catalogue defaults. Model, effort, material, response length, corrections and
+cache usage can change future cost. The service and form consume this one
+catalogue through the existing resolver/schema path. Explicit complete orders
+retain their values; partial orders fill only omitted numeric controls and still
+must satisfy every existing bound and relationship. No stored order is migrated.
+
+M1 verification checked retained JSON, complete common input at both worker
+boundaries, unchanged live sessions/staffing, exact task-store/checkpoint copies,
+accepted batch coverage, counters, terminal outputs, summed physical accounting
+and the declared tolerance. Published defaults equal the measured numeric order.
+The temporary service exited normally after all three remaining tasks completed.
 
 ## Earlier language pilot: incomplete and unmatched
 
@@ -247,13 +362,29 @@ and all four normal stops including empty success.
 
 ## Focused verification
 
-T1: one test with four domain/material subtests passed in 2.833 seconds.
+After the default-admission edit, T1 and T3 passed again: seven tests in 3.249
+seconds. All four T2 checks pass, including the executable Node form check
+(1.351 seconds on its final run). Omission, empty/partial configuration,
+explicit complete values, rigor inheritance and invalid combinations are covered.
+The form submits untouched defaults through HTTP, then explicit values through
+the same schema-generated path; its fixture closes admitted tasks without model
+work so another submission can use the same workspace.
+
+```sh
+python3 -m unittest \
+  orchestrator.tests.test_tasks.TaskContractsTest.test_creativity_configuration_contract \
+  orchestrator.tests.test_tasks.TaskContractsTest.test_creativity_public_catalogue_and_configuration \
+  orchestrator.tests.test_task_api.TaskApiTest.test_creativity_public_order_and_controls \
+  orchestrator.tests.test_task_panel.TaskPanelTests.test_creativity_schema_form_submits_public_order
+```
+
+Initial T1: one test with four domain/material subtests passed in 2.833 seconds.
 
 ```sh
 python3 -m unittest orchestrator.tests.test_creativity_task.CreativityTaskTest.test_creativity_cross_domain_contracts
 ```
 
-T3: all six existing tests passed in 0.517 seconds; their matrices were reused.
+Initial T3: all six existing tests passed in 0.517 seconds; their matrices were reused.
 
 ```sh
 python3 -m unittest \
@@ -265,6 +396,7 @@ python3 -m unittest \
   orchestrator.tests.test_creativity_task.CreativityTaskTest.test_creativity_composes_search_and_results
 ```
 
-The complete suite remains for the driver's scheduled checkpoint. This exercise
-establishes mechanical behavior only: neither scripted scores nor a future small
-real-model sample establish creative superiority or real-world feasibility.
+`git diff --check` passes. The complete suite remains for the driver's scheduled
+checkpoint. Controlled checks establish mechanical behavior only: neither scripted
+scores nor this small real-model sample establish creative superiority or
+real-world feasibility.

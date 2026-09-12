@@ -288,4 +288,5 @@ executing the chosen initiative requires its own instruction.
 | slice_doc-10 (Cross-domain evidence and baseline comparison) | reviewed | 1 | satisfied | 83823d7 |
 | slice_impl-10-a (Cross-domain evidence and baseline comparison) | reviewed | 1 | satisfied | 2df9039 |
 | slice_impl-10-b (Cross-domain evidence and baseline comparison) | reviewed | 1 | satisfied | 6fe04a6 |
-| slice_impl-10-c (Cross-domain evidence and baseline comparison) | reviewed | 1 | satisfied | - |
+| slice_impl-10-c (Cross-domain evidence and baseline comparison) | reviewed | 1 | satisfied | 2e14394 |
+| slice_impl-10-d (Cross-domain evidence and baseline comparison) | reviewed | 1 | satisfied | - |
