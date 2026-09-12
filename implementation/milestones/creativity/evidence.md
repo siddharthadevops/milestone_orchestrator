@@ -2,12 +2,13 @@
 
 ## Current evidence boundary
 
-Controlled checks T1 and T3 pass. The real exercise below retains one completed
-language baseline and its explicitly paused creativity task. Neither real pair
-is complete or matched; the business tasks have not run. M1 and the evidenced
-catalogue defaults/admission/form checks (T2) remain incomplete. Controlled
-numbers below remain fixture limits and simulated accounting, separate from
-the real exercise. No catalogue defaults are published by this cut.
+Controlled checks T1 and T3 pass. The earlier language pilot below remains
+incomplete, partial and unmatched. A replacement comparison now has a completed
+language baseline under a new declaration made before dispatch. Its creativity
+task and both business tasks remain unrun. M1 and the evidenced catalogue
+defaults/admission/form checks (T2) remain incomplete. Controlled numbers remain
+fixture limits and simulated accounting, separate from real evidence. No
+catalogue defaults are published by this cut.
 
 Executed on 2026-09-12 against base revision
 `83823d73524dcb1ab22c5cf35367f17f1eb2fc2e` plus this implementation's examples
@@ -28,7 +29,73 @@ replies live only in the conformance test. In the eventual direct comparison,
 the complete common input appears in the `agent_call` request text itself;
 its separate context field alone does not reach that worker.
 
-## Real exercise: retained at the implementation size cutoff
+## Replacement comparison: completed language baseline
+
+The [replacement declaration](evidence/comparison/declaration.json) was written
+at 2026-09-12T14:08:24.400825Z against revision
+`6fe04a6a8350f5925cdaac23c645a6cce3b6dc0d`, before its first dispatch. It declares
+USD 0.015 API-equivalent per task and the same 50% relative-difference tolerance,
+requiring complete positive totals for both members of each pair. The proposed
+search allowance is two generations and eight evaluations in batches of four;
+the direct request asks it to consider eight alternatives and return three.
+This reduces the third-generation overhead exposed by the pilot. These are
+experimental work targets and explicit trial controls, not defaults or enforced
+spend caps. The old pilot's missing charge and failed comparison are preserved.
+
+The [submitted order](evidence/comparison/language-agent_call-order.json),
+[session](evidence/comparison/language-agent_call-session.json),
+[physical transcript](evidence/comparison/language-agent_call-call-01.json),
+[worker receipt](evidence/comparison/language-agent_call-worker.json) and
+[terminal task](evidence/comparison/language-agent_call-task.json) retain the
+new baseline `00e02a9f-a717-4466-9835-066338109c08`. The existing
+[staffing document](evidence/staffing.json) is reused unchanged. The worker
+received the complete language fixture, including all context and reference
+paths, three-proposal request and exploration-only instruction. It received no
+search-produced material. Actual dispatch was Codex `gpt-5.6-luna` at max effort;
+the retained admission projection says `gpt-5.6-sol`/xhigh and is not dispatch
+evidence. Both the runner transcript and worker receipt record Luna/max.
+The session selects `literature`; this ordinary agent call has no routed job,
+generation, batch or prompt-fallback record.
+
+| Physical call | Duration s | Input / cached / output / reasoning tokens | API USD | Partial tokens / cost |
+| --- | ---: | --- | ---: | --- |
+| `ecb39c28-14dc-4b14-bcc0-ad69a08651b3` | 206.48500728607178 | 18310 / 15104 / 11160 / 10876 | 0.01433528 | false / false |
+
+The one recorded attempt used 95.6% of its target. Subscription real cost is
+USD 0; cached input is included in input and reasoning output in output. The
+controlled size cutoff requested Pause during this call. It nevertheless
+completed and left a successful `completed_result` in the
+[paused response](evidence/comparison/language-agent_call-paused-task.json).
+After process quiescence, explicit Resume published that saved result without
+another physical call; the terminal envelope contains its accounting once.
+The [task store](evidence/comparison/task-store.json) preserves the final store
+bytes. The temporary service home is
+`/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-slice10-comparison-f92_3y8d`;
+the service is stopped and has no active task. No remaining pair member ran.
+
+Human inspection: the three openings count holes in a net, pocket a thread
+after a forgotten embrace, and cut a thread after a forgotten farewell. They
+contain 22, 23 and 19 whitespace-delimited words; the third self-check incorrectly
+says 20. All fit the length bound, give the daughter an action, avoid explaining
+the cause and end without a question. Silence, returning boat noise and a
+lighthouse sweep supply different sensory traces. Only the first explicitly
+anchors net repair; the latter two add assumed intimate events. The first's
+forgotten knot is less clearly an emotional cost. These observations assess the
+supplied criteria without treating a model self-check as an independent judge.
+
+This is one complete baseline, not a matched pair or M1 completion. The next
+work is the declared language creativity order and both business orders, then
+comparison/defaults review and T2. Provisional defaults and T2 edits were
+withdrawn at the cutoff because neither pair yet supports publication.
+
+Cut verification: all eight retained JSON files parse; common-input equality,
+dispatch/session evidence, original store/worker bytes and one-charge result
+handoff agree. Existing `test_agent_call_success_during_pause_is_retained_until_resume`
+and `test_public_pause_waits_for_active_call_and_resume_reuses_its_result` passed
+(two tests, 2.252 seconds). `git diff --check` passed. The complete suite remains
+reserved for the scheduled checkpoint.
+
+## Earlier language pilot: incomplete and unmatched
 
 [Declaration](evidence/declaration.json) was written at
 2026-09-12T13:48:19.734271Z, before either measured task. Execution used revision

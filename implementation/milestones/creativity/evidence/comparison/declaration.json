@@ -1,0 +1,55 @@
+{
+  "declared_at": "2026-09-12T14:08:24.400825+00:00",
+  "execution_revision": "6fe04a6a8350f5925cdaac23c645a6cce3b6dc0d",
+  "allowance": {
+    "unit": "api_usd",
+    "target_per_task": 0.015,
+    "comparability": "abs(creativity - agent_call) / max(creativity, agent_call) <= 0.5; both totals must be complete and positive",
+    "tolerance": 0.5,
+    "enforcement": "Experimental target only; no token/dollar cap, automatic reruns or judge call."
+  },
+  "order_sequence": [
+    "language-agent_call",
+    "language-creativity",
+    "business-agent_call",
+    "business-creativity"
+  ],
+  "creativity_configuration": {
+    "population_size": 4,
+    "generation_limit": 2,
+    "max_evaluated_candidates": 8,
+    "elite_count": 2,
+    "diversity_count": 1,
+    "mutation_rate": 0.35,
+    "minimum_improvement": 0.05,
+    "patience_generations": 1,
+    "max_stagnation_expansions": 1,
+    "evaluation_batch_size": 4,
+    "evaluation_concurrency": 1,
+    "shortlist_size": 3,
+    "rigor": {
+      "default": "medium",
+      "evaluate_candidates": "low"
+    }
+  },
+  "staffing": {
+    "family": "codex",
+    "model": "gpt-5.6-luna",
+    "creativity": {
+      "create_genes": "medium",
+      "evaluate_candidates": "low",
+      "expand_genes": "medium"
+    },
+    "agent_call": {
+      "role": "brainstorm",
+      "effort": "max"
+    },
+    "reason": "Same model; one max-effort ideation call considers eight alternatives versus creation plus two low-effort batches of four. The interrupted pilot exposed the overhead of a third generation."
+  },
+  "materials": {
+    "language": "literature",
+    "business": "business"
+  },
+  "baseline_instruction": "Exploration only: do not edit files, invoke tools, contact anyone or act on proposals. Ignore repository agent instructions. The complete common problem is below, including all context and reference paths. Consider eight distinct alternatives and check their constraints and criteria before selecting exactly three proposals with brief reasons and assumptions. Return only the shortlist and its checks, not private reasoning. Use ordinary direct ideation: no search-generated genes, proposals or scores are supplied. Experimental work allowance: about USD 0.015 API-equivalent for this single call, a target rather than an enforced cap; do not manufacture work to spend it.\n\nCOMMON PROBLEM (JSON):\n",
+  "supersedes": "The earlier language pilot remains incomplete, partial and unmatched. This is one explicitly ordered replacement language pair and the first business pair; no automatic reruns."
+}
