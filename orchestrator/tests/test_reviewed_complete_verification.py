@@ -32,6 +32,7 @@ class ReviewedCompleteVerificationTest(unittest.TestCase):
     request = _task_api_tests.TaskApiTest.request
     order = _task_api_tests.TaskApiTest.order
     wait_record = _task_api_tests.TaskApiTest.wait_record
+    wait_lifecycle = _task_api_tests.TaskApiTest.wait_lifecycle
     _git = staticmethod(_reviewed_tests.ReviewedTaskOrderingTest._git)
     _repo = _reviewed_tests.ReviewedTaskOrderingTest._repo
     _standalone_step = staticmethod(
@@ -378,12 +379,44 @@ class ReviewedCompleteVerificationTest(unittest.TestCase):
 
     def test_blocked_stop_restart_and_gate_crashes_keep_one_honest_result(self):
         blocked_ws, _base, _tree = self._baseline("blocked")
-        blocked, _runner = self._run(
-            blocked_ws, self._config(),
-            [self._call(self._checkpoint("blocked"))],
+        blocked_runner = runners.MockRunner([
+            self._call(self._checkpoint("blocked"))
+        ])
+        blocked_host = task_api.DirectTaskHost(
+            self.home,
+            runner_factory=lambda _config, _workspace: blocked_runner,
+            poll_interval=0.001,
         )
-        self.assertEqual(blocked["result"]["status"], "failure")
-        self.assertIsNone(blocked["result"]["native_result"])
+        self.start_server(blocked_host)
+        with mock.patch.object(
+            service, "_direct_task_config", return_value=self._config()
+        ):
+            status, body = self.request(
+                "POST", "/api/tasks", self._order(blocked_ws)
+            )
+            self.assertEqual(status, 201, body)
+            paused = self.wait_lifecycle(body["task"]["id"], "paused")
+        blocked = task_api.StandaloneTaskStore(self.home).record(
+            body["task"]["id"]
+        )
+        self.assertIsNone(blocked["result"])
+        self.assertEqual(paused["source"], "error")
+        self.assertEqual(
+            paused["reason"], "suite checkpoint blocked: suite cannot run"
+        )
+        lifecycle = st.load(task_api.reviewed_state_path(
+            self.home, blocked["id"]
+        ))
+        verification = [
+            event for event in lifecycle["events"]
+            if event.get("type") == "verification"
+        ]
+        self.assertEqual(len(verification), 1)
+        self.assertEqual(verification[0]["status"], "blocked")
+        self.assertEqual(
+            verification[0]["blocked_reason"], "suite cannot run"
+        )
+        self.assertEqual(len(blocked_runner.calls), 1)
 
         stop_ws, _base, _tree = self._baseline("stop")
         entered, release = threading.Event(), threading.Event()
