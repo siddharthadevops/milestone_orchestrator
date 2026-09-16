@@ -555,8 +555,6 @@ def _create_genes(obj, bound, options, ctx):
     ), ctx)
     for key in ("objective", "context_summary", "composition_guidance"):
         _text(material, key, ctx)
-    if material["objective"] != options["expected_objective"]:
-        raise contracts.ContractError("%s.objective must echo the request" % ctx)
     for key in ("facts", "assumptions", "unknowns"):
         _paths(_require(material, key, list, ctx), "%s.%s" % (ctx, key))
     for key in ("constraints", "criteria"):
@@ -891,7 +889,7 @@ def bind(prompt, consumer_sections=(), consumer_instructions=()):
 def validate(bound, obj, *, queued_findings=None,
              configured_suite_commands=None, workspace=None,
              expected_artifact=None, extension_fields=(),
-             expected_objective=None, candidate_ids=None, constraint_ids=None,
+             candidate_ids=None, constraint_ids=None,
              dimensions=None):
     """Validate a reply against served sections, using trusted caller context."""
     if not isinstance(bound, BoundContract):
@@ -903,7 +901,6 @@ def validate(bound, obj, *, queued_findings=None,
         "configured_suite_commands": configured_suite_commands,
         "workspace": workspace,
         "expected_artifact": expected_artifact,
-        "expected_objective": expected_objective,
         "candidate_ids": candidate_ids,
         "constraint_ids": constraint_ids,
         "dimensions": dimensions,

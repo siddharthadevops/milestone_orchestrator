@@ -5710,39 +5710,9 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'of '
                                                                       'meaningful '
                                                                       'parts.',
-                                                                      'Read '
-                                                                      'the '
-                                                                      'context '
-                                                                      'and '
-                                                                      'referenced '
-                                                                      'material '
-                                                                      'in the '
-                                                                      'supplied '
-                                                                      'order. '
-                                                                      'Preserve '
-                                                                      'the '
-                                                                      'exact',
-                                                                      'objective. '
-                                                                      'Summarize '
-                                                                      'relevant '
-                                                                      'context '
-                                                                      'and '
-                                                                      'supplied '
-                                                                      'facts; '
-                                                                      'distinguish '
-                                                                      'hard '
-                                                                      'constraints',
-                                                                      'from '
-                                                                      'assumptions '
-                                                                      'and '
-                                                                      'unknowns. '
-                                                                      'Do not '
-                                                                      'silently '
-                                                                      'invent '
-                                                                      'facts '
-                                                                      'or '
-                                                                      'relax '
-                                                                      'constraints.',
+                                                                      'Read the complete operator request, context and references in the supplied order.',
+                                                                      "Formulate a concise, self-contained search objective faithful to the operator's intent and scope.",
+                                                                      'Summarize relevant context and facts; distinguish hard constraints from assumptions and unknowns. Do not invent facts or relax constraints.',
                                                                       'Derive '
                                                                       'dimensions '
                                                                       'from '
@@ -5828,10 +5798,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'remain '
                                                                       'judgments.'],
                                                              'variables': []},
-                                                            {'text': ['ADMITTED '
-                                                                      'OBJECTIVE '
-                                                                      '(echo '
-                                                                      'exactly):',
+                                                            {'text': ['OPERATOR REQUEST:',
                                                                       '{{objective}}',
                                                                       'CONTEXT:',
                                                                       '{{context}}',
@@ -5845,10 +5812,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       '{{references}}'],
                                                              'variables': [{'name': 'objective',
                                                                             'required': True,
-                                                                            'description': 'Exact '
-                                                                                           'admitted '
-                                                                                           'operator '
-                                                                                           'objective.'},
+                                                                            'description': 'Complete original operator request, from which to formulate the search objective.'},
                                                                            {'name': 'context',
                                                                             'required': True,
                                                                             'description': 'Admitted '
@@ -5904,15 +5868,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'composition_guidance '
                                                                             'and '
                                                                             'criteria.',
-                                                                            'objective '
-                                                                            'exactly '
-                                                                            'echoes '
-                                                                            'the '
-                                                                            'admitted '
-                                                                            'objective; '
-                                                                            'objective, '
-                                                                            'context_summary '
-                                                                            'and',
+                                                                            'objective is a concise faithful formulation; a verbatim copy is not required. objective, context_summary and',
                                                                             'composition_guidance '
                                                                             'are '
                                                                             'non-blank '
@@ -6002,9 +5958,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                         'instructions': {'parts': [{'ref': 'header'},
                                                                    {'ref': 'project_context'},
                                                                    {'ref': 'creativity_exploration'},
-                                                                   {'text': ['TASK: interpret and evaluate every '
-                                                                             'supplied candidate against the '
-                                                                             "operator's objective.",
+                                                                   {'text': ['TASK: interpret and evaluate every supplied candidate against the formulated search objective.',
                                                                              'Read the immutable search material, '
                                                                              'including its criteria and composition '
                                                                              'guidance.',
@@ -6107,8 +6061,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'ref': 'project_context'},
                                                             {'ref': 'creativity_exploration'},
-                                                            {'text': ['TASK: expand the repertoire after exploration '
-                                                                      'has stalled, using the original objective.',
+                                                            {'text': ['TASK: expand the repertoire after exploration has stalled, using the formulated search objective.',
                                                                       'Read the complete search material, promising '
                                                                       'valid candidates and compact explored',
                                                                       'account. Identify useful alternatives that the '
@@ -6139,7 +6092,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'usefulness, feasibility and meaningful '
                                                                       'difference remain model judgments.'],
                                                              'variables': []},
-                                                            {'text': ['ORIGINAL OBJECTIVE:',
+                                                            {'text': ['SEARCH OBJECTIVE:',
                                                                       '{{objective}}',
                                                                       'COMPLETE SEARCH MATERIAL (JSON):',
                                                                       '{{search_material}}',
@@ -6150,8 +6103,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       '{{explored_account}}'],
                                                              'variables': [{'name': 'objective',
                                                                             'required': True,
-                                                                            'description': 'Original admitted operator '
-                                                                                           'objective.'},
+                                                                            'description': 'Formulated objective from the accepted search material.'},
                                                                            {'name': 'search_material',
                                                                             'required': True,
                                                                             'description': 'Complete current search '

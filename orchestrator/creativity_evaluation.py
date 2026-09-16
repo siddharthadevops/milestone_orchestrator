@@ -19,7 +19,7 @@ def create_genes(
     group, runner, *, objective, context, references, home, session, workspace,
     configuration, execution_context, prompt_set="default", prompt_values=None,
 ):
-    """Return accepted initial material through the shared semantic boundary."""
+    """Derive compact search material from the original operator request."""
     values = dict(prompt_values or {})
     values.update(workspace=workspace, objective=objective,
                   context=json.dumps(context, ensure_ascii=False),
@@ -29,7 +29,7 @@ def create_genes(
         reply, result = _call_semantic_job(
             group, runner, job="create_genes", home=home, session=session,
             workspace=workspace, configuration=configuration, values=values,
-            validation_context={"expected_objective": objective},
+            validation_context={},
             context={"job": "create_genes", "generation": 0, "batch": uuid.uuid4().hex},
             execution_context=execution_context, prompt_set=prompt_set,
         )

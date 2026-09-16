@@ -40,12 +40,15 @@ class TaskPanelTests(unittest.TestCase):
         server.project("mine", server.primary)
         binding = {"project": "mine", "work_area": "main"}
         session = staffing.create_session(server.home, session_body(work_area=binding))["id"]
-        configuration = creativity_configuration(mutation_rate=0.25, minimum_improvement=0.02)
+        configuration = creativity_configuration(
+            max_evaluated_candidates=12, mutation_rate=0.25, minimum_improvement=0.02,
+        )
         names = (
             "esc", "taskExecutorEntry", "taskConfigurationApplicable", "taskConfigurationValue",
             "taskConfigurationOption", "renderTaskConfigurationSchema", "taskUsesExecutionBinding",
             "setTaskConfigurationValue", "currentTaskConfiguration", "submitTaskForm",
             "snapshotTaskExecutorConfiguration", "onTaskConfigurationChange",
+            "taskConfigurationLayers", "renderTaskExecutorEditor", "onTaskExecutorChange",
         )
         sources = [re.search(r"(?:async )?function " + name + r"\([^\n]*\) \{.*?\n\}",
                              self.panel, re.S).group(0) for name in names]
@@ -54,20 +57,42 @@ class TaskPanelTests(unittest.TestCase):
         }) + ";\n"
         checks = r"""
 const assert = require('node:assert/strict');
-let taskExecutorSelected = 'creativity', taskDialogSeq = 1, taskSubmitPending = false;
+let taskExecutorSelected = 'creativity', taskDialogSeq = 1, taskSubmitPending = false, taskAdvancedOpen = false;
 let taskExecutorCatalogue, taskExecutorDrafts = {}, closed = 0, refusal = null;
 const taskProjects = [{families_order: ['codex', 'claude']}];
 const taskReferences = ['second.md', 'first.md'], posts = [];
 const fields = Object.fromEntries(Object.entries({
   t_request: 'Find a useful possibility.', t_context: 'Facts and constraints.',
-  t_output: '', t_project: '0', t_prompt_set: 'default',
+  t_output: '', t_project: '0', t_prompt_set: 'default', t_executor: 'creativity',
 }).map(([id, value]) => [id, {value}]));
 fields.task_error = {textContent: '', style: {}};
 fields.taskform = {close: () => closed++};
+for (const id of ['t_profile_field', 'task_staffing', 't_prompt_set_field']) fields[id] = {style: {}};
+let controls = [];
+fields.task_configuration = {
+  markup: '',
+  get innerHTML() { return this.markup; },
+  set innerHTML(html) {
+    this.markup = html;
+    // Supply DOM controls from actual markup; native validity is browser-owned.
+    controls = [...html.matchAll(/<input\b[^>]*>|<select\b[^>]*>[\s\S]*?<\/select>/g)].map(([tag]) => {
+      const opening = tag.split('>')[0];
+      const attrs = Object.fromEntries([...opening.matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1], m[2]]));
+      const dataset = Object.fromEntries(Object.entries(attrs).filter(([k]) => k.startsWith('data-'))
+        .map(([k, v]) => [k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v]));
+      const options = [...tag.matchAll(/<option\b([^>]*)>/g)];
+      const selected = options.find(option => /\bselected\b/.test(option[1])) || options[0];
+      const value = selected ? selected[1].match(/value="([^"]*)"/)[1] : attrs.value || '';
+      return {dataset, value, min: attrs.min || '', max: attrs.max || '',
+        placeholder: attrs.placeholder || '', checkValidity: () => true};
+    });
+  },
+};
+global.document = {getElementById: id => fields[id], querySelectorAll: () => controls};
+const control = path => controls.find(c => c.dataset.taskConfig === path);
 const taskBinding = () => fixture.binding;
 const standaloneStaffingSession = async () => fixture.session;
 const syncTaskSubmitDisabled = () => {};
-const renderTaskExecutorEditor = () => {};
 async function postJSON(path, payload) {
   posts.push(payload);
   if (refusal) throw new Error(refusal);
@@ -76,25 +101,27 @@ async function postJSON(path, payload) {
   });
   const body = await response.json();
   assert.equal(response.status, 201, JSON.stringify(body));
-  assert.deepEqual(body.task.order.configuration, payload.configuration);
+  const admitted = {...body.task.order.configuration};
+  if (!Object.hasOwn(payload.configuration, 'max_evaluated_candidates')) {
+    assert.equal(admitted.max_evaluated_candidates,
+      payload.configuration.population_size * payload.configuration.generation_limit);
+    delete admitted.max_evaluated_candidates;
+  }
+  assert.deepEqual(admitted, payload.configuration);
 }
 (async () => {
   taskExecutorCatalogue = (await (await fetch(fixture.base + '/api/task-executors')).json()).task_executors;
   const schema = taskExecutorEntry('creativity').configuration_schema;
-  const defaults = Object.fromEntries(Object.entries(schema).filter(([key]) => key !== 'rigor')
+  const defaults = Object.fromEntries(Object.entries(schema).filter(([, definition]) => definition.default !== undefined)
     .map(([key, definition]) => [key, definition.default]));
-  const html = renderTaskConfigurationSchema(schema, {});
-  // Supply DOM controls from the actual rendered markup; native input validity is browser-owned.
-  const controls = [...html.matchAll(/<(?:input|select)\b[^>]*>/g)].map(([tag]) => {
-    const attrs = Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1], m[2]]));
-    const dataset = Object.fromEntries(Object.entries(attrs).filter(([k]) => k.startsWith('data-'))
-      .map(([k, v]) => [k.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v]));
-    return {dataset, value: attrs.value || '', min: attrs.min || '', max: attrs.max || '', checkValidity: () => true};
-  });
-  global.document = {getElementById: id => fields[id], querySelectorAll: () => controls};
-  const control = path => controls.find(c => c.dataset.taskConfig === path);
+  renderTaskExecutorEditor();
   assert.equal(controls.length, 16);
   for (const [key, value] of Object.entries(defaults)) assert.equal(control(key).value, String(value));
+  assert.equal(control('max_evaluated_candidates').value, '');
+  assert.equal(control('max_evaluated_candidates').dataset.taskConfigOptional, 'true');
+  assert.equal(control('max_evaluated_candidates').placeholder, 'Automatic: population × generations');
+  assert(fields.task_configuration.innerHTML.indexOf('data-task-config="max_evaluated_candidates"')
+    > fields.task_configuration.innerHTML.indexOf('id="t_more"'));
   assert(controls.filter(c => c.dataset.taskConfig.startsWith('rigor.')).every(c => c.value === ''));
   assert.equal(control('mutation_rate').max, '1');
   assert.deepEqual(currentTaskConfiguration().configuration, defaults);
@@ -103,16 +130,33 @@ async function postJSON(path, payload) {
   assert.deepEqual(posts[0].configuration, defaults);
   assert.equal(fields.task_error.textContent, '');
   assert.equal(closed, 1);
+  control('population_size').value = '8';
+  onTaskConfigurationChange(control('population_size'));
+  control('generation_limit').value = '10';
+  onTaskConfigurationChange(control('generation_limit'));
+  assert.equal(control('max_evaluated_candidates').value, '');
+  fields.t_executor.value = 'agent_call';
+  onTaskExecutorChange();
+  fields.t_executor.value = 'creativity';
+  onTaskExecutorChange();
+  assert.equal(control('max_evaluated_candidates').value, '');
+  const automatic = {...defaults, population_size: 8, generation_limit: 10};
+  assert.deepEqual(currentTaskConfiguration().configuration, automatic);
+  await submitTaskForm();
+  assert.deepEqual(posts[1].configuration, automatic);
+  assert(!Object.hasOwn(posts[1].configuration, 'max_evaluated_candidates'));
+  assert.equal(closed, 2);
   for (const [key, value] of Object.entries(fixture.configuration)) control(key).value = String(value);
   control('rigor.default').value = 'low';
   control('rigor.evaluate_candidates').value = 'high';
   const expected = {...fixture.configuration, rigor: {default: 'low', evaluate_candidates: 'high'}};
   assert.deepEqual(currentTaskConfiguration().configuration, expected);
   for (const key of Object.keys(fixture.configuration)) {
+    if (schema[key].optional) continue;
     const input = control(key), saved = input.value;
     input.value = '';
     await submitTaskForm();
-    assert.equal(posts.length, 1, key);
+    assert.equal(posts.length, 2, key);
     input.value = saved;
   }
   control('population_size').value = '0';
@@ -120,19 +164,19 @@ async function postJSON(path, payload) {
   assert.equal(control('population_size').value, '0');
   control('population_size').value = '2';
   await submitTaskForm();
-  assert.deepEqual(posts[1], {task_executor: 'creativity', configuration: expected,
+  assert.deepEqual(posts[2], {task_executor: 'creativity', configuration: expected,
     staffing_session: fixture.session, prompt_set: 'default', request: {
       work_area: fixture.binding, request: fields.t_request.value, context: fields.t_context.value,
       reference_documents: taskReferences,
     }});
-  assert.equal(closed, 2);
+  assert.equal(closed, 3);
   assert.equal(taskSubmitPending, false);
   control('rigor.default').value = control('rigor.evaluate_candidates').value = '';
   assert.deepEqual(currentTaskConfiguration().configuration, fixture.configuration);
   refusal = 'invalid_task_request';
   await submitTaskForm();
   assert.equal(fields.task_error.textContent, refusal);
-  assert.equal(closed, 2);
+  assert.equal(closed, 3);
   assert.equal(taskSubmitPending, false);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """

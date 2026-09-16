@@ -15,7 +15,7 @@
       },
       {
         "text": [
-          "TASK: expand the repertoire after exploration has stalled, using the original objective.",
+          "TASK: expand the repertoire after exploration has stalled, using the formulated search objective.",
           "Read the complete search material, promising valid candidates and compact explored",
           "account. Identify useful alternatives that the existing repertoire leaves unexplored.",
           "Suggest new variants only within existing dimensions, keeping their meanings intact.",
@@ -35,7 +35,7 @@
       },
       {
         "text": [
-          "ORIGINAL OBJECTIVE:",
+          "SEARCH OBJECTIVE:",
           "{{objective}}",
           "COMPLETE SEARCH MATERIAL (JSON):",
           "{{search_material}}",
@@ -48,7 +48,7 @@
           {
             "name": "objective",
             "required": true,
-            "description": "Original admitted operator objective."
+            "description": "Formulated objective from the accepted search material."
           },
           {
             "name": "search_material",

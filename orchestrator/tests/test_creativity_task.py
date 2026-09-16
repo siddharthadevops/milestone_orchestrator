@@ -155,6 +155,74 @@ class CreativityTaskTest(unittest.TestCase):
         self.assertEqual(tasks.task_executor_catalogue(), catalogue)
         self.assertIn("creativity", [item["id"] for item in catalogue])
 
+    def test_automatic_budget_allows_ten_generations_of_eight_candidates(self):
+        for dimension in self.material["dimensions"]:
+            dimension["variants"] = [
+                {"id": "option-%d" % index, "text": "Alternative %d" % index}
+                for index in range(10)
+            ]
+        order = self.order("creativity", request=self.material["objective"])
+        order.update(staffing_session=self.session, configuration={
+            "population_size": 8, "generation_limit": 10,
+            "patience_generations": 20,
+        })
+        store = task_api.StandaloneTaskStore(self.home)
+        record = store.admit(order, {}, self.primary)
+        self.assertEqual(record["order"]["configuration"]["max_evaluated_candidates"], 80)
+        host = self.host()
+        host.start(record, self.config)
+        settled = self._terminal(host, record["id"])
+        self.assertEqual(settled["result"]["status"], "success")
+        native = settled["result"]["native_result"]
+        self.assertEqual(native["generations_completed"], 10)
+        self.assertEqual(native["evaluated_candidates"], 80)
+        self.assertEqual(native["stop_reason"], "generation_limit")
+
+    def test_concise_objective_from_long_request_reaches_evaluation_and_expansion(self):
+        request = (
+            "I have finished a story and would like help finding a way to reach readers.\n\n"
+            "Consider the manuscript and the reference documents in their supplied order. "
+            "We have no budget for new spending, so use existing reading formats and "
+            "delivery channels. Explore combinations rather than publishing anything. "
+            "Explain the proposals and keep assumptions distinct from established facts."
+        )
+        objective = self.material["objective"]
+        self.assertNotEqual(objective, request)
+        order = self.order("creativity", request=request, reference_documents=self.references)
+        order.update(
+            staffing_session=self.session,
+            configuration=creativity_configuration(generation_limit=3, max_evaluated_candidates=6),
+        )
+        store = task_api.StandaloneTaskStore(self.home)
+        record = store.admit(order, {}, self.primary)
+        admitted_order = copy.deepcopy(record["order"])
+        host = self.host()
+        host.start(record, self.config)
+        self._wait(lambda: not host.is_active(record["id"]), "creativity did not settle")
+        settled = store.record(record["id"])
+        self.assertIsNotNone(settled["result"], store.lifecycle(record["id"]))
+        self.assertEqual(settled["result"]["status"], "success")
+        self.assertEqual(settled["order"], admitted_order)
+        self.assertEqual(settled["order"]["request"]["request"], request)
+        self.assertEqual(self.checkpoint(record)["search_material"]["objective"], objective)
+        creation = [call for call in self.calls if call["job"] == "create_genes"]
+        self.assertEqual(len(creation), 1)
+        self.assertIn("OPERATOR REQUEST:\n" + request, creation[0]["prompt"])
+        evaluations = [call for call in self.calls if call["job"] == "evaluate_candidates"]
+        self.assertEqual(len(evaluations), 3)
+        for call in evaluations:
+            material = json.loads(call["prompt"].split(
+                "IMMUTABLE SEARCH MATERIAL AND CRITERIA (JSON):\n",
+            )[1].splitlines()[0])
+            self.assertEqual(material["objective"], objective)
+        expansions = [call for call in self.calls if call["job"] == "expand_genes"]
+        self.assertEqual(len(expansions), 1)
+        self.assertIn("SEARCH OBJECTIVE:\n" + objective, expansions[0]["prompt"])
+        expanded_input = json.loads(expansions[0]["prompt"].split(
+            "COMPLETE SEARCH MATERIAL (JSON):\n",
+        )[1].splitlines()[0])
+        self.assertEqual(expanded_input["objective"], objective)
+
     def test_creativity_cross_domain_contracts(self):
         examples = os.path.join(os.path.dirname(__file__), "..", "..", "implementation",
                                 "milestones", "creativity", "examples")
@@ -516,7 +584,7 @@ class CreativityTaskTest(unittest.TestCase):
                 staffing.save(self.home, document)
                 staffing.edit_session(self.home, self.session, {"material": "business"})
                 self.write_prompt("SECOND PROMPT", "create_genes")
-                return self.result({"search_material": dict(self.material, objective="Rewritten objective")})
+                return self.result({"search_material": dict(self.material, objective="")})
             return result
 
         host = self.host(physical)

@@ -200,7 +200,7 @@ class CreativityEvaluationTest(unittest.TestCase):
             self.assertIn("KIND: expand_genes", prompt)
             self.assertIn("ADDITIONAL ROOT /reference — READ-ONLY", prompt)
             self.assertIn("Do not edit files or execute proposals", prompt)
-            self.assertIn("ORIGINAL OBJECTIVE:\n" + self.material["objective"], prompt)
+            self.assertIn("SEARCH OBJECTIVE:\n" + self.material["objective"], prompt)
             self.assertIn("Explored a full story online and an excerpt at a library.", prompt)
             supplied = json.loads(prompt.split("COMPLETE SEARCH MATERIAL (JSON):\n")[1].splitlines()[0])
             self.assertEqual(supplied, self.material if index < 2 else expanded)

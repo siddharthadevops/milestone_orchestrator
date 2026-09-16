@@ -62,7 +62,7 @@ class CreativitySearchTest(unittest.TestCase):
             "criteria": [{"id": "reach", "text": "Reach interested readers."}],
         }}
         return prompt_contracts.validate(
-            self.bound, reply, expected_objective=OBJECTIVE,
+            self.bound, reply,
         )["search_material"]
 
     def evaluated(self, genomes, scores, invalid=(), prefix="candidate"):

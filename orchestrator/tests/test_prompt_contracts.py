@@ -226,7 +226,7 @@ class PromptContractsTest(unittest.TestCase):
                 record = record[key]
             for defect in closed_object_defects(record).values():
                 invalid.append(replaced(path, defect))
-        invalid.append(replaced(("search_material", "objective"), "A different objective"))
+        invalid.append(replaced(("search_material", "objective"), 42))
         for key in ("facts", "assumptions", "unknowns"):
             invalid.append(replaced(("search_material", key), [""]))
             invalid.append(replaced(("search_material", key), [42]))
@@ -241,8 +241,14 @@ class PromptContractsTest(unittest.TestCase):
             invalid.append(replaced(path, [records[0], records[0]]))
             if path[-1] != "constraints":
                 invalid.append(replaced(path, []))
-        objective = minimal["search_material"]["objective"]
-        values = {"workspace": "/workspace", "objective": objective,
+        request = (
+            "Help me find a useful next step for our existing room. We have no money "
+            "to spend, so explore ways to use its current capacity. Distinguish facts "
+            "from assumptions and explain which possibilities serve current participants."
+        )
+        self.assertNotEqual(minimal["search_material"]["objective"], request)
+        echoed = replaced(("search_material", "objective"), request)
+        values = {"workspace": "/workspace", "objective": request,
                   "context": "", "references": "[]"}
         with tempfile.TemporaryDirectory() as home:
             prompt_sets.ensure_default(home)
@@ -253,18 +259,18 @@ class PromptContractsTest(unittest.TestCase):
                 ).prompt
                 bound = prompt_contracts.bind(served)
                 self.assertEqual(bound.registered_section_ids, ("create_genes_result",))
-                for reply in (minimal, populated):
+                for reply in (minimal, populated, echoed):
                     self.assertIs(prompt_contracts.validate(
-                        bound, reply, expected_objective=objective,
+                        bound, reply,
                     ), reply)
                 for index, reply in enumerate(invalid):
                     with self.subTest(material=material_name, invalid=index):
                         with self.assertRaises(contracts.ContractError):
-                            prompt_contracts.validate(bound, reply, expected_objective=objective)
+                            prompt_contracts.validate(bound, reply)
                 served["kind"] = "evaluate_candidates"
                 with self.assertRaisesRegex(contracts.ContractError, "prompt kind"):
                     prompt_contracts.validate(
-                        prompt_contracts.bind(served), minimal, expected_objective=objective,
+                        prompt_contracts.bind(served), minimal,
                     )
                 served["output_contract"][0]["id"] = "operator_data_only"
                 self.assertEqual(prompt_contracts.validate(

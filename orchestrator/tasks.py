@@ -414,11 +414,15 @@ _TASK_EXECUTORS += (
                       "exclusive_minimum": 1 if name == "population_size" else 0}
                for name, default in {
                    "population_size": 4, "generation_limit": 2,
-                   "max_evaluated_candidates": 8, "elite_count": 2,
+                   "elite_count": 2,
                    "diversity_count": 1, "patience_generations": 1,
                    "max_stagnation_expansions": 1, "evaluation_batch_size": 4,
                    "evaluation_concurrency": 1, "shortlist_size": 3,
                }.items()},
+            "max_evaluated_candidates": {
+                "type": "integer", "optional": True, "exclusive_minimum": 0,
+                "placeholder": "Automatic: population × generations",
+            },
             **{name: {"type": "number", "exclusive_minimum": 0, "maximum": 1,
                       "default": default}
                for name, default in {"mutation_rate": 0.35, "minimum_improvement": 0.05}.items()},
@@ -952,6 +956,7 @@ def reviewed_policy_defaults(task_kind, config):
 def resolve_creativity_configuration(value):
     """Fill omitted numeric controls from the catalogue, then admit strictly.
 
+    An omitted evaluation budget covers population_size * generation_limit.
     Omitted rigor remains inherited at call time, never frozen from a session.
     """
     try:
@@ -961,14 +966,19 @@ def resolve_creativity_configuration(value):
         )
         schema = _TASK_EXECUTOR_BY_ID["creativity"]["configuration_schema"]
         value = {
-            **{name: schema[name]["default"] for name in _CREATIVITY_COUNTS + _CREATIVITY_RATES},
+            **{name: schema[name]["default"] for name in _CREATIVITY_COUNTS + _CREATIVITY_RATES
+               if "default" in schema[name]},
             **value,
         }
         for name in _CREATIVITY_COUNTS:
+            if name == "max_evaluated_candidates" and name not in value:
+                continue
             if type(value[name]) is not int or value[name] <= 0:
                 raise ContractError(
                     "configuration.%s must be a positive integer" % name
                 )
+        if "max_evaluated_candidates" not in value:
+            value["max_evaluated_candidates"] = value["population_size"] * value["generation_limit"]
         for name in _CREATIVITY_RATES:
             number = value[name]
             if (

@@ -429,6 +429,30 @@ If a work area also records `work_area_meta.reuse_sources`, keep its
 with the template parameters. The template does not read that descriptor; it
 is project-wide standing law supplied explicitly by the operator.
 
+### Creativity search objectives
+
+The task order retains the complete operator request. `create_genes` derives
+a compact, self-contained `search_material.objective` from that request,
+alongside context, facts, constraints, assumptions, dimensions and criteria.
+The objective must preserve the operator's intent and scope; it need not repeat
+the request verbatim. Its contract checks structure and non-empty content,
+while semantic faithfulness remains model judgment.
+
+Evaluation and expansion use that accepted search objective and the same
+search material. They do not rewrite it during evolution. This supersedes the
+literal-echo rule recorded in the original creativity skeleton and slice 02;
+the original request remains available in the task order.
+
+The evaluation budget defaults to `population_size * generation_limit`, using
+the values resolved for the order. For example, eight new candidates over ten
+generations allows 80 accepted candidate evaluations. The advanced
+`max_evaluated_candidates` field may be left empty for this automatic budget,
+or set explicitly to another cap. Existing orders keep their recorded cap.
+The budget counts accepted evaluations, including any reassessment after an
+evaluator change; it is not a limit on tokens, money, or all physical calls.
+Stagnation and repertoire exhaustion may still end a search before its maximum
+generation count.
+
 ### Standalone task Pause, Resume and Cancel
 
 Standalone `agent_call`, `reviewed_task` and `deep_task` orders share durable

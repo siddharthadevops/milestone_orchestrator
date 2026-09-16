@@ -102,11 +102,26 @@ class TaskContractsTest(unittest.TestCase):
             function(*args)
         self.assertEqual(caught.exception.code, code)
 
+    def test_creativity_automatic_budget_covers_requested_generations(self):
+        configuration = {"population_size": 8, "generation_limit": 10}
+        order = dict(task_order("creativity"), configuration=configuration)
+        resolved = tasks.validate_order(order)["configuration"]
+        self.assertEqual(resolved["max_evaluated_candidates"], 80)
+        self.assertEqual(configuration, {"population_size": 8, "generation_limit": 10})
+        for budget in (8, 24, 100):
+            with self.subTest(explicit_budget=budget):
+                manual = dict(configuration, max_evaluated_candidates=budget)
+                self.assertEqual(
+                    tasks.resolve_creativity_configuration(manual)["max_evaluated_candidates"],
+                    budget,
+                )
+
     def test_creativity_configuration_contract(self):
         base = creativity_configuration()
         schema = next(item for item in tasks.task_executor_catalogue()
                       if item["id"] == "creativity")["configuration_schema"]
-        defaults = {key: schema[key]["default"] for key in base}
+        defaults = {key: schema[key]["default"] for key in base if "default" in schema[key]}
+        defaults["max_evaluated_candidates"] = defaults["population_size"] * defaults["generation_limit"]
         self.assertEqual(tasks.resolve_creativity_configuration({}), defaults)
         for key in defaults:
             partial = {name: value for name, value in defaults.items() if name != key}
@@ -171,14 +186,21 @@ class TaskContractsTest(unittest.TestCase):
         base = creativity_configuration(mutation_rate=0.25, minimum_improvement=0.02)
         self.assertEqual(set(schema), set(base) | {"rigor"})
         for key in base:
+            if key == "max_evaluated_candidates":
+                self.assertNotIn("default", schema[key])
+                self.assertTrue(schema[key]["optional"])
+                continue
             self.assertIn("default", schema[key])
             self.assertFalse(schema[key].get("optional", False))
-        defaults = {key: schema[key]["default"] for key in base}
+        defaults = {key: schema[key]["default"] for key in base if "default" in schema[key]}
+        defaults["max_evaluated_candidates"] = defaults["population_size"] * defaults["generation_limit"]
         self.assertNotIn("default", schema["rigor"])
         self.assertEqual(tasks.validate_order(task_order("creativity"))["configuration"], defaults)
         for partial in ({}, {"generation_limit": 4}, {"rigor": {"default": "low"}}):
             resolved = tasks.validate_order(dict(task_order("creativity"), configuration=partial))
-            self.assertEqual(resolved["configuration"], dict(defaults, **partial))
+            expected = dict(defaults, **partial)
+            expected["max_evaluated_candidates"] = expected["population_size"] * expected["generation_limit"]
+            self.assertEqual(resolved["configuration"], expected)
         self.assertEqual(set(schema["rigor"]["properties"]), {
             "default", "create_genes", "evaluate_candidates", "expand_genes",
         })

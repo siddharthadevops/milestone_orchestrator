@@ -15,7 +15,7 @@
       },
       {
         "text": [
-          "TASK: interpret and evaluate every supplied candidate against the operator's objective.",
+          "TASK: interpret and evaluate every supplied candidate against the formulated search objective.",
           "Read the immutable search material, including its criteria and composition guidance.",
           "Each candidate combines one variant per dimension. Interpret those chosen components",
           "faithfully as a concrete proposal; do not substitute a better combination or rewrite",

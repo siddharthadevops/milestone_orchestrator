@@ -434,16 +434,19 @@ class TaskApiTest(unittest.TestCase):
 
         schema = next(entry for entry in self.request("GET", "/api/task-executors")[1]["task_executors"]
                       if entry["id"] == "creativity")["configuration_schema"]
-        defaults = {key: definition["default"] for key, definition in schema.items() if key != "rigor"}
+        defaults = {key: definition["default"] for key, definition in schema.items()
+                    if "default" in definition}
         omitted = {key: value for key, value in order.items() if key != "configuration"}
         for submitted in (omitted, dict(order, configuration={}),
                           dict(order, configuration={"mutation_rate": 0.2}),
+                          dict(order, configuration={"population_size": 8, "generation_limit": 10}),
                           dict(order, configuration={"rigor": {"evaluate_candidates": "high"}})):
             with self.subTest(configuration=submitted.get("configuration")):
                 code, response = self.request("POST", "/api/tasks", submitted)
                 self.assertEqual(code, 201, response)
                 record = response["task"]
                 expected = dict(defaults, **submitted.get("configuration", {}))
+                expected["max_evaluated_candidates"] = expected["population_size"] * expected["generation_limit"]
                 self.assertEqual(record["order"]["configuration"], expected)
                 path = "/api/tasks/" + record["id"]
                 self.assertEqual(self.request("GET", path)[1]["task"]["order"]["configuration"], expected)
