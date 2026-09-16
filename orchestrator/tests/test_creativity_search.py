@@ -2,6 +2,7 @@
 
 import copy
 import json
+import math
 import random
 import tempfile
 import unittest
@@ -60,6 +61,7 @@ class CreativitySearchTest(unittest.TestCase):
             "dimensions": dimensions,
             "composition_guidance": "Combine the chosen format and channel.",
             "criteria": [{"id": "reach", "text": "Reach interested readers."}],
+            "order_semantics": "sequence in which the selected components are applied",
         }}
         return prompt_contracts.validate(
             self.bound, reply,
@@ -108,7 +110,7 @@ class CreativitySearchTest(unittest.TestCase):
     def test_population_bounds_and_explored_identity(self):
         dimensions = self.accepted_material()["dimensions"]
         configuration = tasks.resolve_creativity_configuration(creativity_configuration(
-            population_size=8, max_evaluated_candidates=8,
+            population_size=8, max_evaluated_candidates=8, order_mode="fixed",
         ))
         expected = {search.genome_key({"format": f, "channel": c})
                     for f in ("a", "b") for c in ("a", "b", "c")}
@@ -158,6 +160,7 @@ class CreativitySearchTest(unittest.TestCase):
         original = copy.deepcopy(evaluated)
         configuration = tasks.resolve_creativity_configuration(creativity_configuration(
             population_size=4, max_evaluated_candidates=4, elite_count=2, diversity_count=2,
+            order_mode="fixed",
         ))
         survivors = search.select_survivors(evaluated, configuration)
         self.assertEqual([pair[0] for pair in survivors[:2]], [genomes[3], genomes[1]])
@@ -199,6 +202,7 @@ class CreativitySearchTest(unittest.TestCase):
                 configuration = tasks.resolve_creativity_configuration(creativity_configuration(
                     population_size=4, max_evaluated_candidates=4,
                     elite_count=2, diversity_count=2,
+                    order_mode="fixed",
                 ))
                 larger = search.select_survivors(evaluated, configuration)
                 self.assertEqual([pair[0] for pair in larger], [
@@ -252,6 +256,7 @@ class CreativitySearchTest(unittest.TestCase):
             with self.subTest(population_size=population_size):
                 configuration = tasks.resolve_creativity_configuration(creativity_configuration(
                     population_size=population_size, max_evaluated_candidates=12, mutation_rate=0.5,
+                    order_mode="fixed",
                 ))
                 rng = random.Random(12)
                 with mock.patch.object(rng, "randrange", return_value=0):
@@ -311,10 +316,152 @@ class CreativitySearchTest(unittest.TestCase):
         # Shared ids across dimensions and equal text under different ids remain distinct.
         self.assertEqual(len(identities), 6)
 
+    def test_order_ranking_is_stable_bounded_and_one_to_one(self):
+        expected = [
+            ["a", "b", "c"], ["a", "c", "b"], ["b", "a", "c"],
+            ["b", "c", "a"], ["c", "a", "b"], ["c", "b", "a"],
+        ]
+        self.assertEqual(
+            [search.unrank_order(["a", "b", "c"], value) for value in range(6)],
+            expected,
+        )
+        for count in range(1, 6):
+            dimension_ids = ["d%s" % index for index in range(count)]
+            permutations = []
+            for value in range(math.factorial(count)):
+                ordered = search.unrank_order(dimension_ids, value)
+                permutations.append(tuple(ordered))
+                self.assertEqual(search.rank_order(dimension_ids, ordered), value)
+            self.assertEqual(len(set(permutations)), math.factorial(count))
+        for value in (-1, 6, 1.5, True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                search.unrank_order(["a", "b", "c"], value)
+        for ordered in (["a", "b"], ["a", "a", "c"], ["a", "b", "other"]):
+            with self.subTest(ordered=ordered), self.assertRaises(ValueError):
+                search.rank_order(["a", "b", "c"], ordered)
+
+    def test_interchangeable_order_is_ordinary_categorical_material(self):
+        dimensions = self.accepted_material(dimensions=[{
+            "id": dimension_id, "meaning": "Component " + dimension_id,
+            "variants": [{"id": "selected", "text": "Value " + dimension_id}],
+        } for dimension_id in "abc"])["dimensions"]
+        configuration = creativity_configuration(
+            order_mode="interchangeable", population_size=8,
+        )
+        rng = random.Random(2)
+        with mock.patch.object(rng, "randrange", return_value=0):
+            population = search.make_population(
+                dimensions, 8, configuration, rng=rng,
+            )
+        self.assertEqual(len(population), 6)
+        self.assertEqual({genome[search.ORDER_GENE] for genome in population}, set(range(6)))
+        self.assertTrue(all(list(genome)[0] == search.ORDER_GENE for genome in population))
+        self.assertEqual(len({search.genome_key(genome) for genome in population}), 6)
+        self.assertEqual(search.make_population(
+            dimensions, 8, configuration,
+            explored={search.genome_key(genome) for genome in population},
+        ), [])
+
+        canonical = dict(population[0], **{search.ORDER_GENE: 0})
+        reordered = dict(population[0], **{search.ORDER_GENE: 4})
+        self.assertNotEqual(search.genome_key(canonical), search.genome_key(reordered))
+        self.assertEqual(
+            [component["dimension_id"] for component in search.genome_components(
+                dimensions, canonical, "interchangeable",
+            )],
+            ["a", "b", "c"],
+        )
+        reordered_components = search.genome_components(
+            dimensions, reordered, "interchangeable",
+        )
+        self.assertEqual(
+            [component["dimension_id"] for component in reordered_components],
+            ["c", "a", "b"],
+        )
+        self.assertNotIn(search.ORDER_GENE, {
+            component["dimension_id"] for component in reordered_components
+        })
+
+        selected = search.select_survivors(
+            self.evaluated([canonical, reordered], [1, 0.9]),
+            creativity_configuration(elite_count=1, diversity_count=1),
+        )
+        self.assertEqual([genome[search.ORDER_GENE] for genome, _ in selected], [0, 4])
+
+    def test_order_gene_initialization_inheritance_and_mutation(self):
+        dimensions = self.accepted_material(dimensions=[{
+            "id": dimension_id, "meaning": "Component " + dimension_id,
+            "variants": [{"id": "selected", "text": "Value " + dimension_id}],
+        } for dimension_id in "abc"])["dimensions"]
+        configuration = creativity_configuration(
+            order_mode="interchangeable", population_size=2,
+        )
+        rng = random.Random(9)
+        with mock.patch.object(rng, "randrange", side_effect=[0, 0, 0, 4]):
+            initialized = search.make_population(dimensions, 1, configuration, rng=rng)
+        self.assertEqual(initialized[0][search.ORDER_GENE], 4)
+
+        semantic = {dimension_id: "selected" for dimension_id in "abc"}
+        parents = [
+            (dict({search.ORDER_GENE: value}, **semantic), {"score": score})
+            for value, score in ((1, 1), (4, 0.9))
+        ]
+        inherited = search.make_child(
+            dimensions, parents, 0, order_mode="interchangeable", rng=rng,
+        )
+        self.assertIn(inherited[search.ORDER_GENE], (1, 4))
+        with mock.patch.object(rng, "randrange", return_value=0):
+            mutated = search.make_child(
+                dimensions, parents, 1, order_mode="interchangeable", rng=rng,
+            )
+        self.assertIn(mutated[search.ORDER_GENE], range(6))
+        # Replacement zero differs from either admitted parent value.
+        self.assertEqual(mutated[search.ORDER_GENE], 0)
+
+        singleton = dimensions[:1]
+        immutable = search.make_child(
+            singleton,
+            [({search.ORDER_GENE: 0, "a": "selected"}, {"score": 1})],
+            1, order_mode="interchangeable", rng=rng,
+        )
+        self.assertEqual(immutable[search.ORDER_GENE], 0)
+
+    def test_fixed_and_legacy_modes_keep_the_admitted_order(self):
+        dimensions = self.accepted_material()["dimensions"]
+        indices = {"format": 1, "channel": 0}
+        fixed = search.make_population(
+            dimensions, 8, creativity_configuration(
+                order_mode="fixed", population_size=8,
+            ), rng=random.Random(4),
+        )
+        legacy = search.make_population(
+            dimensions, 8, creativity_configuration(population_size=8),
+            rng=random.Random(4),
+        )
+        self.assertEqual(
+            {search.genome_key(genome) for genome in fixed},
+            {search.genome_key(genome) for genome in legacy},
+        )
+        self.assertTrue(all(search.ORDER_GENE not in genome for genome in fixed + legacy))
+        fixed_components = search.genome_components(
+            dimensions, search.make_genome(dimensions, indices), "fixed",
+        )
+        order_zero = search.genome_components(
+            dimensions, search.make_genome(dimensions, indices, order=0),
+            "interchangeable",
+        )
+        self.assertEqual(fixed_components, order_zero)
+        with self.assertRaises(ValueError):
+            search.genome_components(
+                dimensions, search.make_genome(dimensions, indices, order=0),
+                "fixed",
+            )
+
     def test_cumulative_best_valid_progress(self):
         configuration = tasks.resolve_creativity_configuration(creativity_configuration(
             generation_limit=12, max_evaluated_candidates=24,
             minimum_improvement=0.125, patience_generations=3,
+            order_mode="fixed",
         ))
         genomes = [{"format": f, "channel": c}
                    for f in ("a", "b") for c in ("a", "b", "c")]

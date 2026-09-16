@@ -438,7 +438,8 @@ is project-wide standing law supplied explicitly by the operator.
 
 The task order retains the complete operator request. `create_genes` derives
 a compact, self-contained `search_material.objective` from that request,
-alongside context, facts, constraints, assumptions, dimensions and criteria.
+alongside context, facts, constraints, assumptions, dimensions, criteria and
+`order_semantics`.
 The objective must preserve the operator's intent and scope; it need not repeat
 the request verbatim. Its contract checks structure and non-empty content,
 while semantic faithfulness remains model judgment.
@@ -447,6 +448,22 @@ Evaluation and expansion use that accepted search objective and the same
 search material. They do not rewrite it during evolution. This supersedes the
 literal-echo rule recorded in the original creativity skeleton and slice 02;
 the original request remains available in the task order.
+
+New Creativity orders resolve `configuration.order_mode` to
+`interchangeable` unless the caller explicitly selects `fixed`. Fixed searches
+retain the admitted dimension-list order. Interchangeable searches add a
+code-owned `__order__` value to each genome and present only the resulting
+ordered semantic components to evaluation; the synthetic value is never a
+prompt component. Stored orders from before this field existed retain fixed
+ordering.
+
+An order may provide `initial_genes` as the complete current `create_genes`
+reply envelope. Admission applies the same closed structural validator used
+for a model reply, then starts at generation one without making or accounting
+for a creation call. The panel accepts pasted JSON or reads one local `.json`
+file into the same editor; direct API clients send the object itself. The
+standalone panel intentionally sends an empty request context, while the API
+continues to accept and preserve a non-empty `request.context`.
 
 The evaluation budget defaults to `population_size * generation_limit`, using
 the values resolved for the order. For example, eight new candidates over ten

@@ -61,7 +61,7 @@ def call_evaluation_batch(
         search_material=json.dumps(search_material, ensure_ascii=False),
         candidates=json.dumps([
             {"candidate_id": candidate_id, "components": creativity_search.genome_components(
-                search_material["dimensions"], genome,
+                search_material["dimensions"], genome, configuration.get("order_mode"),
             )}
             for candidate_id, genome in genomes.items()
         ], ensure_ascii=False),
@@ -159,7 +159,7 @@ def expand_progress(
         promising_candidates=json.dumps([
             dict(candidate_id=item["candidate_id"], proposal=item["proposal"],
                  assumptions=item["assumptions"], components=creativity_search.genome_components(
-                     search_material["dimensions"], genome,
+                     search_material["dimensions"], genome, configuration.get("order_mode"),
                  ))
             for genome, item in progress["archive"]
         ], ensure_ascii=False),

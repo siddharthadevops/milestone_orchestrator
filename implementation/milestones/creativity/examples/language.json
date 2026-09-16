@@ -15,6 +15,7 @@
     ],
     "assumptions": ["The intended reader accepts an unexplained speculative premise."],
     "unknowns": ["The cause of the missing minute is deliberately unspecified."],
+    "order_semantics": "sequence in which the selected sentence components appear",
     "composition_guidance": "Connect the daughter's action to a sensory trace of the missing minute and her relationship with her father.",
     "criteria": [
       {"id": "tension", "text": "A concrete action implies an emotional cost without explaining it."},

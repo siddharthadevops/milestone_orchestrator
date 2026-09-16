@@ -9,19 +9,88 @@ Fixed problem fields stay with the caller and never become candidate state.
 import copy
 from fractions import Fraction
 from itertools import chain, product
+import math
 import random
 
 
-def make_genome(dimensions, variant_indices):
+ORDER_GENE = "__order__"
+FIXED_ORDER = "fixed"
+INTERCHANGEABLE_ORDER = "interchangeable"
+
+
+def _order_mode(configuration):
+    """Read current configuration while keeping legacy work fixed."""
+    mode = configuration.get("order_mode")
+    if mode is None:
+        return FIXED_ORDER
+    if mode not in (FIXED_ORDER, INTERCHANGEABLE_ORDER):
+        raise ValueError("unknown creativity order mode: %r" % mode)
+    return mode
+
+
+def _dimension_ids(dimensions):
+    ids = [dimension["id"] for dimension in dimensions]
+    if ORDER_GENE in ids:
+        raise ValueError("%s is reserved for the synthetic order gene" % ORDER_GENE)
+    return ids
+
+
+def unrank_order(dimension_ids, value):
+    """Return the stable lexicographic permutation named by ``value``.
+
+    The calculation keeps only the remaining dimension ids; it never builds a
+    permutation table. Permutation zero is the admitted dimension-list order.
+    """
+    canonical = list(dimension_ids)
+    if len(set(canonical)) != len(canonical):
+        raise ValueError("dimension ids must be unique")
+    limit = math.factorial(len(canonical))
+    if type(value) is not int or not 0 <= value < limit:
+        raise ValueError("order value must be an integer in [0, %s)" % limit)
+    remaining = list(canonical)
+    ordered = []
+    for width in range(len(remaining), 0, -1):
+        block = math.factorial(width - 1)
+        index, value = divmod(value, block)
+        ordered.append(remaining.pop(index))
+    return ordered
+
+
+def rank_order(dimension_ids, ordered_ids):
+    """Return the integer naming one permutation of the canonical ids."""
+    canonical = list(dimension_ids)
+    ordered = list(ordered_ids)
+    if len(set(canonical)) != len(canonical):
+        raise ValueError("dimension ids must be unique")
+    if len(ordered) != len(canonical) or set(ordered) != set(canonical):
+        raise ValueError("ordered ids must be one permutation of dimension ids")
+    remaining = list(canonical)
+    value = 0
+    for offset, dimension_id in enumerate(ordered):
+        index = remaining.index(dimension_id)
+        value += index * math.factorial(len(canonical) - offset - 1)
+        remaining.pop(index)
+    return value
+
+
+def make_genome(dimensions, variant_indices, *, order=None):
     """Build an independent genome from a variant index per dimension id.
 
-    Each index is a zero-based position in that dimension's variants list.
-    Only dimension and variant ids enter the returned mapping.
+    Each index is a zero-based position in that dimension's variants list. An
+    optional validated order integer is inserted first as synthetic material.
     """
-    return {
+    dimension_ids = _dimension_ids(dimensions)
+    genome = {}
+    if order is not None:
+        order_count = math.factorial(len(dimension_ids))
+        if type(order) is not int or not 0 <= order < order_count:
+            raise ValueError("order value must be an integer in [0, %s)" % order_count)
+        genome[ORDER_GENE] = order
+    genome.update({
         dimension["id"]: dimension["variants"][variant_indices[dimension["id"]]]["id"]
         for dimension in dimensions
-    }
+    })
+    return genome
 
 
 def genome_key(genome):
@@ -29,11 +98,25 @@ def genome_key(genome):
     return frozenset(genome.items())
 
 
-def genome_components(dimensions, genome):
-    """Return independent readable component records in material order."""
+def genome_components(dimensions, genome, order_mode=None):
+    """Return readable semantic components in their effective order.
+
+    Missing ``order_mode`` is the legacy fixed interpretation. The synthetic
+    gene is consumed here and never becomes an evaluator-facing component.
+    """
+    mode = _order_mode({"order_mode": order_mode})
+    dimension_ids = _dimension_ids(dimensions)
+    if mode == INTERCHANGEABLE_ORDER:
+        ordered_ids = unrank_order(dimension_ids, genome[ORDER_GENE])
+    else:
+        if ORDER_GENE in genome:
+            raise ValueError("fixed-order genome cannot contain %s" % ORDER_GENE)
+        ordered_ids = dimension_ids
+    by_id = {dimension["id"]: dimension for dimension in dimensions}
     components = []
-    for dimension in dimensions:
-        variant_id = genome[dimension["id"]]
+    for dimension_id in ordered_ids:
+        dimension = by_id[dimension_id]
+        variant_id = genome[dimension_id]
         variant = next(
             variant for variant in dimension["variants"]
             if variant["id"] == variant_id
@@ -47,21 +130,32 @@ def genome_components(dimensions, genome):
     return components
 
 
-def _fill_population(dimensions, proposals, count, explored):
+def _repertoire(dimensions, order_mode):
+    """Yield every genome lazily, including order when interchangeable."""
+    dimension_ids = _dimension_ids(dimensions)
+    order_values = (
+        range(math.factorial(len(dimension_ids)))
+        if order_mode == INTERCHANGEABLE_ORDER else (None,)
+    )
+    for order in order_values:
+        # Recreate this small categorical product for each order; feeding the
+        # factorial range itself to itertools.product would cache that range.
+        combinations = product(*(
+            range(len(dimension["variants"])) for dimension in dimensions
+        ))
+        for indices in combinations:
+            yield make_genome(
+                dimensions, dict(zip(dimension_ids, indices)), order=order,
+            )
+
+
+def _fill_population(dimensions, proposals, count, explored, order_mode):
     """Take distinct proposals, then scan the repertoire to settle shortages."""
     if count == 0:
         return []
-    dimension_ids = [dimension["id"] for dimension in dimensions]
-    combinations = product(*(
-        range(len(dimension["variants"])) for dimension in dimensions
-    ))
-    repertoire = (
-        make_genome(dimensions, dict(zip(dimension_ids, indices)))
-        for indices in combinations
-    )
     seen = set(explored)
     population = []
-    for genome in chain(proposals, repertoire):
+    for genome in chain(proposals, _repertoire(dimensions, order_mode)):
         key = genome_key(genome)
         if key in seen:
             continue
@@ -79,14 +173,18 @@ def make_population(dimensions, count, configuration, *, explored=(), rng=random
     exhaustion. The repertoire is traversed lazily, not materialized.
     """
     count = min(count, configuration["population_size"])
+    order_mode = _order_mode(configuration)
+    dimension_ids = _dimension_ids(dimensions)
+    order_count = math.factorial(len(dimension_ids))
     proposals = (
         make_genome(dimensions, {
             dimension["id"]: rng.randrange(len(dimension["variants"]))
             for dimension in dimensions
-        })
+        }, order=(rng.randrange(order_count)
+                  if order_mode == INTERCHANGEABLE_ORDER else None))
         for _ in range(count)
     )
-    return _fill_population(dimensions, proposals, count, explored)
+    return _fill_population(dimensions, proposals, count, explored, order_mode)
 
 
 def select_survivors(evaluated, configuration):
@@ -121,15 +219,23 @@ def select_survivors(evaluated, configuration):
     return [(dict(genome), evaluation) for genome, evaluation in selected]
 
 
-def make_child(dimensions, parents, mutation_rate, *, rng=random):
+def make_child(dimensions, parents, mutation_rate, *, order_mode=None, rng=random):
     """Cross nonempty selected parent pairs and mutate each mutable choice.
 
-    A child contains only choices, with no inherited evaluation. Each dimension
-    independently receives the configured mutation probability; a mutation
-    chooses a different existing variant, including variants absent in parents.
+    A child contains only choices, with no inherited evaluation. Each semantic
+    dimension and the optional order gene independently receive the configured
+    mutation probability; mutation chooses a different categorical value.
     """
     mates = rng.sample(parents, min(2, len(parents)))
     child = {}
+    mode = _order_mode({"order_mode": order_mode})
+    if mode == INTERCHANGEABLE_ORDER:
+        order_count = math.factorial(len(_dimension_ids(dimensions)))
+        choice = rng.choice(mates)[0][ORDER_GENE]
+        if order_count > 1 and rng.random() < mutation_rate:
+            replacement = rng.randrange(order_count - 1)
+            choice = replacement + (replacement >= choice)
+        child[ORDER_GENE] = choice
     for dimension in dimensions:
         dimension_id = dimension["id"]
         choice = rng.choice(mates)[0][dimension_id]
@@ -154,12 +260,16 @@ def reproduce(dimensions, parents, count, configuration, *, explored=(), rng=ran
     if not parents:
         return []
     count = min(count, configuration["population_size"])
+    order_mode = _order_mode(configuration)
     excluded = set(explored) | {genome_key(genome) for genome, _ in parents}
     proposals = (
-        make_child(dimensions, parents, configuration["mutation_rate"], rng=rng)
+        make_child(
+            dimensions, parents, configuration["mutation_rate"],
+            order_mode=order_mode, rng=rng,
+        )
         for _ in range(count)
     )
-    return _fill_population(dimensions, proposals, count, excluded)
+    return _fill_population(dimensions, proposals, count, excluded, order_mode)
 
 
 def new_progress():

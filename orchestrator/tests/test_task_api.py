@@ -352,6 +352,7 @@ class TaskApiTest(unittest.TestCase):
         order = self.order("creativity", request=search.material["objective"],
                            reference_documents=search.references)
         configuration = creativity_configuration(
+            order_mode="interchangeable",
             generation_limit=3, max_evaluated_candidates=8,
             rigor={"default": "low", "create_genes": "high", "evaluate_candidates": "medium"},
         )
@@ -572,6 +573,71 @@ class TaskApiTest(unittest.TestCase):
         record["result"] = empty
         self._age_stored_record(task_api.StandaloneTaskStore(self.home), record)
         self.assertEqual(self.request("GET", "/api/tasks/" + record["id"])[1]["task"]["result"], empty)
+
+    def test_legacy_creativity_record_resumes_with_fixed_order(self):
+        from orchestrator.tests.test_creativity_task import CreativityTaskTest
+
+        search = CreativityTaskTest()
+        search.setUp()
+        self.addCleanup(search.doCleanups)
+        self.home, self.primary, self.additional = (
+            search.home, search.primary, search.additional
+        )
+        record = search.admit(
+            generation_limit=2,
+            max_evaluated_candidates=4,
+            evaluation_batch_size=1,
+            evaluation_concurrency=1,
+        )
+        store = task_api.StandaloneTaskStore(self.home)
+        legacy = copy.deepcopy(record)
+        self.assertEqual(
+            legacy["order"]["configuration"].pop("order_mode"), "fixed"
+        )
+        self._age_stored_record(store, legacy)
+
+        failed = []
+
+        def interrupt_first_evaluation(*args, **kwargs):
+            result = search.physical(*args, **kwargs)
+            if search.calls[-1]["job"] == "evaluate_candidates" and not failed:
+                failed.append(True)
+                raise runners.ProviderResponseError("pause legacy evaluation")
+            return result
+
+        host = search.host(interrupt_first_evaluation)
+        host.start(record, search.config)
+        paused = search._paused(host, record["id"])
+        before = search.checkpoint(record)
+        self.assertTrue(before["candidates"])
+        self.assertTrue(all(
+            "__order__" not in genome
+            for genome in before["candidates"].values()
+        ))
+        view = task_api.creativity_view(self.home, store.record(record["id"]))
+        self.assertFalse(view["initial_genes_supplied"])
+
+        resumed = search.host()
+        resumed.resume(record["id"], search.config, paused["revision"])
+        terminal = search._terminal(resumed, record["id"])
+        self.assertEqual(terminal["result"]["status"], "success")
+        self.assertNotIn("order_mode", terminal["order"]["configuration"])
+        checkpoint = search.checkpoint(record)
+        self.assertTrue(all(
+            "__order__" not in genome
+            for genome in checkpoint["candidates"].values()
+        ))
+        expected_order = [
+            dimension["id"] for dimension in search.material["dimensions"]
+        ]
+        for proposal in terminal["result"]["native_result"]["proposals"]:
+            self.assertEqual(
+                [component["dimension_id"] for component in proposal["components"]],
+                expected_order,
+            )
+        self.assertEqual(
+            [call["job"] for call in search.calls].count("create_genes"), 1
+        )
 
     def test_direct_brainstorming_requires_git_and_service_owns_its_mode(self):
         nonrepo = self.directory("brainstorming-nonrepo")

@@ -65,13 +65,15 @@ def creativity_checkpoint_store(home, task_id):
     ))
 
 
-def _creativity_proposals(checkpoint, limit):
+def _creativity_proposals(checkpoint, limit, order_mode=None):
     return [dict(
         **{key: item[key] for key in (
             "candidate_id", "proposal", "reason", "assumptions", "score",
         )},
         components=creativity_search.genome_components(
-            checkpoint["search_material"]["dimensions"], genome),
+            checkpoint["search_material"]["dimensions"], genome,
+            order_mode=order_mode,
+        ),
     ) for genome, item in checkpoint["progress"]["archive"][:limit]]
 
 
@@ -94,7 +96,12 @@ def creativity_view(home, record):
         evaluated_candidates=(checkpoint["evaluation"]["accepted_count"]
                               if "evaluation" in checkpoint else progress["evaluated_candidates"]),
         evaluation_budget=configuration["max_evaluated_candidates"],
-        best_candidates=_creativity_proposals(checkpoint, configuration["shortlist_size"]),
+        best_candidates=_creativity_proposals(
+            checkpoint,
+            configuration["shortlist_size"],
+            configuration.get("order_mode"),
+        ),
+        initial_genes_supplied="initial_genes" in record["order"],
     )
     return view
 
@@ -2629,10 +2636,17 @@ class DirectTaskHost:
         store = creativity_checkpoint_store(self.home, task_id)
         checkpoint = store.get("checkpoint")
         if checkpoint is kvstore.ABSENT:
+            initial = order.get("initial_genes")
             checkpoint = {
-                "search_material": None, "candidates": {},
+                "search_material": (
+                    copy.deepcopy(initial["search_material"])
+                    if initial is not None else None
+                ),
+                "candidates": {},
                 "progress": creativity_search.new_progress(),
-                "job": "create_genes", "generation": 0, "native_result": None,
+                "job": "evolve" if initial is not None else "create_genes",
+                "generation": 1 if initial is not None else 0,
+                "native_result": None,
             }
             store.put("checkpoint", checkpoint)
         runner = None
@@ -2644,7 +2658,11 @@ class DirectTaskHost:
                 return
             progress, material = checkpoint["progress"], checkpoint["search_material"]
             if progress["stop_reason"] is not None:
-                proposals = _creativity_proposals(checkpoint, configuration["shortlist_size"])
+                proposals = _creativity_proposals(
+                    checkpoint,
+                    configuration["shortlist_size"],
+                    configuration.get("order_mode"),
+                )
                 checkpoint["native_result"] = tasks.validate_creativity_native_result({
                     "outcome": "proposals" if proposals else "no_valid_candidates",
                     "proposals": proposals,

@@ -544,16 +544,25 @@ def _id_records(obj, key, fields, ctx, *, nonempty=False, id_key="id"):
     return records
 
 
-def _create_genes(obj, bound, options, ctx):
-    _kind(bound, ("create_genes",))
+def validate_create_genes_reply(obj, context="create_genes reply"):
+    """Validate the one current create_genes envelope for every entry path.
+
+    Routed model replies and operator-supplied initial material deliberately
+    share this boundary.  Callers that persist the accepted value remain
+    responsible for detaching it from their input.
+    """
+    ctx = context
     _exact_keys(obj, ("search_material",), ctx)
     material = _require(obj, "search_material", dict, ctx)
     ctx += ".search_material"
     _exact_keys(material, (
         "objective", "context_summary", "facts", "constraints", "assumptions",
         "unknowns", "dimensions", "composition_guidance", "criteria",
+        "order_semantics",
     ), ctx)
-    for key in ("objective", "context_summary", "composition_guidance"):
+    for key in (
+        "objective", "context_summary", "composition_guidance", "order_semantics",
+    ):
         _text(material, key, ctx)
     for key in ("facts", "assumptions", "unknowns"):
         _paths(_require(material, key, list, ctx), "%s.%s" % (ctx, key))
@@ -567,11 +576,21 @@ def _create_genes(obj, bound, options, ctx):
         nonempty=True,
     ):
         dctx = "%s.dimensions[%s]" % (ctx, dimension["id"])
+        if dimension["id"] == "__order__":
+            raise contracts.ContractError(
+                "%s.id is reserved for the creativity engine" % dctx
+            )
         _text(dimension, "meaning", dctx)
         for variant in _id_records(
             dimension, "variants", ("id", "text"), dctx, nonempty=True
         ):
             _text(variant, "text", "%s.variants" % dctx)
+    return obj
+
+
+def _create_genes(obj, bound, options, ctx):
+    _kind(bound, ("create_genes",))
+    validate_create_genes_reply(obj, context=ctx)
 
 
 def _evaluate_candidates(obj, bound, options, ctx):

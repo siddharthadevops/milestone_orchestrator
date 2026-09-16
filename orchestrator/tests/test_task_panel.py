@@ -49,11 +49,25 @@ class TaskPanelTests(unittest.TestCase):
             "setTaskConfigurationValue", "currentTaskConfiguration", "submitTaskForm",
             "snapshotTaskExecutorConfiguration", "onTaskConfigurationChange",
             "taskConfigurationLayers", "renderTaskExecutorEditor", "onTaskExecutorChange",
+            "loadTaskInitialGenesFile",
         )
         sources = [re.search(r"(?:async )?function " + name + r"\([^\n]*\) \{.*?\n\}",
                              self.panel, re.S).group(0) for name in names]
+        initial_genes = {"search_material": {
+            "objective": "Find a useful possibility.",
+            "context_summary": "Use what is available.",
+            "facts": [], "constraints": [], "assumptions": [], "unknowns": [],
+            "dimensions": [{
+                "id": "approach", "meaning": "How to proceed",
+                "variants": [{"id": "reuse", "text": "Reuse what exists"}],
+            }],
+            "composition_guidance": "Apply the selected components in order.",
+            "criteria": [{"id": "usefulness", "text": "Serves the objective"}],
+            "order_semantics": "Sequence in which the selected actions are applied.",
+        }}
         setup = "const fixture = " + json.dumps({
-            "base": server.base, "binding": binding, "session": session, "configuration": configuration,
+            "base": server.base, "binding": binding, "session": session,
+            "configuration": configuration, "initialGenes": initial_genes,
         }) + ";\n"
         checks = r"""
 const assert = require('node:assert/strict');
@@ -62,12 +76,13 @@ let taskExecutorCatalogue, taskExecutorDrafts = {}, closed = 0, refusal = null;
 const taskProjects = [{families_order: ['codex', 'claude']}];
 const taskReferences = ['second.md', 'first.md'], posts = [];
 const fields = Object.fromEntries(Object.entries({
-  t_request: 'Find a useful possibility.', t_context: 'Facts and constraints.',
+  t_request: 'Find a useful possibility.', t_initial_genes: '',
   t_output: '', t_project: '0', t_prompt_set: 'default', t_executor: 'creativity',
 }).map(([id, value]) => [id, {value}]));
 fields.task_error = {textContent: '', style: {}};
 fields.taskform = {close: () => closed++};
-for (const id of ['t_profile_field', 'task_staffing', 't_prompt_set_field']) fields[id] = {style: {}};
+for (const id of ['t_profile_field', 'task_staffing', 't_prompt_set_field',
+                  't_initial_genes_field']) fields[id] = {style: {}};
 let controls = [];
 fields.task_configuration = {
   markup: '',
@@ -115,7 +130,7 @@ async function postJSON(path, payload) {
   const defaults = Object.fromEntries(Object.entries(schema).filter(([, definition]) => definition.default !== undefined)
     .map(([key, definition]) => [key, definition.default]));
   renderTaskExecutorEditor();
-  assert.equal(controls.length, 16);
+  assert.equal(control('order_mode').value, 'interchangeable');
   for (const [key, value] of Object.entries(defaults)) assert.equal(control(key).value, String(value));
   assert.equal(control('max_evaluated_candidates').value, '');
   assert.equal(control('max_evaluated_candidates').dataset.taskConfigOptional, 'true');
@@ -137,8 +152,10 @@ async function postJSON(path, payload) {
   assert.equal(control('max_evaluated_candidates').value, '');
   fields.t_executor.value = 'agent_call';
   onTaskExecutorChange();
+  assert.equal(fields.t_initial_genes_field.style.display, 'none');
   fields.t_executor.value = 'creativity';
   onTaskExecutorChange();
+  assert.equal(fields.t_initial_genes_field.style.display, '');
   assert.equal(control('max_evaluated_candidates').value, '');
   const automatic = {...defaults, population_size: 8, generation_limit: 10};
   assert.deepEqual(currentTaskConfiguration().configuration, automatic);
@@ -149,7 +166,8 @@ async function postJSON(path, payload) {
   for (const [key, value] of Object.entries(fixture.configuration)) control(key).value = String(value);
   control('rigor.default').value = 'low';
   control('rigor.evaluate_candidates').value = 'high';
-  const expected = {...fixture.configuration, rigor: {default: 'low', evaluate_candidates: 'high'}};
+  const configured = {...defaults, ...fixture.configuration};
+  const expected = {...configured, rigor: {default: 'low', evaluate_candidates: 'high'}};
   assert.deepEqual(currentTaskConfiguration().configuration, expected);
   for (const key of Object.keys(fixture.configuration)) {
     if (schema[key].optional) continue;
@@ -166,18 +184,41 @@ async function postJSON(path, payload) {
   await submitTaskForm();
   assert.deepEqual(posts[2], {task_executor: 'creativity', configuration: expected,
     staffing_session: fixture.session, prompt_set: 'default', request: {
-      work_area: fixture.binding, request: fields.t_request.value, context: fields.t_context.value,
+      work_area: fixture.binding, request: fields.t_request.value, context: '',
       reference_documents: taskReferences,
     }});
   assert.equal(closed, 3);
   assert.equal(taskSubmitPending, false);
   control('rigor.default').value = control('rigor.evaluate_candidates').value = '';
-  assert.deepEqual(currentTaskConfiguration().configuration, fixture.configuration);
+  assert.deepEqual(currentTaskConfiguration().configuration, configured);
   refusal = 'invalid_task_request';
   await submitTaskForm();
   assert.equal(fields.task_error.textContent, refusal);
   assert.equal(closed, 3);
   assert.equal(taskSubmitPending, false);
+  refusal = null;
+  fields.t_initial_genes.value = JSON.stringify(fixture.initialGenes);
+  await submitTaskForm();
+  assert.deepEqual(posts.at(-1).initial_genes, fixture.initialGenes);
+  fields.t_initial_genes.value = '{not valid JSON';
+  const postCount = posts.length;
+  await submitTaskForm();
+  assert.equal(posts.length, postCount);
+  assert.match(fields.task_error.textContent, /^initial genes JSON is invalid:/);
+  fields.t_initial_genes.value = '   ';
+  await submitTaskForm();
+  assert.equal(Object.hasOwn(posts.at(-1), 'initial_genes'), false);
+  const fileInput = {files: [{name: 'genes.json', text: async () => '{"utf8":"café"}'}], value: 'chosen'};
+  await loadTaskInitialGenesFile(fileInput);
+  assert.equal(fields.t_initial_genes.value, '{"utf8":"café"}');
+  assert.equal(fileInput.value, '');
+  let readWrongExtension = false;
+  const wrongFile = {files: [{name: 'genes.txt', text: async () => {
+    readWrongExtension = true; return '{}';
+  }}], value: 'chosen'};
+  await loadTaskInitialGenesFile(wrongFile);
+  assert.equal(readWrongExtension, false);
+  assert.equal(fields.task_error.textContent, 'choose a .json file');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
         result = subprocess.run([node, "-e", setup + "\n".join(sources) + checks],
@@ -340,14 +381,37 @@ async function postJSON(path, payload) {
         ).group(1)
         self.assertRegex(
             body,
-            r"work_area: binding,\s+request,\s+context: .*?,\s+"
+            r'work_area: binding,\s+request,\s+context: "",\s+'
             r"reference_documents: taskReferences\.slice\(\),\s*$",
         )
+        task_dialog = re.search(
+            r'<dialog id="taskform"(.*?)</dialog>', self.panel, re.S
+        ).group(1)
+        self.assertNotIn('id="t_context"', task_dialog)
+        self.assertNotIn("Background the executor should use", task_dialog)
         self.assertIn("requestDoc.output_directory = output", self.task_ui)
         self.assertIn("reference_documents: taskReferences.slice()", self.task_ui)
         self.assertIn("function moveTaskReference", self.task_ui)
         self.assertIn('path = "/api/tasks"', self.task_ui)
         self.assertEqual(self.task_ui.count("await postJSON(path, payload)"), 1)
+
+    def test_creativity_initial_genes_uses_one_local_json_editor(self):
+        task_dialog = re.search(
+            r'<dialog id="taskform"(.*?)</dialog>', self.panel, re.S
+        ).group(1)
+        self.assertIn('id="t_initial_genes" class="mono"', task_dialog)
+        self.assertIn('id="t_initial_genes_file" type="file"', task_dialog)
+        self.assertIn('accept=".json,application/json"', task_dialog)
+        self.assertIn("Load JSON file…", task_dialog)
+        self.assertEqual(task_dialog.count('id="t_initial_genes"'), 1)
+        self.assertIn('file.text()', self.task_ui)
+        self.assertIn('document.getElementById("t_initial_genes").value = contents',
+                      self.task_ui)
+        self.assertIn('entry.id === "creativity"', self.task_ui)
+        self.assertIn('payload.initial_genes = JSON.parse(initialGenesText)',
+                      self.task_ui)
+        self.assertIn('if (initialGenesText)', self.task_ui)
+        self.assertIn('#t_initial_genes {', self.panel)
 
     def test_slice_plan_values_are_visible_and_read_only(self):
         self.assertIn("function slicePlanSummary(producerMap)",

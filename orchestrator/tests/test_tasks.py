@@ -107,6 +107,7 @@ class TaskContractsTest(unittest.TestCase):
         order = dict(task_order("creativity"), configuration=configuration)
         resolved = tasks.validate_order(order)["configuration"]
         self.assertEqual(resolved["max_evaluated_candidates"], 80)
+        self.assertEqual(resolved["order_mode"], "interchangeable")
         self.assertEqual(configuration, {"population_size": 8, "generation_limit": 10})
         for budget in (8, 24, 100):
             with self.subTest(explicit_budget=budget):
@@ -120,7 +121,11 @@ class TaskContractsTest(unittest.TestCase):
         base = creativity_configuration()
         schema = next(item for item in tasks.task_executor_catalogue()
                       if item["id"] == "creativity")["configuration_schema"]
-        defaults = {key: schema[key]["default"] for key in base if "default" in schema[key]}
+        defaults = {
+            key: definition["default"]
+            for key, definition in schema.items()
+            if "default" in definition
+        }
         defaults["max_evaluated_candidates"] = defaults["population_size"] * defaults["generation_limit"]
         self.assertEqual(tasks.resolve_creativity_configuration({}), defaults)
         for key in defaults:
@@ -140,7 +145,9 @@ class TaskContractsTest(unittest.TestCase):
         })):
             with self.subTest(configuration=source):
                 resolved = tasks.resolve_creativity_configuration(source)
-                self.assertEqual(resolved, source)
+                self.assertEqual(
+                    resolved, dict(source, order_mode="interchangeable")
+                )
                 self.assertIsNot(resolved, source)
                 for key in base:
                     self.assertIs(type(resolved[key]), type(source[key]))
@@ -169,7 +176,19 @@ class TaskContractsTest(unittest.TestCase):
             ))
             for choice in ("low", "medium", "high"):
                 source = dict(base, rigor={job: choice})
-                self.assertEqual(tasks.resolve_creativity_configuration(source), source)
+                self.assertEqual(
+                    tasks.resolve_creativity_configuration(source),
+                    dict(source, order_mode="interchangeable"),
+                )
+        for choice in ("fixed", "interchangeable"):
+            source = dict(base, order_mode=choice)
+            self.assertEqual(
+                tasks.resolve_creativity_configuration(source), source
+            )
+        invalid.extend(
+            dict(base, order_mode=value)
+            for value in (None, True, 1, [], {}, "", "FIXED", "automatic")
+        )
         for value in invalid:
             with self.subTest(invalid=value):
                 self.assert_request_error(
@@ -184,7 +203,12 @@ class TaskContractsTest(unittest.TestCase):
         })
         schema = entry["configuration_schema"]
         base = creativity_configuration(mutation_rate=0.25, minimum_improvement=0.02)
-        self.assertEqual(set(schema), set(base) | {"rigor"})
+        self.assertEqual(set(schema), set(base) | {"order_mode", "rigor"})
+        self.assertEqual(schema["order_mode"], {
+            "type": "choice",
+            "choices": ["fixed", "interchangeable"],
+            "default": "interchangeable",
+        })
         for key in base:
             if key == "max_evaluated_candidates":
                 self.assertNotIn("default", schema[key])
@@ -192,7 +216,11 @@ class TaskContractsTest(unittest.TestCase):
                 continue
             self.assertIn("default", schema[key])
             self.assertFalse(schema[key].get("optional", False))
-        defaults = {key: schema[key]["default"] for key in base if "default" in schema[key]}
+        defaults = {
+            key: definition["default"]
+            for key, definition in schema.items()
+            if "default" in definition
+        }
         defaults["max_evaluated_candidates"] = defaults["population_size"] * defaults["generation_limit"]
         self.assertNotIn("default", schema["rigor"])
         self.assertEqual(tasks.validate_order(task_order("creativity"))["configuration"], defaults)
@@ -210,7 +238,10 @@ class TaskContractsTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in tasks.producer_task_executor_catalogue()], ["agent_call"])
         for configuration in (base, dict(base, rigor={}), dict(base, rigor={"create_genes": "high"})):
             order = dict(task_order("creativity"), configuration=configuration)
-            self.assertEqual(tasks.validate_order(order)["configuration"], configuration)
+            self.assertEqual(
+                tasks.validate_order(order)["configuration"],
+                dict(configuration, order_mode="interchangeable"),
+            )
         for configuration in ({"population_size": 2}, dict(base, population_size=0), dict(base, mutation_rate=1.1),
                               dict(base, elite_count=2), dict(base, max_evaluated_candidates=1),
                               dict(base, evaluation_batch_size=3), dict(base, shortlist_size=3)):
@@ -218,6 +249,57 @@ class TaskContractsTest(unittest.TestCase):
                 tasks.INVALID_TASK_REQUEST, tasks.validate_order,
                 dict(task_order("creativity"), configuration=configuration),
             )
+
+    def test_creativity_initial_genes_reuses_reply_contract_and_detaches(self):
+        initial = {"search_material": {
+            "objective": "Choose a useful reading plan.",
+            "context_summary": "A finished story needs readers.",
+            "facts": ["The story is complete."],
+            "constraints": [{"id": "budget", "text": "Spend no money."}],
+            "assumptions": ["A library may host an event."],
+            "unknowns": ["Likely attendance."],
+            "dimensions": [{
+                "id": "format",
+                "meaning": "Reading format",
+                "variants": [
+                    {"id": "full", "text": "Read the full story."},
+                    {"id": "excerpt", "text": "Read an excerpt."},
+                ],
+            }],
+            "composition_guidance": "Apply the selected components in order.",
+            "criteria": [{"id": "reach", "text": "Reach interested readers."}],
+            "order_semantics": "sequence in which the components are applied",
+        }}
+        source = dict(task_order("creativity"), initial_genes=copy.deepcopy(initial))
+        checked = tasks.validate_order(source)
+        self.assertEqual(checked["initial_genes"], initial)
+        self.assertEqual(checked["configuration"]["order_mode"], "interchangeable")
+        source["initial_genes"]["search_material"]["objective"] = "Changed later"
+        self.assertEqual(
+            checked["initial_genes"]["search_material"]["objective"],
+            "Choose a useful reading plan.",
+        )
+
+        invalid = []
+        missing_order_semantics = copy.deepcopy(initial)
+        missing_order_semantics["search_material"].pop("order_semantics")
+        invalid.append(missing_order_semantics)
+        reserved = copy.deepcopy(initial)
+        reserved["search_material"]["dimensions"][0]["id"] = "__order__"
+        invalid.append(reserved)
+        invalid.extend((None, [], {}, {"search_material": []}))
+        for value in invalid:
+            with self.subTest(initial_genes=value):
+                self.assert_request_error(
+                    tasks.INVALID_TASK_REQUEST,
+                    tasks.validate_order,
+                    dict(task_order("creativity"), initial_genes=value),
+                )
+        self.assert_request_error(
+            tasks.INVALID_TASK_REQUEST,
+            tasks.validate_order,
+            dict(task_order("agent_call"), initial_genes=initial),
+        )
 
     def test_creativity_native_result_contract(self):
         dimensions = [
@@ -368,12 +450,19 @@ class TaskContractsTest(unittest.TestCase):
         # Known readable text from another dimension is still the wrong selection.
         invalid.append(replaced(("proposals", 0, "components", 0, "variant"), "Full story"))
         invalid.append(replaced(("proposals", 1, "candidate_id"), first["candidate_id"]))
-        for duplicate in (components, list(reversed(components))):
-            invalid.append(replaced(("proposals", 1, "components"), duplicate))
+        invalid.append(replaced(("proposals", 1, "components"), components))
         for value in invalid:
             with self.subTest(invalid=value):
                 with self.assertRaises(tasks.ContractError):
                     validate(value)
+
+        reordered = copy.deepcopy(first)
+        reordered.update(
+            candidate_id="candidate-reordered",
+            components=list(reversed(first["components"])),
+        )
+        ordered_native = dict(native, proposals=[first, reordered])
+        self.assertEqual(validate(ordered_native), ordered_native)
 
     def test_creativity_job_staffing_contract(self):
         from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body

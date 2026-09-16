@@ -697,7 +697,8 @@
                 "rhythm, tension and character agency when they serve the stated objective.",
                 "Preserve supplied continuity and stylistic constraints; distinguish textual",
                 "evidence from interpretive assumptions. These are lenses, not required",
-                "dimensions. Keep the generic objective and result contract unchanged."
+                "dimensions. Preserve logical, position-independent units and the declared order",
+                "semantics. Keep the generic objective and result contract unchanged."
               ],
               "variables": []
             }
@@ -715,7 +716,8 @@
                 "uses when they serve this objective. Preserve supplied budget, capacity and",
                 "other hard conditions; label assumptions about demand, access and willingness",
                 "to agree. These are lenses, not a required business-plan schema. Keep the",
-                "generic objective and result contract unchanged."
+                "generic objective and result contract unchanged. Preserve logical, position-independent",
+                "units and the declared order semantics."
               ],
               "variables": []
             }

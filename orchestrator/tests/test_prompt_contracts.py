@@ -194,6 +194,7 @@ class PromptContractsTest(unittest.TestCase):
                             "variants": [{"id": "v1", "text": "Reuse what exists"}]}],
             "composition_guidance": "Combine the chosen parts faithfully.",
             "criteria": [{"id": "useful", "text": "Serves the objective"}],
+            "order_semantics": "Sequence in which the chosen actions are applied.",
         }}
         populated = copy.deepcopy(minimal)
         material = populated["search_material"]
@@ -227,6 +228,8 @@ class PromptContractsTest(unittest.TestCase):
             for defect in closed_object_defects(record).values():
                 invalid.append(replaced(path, defect))
         invalid.append(replaced(("search_material", "objective"), 42))
+        invalid.append(replaced(("search_material", "order_semantics"), ""))
+        invalid.append(replaced(("search_material", "dimensions", 0, "id"), "__order__"))
         for key in ("facts", "assumptions", "unknowns"):
             invalid.append(replaced(("search_material", key), [""]))
             invalid.append(replaced(("search_material", key), [42]))

@@ -17,8 +17,10 @@
         "text": [
           "TASK: interpret and evaluate every supplied candidate against the formulated search objective.",
           "Read the immutable search material, including its criteria and composition guidance.",
-          "Each candidate combines one variant per dimension. Interpret those chosen components",
-          "faithfully as a concrete proposal; do not substitute a better combination or rewrite",
+          "Each candidate combines one variant per dimension in an intentional supplied order.",
+          "Interpret that sequence under search_material.order_semantics and composition_guidance.",
+          "Preserve the supplied component order exactly: do not reorder components, substitute a",
+          "better combination, repair a weak ordering, or rewrite",
           "the objective, supplied facts or hard constraints to make a candidate succeed.",
           "Assess each proposal on the supplied criteria, usefulness and meaningful difference",
           "where relevant. Explain its strengths, weaknesses and assumptions. Distinguish supplied",
@@ -44,12 +46,12 @@
           {
             "name": "search_material",
             "required": true,
-            "description": "Complete compact problem, dimensions, variants, guidance and criteria as JSON."
+            "description": "Complete compact problem, dimensions, variants, order semantics, guidance and criteria as JSON."
           },
           {
             "name": "candidates",
             "required": true,
-            "description": "Candidate IDs and chosen components as JSON, without historical scores or prestige."
+            "description": "Candidate IDs and intentionally ordered chosen components as JSON, without synthetic genes, historical scores or prestige."
           }
         ]
       }

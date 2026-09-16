@@ -1061,6 +1061,7 @@ class PromptRouterTest(unittest.TestCase):
             ]}],
             "composition_guidance": "Interpret the chosen parts faithfully.",
             "criteria": [{"id": "useful", "text": "Serves current participants"}],
+            "order_semantics": "Sequence in which the chosen actions are applied.",
         }
         candidates = [{"candidate_id": "c2", "components": {"approach": "v2"}},
                       {"candidate_id": "c1", "components": {"approach": "v1"}}]
@@ -1102,6 +1103,14 @@ class PromptRouterTest(unittest.TestCase):
                             self.assertLess(rendered.index("z-last.md"), rendered.index("a-first.md"))
                         self.assertIn("Do not edit files or execute proposals", rendered)
                         self.assertIn("one variant per dimension", rendered)
+                        if kind == "create_genes":
+                            self.assertIn("logical, position-independent composition units", rendered)
+                            self.assertIn("do not enumerate orders", rendered)
+                            self.assertIn("order_semantics", rendered)
+                            if material in ("literature", "business"):
+                                self.assertIn("position-independent", rendered)
+                        elif kind == "evaluate_candidates":
+                            self.assertIn("Preserve the supplied component order exactly", rendered)
                         self.assertIn("The only top-level key is " + reply_key, rendered)
                         self.assertIn("No status, kind or questions envelope", rendered)
                         self.assertEqual(selected.prompt["questions"]["items"], [])

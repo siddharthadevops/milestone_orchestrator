@@ -43,7 +43,9 @@ class CreativityEvaluationTest(unittest.TestCase):
         self.reply = {"evaluations": [pair[1] for pair in source.evaluated(
             genomes, [0.4, 1.0], invalid=(1,), prefix="c",
         )][::-1]}
-        self.configuration = tasks.resolve_creativity_configuration(creativity_configuration())
+        self.configuration = tasks.resolve_creativity_configuration(
+            creativity_configuration(order_mode="fixed")
+        )
         self.document = resolver_doc()
         for slot in ("2", "3"):
             for rigor, cell in (("low", [1, 1]), ("medium", [2, 2]), ("high", [3, 4])):
@@ -441,6 +443,45 @@ class CreativityEvaluationTest(unittest.TestCase):
         self.assertEqual(accepted["evaluations"], self.reply["evaluations"])
         self.assertEqual(self.candidates, original)
 
+    def test_interchangeable_genomes_reach_evaluator_as_ordered_semantic_components(self):
+        semantic = {"format": "a", "channel": "b"}
+        candidates = {
+            "c-0": {evaluation.creativity_search.ORDER_GENE: 0, **semantic},
+            "c-1": {evaluation.creativity_search.ORDER_GENE: 1, **semantic},
+        }
+        prompts = []
+
+        def physical(_family, prompt, _workspace, **_kwargs):
+            prompts.append(prompt)
+            return self.result()
+
+        accepted, _result = self.call(
+            physical, candidates=candidates,
+            configuration=dict(self.configuration, order_mode="interchangeable"),
+        )
+        supplied = json.loads(prompts[0].split(
+            "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
+        )[1].splitlines()[0])
+        by_id = {item["candidate_id"]: item["components"] for item in supplied}
+        self.assertEqual(
+            [component["dimension_id"] for component in by_id["c-0"]],
+            ["format", "channel"],
+        )
+        self.assertEqual(
+            [component["dimension_id"] for component in by_id["c-1"]],
+            ["channel", "format"],
+        )
+        self.assertTrue(all(
+            component["dimension_id"] != evaluation.creativity_search.ORDER_GENE
+            for components in by_id.values() for component in components
+        ))
+        self.assertIn("Preserve the supplied component order exactly", prompts[0])
+        self.assertEqual(accepted["genomes"], candidates)
+        self.assertNotEqual(
+            evaluation.creativity_search.genome_key(candidates["c-0"]),
+            evaluation.creativity_search.genome_key(candidates["c-1"]),
+        )
+
     def test_batch_faults_keep_existing_conditions_and_no_retry(self):
         calls = []
 
@@ -728,6 +769,7 @@ class CreativityEvaluationTest(unittest.TestCase):
                 self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
                     generation_limit=8, max_evaluated_candidates=20,
                     minimum_improvement=0.02, patience_generations=2,
+                    order_mode="fixed",
                 ))
                 self.store.put("checkpoint", {"search_material": self.material})
                 progress = search.new_progress()
@@ -761,6 +803,7 @@ class CreativityEvaluationTest(unittest.TestCase):
         self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
             generation_limit=10, max_evaluated_candidates=20, minimum_improvement=0.125,
             patience_generations=3, evaluation_batch_size=1, evaluation_concurrency=2,
+            order_mode="fixed",
         ))
         progress = search.new_progress()
         assessments = {"c-0": (0.25, True), "c-1": (0.125, True),
@@ -826,6 +869,7 @@ class CreativityEvaluationTest(unittest.TestCase):
         self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
             generation_limit=10, max_evaluated_candidates=20, minimum_improvement=0.125,
             patience_generations=3, evaluation_batch_size=1, evaluation_concurrency=2,
+            order_mode="fixed",
         ))
         progress = search.new_progress()
         search.begin_generation(progress, self.candidates, self.configuration)
@@ -882,7 +926,7 @@ class CreativityEvaluationTest(unittest.TestCase):
     def test_progress_limits_and_interrupted_reassessment(self):
         search = evaluation.creativity_search
         self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
-            generation_limit=1, max_evaluated_candidates=20,
+            generation_limit=1, max_evaluated_candidates=20, order_mode="fixed",
         ))
         progress = search.new_progress()
         search.begin_generation(progress, self.candidates, self.configuration)
@@ -925,6 +969,7 @@ class CreativityEvaluationTest(unittest.TestCase):
         self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
             generation_limit=10, max_evaluated_candidates=4,
             evaluation_batch_size=1, evaluation_concurrency=2,
+            order_mode="fixed",
         ))
         for item in self.reply["evaluations"]:
             item.update(score=0.25, constraint_valid=True, constraint_violations=[])

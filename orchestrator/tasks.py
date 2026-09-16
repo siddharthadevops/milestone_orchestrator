@@ -11,7 +11,14 @@ import math
 import os
 import uuid
 
-from orchestrator import brainstorming, contracts, kvstore, profiles, prompt_sets
+from orchestrator import (
+    brainstorming,
+    contracts,
+    kvstore,
+    profiles,
+    prompt_contracts,
+    prompt_sets,
+)
 from orchestrator import staffing
 from orchestrator import state as st
 
@@ -410,6 +417,11 @@ _TASK_EXECUTORS += (
         },
         "configuration_schema": {
             # Workload evidence: implementation/milestones/creativity/evidence.md.
+            "order_mode": {
+                "type": "choice",
+                "choices": ["fixed", "interchangeable"],
+                "default": "interchangeable",
+            },
             **{name: {"type": "integer", "default": default,
                       "exclusive_minimum": 1 if name == "population_size" else 0}
                for name, default in {
@@ -954,22 +966,29 @@ def reviewed_policy_defaults(task_kind, config):
 
 
 def resolve_creativity_configuration(value):
-    """Fill omitted numeric controls from the catalogue, then admit strictly.
+    """Fill omitted controls from the catalogue, then admit strictly.
 
     An omitted evaluation budget covers population_size * generation_limit.
     Omitted rigor remains inherited at call time, never frozen from a session.
     """
     try:
         _exact_keys(
-            value, (), _CREATIVITY_COUNTS + _CREATIVITY_RATES + ("rigor",),
+            value, (),
+            _CREATIVITY_COUNTS + _CREATIVITY_RATES + ("order_mode", "rigor"),
             "configuration",
         )
         schema = _TASK_EXECUTOR_BY_ID["creativity"]["configuration_schema"]
         value = {
             **{name: schema[name]["default"] for name in _CREATIVITY_COUNTS + _CREATIVITY_RATES
                if "default" in schema[name]},
+            "order_mode": schema["order_mode"]["default"],
             **value,
         }
+        if value["order_mode"] not in schema["order_mode"]["choices"]:
+            raise ContractError(
+                "configuration.order_mode must be one of %s"
+                % schema["order_mode"]["choices"]
+            )
         for name in _CREATIVITY_COUNTS:
             if name == "max_evaluated_candidates" and name not in value:
                 continue
@@ -1114,7 +1133,10 @@ def validate_creativity_native_result(result, *, dimensions, shortlist_size):
             ):
                 raise ContractError("%s must match the selected dimension and variant material" % component_context)
             genome[dimension_id] = component["variant_id"]
-        genome_key = frozenset(genome.items())
+        # The evaluated component sequence is part of terminal identity. Two
+        # interchangeable candidates may select the same semantic variants in
+        # different orders and remain distinct proposals.
+        genome_key = tuple(genome.items())
         if genome_key in genomes:
             raise ContractError("%s has a duplicate genome" % proposal_context)
         genomes.add(genome_key)
@@ -1305,7 +1327,7 @@ def validate_order(order, reviewed_defaults=None):
             ("task_executor", "request"),
             (
                 "configuration", "staffing_session", "prompt_set",
-                "brainstorming_mode", "strategy_profile",
+                "brainstorming_mode", "strategy_profile", "initial_genes",
             ),
             "task order",
         )
@@ -1350,6 +1372,10 @@ def validate_order(order, reviewed_defaults=None):
                 "task order.brainstorming_mode must be repository_review "
                 "for Brainstorming"
             )
+        if "initial_genes" in order and task_executor != "creativity":
+            raise ContractError(
+                "task order.initial_genes is unavailable for this TaskExecutor"
+            )
         checked = {
             "task_executor": task_executor,
             "request": _validate_request(order["request"]),
@@ -1374,6 +1400,16 @@ def validate_order(order, reviewed_defaults=None):
         if "strategy_profile" in order:
             checked["strategy_profile"] = _strategy_profile(
                 order["strategy_profile"]
+            )
+        if "initial_genes" in order:
+            try:
+                prompt_contracts.validate_create_genes_reply(
+                    order["initial_genes"], context="task order.initial_genes"
+                )
+            except contracts.ContractError as exc:
+                raise ContractError(str(exc)) from exc
+            checked["initial_genes"] = _json_copy(
+                order["initial_genes"], "task order.initial_genes"
             )
         return _json_copy(checked, "task order")
     except (ContractError, TypeError, ValueError) as exc:

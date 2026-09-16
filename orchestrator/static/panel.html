@@ -355,6 +355,8 @@
   .field input, .field textarea { width: 100%; border: 1px solid var(--line);
     border-radius: 8px; padding: 7px 10px; font: inherit; }
   .field textarea { min-height: 84px; resize: vertical; }
+  #t_initial_genes { min-height: 180px;
+    font-family: "SF Mono", ui-monospace, Menlo, monospace; }
   .hint { font-size: 11px; color: var(--dim); margin-top: 3px; }
   .formrow { display: flex; gap: 10px; justify-content: flex-end;
              align-items: center; margin-top: 8px; }
@@ -790,8 +792,6 @@
       <div class="hint" id="t_resolved"></div></div>
     <div class="field"><label>Request *</label>
       <textarea id="t_request" placeholder="Describe the result or effect to produce…"></textarea></div>
-    <div class="field"><label>Context</label>
-      <textarea id="t_context" placeholder="Background the executor should use…"></textarea></div>
     <div class="field"><label>Reference documents</label>
       <div id="t_refs_list"></div>
       <div class="pathrow">
@@ -821,6 +821,18 @@
     </div>
     <div class="hint" id="t_prompt_set_hint"></div></div>
   <div id="task_configuration"></div>
+  <div class="field" id="t_initial_genes_field" style="display:none">
+    <label>Initial genes JSON (optional)</label>
+    <textarea id="t_initial_genes" class="mono" spellcheck="false"
+      placeholder='{"search_material": { … }}'></textarea>
+    <div class="pathrow">
+      <button class="btn" type="button"
+        onclick="document.getElementById('t_initial_genes_file').click()">Load JSON file…</button>
+      <input id="t_initial_genes_file" type="file" accept=".json,application/json"
+        style="display:none" onchange="loadTaskInitialGenesFile(this)">
+    </div>
+    <div class="hint">The browser loads the file into this editor. Nothing is submitted until you order the task.</div>
+  </div>
   <div id="task_catalogue_error" class="failure" style="display:none"></div>
   <div class="formrow">
     <span id="task_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
@@ -6010,8 +6022,9 @@ function resetTaskDialog() {
 function openDirectTaskForm(preselect) {
   resetTaskDialog();
   taskReferences = [];
-  for (const id of ["t_request", "t_context", "t_ref_input", "t_output"])
+  for (const id of ["t_request", "t_ref_input", "t_output", "t_initial_genes"])
     document.getElementById(id).value = "";
+  document.getElementById("t_initial_genes_file").value = "";
   document.getElementById("task_title").textContent = "Order task";
   renderTaskReferences();
   document.getElementById("taskform").showModal();
@@ -6211,6 +6224,28 @@ function onTaskExecutorChange() {
   taskAdvancedOpen = false;
   renderTaskExecutorEditor();
 }
+async function loadTaskInitialGenesFile(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const dialogSeq = taskDialogSeq;
+  const error = document.getElementById("task_error");
+  if (!file.name.toLowerCase().endsWith(".json")) {
+    error.textContent = "choose a .json file";
+    input.value = "";
+    return;
+  }
+  try {
+    const contents = await file.text();
+    if (dialogSeq !== taskDialogSeq) return;
+    document.getElementById("t_initial_genes").value = contents;
+    error.textContent = "";
+  } catch (e) {
+    if (dialogSeq === taskDialogSeq)
+      error.textContent = "could not read JSON file: " + e.message;
+  } finally {
+    input.value = "";
+  }
+}
 function onTaskConfigurationChange(control) {
   if (control && (control.dataset.taskConfigType === "integer"
       || control.dataset.taskConfigType === "number")
@@ -6347,6 +6382,8 @@ function renderTaskExecutorEditor() {
   document.getElementById("t_prompt_set_field").style.display =
     entry && taskUsesExecutionBinding(entry.id, "prompt_set")
       ? "" : "none";
+  document.getElementById("t_initial_genes_field").style.display =
+    entry && entry.id === "creativity" ? "" : "none";
   const controls = document.getElementById("task_configuration");
   if (!entry) { controls.innerHTML = ""; return; }
   const schema = entry.configuration_schema || {};
@@ -6438,6 +6475,16 @@ async function submitTaskForm() {
   catch (e) { error.textContent = e.message; return; }
   const payload = {task_executor: taskExecutorSelected};
   if (resolved.present) payload.configuration = resolved.configuration;
+  if (taskExecutorSelected === "creativity") {
+    const initialGenesText = document.getElementById("t_initial_genes").value.trim();
+    if (initialGenesText) {
+      try { payload.initial_genes = JSON.parse(initialGenesText); }
+      catch (e) {
+        error.textContent = "initial genes JSON is invalid: " + e.message;
+        return;
+      }
+    }
+  }
   if (taskUsesExecutionBinding(taskExecutorSelected, "strategy_profile")) {
     if (strategyCatalogueLoading) {
       error.textContent = "strategy profiles are still loading";
@@ -6475,7 +6522,7 @@ async function submitTaskForm() {
   const requestDoc = {
     work_area: binding,
     request,
-    context: document.getElementById("t_context").value,
+    context: "",
     reference_documents: taskReferences.slice(),
   };
   const output = document.getElementById("t_output").value.trim();

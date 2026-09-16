@@ -16,6 +16,7 @@
     ],
     "assumptions": ["The owner may set pilot prices and reserve limited service appointments."],
     "unknowns": ["Customer willingness to pay and response rate have not been measured."],
+    "order_semantics": "sequence in which the selected pilot components are carried out",
     "composition_guidance": "Combine a paid service offer with a bounded delivery arrangement; count all preparation and delivery effort.",
     "criteria": [
       {"id": "feasibility", "text": "Itemise cash and staff time and show that the complete pilot fits both limits."},
