@@ -255,19 +255,19 @@ class TestVerificationChronology(DriverTestCase):
             )
 
             self.assertEqual(
-                driver._matching_fixer_verification(
+                driver._matching_suite_verification(
                     unit, "milestone_final", fingerprint, [command]
                 ),
                 proof,
             )
             self.assertIsNone(
-                driver._matching_fixer_verification(
+                driver._matching_suite_verification(
                     unit, "milestone_final", fingerprint, ["other-suite"]
                 )
             )
             write_file("later-edit.txt", "changed\n")(ws)
             self.assertIsNone(
-                driver._matching_fixer_verification(
+                driver._matching_suite_verification(
                     unit,
                     "milestone_final",
                     driver._verification_candidate_fingerprint(),
@@ -399,6 +399,42 @@ class TestVerificationChronology(DriverTestCase):
                     == contracts.KIND_REVIEW_ROUND
                 )
                 self.assertGreater(event["seq"], last_review_seq)
+
+    def test_mutating_suite_is_reused_after_reviews_of_its_final_bytes(self):
+        counter = "mutating-suite-count"
+        command = _counter_command(counter)
+
+        def suite_effects(workspace):
+            _increment_counter(counter)(workspace)
+            write_file("feature_01.py", "SLICE = 1\nPART = 'formatted'\n")(workspace)
+            write_file("snapshot.txt", "updated by the suite\n")(workspace)
+
+        with tempfile.TemporaryDirectory(prefix="orch-verify-mutation-") as ws:
+            path = init_state(ws, make_config(verification=[command]))
+            runner = runners.MockRunner(_clean_milestone_script(
+                1,
+                checkpoints={1: [
+                    _suite_step(command, side_effect=suite_effects),
+                    *_clean_reviews(),
+                ]},
+            ))
+            subject = drv.Driver(path, runner=runner)
+
+            _actions, final = self.drive(subject, max_steps=60)
+
+            self.assertEqual(final.type, drv.A_DONE)
+            self.assertEqual(runner.script, [])
+            self.assertEqual(_count(ws, counter), 1)
+            events = self._verification_events(st.load(path))
+            self.assertEqual(len(events), 2)
+            self.assertNotEqual(events[0]["candidate_before"], events[0]["candidate_after"])
+            self.assertTrue(events[1]["reused"])
+            self.assertFalse(events[1]["fixer_certified"])
+            self.assertEqual(events[1]["reused_from_seq"], events[0]["seq"])
+            self.assertEqual(events[1]["candidate_after"], events[0]["candidate_after"])
+            self.assertEqual(subprocess.check_output(
+                ["git", "show", "HEAD:snapshot.txt"], cwd=ws, text=True,
+            ), "updated by the suite\n")
 
     def test_milestone_final_runs_before_four_slices(self):
         counter = "short-final-suite-count"

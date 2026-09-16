@@ -1,5 +1,6 @@
 """Focused proof for prospective sibling milestone verification cadence."""
 
+import copy
 import os
 import subprocess
 import tempfile
@@ -210,23 +211,110 @@ class MilestoneVerificationCadenceTest(unittest.TestCase):
             for record in tasks.task_records(subject.state)
         ))
 
-    def test_parts_count_once_and_open_or_failed_verification_blocks(self):
+    def test_parts_count_once_and_explicit_resume_admits_fresh_verification(self):
         subject = self._fixture(split=4)
         subject._prepare_milestone_verification()
         record = self._verification_records(subject)[0]
         context = subject._milestone_verification_context(record)
         self.assertEqual(context["completed_slice_ids"], [1, 2, 3, 4, 5])
+        self.assertFalse(subject._prepare_milestone_verification())
+        self.assertEqual(len(self._verification_records(subject)), 1)
         unit = subject._milestone_verification_unit(record)
-        st.fail_run(subject.state, "suite blocked", unit=unit)
+        unit["status"] = st.U_PRE_SEAL_VERIFY
+        st.fail_run(
+            subject.state, "suite blocked", unit=unit,
+            type_="suite_checkpoint",
+        )
         subject._prepare_milestone_verification()
-        self.assertEqual(tasks.task_record(subject.state, record["id"])[
-            "result"]["status"], "failure")
+        failed_result = copy.deepcopy(
+            tasks.task_record(subject.state, record["id"])["result"]
+        )
+        self.assertEqual(failed_result["status"], "failure")
         st.resume_run(subject.state)
         subject._save()
         subject = drv.Driver(self.path, runner=base.runners.MockRunner([]))
-        subject._prepare_milestone_verification()
-        self.assertIsNotNone(subject.state["failure"])
-        self.assertEqual(len(self._verification_records(subject)), 1)
+
+        self.assertTrue(subject._prepare_milestone_verification())
+
+        records = self._verification_records(subject)
+        self.assertIsNone(subject.state["failure"])
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["result"], failed_result)
+        self.assertEqual(
+            subject._milestone_verification_unit(records[0])["status"],
+            st.U_FAILED,
+        )
+        self.assertNotEqual(records[1]["id"], records[0]["id"])
+        self.assertIsNone(records[1]["result"])
+        self.assertEqual(
+            subject._milestone_verification_context(records[1]), context
+        )
+        self.assertEqual(
+            st.unit_key(subject._milestone_verification_unit(records[1])),
+            "milestone_verification-2",
+        )
+
+    def test_each_terminal_failure_requires_resume_and_restart_never_duplicates(self):
+        subject = self._fixture()
+        self.assertTrue(subject._prepare_milestone_verification())
+        failed_results = []
+
+        for attempt in (1, 2):
+            with self.subTest(attempt=attempt):
+                records = self._verification_records(subject)
+                self.assertEqual(len(records), attempt)
+                unit = subject._milestone_verification_unit(records[-1])
+                unit["status"] = st.U_PRE_SEAL_VERIFY
+                st.fail_run(
+                    subject.state, "suite blocked attempt %d" % attempt,
+                    unit=unit, type_="suite_checkpoint",
+                )
+                self.assertTrue(subject._prepare_milestone_verification())
+                failed_results.append(copy.deepcopy(
+                    self._verification_records(subject)[-1]["result"]
+                ))
+
+                self.assertFalse(subject._prepare_milestone_verification())
+                subject = drv.Driver(
+                    self.path, runner=base.runners.MockRunner([])
+                )
+                self.assertFalse(subject._prepare_milestone_verification())
+                self.assertIsNotNone(subject.state["failure"])
+                self.assertEqual(
+                    len(self._verification_records(subject)), attempt
+                )
+
+                st.resume_run(subject.state)
+                subject._save()
+                subject = drv.Driver(
+                    self.path, runner=base.runners.MockRunner([])
+                )
+                self.assertTrue(subject._prepare_milestone_verification())
+                self.assertIsNone(subject.state["failure"])
+                records = self._verification_records(subject)
+                self.assertEqual(len(records), attempt + 1)
+                self.assertEqual(
+                    sum(record["result"] is None for record in records), 1
+                )
+                for old_record, result in zip(records, failed_results):
+                    self.assertEqual(old_record["result"], result)
+                    self.assertEqual(
+                        subject._milestone_verification_unit(old_record)["status"],
+                        st.U_FAILED,
+                    )
+                self.assertEqual(
+                    st.unit_key(subject._milestone_verification_unit(records[-1])),
+                    "milestone_verification-%d" % (attempt + 1),
+                )
+
+                subject = drv.Driver(
+                    self.path, runner=base.runners.MockRunner([])
+                )
+                self.assertFalse(subject._prepare_milestone_verification())
+                self.assertEqual(
+                    len(self._verification_records(subject)), attempt + 1
+                )
+                self.assertEqual(subject.runner.calls, [])
 
     def test_final_reuses_only_current_active_five_slice_verification(self):
         subject = self._fixture(total=5)

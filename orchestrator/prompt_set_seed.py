@@ -4081,22 +4081,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                     'law, no battery.',
                                      'instructions': {'parts': [{'ref': 'header'},
                                                                 {'ref': 'contract_correction'},
-                                                                {'text': ['TASK: '
-                                                                          'certify the '
-                                                                          'CURRENT '
-                                                                          'WORK TREE '
-                                                                          'at the '
-                                                                          'scheduled '
-                                                                          'full-suite '
-                                                                          'checkpoint.',
-                                                                          'This is one '
-                                                                          'fresh, '
-                                                                          'report-only '
-                                                                          'call. '
-                                                                          'Determine '
-                                                                          'the '
-                                                                          "repository's "
-                                                                          'official',
+                                                                {'text': ['TASK: execute and report the scheduled full-suite checkpoint on the CURRENT WORK TREE.',
+                                                                          "This is one fresh execution-and-report call. Determine the repository's official",
                                                                           'complete '
                                                                           'suite when '
                                                                           'the '
@@ -4161,27 +4147,13 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                'in '
                                                                                                'that '
                                                                                                'order.'}]},
-                                                                {'text': ['CHECKPOINT '
-                                                                          'LAW',
-                                                                          '- You are '
-                                                                          'not an '
-                                                                          'author: do '
-                                                                          'not fix '
-                                                                          'code, '
-                                                                          'tests, '
-                                                                          'configuration, '
-                                                                          'or docs,',
-                                                                          '  and do '
-                                                                          'not stage '
-                                                                          'or commit. '
-                                                                          'Only the '
-                                                                          'suite '
-                                                                          'commands '
-                                                                          'may produce '
-                                                                          'their',
-                                                                          '  ordinary '
-                                                                          'generated/ignored '
-                                                                          'outputs.',
+                                                                {'text': ['CHECKPOINT LAW',
+                                                                          '- Run the suite as defined, including its normal repository changes.',
+                                                                          '  Formatting, dependency lock updates, generated sources, and test snapshots',
+                                                                          '  produced by the suite are allowed, even when those files are tracked.',
+                                                                          '  Do not block, undo, or repeat the suite because it changes repository files.',
+                                                                          '  Do not make ad hoc repairs to code, tests, configuration, or docs outside',
+                                                                          '  the suite commands, and do not stage or commit.',
                                                                           '- When '
                                                                           'operator '
                                                                           'commands '
@@ -4276,14 +4248,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                           '  '
                                                                           'execution-safety '
                                                                           'requirements.',
-                                                                          '- Stop '
-                                                                          'after the '
-                                                                          'first '
-                                                                          'failure and '
-                                                                          'report it. '
-                                                                          'Do not '
-                                                                          'repair it. '
-                                                                          'A later',
+                                                                          '- Stop after the first failure and report it. Do not make ad hoc repairs. A later',
                                                                           '  dedicated '
                                                                           'full-suite '
                                                                           'fixer '

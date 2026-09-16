@@ -160,10 +160,15 @@ slice and at milestone completion, the driver dispatches one routed
 `suite_checkpoint` LLM call. Explicit config `verification` supplies the exact
 ordered commands; otherwise the checkpoint agent inspects repository authority
 for the complete suite and may report `no_suite`. The driver executes no shell
-suite and implementers report no suite command. A failed checkpoint assigns
+suite and implementers report no suite command. The checkpoint runs each command
+at most once and accepts normal suite changes, including formatting, dependency
+locks, generated sources, and test snapshots in tracked files. The worker does
+not make ad hoc repairs, stage, or commit. A failed checkpoint assigns
 its complete command plan to a dedicated fixer. That fixer's `status: ok`
 certifies the final workspace bytes; the driver reuses the certification on
 those exact bytes instead of executing another checkpoint.
+Resuming a milestone with a failed checkpoint creates a fresh verification
+attempt and retains the previous attempt's result in its history.
 Documentation does not run the full suite, and split implementation parts
 (`a`...`z`) still count as one logical slice. Focused checks remain the
 implementer's and fixer's ordinary feedback while bytes change; there are no
@@ -521,9 +526,12 @@ If an accepted fix changes candidate bytes, all earlier whole-artifact
 approvals become stale and review restarts at the first family. Implementers,
 fixers, and reviewers use focused checks where relevant; the full suite is
 not repeated between review cycles. If no bytes changed, same-byte approvals
-remain current. If scheduled verification itself changes candidate bytes,
-review restarts on those resulting bytes and the suite runs again only after
-the new reviews are clean.
+remain current. When a checkpoint belongs to an implementation review cycle,
+suite changes restart review on the resulting bytes. A successful suite result
+remains evidence for those bytes; review alone does not repeat the suite. A
+later edit invalidates that evidence. A `complete_verification` task accepts
+normal suite transformations and proceeds to its gate without adding reviews;
+fixer repairs still follow their existing review requirement.
 
 Under a reform strategy profile (any governing profile that is not the
 `legacy` compat artifact), doc-unit drafts additionally pass the question

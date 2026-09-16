@@ -482,7 +482,7 @@ class MilestoneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
 
 
 class StandaloneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
-    """Routed calls with a plan-free, read-only repository checkpoint."""
+    """Routed checkpoints that retain the suite's repository changes."""
 
     def suite_checkpoint(self, unit, cadence, configured_commands):
         routed = self.host._routed_suite_checkpoint_prepare_call(
@@ -491,23 +491,13 @@ class StandaloneReviewedWorkCallPreparation(ReviewedWorkCallPreparation):
 
         def prepare(repair_error):
             prepared = routed(repair_error)
-            repository = canonical_plan._repository_snapshot(
-                self.host.workspace
-            )
 
             def complete():
-                unchanged = canonical_plan._repository_matches_snapshot(
-                    {"repository": repository}
-                )
-                if not unchanged:
-                    canonical_plan.restore_author_call(
-                        {"repository": repository}
-                    )
                 return {
-                    "accept_reply": unchanged,
+                    "accept_reply": True,
                     "committed": False,
                     "plan_changed": False,
-                    "revision": repository["head"],
+                    "revision": gitops.head_full_sha(self.host.workspace),
                     "anchor": None,
                 }
 
@@ -1809,10 +1799,10 @@ class Driver(object):
             operator_bytes
         ).hexdigest()
 
-    def _matching_fixer_verification(
+    def _matching_suite_verification(
         self, unit, cadence, fingerprint, configured_commands
     ):
-        """Return a fixer-owned suite success for these exact inputs."""
+        """Reuse a checkpoint or fixer success on its final, current bytes."""
         barriers = st.reconciliation_invalidation_barriers(self.state)
         for event in reversed(self.state.get("events") or []):
             if not st.event_survives_reconciliation_barrier(
@@ -1826,7 +1816,6 @@ class Driver(object):
                 and event.get("status") == "passed"
                 and event.get("ok") is True
                 and event.get("stable") is True
-                and event.get("fixer_certified") is True
                 and not event.get("reused")
                 and event.get("candidate_after") == fingerprint
                 and isinstance(event.get("commands"), list)
@@ -3494,7 +3483,7 @@ class Driver(object):
     def _suite_checkpoint_prepare_call(
         self, unit, cadence, configured_commands
     ):
-        """Build one fresh routed checkpoint and its read-only Git boundary."""
+        """Retain suite changes and observe the existing canonical-plan boundary."""
         skeleton_path = self._skeleton_artifact()
         attempt_context = {}
         routed_prepare = self._routed_suite_checkpoint_prepare_call(
@@ -3513,22 +3502,22 @@ class Driver(object):
             physical_attempt = 2 if repair_error is not None else 1
 
             def complete():
-                outcome = canonical_plan.complete_repository_read_only_call(
+                outcome = canonical_plan.complete_observed_call(
                     self.state,
                     snapshot,
-                    message="Canonical plan from suite checkpoint",
+                    message="Changes from suite checkpoint",
                 )
                 source_base = snapshot["repository"]["head"]
-                accepted = outcome["revision"]
+                accepted = outcome.get("accepted_revision", source_base)
                 boundary = {
-                    "accept_reply": bool(outcome["accept_reply"]),
-                    "plan_changed": bool(outcome["plan_changed"]),
+                    "accept_reply": not outcome["changed"],
+                    "plan_changed": bool(outcome["changed"]),
                     "source_base_revision": source_base,
                     "accepted_revision": accepted,
                     "physical_attempt": physical_attempt,
                     "scheduling_frozen": False,
                 }
-                if outcome["plan_changed"]:
+                if outcome["changed"]:
                     boundary["scheduling_frozen"] = (
                         self._observe_accepted_plan_range(
                             source_base,
@@ -3542,14 +3531,14 @@ class Driver(object):
                             },
                         )
                     )
-                if not outcome["accept_reply"]:
+                if not boundary["accept_reply"]:
                     st.append_event(
                         self.state,
                         "suite_checkpoint_rerun_required",
                         unit=st.unit_key(unit),
                         cadence=cadence,
                         physical_attempt=physical_attempt,
-                        plan_changed=bool(outcome["plan_changed"]),
+                        plan_changed=bool(outcome["changed"]),
                         source_base_revision=source_base,
                         accepted_revision=accepted,
                     )
@@ -3794,10 +3783,10 @@ class Driver(object):
             return
         root_call = calls[0] if calls else marker
         kind = root_call.get("kind")
-        if kind == "merge_repair":
+        if kind in ("merge_repair", contracts.KIND_SUITE_CHECKPOINT):
             # A3 assigns every repository mutation to the sole repair LLM.
-            # An interrupted attempt is terminal/manual; startup must not
-            # restore, fold, or otherwise reinterpret the LLM-left state.
+            # Suite commands may also write repository files. Preserve the
+            # effects of either interrupted call without restoring them.
             self._clear_busy()
             return
         if not gitops.enabled(self.config):
@@ -4611,15 +4600,32 @@ class Driver(object):
             return changed
         if latest is not None and latest["result"]["status"] == "failure":
             unit = self._milestone_verification_unit(latest)
-            st.fail_run(
-                self.state,
-                "due milestone verification %s failed: %s"
-                % (latest["id"], latest["result"].get("reason")),
-                unit=unit,
-                type_="orchestrator",
-            )
-            self._save()
-            return True
+            resume = next((
+                event for event in reversed(self.state.get("events") or [])
+                if event.get("type") == "resumed"
+            ), {})
+            if (
+                unit["status"] == st.U_FAILED
+                or st.unit_key(unit) not in (resume.get("restored") or {})
+            ):
+                st.fail_run(
+                    self.state,
+                    "due milestone verification %s failed: %s"
+                    % (latest["id"], latest["result"].get("reason")),
+                    unit=unit,
+                    type_="orchestrator",
+                )
+                self._save()
+                return True
+            # Resume reopens failed units, but their task results remain
+            # immutable. Keep those attempts terminal and admit one fresh
+            # checkpoint through the ordinary path below.
+            for record in records:
+                if (record.get("result") or {}).get("status") == "failure":
+                    previous = self._milestone_verification_unit(record)
+                    if previous["status"] != st.U_FAILED:
+                        previous["failed_from"] = previous["status"]
+                        previous["status"] = st.U_FAILED
 
         ordinal = 1 + sum(
             unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
@@ -13415,9 +13421,8 @@ class Driver(object):
                 "verification cannot run from status %s" % stage
             )
 
-        # Compatibility with states persisted by the retired generic
-        # gate-reuse shortcut. Only a fixer that explicitly owned the full
-        # suite may now certify this boundary without another execution.
+        # Retire the old per-unit shortcut; reuse requires an actual suite
+        # result for the current commands and final repository bytes.
         unit.pop("skip_next_verify", None)
 
         reviews_required = (
@@ -13472,13 +13477,13 @@ class Driver(object):
             unit
         )
         candidate_fingerprint = self._verification_candidate_fingerprint()
-        fixer_verification = self._matching_fixer_verification(
+        suite_verification = self._matching_suite_verification(
             unit,
             cadence,
             candidate_fingerprint,
             configured_commands,
         )
-        if fixer_verification is not None:
+        if suite_verification is not None:
             verification_event = st.append_event(
                 self.state,
                 "verification",
@@ -13489,23 +13494,23 @@ class Driver(object):
                 status="passed",
                 ok=True,
                 stable=True,
-                commands=copy.deepcopy(fixer_verification["commands"]),
-                results=copy.deepcopy(fixer_verification.get("results") or []),
+                commands=copy.deepcopy(suite_verification["commands"]),
+                results=copy.deepcopy(suite_verification.get("results") or []),
                 candidate_before=candidate_fingerprint,
                 candidate_after=candidate_fingerprint,
                 reused=True,
-                reused_from_seq=fixer_verification["seq"],
-                fixer_certified=True,
+                reused_from_seq=suite_verification["seq"],
+                fixer_certified=suite_verification.get("fixer_certified") is True,
                 output_tail=(
-                    "(reused: fixer certified these exact bytes and commands "
-                    "at event %d)" % fixer_verification["seq"]
+                    "(reused: suite certified these exact bytes and commands "
+                    "at event %d)" % suite_verification["seq"]
                 ),
             )
             unit["verify_fix_attempts"]["pre_seal"] = 0
             closed = self._complete_seal_from_reviews(
                 unit, verification_event=verification_event
             )
-            return "fixer suite result reused; %s" % closed
+            return "suite result reused; %s" % closed
         if self.model_profiles_home is not None:
             family, model, effort = self._staff("implement", episode_unit=unit)
             dispatch = self._dispatch_for_role("implement", episode_unit=unit)
@@ -13549,6 +13554,7 @@ class Driver(object):
             raise StopStep("suite checkpoint boundary unavailable")
         call_boundary = boundaries[-1]
         accepted = call_boundary.get("accept_reply") is True
+        final_fingerprint = self._verification_candidate_fingerprint()
         returned_status = output.get("status")
         status = returned_status if accepted else "invalidated"
         duration_s, token_usage, token_usage_partial = (
@@ -13575,19 +13581,8 @@ class Driver(object):
                 copy.deepcopy(output.get("results") or [])
                 if accepted else []
             ),
-            "candidate_before": (
-                candidate_fingerprint
-                if self.reviewed_work._is_complete_verification(unit)
-                else call_boundary.get("source_base_revision")
-            ),
-            "candidate_after": (
-                candidate_fingerprint
-                if (
-                    accepted
-                    and self.reviewed_work._is_complete_verification(unit)
-                )
-                else call_boundary.get("accepted_revision")
-            ),
+            "candidate_before": candidate_fingerprint,
+            "candidate_after": final_fingerprint,
             "vacuous": (
                 True if accepted and returned_status == "no_suite" else None
             ),
@@ -13654,7 +13649,7 @@ class Driver(object):
                         "cycle, but it cannot satisfy the due suite gate."
                     ),
                     "actual_outcome": (
-                        "The accepted unchanged checkpoint returned failed."
+                        "The accepted checkpoint returned failed."
                     ),
                     "incremental_harm": (
                         "The current candidate cannot seal until the failure "

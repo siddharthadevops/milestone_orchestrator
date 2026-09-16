@@ -1,7 +1,9 @@
 import copy
 import json
 import os
+import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -46,6 +48,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         self._write(".gitignore", "\n".join(gitops.ignore_lines()) + "\n")
         self._write(self.skeleton, _document((1,)))
         self._write("app.txt", "baseline\n")
+        self._write("deps.lock", "version=1\n")
         self.head = self._commit("checkpoint baseline")
         self._git("config", "--local", gitops.BASELINE_MARK, "true")
 
@@ -228,29 +231,35 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         self.assertIn("passed", note)
         self.assertEqual(seen, ["lawyer"])
 
-    def test_ordinary_mutation_is_restored_and_status_discarded(self):
+    def test_ordinary_mutation_is_preserved_and_pass_can_seal(self):
         def mutate(_workspace):
             self._write("app.txt", "changed by checkpoint\n")
 
         subject = self._subject(self._response(), side_effect=mutate)
+        before = subject._verification_candidate_fingerprint()
 
         note, seal = self._verify(subject)
 
-        self.assertIn("invalidated", note)
-        seal.assert_not_called()
+        self.assertIn("passed", note)
+        seal.assert_called_once()
         with open(os.path.join(self.workspace, "app.txt"), encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), "baseline\n")
+            self.assertEqual(handle.read(), "changed by checkpoint\n")
         event = subject.state["events"][-1]
-        self.assertFalse(event["ok"])
-        self.assertFalse(event["stable"])
-        self.assertEqual(event["returned_status"], "passed")
-        self.assertFalse(event["plan_changed"])
-        self.assertTrue(any(
+        self.assertTrue(event["ok"])
+        self.assertTrue(event["stable"])
+        self.assertEqual(event["status"], "passed")
+        self.assertEqual(event["candidate_before"], before)
+        self.assertEqual(
+            event["candidate_after"],
+            subject._verification_candidate_fingerprint(),
+        )
+        self.assertNotEqual(event["candidate_before"], event["candidate_after"])
+        self.assertFalse(any(
             candidate.get("type") == "suite_checkpoint_rerun_required"
             for candidate in subject.state["events"]
         ))
 
-    def test_reusable_lifecycle_retains_checkpoint_repository_boundary(self):
+    def test_reusable_lifecycle_preserves_checkpoint_changes(self):
         def mutate(_workspace):
             self._write("app.txt", "changed by reusable checkpoint\n")
 
@@ -258,17 +267,77 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         preparation = driver.ReviewedWorkCallPreparation(subject)
         note, seal = self._verify(subject, preparation)
 
-        self.assertIn("invalidated", note)
-        seal.assert_not_called()
+        self.assertIn("passed", note)
+        seal.assert_called_once()
         self.assertIsNone(subject.state["failure"])
         with open(
             os.path.join(self.workspace, "app.txt"), encoding="utf-8"
         ) as handle:
-            self.assertEqual(handle.read(), "baseline\n")
+            self.assertEqual(handle.read(), "changed by reusable checkpoint\n")
         event = subject.state["events"][-1]
         self.assertEqual(event["type"], "verification")
-        self.assertFalse(event["ok"])
-        self.assertFalse(event["stable"])
+        self.assertTrue(event["ok"])
+        self.assertTrue(event["stable"])
+        self.assertEqual(
+            event["candidate_after"],
+            subject._verification_candidate_fingerprint(),
+        )
+
+    def test_real_suite_command_preserves_lock_source_and_new_snapshot(self):
+        command_args = [sys.executable, "-c", (
+            "import os; from pathlib import Path; "
+            "assert os.environ['CI'] == '1'; "
+            "assert Path('app.txt').read_text() == 'baseline\\n'; "
+            "assert Path('deps.lock').read_text() == 'version=1\\n'; "
+            "Path('app.txt').write_text('formatted source\\n'); "
+            "Path('deps.lock').write_text('version=2\\n'); "
+            "Path('snapshots').mkdir(); "
+            "Path('snapshots/result.txt').write_text('accepted snapshot\\n'); "
+            "print('complete suite passed')"
+        )]
+        self.command = shlex.join(command_args)
+        state = st.load(self.state_path)
+        state["config"]["verification"] = [self.command]
+        os.unlink(self.state_path)
+        st.save_new(self.state_path, state)
+        executions = []
+
+        def execute_suite(workspace):
+            execution = subprocess.run(
+                command_args,
+                cwd=workspace,
+                env={**os.environ, "CI": "1"},
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            executions.append(execution)
+
+        subject = self._subject(self._response(), side_effect=execute_suite)
+        before = subject._verification_candidate_fingerprint()
+
+        note, seal = self._verify(subject)
+
+        self.assertIn("passed", note)
+        seal.assert_called_once()
+        self.assertEqual(len(executions), 1)
+        self.assertEqual(executions[0].stdout, "complete suite passed\n")
+        for path, content in (
+            ("app.txt", "formatted source\n"),
+            ("deps.lock", "version=2\n"),
+            ("snapshots/result.txt", "accepted snapshot\n"),
+        ):
+            with open(os.path.join(self.workspace, path), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), content)
+        event = subject.state["events"][-1]
+        self.assertTrue(event["ok"])
+        self.assertEqual(event["commands"], [self.command])
+        self.assertEqual(event["candidate_before"], before)
+        self.assertEqual(
+            event["candidate_after"],
+            subject._verification_candidate_fingerprint(),
+        )
+        self.assertNotEqual(event["candidate_before"], event["candidate_after"])
 
     def test_reusable_lifecycle_unchanged_checkpoint_can_seal(self):
         subject = self._subject(self._response())
@@ -283,11 +352,51 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         self.assertTrue(event["ok"])
         self.assertTrue(event["stable"])
 
-    def test_contract_correction_gets_a_fresh_restored_attempt(self):
+    def test_interrupted_checkpoint_preserves_changes_on_driver_restart(self):
+        subject = self._subject(self._response())
+        self._write("app.txt", "formatted before interruption\n")
+        self._write("snapshots/result.txt", "snapshot before interruption\n")
+        self.assertTrue(subject._write_busy({
+            "label": "interrupted-suite-checkpoint",
+            "kind": "suite_checkpoint",
+            "family": "codex",
+            "started_at": 0,
+        }))
+
+        recovered = driver.Driver(
+            self.state_path,
+            model_profiles_home=self.model_home.name,
+            runner=runners.MockRunner([]),
+        )
+
+        for path, content in (
+            ("app.txt", "formatted before interruption\n"),
+            ("snapshots/result.txt", "snapshot before interruption\n"),
+        ):
+            with open(os.path.join(self.workspace, path), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), content)
+        self.assertIsNone(recovered._read_busy())
+        self.assertEqual(recovered.runner.calls, [])
+        self.assertTrue(any(
+            event.get("type") == "worker_interrupted"
+            and event.get("kind") == "suite_checkpoint"
+            for event in recovered.state["events"]
+        ))
+        self.assertFalse(any(
+            event.get("type") == "unclean_stop_restored"
+            for event in recovered.state["events"]
+        ))
+
+    def test_contract_correction_preserves_changes_from_rejected_attempt(self):
         malformed = self._response(commands=["wrong configured command"])
 
         def mutate(_workspace):
             self._write("app.txt", "changed during rejected attempt\n")
+
+        def continue_from_changed_files(_workspace):
+            with open(os.path.join(self.workspace, "app.txt"), encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "changed during rejected attempt\n")
+            self._write("deps.lock", "version=2\n")
 
         subject = driver.Driver(
             self.state_path,
@@ -300,6 +409,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
                 },
                 {
                     "expect_kind": "suite_checkpoint",
+                    "side_effect": continue_from_changed_files,
                     "response": self._response(),
                 },
             ]),
@@ -312,12 +422,18 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         self.assertEqual(len(subject.runner.calls), 2)
         self.assertIn("CONTRACT CORRECTION", subject.runner.calls[1][2])
         with open(os.path.join(self.workspace, "app.txt"), encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), "baseline\n")
+            self.assertEqual(handle.read(), "changed during rejected attempt\n")
+        with open(os.path.join(self.workspace, "deps.lock"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "version=2\n")
         event = subject.state["events"][-1]
         self.assertTrue(event["ok"])
         self.assertTrue(event["stable"])
+        self.assertEqual(
+            event["candidate_after"],
+            subject._verification_candidate_fingerprint(),
+        )
 
-    def test_valid_plan_block_is_preserved_alone_and_status_discarded(self):
+    def test_plan_and_other_changes_are_preserved_but_status_is_discarded(self):
         def change_plan(_workspace):
             self._write(self.skeleton, _document((1, 2)))
             self._write("app.txt", "unrelated checkpoint mutation\n")
@@ -331,7 +447,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         with open(os.path.join(self.workspace, self.skeleton), encoding="utf-8") as handle:
             self.assertEqual(handle.read(), _document((1, 2)))
         with open(os.path.join(self.workspace, "app.txt"), encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), "baseline\n")
+            self.assertEqual(handle.read(), "unrelated checkpoint mutation\n")
         event = subject.state["events"][-1]
         self.assertTrue(event["plan_changed"])
         self.assertTrue(any(
@@ -450,7 +566,7 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         self.assertEqual(event["commands"], [])
         self.assertTrue(event["ok"])
 
-    def test_unchanged_failure_account_is_preserved_without_sealing(self):
+    def test_failed_checkpoint_preserves_changes_and_queues_fixer(self):
         failure = {
             "command": self.command,
             "exit_code": 1,
@@ -470,7 +586,12 @@ class SuiteCheckpointCallTest(unittest.TestCase):
             "failure_account": failure,
         }
         self._with_questions(response)
-        subject = self._subject(response)
+
+        def mutate(_workspace):
+            self._write("app.txt", "changed before suite failure\n")
+
+        subject = self._subject(response, side_effect=mutate)
+        before = subject._verification_candidate_fingerprint()
 
         note, seal = self._verify(subject)
 
@@ -484,6 +605,14 @@ class SuiteCheckpointCallTest(unittest.TestCase):
         self.assertEqual(event["failure_account"], failure)
         self.assertTrue(event["stable"])
         self.assertFalse(event["ok"])
+        with open(os.path.join(self.workspace, "app.txt"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "changed before suite failure\n")
+        self.assertEqual(event["candidate_before"], before)
+        self.assertEqual(
+            event["candidate_after"],
+            subject._verification_candidate_fingerprint(),
+        )
+        self.assertNotEqual(event["candidate_before"], event["candidate_after"])
         unit = st.current_unit(subject.state)
         self.assertEqual(unit["status"], st.U_FIXING)
         self.assertEqual(unit["fix_source"]["type"], "suite_checkpoint")

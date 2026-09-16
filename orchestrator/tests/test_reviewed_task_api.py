@@ -814,17 +814,19 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
             [terminal["id"]],
         )
 
-    def test_standalone_suite_checkpoint_restores_edits_before_retry(self):
-        workspace = self._repo("suite-read-only")
+    def test_standalone_suite_checkpoint_preserves_edits_without_repeating(self):
+        workspace = self._repo("suite-changes")
         script = self._script("implement")
+        checkpoint = suite_checkpoint_response("passed", ["python3 -m unittest"])
+        checkpoint["authority"] = {
+            "source": "repository",
+            "evidence": [{"path": "standalone.py", "basis": "Complete test suite."}],
+        }
+        script[-1]["response"] = checkpoint
         script[-1]["side_effect"] = write_file(
             "standalone.py", "VALUE = 'checkpoint edit'\n"
         )
-        checkpoint = suite_checkpoint_response("no_suite", [])
-        checkpoint["authority"]["evidence"][0]["path"] = "standalone.py"
-        retry = step(contracts.KIND_SUITE_CHECKPOINT, checkpoint)
-        retry.pop("expect_family", None)
-        script.append(retry)
+        script.extend(self._script("implement")[1:3])
 
         terminal, runner, _host = self._run_reviewed(
             workspace, "implement", script=script
@@ -832,7 +834,7 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         with open(
             os.path.join(workspace, "standalone.py"), encoding="utf-8"
         ) as handle:
-            self.assertEqual(handle.read(), "VALUE = 'done'\n")
+            self.assertEqual(handle.read(), "VALUE = 'checkpoint edit'\n")
         lifecycle = st.load(task_api.reviewed_state_path(self.home, terminal["id"]))
         verifications = [
             event for event in lifecycle["events"]
@@ -840,12 +842,14 @@ class ReviewedTaskOrderingTest(unittest.TestCase):
         ]
         self.assertEqual(
             [event["status"] for event in verifications[-2:]],
-            ["invalidated", "no_suite"],
+            ["passed", "passed"],
         )
+        self.assertTrue(verifications[-1]["reused"])
+        self.assertFalse(verifications[-1]["fixer_certified"])
         self.assertEqual(
             sum(kind == contracts.KIND_SUITE_CHECKPOINT
                 for _family, kind, _prompt in runner.calls),
-            2,
+            1,
         )
 
     def test_stop_fails_without_success_and_releases_the_work_area(self):

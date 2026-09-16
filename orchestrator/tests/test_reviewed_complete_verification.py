@@ -212,12 +212,75 @@ class ReviewedCompleteVerificationTest(unittest.TestCase):
                     before + 1,
                 )
 
-    def test_failed_suite_repairs_reviews_changes_and_reverifies_current_bytes(self):
+    def test_mutating_pass_commits_and_certifies_the_suite_output_once(self):
+        workspace, base, baseline_tree = self._baseline("mutating-pass")
+
+        def suite_effects(root):
+            write_file("app.txt", "formatted by the suite\n")(root)
+            write_file("snapshots/example.txt", "generated expectation\n")(root)
+
+        terminal, runner = self._run(
+            workspace,
+            self._config(),
+            [self._call(self._checkpoint("passed"), side_effect=suite_effects)],
+        )
+
+        self.assertEqual(terminal["result"]["status"], "success", terminal)
+        self.assertEqual(
+            [kind for _family, kind, _prompt in runner.calls],
+            [contracts.KIND_SUITE_CHECKPOINT],
+        )
+        self.assertEqual(self._git(workspace, "rev-parse", "HEAD^"), base)
+        self.assertNotEqual(
+            self._git(workspace, "rev-parse", "HEAD^{tree}"), baseline_tree
+        )
+        self.assertEqual(
+            self._git(workspace, "show", "HEAD:app.txt"),
+            "formatted by the suite",
+        )
+        self.assertEqual(
+            self._git(workspace, "show", "HEAD:snapshots/example.txt"),
+            "generated expectation",
+        )
+        self.assertEqual(self._git(workspace, "status", "--porcelain"), "")
+
+        subject = drv.Driver(
+            task_api.reviewed_state_path(self.home, terminal["id"]),
+            runner=runners.MockRunner([]),
+            model_profiles_home=self.home,
+        )
+        unit = subject._unit_by_key(subject.state["reviewed_task"]["unit"])
+        verification = [event for event in subject.state["events"]
+                        if event.get("type") == "verification"]
+        self.assertEqual(len(verification), 1)
+        event = verification[0]
+        self.assertEqual(event["status"], "passed")
+        self.assertTrue(event["ok"])
+        self.assertTrue(event["stable"])
+        self.assertEqual(event["results"], self._checkpoint("passed")["results"])
+        self.assertNotEqual(event["candidate_before"], event["candidate_after"])
+        self.assertEqual(
+            event["candidate_after"], subject._verification_candidate_fingerprint()
+        )
+        self.assertIsNotNone(subject._current_complete_verification_event(unit))
+        self.assertEqual(unit["seals"][-1]["reviews"], [])
+        self.assertEqual(unit["seals"][-1]["verification_event_seq"], event["seq"])
+        self.assertFalse(any(
+            event.get("type") == "suite_checkpoint_rerun_required"
+            for event in subject.state["events"]
+        ))
+
+    def test_failed_mutating_suite_preserves_changes_through_repair_and_certification(self):
         workspace, _base, _tree = self._baseline("repair")
         config = self._config()
         record = self._admit(workspace, config)
+
+        def suite_effects(root):
+            write_file("app.txt", "formatted before the failure\n")(root)
+            write_file("snapshots/example.txt", "retained suite output\n")(root)
+
         runner = runners.MockRunner([
-            self._call(self._checkpoint("failed")),
+            self._call(self._checkpoint("failed"), side_effect=suite_effects),
         ])
         subject = drv.Driver(
             task_api.reviewed_state_path(self.home, record["id"]),
@@ -227,6 +290,25 @@ class ReviewedCompleteVerificationTest(unittest.TestCase):
         self._standalone_step(subject)  # task-owned empty WIP
         self._standalone_step(subject)  # failed checkpoint
         unit = subject._unit_by_key(subject.state["reviewed_task"]["unit"])
+        with open(os.path.join(workspace, "app.txt"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "formatted before the failure\n")
+        with open(
+            os.path.join(workspace, "snapshots/example.txt"), encoding="utf-8"
+        ) as handle:
+            self.assertEqual(handle.read(), "retained suite output\n")
+        failed = next(event for event in reversed(subject.state["events"])
+                      if event.get("type") == "verification")
+        self.assertEqual(failed["status"], "failed")
+        self.assertFalse(failed["ok"])
+        self.assertTrue(failed["stable"])
+        self.assertNotEqual(failed["candidate_before"], failed["candidate_after"])
+        self.assertEqual(
+            failed["candidate_after"], subject._verification_candidate_fingerprint()
+        )
+        self.assertEqual(failed["results"], self._checkpoint("failed")["results"])
+        self.assertEqual(
+            failed["failure_account"], self._checkpoint("failed")["failure_account"]
+        )
         queued = copy.deepcopy(unit["fix_queue"][0])
         runner.script.extend([
             step(
@@ -271,6 +353,28 @@ class ReviewedCompleteVerificationTest(unittest.TestCase):
         )
         self.assertFalse(any(event["type"].startswith("implementation_size_")
                              for event in lifecycle["events"]))
+        self.assertEqual(
+            self._git(workspace, "show", "HEAD:app.txt"), "repaired"
+        )
+        self.assertEqual(
+            self._git(workspace, "show", "HEAD:snapshots/example.txt"),
+            "retained suite output",
+        )
+        self.assertEqual(self._git(workspace, "status", "--porcelain"), "")
+        current = drv.Driver(
+            task_api.reviewed_state_path(self.home, record["id"]),
+            runner=runners.MockRunner([]),
+            model_profiles_home=self.home,
+        )
+        self.assertEqual(
+            verification[-1]["candidate_after"],
+            current._verification_candidate_fingerprint(),
+        )
+        self.assertEqual(
+            sum(kind == contracts.KIND_SUITE_CHECKPOINT
+                for _family, kind, _prompt in runner.calls),
+            1,
+        )
 
     def test_blocked_stop_restart_and_gate_crashes_keep_one_honest_result(self):
         blocked_ws, _base, _tree = self._baseline("blocked")
