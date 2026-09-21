@@ -65,7 +65,15 @@ def creativity_checkpoint_store(home, task_id):
     ))
 
 
-def _creativity_proposals(checkpoint, limit, order_mode=None):
+def _creativity_proposals(checkpoint, limit, order_mode=None, *, creativity_semantics=None):
+    if creativity_semantics == "sparse_v2":
+        accepted = _creativity_candidate_evaluations(
+            checkpoint, order_mode, creativity_semantics=creativity_semantics,
+        )
+        return [{key: item[key] for key in (
+            "candidate_id", "components", "proposal", "constraint_valid",
+            "constraint_violations", "reason", "assumptions", "score",
+        )} for item in sorted(accepted, key=lambda item: item["score"], reverse=True)[:limit]]
     return [dict(
         **{key: item[key] for key in (
             "candidate_id", "proposal", "reason", "assumptions", "score",
@@ -78,7 +86,7 @@ def _creativity_proposals(checkpoint, limit, order_mode=None):
        if item["constraint_valid"]][:limit]
 
 
-def _creativity_candidate_evaluations(checkpoint, order_mode=None):
+def _creativity_candidate_evaluations(checkpoint, order_mode=None, *, creativity_semantics=None):
     """Project every durable evaluation without making it a final proposal."""
     material = checkpoint.get("search_material")
     state = checkpoint.get("evaluation")
@@ -99,6 +107,8 @@ def _creativity_candidate_evaluations(checkpoint, order_mode=None):
                     dimensions,
                     batch["genomes"][candidate_id],
                     order_mode=order_mode,
+                    variants=material["variants"] if creativity_semantics == "sparse_v2" else None,
+                    creativity_semantics=creativity_semantics,
                 ),
             })
     return projected
@@ -111,6 +121,11 @@ def creativity_view(home, record):
         return None
     progress = checkpoint["progress"]
     configuration = record["order"]["configuration"]
+    semantics = record["order"].get("creativity_semantics")
+    proposals = _creativity_proposals(
+        checkpoint, configuration["shortlist_size"], configuration.get("order_mode"),
+        creativity_semantics=semantics,
+    )
     view = {key: progress[key] for key in (
         "best_score", "reference_score", "stagnant_generations",
         "consecutive_expansions", "expansion_interventions",
@@ -127,17 +142,16 @@ def creativity_view(home, record):
             progress["archive"][0][1]["constraint_valid"]
             if progress["archive"] else None
         ),
-        best_candidates=_creativity_proposals(
-            checkpoint,
-            configuration["shortlist_size"],
-            configuration.get("order_mode"),
-        ),
+        best_candidates=proposals,
         search_material=copy.deepcopy(checkpoint.get("search_material")),
         candidate_evaluations=_creativity_candidate_evaluations(
-            checkpoint, configuration.get("order_mode")
+            checkpoint, configuration.get("order_mode"), creativity_semantics=semantics,
         ),
         initial_genes_supplied="initial_genes" in record["order"],
     )
+    if semantics == "sparse_v2":
+        view["best_score"] = proposals[0]["score"] if proposals else None
+        view["best_candidate_valid"] = proposals[0]["constraint_valid"] if proposals else None
     return view
 
 
@@ -2668,6 +2682,7 @@ class DirectTaskHost:
         task_id = record["id"]
         order = record["order"]
         request, configuration = order["request"], order["configuration"]
+        semantics = order.get("creativity_semantics")
         store = creativity_checkpoint_store(self.home, task_id)
         checkpoint = store.get("checkpoint")
         if checkpoint is kvstore.ABSENT:
@@ -2697,6 +2712,7 @@ class DirectTaskHost:
                     checkpoint,
                     configuration["shortlist_size"],
                     configuration.get("order_mode"),
+                    creativity_semantics=semantics,
                 )
                 checkpoint["native_result"] = tasks.validate_creativity_native_result({
                     "outcome": "proposals" if proposals else "no_valid_candidates",
@@ -2705,7 +2721,9 @@ class DirectTaskHost:
                         "stop_reason", "generations_completed", "evaluated_candidates",
                         "expansion_interventions",
                     )},
-                }, dimensions=material["dimensions"], shortlist_size=configuration["shortlist_size"])
+                }, dimensions=material["dimensions"], shortlist_size=configuration["shortlist_size"],
+                    variants=material["variants"] if semantics == "sparse_v2" else None,
+                    creativity_semantics=semantics)
                 checkpoint["job"] = "complete"
                 store.put("checkpoint", checkpoint)
                 continue
@@ -2724,7 +2742,7 @@ class DirectTaskHost:
             if material is None:
                 material, result = creativity_evaluation.create_genes(
                     group, runner, objective=request["request"], context=request["context"],
-                    creativity_semantics=order.get("creativity_semantics"),
+                    creativity_semantics=semantics,
                     references=request["reference_documents"], **options,
                 )
                 if isinstance(result, runners.ControlledInterruptionResult):
@@ -2735,6 +2753,7 @@ class DirectTaskHost:
                 wave = creativity_evaluation.evaluate_progress_wave(
                     group, runner, progress=progress, store=store, checkpoint_key="checkpoint",
                     search_material=material, generation=checkpoint["generation"], **options,
+                    creativity_semantics=semantics,
                 )
                 # The wave saved accepted siblings. Retain that whole checkpoint
                 # while committing its progress handoff, including JSON pair lists.
@@ -2745,9 +2764,12 @@ class DirectTaskHost:
                     checkpoint["job"] = "evolve"
                 interruption = wave["interruption"]
             else:
-                explored = {creativity_search.genome_key(genome)
+                explored = {creativity_search.genome_key(
+                                genome, material["dimensions"], configuration.get("order_mode"),
+                                creativity_semantics=semantics,
+                            )
                             for genome in checkpoint["candidates"].values()}
-                if creativity_search.expansion_due(progress, configuration):
+                if creativity_search.expansion_due(progress, configuration, creativity_semantics=semantics):
                     checkpoint["job"] = "expand_genes"
                     store.put("checkpoint", checkpoint)
                     material, result = creativity_evaluation.expand_progress(
@@ -2766,20 +2788,27 @@ class DirectTaskHost:
                     else:
                         checkpoint["job"] = "evolve"
                 elif progress["stop_reason"] is None:
+                    search_options = dict(
+                        explored=explored, creativity_semantics=semantics,
+                        variants=material["variants"] if semantics == "sparse_v2" else None,
+                    )
                     if progress["archive"]:
                         population = creativity_search.reproduce(
                             material["dimensions"], progress["archive"],
-                            configuration["population_size"], configuration, explored=explored,
+                            configuration["population_size"], configuration, **search_options,
                         )
                     else:
                         population = creativity_search.make_population(
                             material["dimensions"], configuration["population_size"],
-                            configuration, explored=explored,
+                            configuration, **search_options,
                         )
                     candidates = {uuid.uuid4().hex: genome for genome in population}
                     checkpoint["candidates"].update(candidates)
-                    creativity_search.begin_generation(progress, candidates, configuration)
-                    checkpoint.update(job="evaluate_candidates", generation=progress["generations_completed"] + 1)
+                    creativity_search.begin_generation(
+                        progress, candidates, configuration, creativity_semantics=semantics,
+                    )
+                    if progress["pending"] is not None:
+                        checkpoint.update(job="evaluate_candidates", generation=progress["generations_completed"] + 1)
             store.put("checkpoint", checkpoint)
             if interruption is not None:
                 self._pause_failure(task_id, interruption.interrupt_reason)

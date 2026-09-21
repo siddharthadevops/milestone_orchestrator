@@ -1046,16 +1046,18 @@ def creativity_job_staffing_request(job, configuration):
     return request
 
 
-def validate_creativity_native_result(result, *, dimensions, shortlist_size):
+def validate_creativity_native_result(result, *, dimensions, shortlist_size,
+                                     variants=None, creativity_semantics=None):
     """Validate and detach the creativity producer's terminal representation.
 
-    The producer supplies trusted search_material['dimensions'] and the
+    The producer supplies trusted dimensions, shared sparse variants and the
     admitted shortlist_size; their schemas are not re-admitted here. Component
     order is preserved. These checks establish representation, not valid-candidate
     selection, truthful counters/stop reasons, or semantic quality. The common
     task envelope continues to treat native_result as executor-opaque.
     """
     context = "creativity native_result"
+    sparse = creativity_semantics == "sparse_v2"
     counts = (
         "generations_completed", "evaluated_candidates", "expansion_interventions",
     )
@@ -1063,9 +1065,10 @@ def validate_creativity_native_result(result, *, dimensions, shortlist_size):
     for name in counts:
         _reviewed_non_negative_int(result[name], "%s.%s" % (context, name))
     stop_reasons = (
-        "generation_limit", "evaluation_budget", "persistent_stagnation",
-        "repertoire_exhausted",
+        "generation_limit", "evaluation_budget", "repertoire_exhausted",
     )
+    if not sparse:
+        stop_reasons += ("persistent_stagnation",)
     if result["stop_reason"] not in stop_reasons:
         raise ContractError("%s.stop_reason must be one of %s" % (context, stop_reasons))
     proposals = result["proposals"]
@@ -1078,10 +1081,13 @@ def validate_creativity_native_result(result, *, dimensions, shortlist_size):
     if result["outcome"] != outcome:
         raise ContractError("%s.outcome must be %s for this shortlist" % (context, outcome))
 
+    shared_variants = {variant["id"]: variant["text"] for variant in variants} if sparse else None
     material = {
         dimension["id"]: (
             dimension["meaning"],
-            {variant["id"]: variant["text"] for variant in dimension["variants"]},
+            shared_variants if sparse else {
+                variant["id"]: variant["text"] for variant in dimension["variants"]
+            },
         )
         for dimension in dimensions
     }
@@ -1091,7 +1097,8 @@ def validate_creativity_native_result(result, *, dimensions, shortlist_size):
         proposal_context = "%s.proposals[%d]" % (context, index)
         _exact_keys(
             proposal,
-            ("candidate_id", "components", "proposal", "reason", "assumptions", "score"),
+            ("candidate_id", "components", "proposal", "reason", "assumptions", "score")
+            + (("constraint_valid", "constraint_violations") if sparse else ()),
             (), proposal_context,
         )
         for name in ("candidate_id", "proposal", "reason"):
@@ -1114,8 +1121,12 @@ def validate_creativity_native_result(result, *, dimensions, shortlist_size):
             raise ContractError("%s.score must be a finite number in [0, 1]" % proposal_context)
 
         components = proposal["components"]
-        if not isinstance(components, list) or len(components) != len(material):
-            raise ContractError("%s.components must cover every dimension once" % proposal_context)
+        if not isinstance(components, list) or not (
+            1 <= len(components) <= len(material) if sparse else len(components) == len(material)
+        ):
+            raise ContractError("%s.components must cover %s dimensions once" % (
+                proposal_context, "active" if sparse else "every",
+            ))
         genome = {}
         for component_index, component in enumerate(components):
             component_context = "%s.components[%d]" % (proposal_context, component_index)
