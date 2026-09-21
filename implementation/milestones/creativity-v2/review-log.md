@@ -185,6 +185,16 @@
 
 ## slice_doc-06 (Compare prompt formulations on three different problems)
 
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/creativity-v2/slices/slice-06.md` (raw: `implementation/milestones/creativity-v2/.run/raw/slice_doc-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-06-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/creativity-v2/.run/raw/slice_doc-06-codex-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-06-codex-r1`
 
 ## milestone_verification-2 (?)
 
