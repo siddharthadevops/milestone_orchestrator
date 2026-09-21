@@ -375,6 +375,105 @@ selectedTask = pages.terminal.task.id;
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """, ("refreshTaskPage", "paintTaskPage", "controlSelectedTask"))
 
+    def test_sparse_evidence_rendering(self):
+        from orchestrator.tests.test_task_api import TaskApiTest
+
+        for mode, all_zero in (("fixed", False), ("interchangeable", True)):
+            with self.subTest(mode=mode, all_zero=all_zero):
+                source = TaskApiTest()
+                self.addCleanup(source.doCleanups)
+                pages, _ = source.creativity_projection_pages(sparse=True, order_mode=mode, all_zero=all_zero)
+                self.javascript("const pages = " + json.dumps(pages) + ";\n" + r"""
+function render(data) {
+  lastTaskLifecycle = data.lifecycle;
+  return renderTaskPage(data.task, 'today', data.creativity);
+}
+assert(render(pages.no_progress).includes('No saved progress available'));
+assert(render(pages.genes).includes('The generator has not returned search material yet'));
+assert(render(pages.batch).includes('Best candidates from all accepted evaluations'));
+assert(render(pages.batch).includes('Proposal 1'));
+assert(render(pages.paused).includes('>Resume</button>'));
+assert(render(pages.prepared).includes('awaiting task completion'));
+assert(!render(pages.prepared).includes('<h3>Result</h3>'));
+assert(render(pages.terminal).includes('<h3>Result</h3>'));
+const material = pages.terminal.creativity.search_material;
+const materialHTML = creativitySearchMaterial(material, true);
+for (const value of [material.objective, material.context_summary, material.composition_guidance,
+    material.order_semantics, ...material.facts, ...material.assumptions, ...material.unknowns,
+    ...material.constraints.flatMap(item => [item.id, item.text]),
+    ...material.criteria.flatMap(item => [item.id, item.text]),
+    ...material.dimensions.flatMap(item => [item.id, item.meaning])])
+  assert(materialHTML.includes(esc(value)), value);
+assert.equal(materialHTML.split('Shared repertoire').length - 1, 1);
+for (const variant of material.variants)
+  assert.equal(materialHTML.split(esc(variant.text)).length - 1, 1);
+assert(!materialHTML.includes('<Action') && !materialHTML.includes('<Focus'));
+for (const data of Object.values(pages)) {
+  const html = render(data), view = data.creativity;
+  assert(!html.includes('<img'));
+  for (const retired of ['reference:', 'patience window', 'Expansion interventions',
+      'expansion interventions:', 'Reassessing candidates', 'Historical evaluator regime'])
+    assert(!html.includes(retired), retired);
+  if (!view) continue;
+  assert(html.includes(`Accepted candidate evaluations: ${view.evaluated_candidates} / ${view.evaluation_budget}`));
+  assert(html.includes(`${view.generations_completed} completed`));
+  assert(html.includes(`Best retained evaluation: ${view.best_score === null ? 'unavailable' : view.best_score}`));
+  assert.equal(html.includes('Stop reason:'), view.stop_reason !== null);
+  if (view.stop_reason !== null) assert(html.includes(`Stop reason: ${view.stop_reason}`));
+  const evaluations = creativityCandidateEvaluations(view.candidate_evaluations, true);
+  assert(html.includes(evaluations));
+  for (const item of view.candidate_evaluations) {
+    for (const value of [item.candidate_id, item.proposal, item.reason, ...item.assumptions,
+        ...item.constraint_violations, item.call_id, item.prompt_path, ...Object.values(item.regime)])
+      assert(evaluations.includes(esc(value)), value);
+    assert(evaluations.includes(`${item.active_count} active · ${item.omitted_count} omitted`));
+    assert(evaluations.includes(`score ${item.score} · ${item.constraint_valid ? 'valid' : 'constraint-invalid'}`));
+    let previous = evaluations.indexOf(esc(item.candidate_id));
+    for (const component of item.components) {
+      const position = evaluations.indexOf(`<li><b>${esc(component.dimension)}</b> · ${esc(component.variant)}`, previous);
+      assert(position > previous);
+      previous = position;
+    }
+  }
+  const proposals = data.task.result ? data.task.result.native_result.proposals : view.best_candidates;
+  const ranked = creativityProposals(proposals, view.search_material, true);
+  assert(html.includes(ranked));
+  let previous = -1;
+  for (const item of proposals) {
+    const position = ranked.indexOf(esc(item.candidate_id), previous + 1);
+    assert(position > previous);
+    previous = position;
+    assert(ranked.includes(`${item.components.length} active · ${10 - item.components.length} omitted`));
+    assert(ranked.includes(`evaluation ${item.score}`));
+    assert(ranked.includes(item.constraint_valid ? 'valid' : 'constraint-invalid'));
+    assert(ranked.includes(esc(item.constraint_violations.join(', ') || 'None')));
+  }
+}
+const terminal = render(pages.terminal);
+for (const text of ['3 active · 7 omitted', '10 active · 0 omitted', 'assessment retained in ranking',
+    'constraint-invalid', 'Constraint violations', 'budget', 'not probabilities of success or proof of creativity',
+    'tokens unknown', 'cost unknown', 'some calls are still unpriced, so this is a floor'])
+  assert(terminal.includes(text), text);
+const polls = [pages.batch, pages.paused, pages.prepared, pages.terminal], reads = [];
+const api = async path => { reads.push(path); return polls.shift(); };
+const detail = {innerHTML: '', querySelectorAll: () => []};
+const document = {getElementById: () => detail};
+const syncRequestMore = () => {}, updateBottomJump = () => {}, refreshRuns = () => {};
+const requestAnimationFrame = callback => callback();
+let lastTaskPage = null, lastTaskPipeline = null, taskPageSeq = 0;
+let taskPagePaintSeq = 0, pendingLanding = null;
+const lastTaskRows = [];
+selectedTask = pages.terminal.task.id;
+(async () => {
+  for (const text of ['Proposal 1', '>Resume</button>', 'awaiting task completion', '<h3>Result</h3>']) {
+    await refreshTaskPage();
+    assert(detail.innerHTML.includes(text), text);
+  }
+  await refreshTaskPage();
+  assert.deepEqual(reads, Array(4).fill(`/api/tasks/${selectedTask}`));
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""", ("refreshTaskPage", "paintTaskPage"))
+
     def test_task_repaint_preserves_reading_position_and_keyed_details(self):
         self.javascript(r"""
 const detailNode = (key, open) => ({

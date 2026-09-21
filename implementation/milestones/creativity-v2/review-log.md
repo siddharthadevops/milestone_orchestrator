@@ -148,3 +148,16 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_doc-05-codex-r1`
 
+## slice_impl-05-a (Expose sparse controls and inspectable evidence)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/creativity-v2/.run/raw/slice_impl-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/creativity-v2/.run/raw/slice_impl-05-codex-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-codex-r1`
+

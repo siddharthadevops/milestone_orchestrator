@@ -111,6 +111,13 @@ def _creativity_candidate_evaluations(checkpoint, order_mode=None, *, creativity
                     creativity_semantics=creativity_semantics,
                 ),
             })
+            if creativity_semantics == "sparse_v2":
+                active_count = len(projected[-1]["components"])
+                projected[-1].update(
+                    active_count=active_count,
+                    omitted_count=len(dimensions) - active_count,
+                    **{key: copy.deepcopy(batch[key]) for key in ("call_id", "prompt_path", "regime")},
+                )
     return projected
 
 
@@ -150,6 +157,7 @@ def creativity_view(home, record):
         initial_genes_supplied="initial_genes" in record["order"],
     )
     if semantics == "sparse_v2":
+        view["stop_reason"] = progress["stop_reason"]
         view["best_score"] = proposals[0]["score"] if proposals else None
         view["best_candidate_valid"] = proposals[0]["constraint_valid"] if proposals else None
     return view

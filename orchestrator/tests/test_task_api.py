@@ -466,18 +466,24 @@ class TaskApiTest(unittest.TestCase):
                 self.assertEqual(search._terminal(host, record["id"])["result"]["status"], "success")
                 self.assertEqual(self.request("DELETE", path)[0], 200)
 
-    def creativity_projection_pages(self):
+    def creativity_projection_pages(self, *, sparse=False, order_mode="fixed", all_zero=False):
         """Replay owner-produced checkpoints through the ordinary detail route."""
         from orchestrator import kvstore
-        from orchestrator.tests.test_creativity_task import CreativityTaskTest
+        from orchestrator.tests.test_creativity_task import CreativityTaskTest, SparseCreativityTaskTest
         from orchestrator.tests.test_task_controls_api import HeldHost
 
-        search = CreativityTaskTest()
+        search = (SparseCreativityTaskTest if sparse else CreativityTaskTest)()
         search.setUp()
         self.addCleanup(search.doCleanups)
         self.home, self.primary, self.additional = search.home, search.primary, search.additional
+        if sparse:
+            search.material["dimensions"] = [
+                {"id": "d%s" % i, "meaning": "<Focus & %s>" % i} for i in range(10)
+            ]
+            search.material["variants"][0]["text"] = "<Action & 0>"
         record = search.admit(prompt_set="operator", generation_limit=3, max_evaluated_candidates=20,
-                              evaluation_batch_size=1, evaluation_concurrency=2)
+                              evaluation_batch_size=1, evaluation_concurrency=1 if sparse else 2,
+                              order_mode=order_mode)
         checkpoint_store = task_api.creativity_checkpoint_store(self.home, record["id"])
         store = task_api.StandaloneTaskStore(self.home)
         snapshots = {"no_progress": (kvstore.ABSENT, store._read_document(record["id"])[1])}
@@ -506,23 +512,40 @@ class TaskApiTest(unittest.TestCase):
                 staffing.edit_session(self.home, search.session, {"material": "business"})
             return revision
 
+        assessed = []
+
         def physical(*args, **kwargs):
             result = search.physical(*args, **kwargs)
             if search.calls[-1]["job"] == "create_genes":
                 return runners.RunnerResult(result.text, 0, 1.0)  # No provider usage/price.
             reply = json.loads(result.text)
             for item in reply.get("evaluations", []):
+                if sparse:
+                    valid = not all_zero and len(assessed) == 1
+                    item.update(score=0 if all_zero else (0.9 if not assessed else 0.4),
+                                constraint_valid=valid, constraint_violations=[] if valid else ["budget"])
+                    assessed.append(item["candidate_id"])
                 item.update(proposal='<img src=x onerror="alert(1)"> A useful proposal.\nA second line.',
                             reason="Fits the objective & constraints.", assumptions=["Readers have time.", "Budget holds."])
             return search.result(reply)
 
         host = search.host(physical)
-        with mock.patch.object(kvstore.LocalKVClient, "put", new=capture):
+        make_population = task_api.creativity_search.make_population
+        rng = mock.Mock()
+        rng.random.side_effect = [1] * 3 + [0] * 7 + [1] * 10
+        rng.randrange.side_effect = lambda bound: bound - 1 if bound > 2 else 0
+
+        def population(*args, **kwargs):
+            return make_population(*args, **kwargs, **({"rng": rng} if sparse else {}))
+
+        with mock.patch.object(kvstore.LocalKVClient, "put", new=capture), mock.patch.object(
+            task_api.creativity_search, "make_population", side_effect=population,
+        ):
             host.start(record, search.config)
             terminal = search._terminal(host, record["id"])
         self.assertEqual(terminal["result"]["status"], "success", terminal)
         snapshots["terminal"] = (search.checkpoint(record), store._read_document(record["id"])[1])
-        snapshots["paused"] = copy.deepcopy(snapshots["expansion"])
+        snapshots["paused"] = copy.deepcopy(snapshots["batch" if sparse else "expansion"])
         held = HeldHost(self.home)
         self.start_server(held)
         pages = {}
@@ -538,10 +561,12 @@ class TaskApiTest(unittest.TestCase):
                 with registry.locked(self.home):
                     store.pause_locked(record["id"], "Provider quota <exhausted>", source="error")
             path = "/api/tasks/" + record["id"]
+            saved_document = store._read_document(record["id"])
             code, page = self.request("GET", path)
             self.assertEqual(code, 200, page)
             self.assertEqual(self.request("GET", path), (code, page))
             self.assertEqual(checkpoint_store.get("checkpoint"), checkpoint)
+            self.assertEqual(store._read_document(record["id"]), saved_document)
             self.assertEqual(page["lifecycle"]["history"], store.lifecycle(record["id"])["history"])
             if "accounting" in page["lifecycle"]:
                 self.assertEqual(page["lifecycle"]["accounting"], store.lifecycle(record["id"])["accounting"])
@@ -549,6 +574,63 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(search.calls, calls_before)
         self.assertEqual(held.started, [])
         return pages, snapshots
+
+    def test_sparse_inspection_projection(self):
+        for mode in ("fixed", "interchangeable"):
+            for all_zero in (False, True):
+                with self.subTest(mode=mode, all_zero=all_zero):
+                    pages, snapshots = self.creativity_projection_pages(
+                        sparse=True, order_mode=mode, all_zero=all_zero,
+                    )
+                    self.assertIsNone(pages["no_progress"]["creativity"])
+                    self.assertIsNone(pages["genes"]["creativity"]["stop_reason"])
+                    self.assertEqual(pages["batch"]["creativity"]["evaluated_candidates"], 1)
+                    self.assertEqual(len(pages["batch"]["creativity"]["best_candidates"]), 1)
+                    self.assertEqual(pages["paused"]["lifecycle"]["status"], "paused")
+                    self.assertIsNone(pages["prepared"]["task"]["result"])
+                    for stage, page in pages.items():
+                        view, checkpoint = page["creativity"], snapshots[stage][0]
+                        if view is None:
+                            continue
+                        self.assertEqual(view["search_material"], checkpoint["search_material"])
+                        for key in ("stop_reason", "generations_completed"):
+                            self.assertEqual(view[key], checkpoint["progress"][key])
+                        self.assertEqual(view["evaluation_budget"], 20)
+                        saved = [(batch, item) for batch in checkpoint.get("evaluation", {}).get("batches", [])
+                                 for item in batch["evaluations"]]
+                        self.assertEqual(len(view["candidate_evaluations"]), len(saved))
+                        self.assertEqual(view["evaluated_candidates"], len(saved))
+                        for projected, (batch, item) in zip(view["candidate_evaluations"], saved):
+                            self.assertEqual({key: projected[key] for key in item}, item)
+                            for key in ("generation", "regime_revision", "call_id", "prompt_path", "regime"):
+                                self.assertEqual(projected[key], batch[key])
+                            self.assertEqual(projected["current_regime"],
+                                             batch["regime_revision"] == checkpoint["evaluation"]["regime_revision"])
+                            self.assertEqual(projected["active_count"], len(projected["components"]))
+                            self.assertEqual(projected["active_count"] + projected["omitted_count"], 10)
+                        best = view["best_candidates"]
+                        ranked = sorted((item for _, item in saved), key=lambda item: item["score"], reverse=True)[:2]
+                        self.assertEqual([{key: item[key] for key in ranked[0]} for item in best], ranked)
+                        self.assertEqual(view["best_score"], ranked[0]["score"] if ranked else None)
+                        self.assertEqual(view["best_candidate_valid"], ranked[0]["constraint_valid"] if ranked else None)
+                    view = pages["terminal"]["creativity"]
+                    first_generation = sorted(view["candidate_evaluations"][:2], key=lambda item: item["active_count"])
+                    for item, active in zip(first_generation, (3, 10)):
+                        ids = list(range(active))
+                        if mode == "interchangeable":
+                            ids.reverse()
+                        self.assertEqual(item["components"], [
+                            {"dimension_id": "d%s" % i, "dimension": "<Focus & %s>" % i,
+                             "variant_id": "v0", "variant": "<Action & 0>"} for i in ids
+                        ])
+                    self.assertFalse(view["candidate_evaluations"][0]["current_regime"])
+                    self.assertTrue(view["candidate_evaluations"][-1]["current_regime"])
+                    self.assertFalse(view["best_candidates"][0]["constraint_valid"])
+                    if all_zero:
+                        self.assertTrue(all(item["score"] == 0 and not item["constraint_valid"]
+                                            for item in view["candidate_evaluations"]))
+                    self.assertEqual(view["stop_reason"], "generation_limit")
+                    self.assertEqual(view["best_candidates"], pages["terminal"]["task"]["result"]["native_result"]["proposals"])
 
     def test_creativity_projection_tracks_saved_work(self):
         pages, snapshots = self.creativity_projection_pages()

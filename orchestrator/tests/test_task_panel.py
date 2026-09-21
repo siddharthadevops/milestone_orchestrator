@@ -59,8 +59,8 @@ class TaskPanelTests(unittest.TestCase):
             "facts": [], "constraints": [], "assumptions": [], "unknowns": [],
             "dimensions": [{
                 "id": "approach", "meaning": "How to proceed",
-                "variants": [{"id": "reuse", "text": "Reuse what exists"}],
             }],
+            "variants": [{"id": "reuse", "text": "Reuse the café space"}],
             "composition_guidance": "Apply the selected components in order.",
             "criteria": [{"id": "usefulness", "text": "Serves the objective"}],
             "order_semantics": "Sequence in which the selected actions are applied.",
@@ -116,6 +116,8 @@ async function postJSON(path, payload) {
   });
   const body = await response.json();
   assert.equal(response.status, 201, JSON.stringify(body));
+  assert.equal(body.task.order.creativity_semantics, 'sparse_v2');
+  assert.deepEqual(body.task.order.initial_genes, payload.initial_genes);
   const admitted = {...body.task.order.configuration};
   if (!Object.hasOwn(payload.configuration, 'max_evaluated_candidates')) {
     assert.equal(admitted.max_evaluated_candidates,
@@ -201,6 +203,7 @@ async function postJSON(path, payload) {
   fields.t_initial_genes.value = JSON.stringify(fixture.initialGenes);
   await submitTaskForm();
   assert.deepEqual(posts.at(-1).initial_genes, fixture.initialGenes);
+  const pastedGenes = posts.at(-1).initial_genes;
   fields.t_initial_genes.value = '{not valid JSON';
   const postCount = posts.length;
   await submitTaskForm();
@@ -209,10 +212,15 @@ async function postJSON(path, payload) {
   fields.t_initial_genes.value = '   ';
   await submitTaskForm();
   assert.equal(Object.hasOwn(posts.at(-1), 'initial_genes'), false);
-  const fileInput = {files: [{name: 'genes.json', text: async () => '{"utf8":"café"}'}], value: 'chosen'};
+  const fileContents = JSON.stringify(fixture.initialGenes, null, 2);
+  const fileInput = {files: [{name: 'genes.json', text: async () => fileContents}], value: 'chosen'};
+  const beforeLoad = posts.length;
   await loadTaskInitialGenesFile(fileInput);
-  assert.equal(fields.t_initial_genes.value, '{"utf8":"café"}');
+  assert.equal(posts.length, beforeLoad);
+  assert.equal(fields.t_initial_genes.value, fileContents);
   assert.equal(fileInput.value, '');
+  await submitTaskForm();
+  assert.deepEqual(posts.at(-1).initial_genes, pastedGenes);
   let readWrongExtension = false;
   const wrongFile = {files: [{name: 'genes.txt', text: async () => {
     readWrongExtension = true; return '{}';
@@ -424,7 +432,7 @@ async function postJSON(path, payload) {
             "Evaluated candidates (${items.length})",
             "constraint-invalid",
             "Constraint violations",
-            "creativityCandidateEvaluations(view.candidate_evaluations)",
+            "creativityCandidateEvaluations(view.candidate_evaluations, sparse)",
         ):
             self.assertIn(text, self.panel)
 

@@ -1501,6 +1501,7 @@ class SparseCreativityTaskTest(unittest.TestCase):
                         self.assertEqual(terminal["result"]["status"], "success", terminal["result"])
                         native, checkpoint = terminal["result"]["native_result"], self.checkpoint(record)
                         self.assertEqual(native["stop_reason"], stop)
+                        self.assertEqual(task_api.creativity_view(self.home, terminal)["stop_reason"], stop)
                         self.assertEqual(native["generations_completed"], completed)
                         self.assertEqual(native["evaluated_candidates"], accepted)
                         self.assertEqual(native["expansion_interventions"], 0)

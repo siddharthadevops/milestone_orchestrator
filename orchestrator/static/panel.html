@@ -5614,10 +5614,15 @@ function taskControlHistory(lifecycle) {
       (event.reason ? `<div class="story-note">${esc(event.reason)}</div>` : "") +
       `</div>`).join("") + `</details>`;
 }
-function creativityProposals(proposals) {
+function creativityProposals(proposals, material = null, sparse = false) {
   return proposals.map((proposal, index) => `<div class="card"><h4>Proposal ${index + 1}` +
     ` · evaluation ${esc(proposal.score)}</h4>` +
     `<div class="story-meta">${esc(proposal.candidate_id)}</div>` +
+    (sparse ? `<div class="story-note">${proposal.components.length} active · ` +
+      `${material.dimensions.length - proposal.components.length} omitted · ` +
+      `${proposal.constraint_valid ? "valid" : "constraint-invalid"}</div>` +
+      `<div class="story-note"><b>Constraint violations</b> · ` +
+      `${esc(proposal.constraint_violations.join(", ") || "None")}</div>` : "") +
     `<div class="story-note">${esc(proposal.proposal)}</div>` +
     `<ol>${proposal.components.map(part => `<li><b>${esc(part.dimension)}</b>` +
       ` · ${esc(part.variant)}</li>`).join("")}</ol>` +
@@ -5625,7 +5630,7 @@ function creativityProposals(proposals) {
     `<div class="story-note"><b>Assumptions</b> · ${esc(proposal.assumptions.length
       ? proposal.assumptions.join("\n") : "None stated")}</div></div>`).join("");
 }
-function creativitySearchMaterial(material) {
+function creativitySearchMaterial(material, sparse = false) {
   if (!material) return `<div class="card"><h3>Search genes</h3>` +
     `<div class="story-note">The generator has not returned search material yet.</div></div>`;
   const dimensions = material.dimensions || [];
@@ -5633,13 +5638,25 @@ function creativitySearchMaterial(material) {
     `<summary>Search genes (${dimensions.length})</summary>` +
     `<div class="story-note"><b>Objective</b> · ${esc(material.objective)}</div>` +
     `<div class="story-note"><b>Order semantics</b> · ${esc(material.order_semantics)}</div>` +
-    dimensions.map(dimension => `<details class="card" ` +
+    (sparse ? `<div class="story-note"><b>Context summary</b> · ${esc(material.context_summary)}</div>` +
+      ["facts", "assumptions", "unknowns"].map(key => `<div class="story-note">` +
+        `<b>${esc(key)}</b> · ${esc(material[key].join("\n") || "None stated")}</div>`).join("") +
+      ["constraints", "criteria"].map(key => `<div class="story-note"><b>${esc(key)}</b>` +
+        `<ul>${material[key].map(item => `<li>${esc(item.id)} · ${esc(item.text)}</li>`).join("")}` +
+        `</ul></div>`).join("") +
+      `<div class="story-note"><b>Composition guidance</b> · ${esc(material.composition_guidance)}</div>` +
+      `<ul>${dimensions.map(dimension => `<li><b>${esc(dimension.id)}</b> · ` +
+        `${esc(dimension.meaning)}</li>`).join("")}</ul>` +
+      `<h4>Shared repertoire (${material.variants.length})</h4>` +
+      `<ul>${material.variants.map(variant => `<li><b>${esc(variant.id)}</b> · ` +
+        `${esc(variant.text)}</li>`).join("")}</ul>`
+    : dimensions.map(dimension => `<details class="card" ` +
       `data-task-detail-key="creativity-dimension:${esc(dimension.id)}"><summary>${esc(dimension.id)}` +
       ` · ${esc(dimension.meaning)} · ${esc(dimension.variants.length)} variants</summary>` +
       `<ul>${dimension.variants.map(variant => `<li><b>${esc(variant.id)}</b> · ` +
-        `${esc(variant.text)}</li>`).join("")}</ul></details>`).join("") + `</details>`;
+        `${esc(variant.text)}</li>`).join("")}</ul></details>`).join("")) + `</details>`;
 }
-function creativityCandidateEvaluations(evaluations) {
+function creativityCandidateEvaluations(evaluations, sparse = false) {
   const items = evaluations || [];
   return `<details class="card" data-task-detail-key="creativity-evaluations" open>` +
     `<summary>Evaluated candidates (${items.length})</summary>` +
@@ -5652,8 +5669,13 @@ function creativityCandidateEvaluations(evaluations) {
         `${esc(item.candidate_id)}">` +
         `<summary>Generation ${esc(item.generation)}` +
         ` · score ${esc(item.score)} · ${esc(validity)} · ${esc(item.candidate_id)}</summary>` +
-        (!item.current_regime ? `<div class="amend-hint">Historical evaluator regime ` +
-          `${esc(item.regime_revision)}</div>` : "") +
+        (!item.current_regime ? `<div class="amend-hint">${sparse ? "Earlier" : "Historical"} evaluator regime ` +
+          `${esc(item.regime_revision)}${sparse ? " · assessment retained in ranking" : ""}</div>` : "") +
+        (sparse ? `<div class="story-note">${item.active_count} active · ${item.omitted_count} omitted</div>` +
+          `<div class="story-meta"><b>Evaluator</b> · ${esc([item.regime.material, item.regime.agent,
+            item.regime.model, item.regime.effort].join(" · "))}</div>` +
+          `<div class="story-meta"><b>Call</b> · ${esc(item.call_id)}</div>` +
+          `<div class="story-meta"><b>Prompt</b> · ${esc(item.prompt_path)}</div>` : "") +
         `<ol>${item.components.map(component => `<li><b>${esc(component.dimension)}</b> · ` +
           `${esc(component.variant)}</li>`).join("")}</ol>` +
         `<div class="story-note"><b>Proposal</b> · ${esc(item.proposal)}</div>` +
@@ -5664,7 +5686,7 @@ function creativityCandidateEvaluations(evaluations) {
     }).join("") : `<div class="story-note">No candidate evaluations have completed yet.</div>`) +
     `</details>`;
 }
-function creativityProgress(view, configuration, open) {
+function creativityProgress(view, configuration, open, sparse = false) {
   if (!view) return `<div class="card"><h3>Search progress</h3>` +
     `<div class="story-note">No saved progress available.</div></div>`;
   const score = value => value === null ? "unavailable" : value;
@@ -5677,34 +5699,39 @@ function creativityProgress(view, configuration, open) {
     `<div class="story-note">Best retained evaluation: ${esc(score(view.best_score))}` +
     (view.best_candidate_valid === null || view.best_candidate_valid === undefined ? "" :
       ` (${view.best_candidate_valid ? "valid" : "constraint-invalid"})`) +
-    ` · reference: ${esc(score(view.reference_score))}</div>` +
+    (sparse ? "" : ` · reference: ${esc(score(view.reference_score))}`) + `</div>`;
+  if (sparse && view.stop_reason !== null)
+    html += `<div class="story-note">Stop reason: ${esc(view.stop_reason)}</div>`;
+  if (!sparse) html +=
     `<div class="story-note">Generations without required improvement: ${esc(view.stagnant_generations)}` +
     ` / ${esc(configuration.patience_generations)}` +
     ` · patience window ${view.window_complete ? "complete" : "in progress"}</div>` +
     `<div class="story-note">Expansion interventions: ${esc(view.expansion_interventions)}` +
     ` · consecutive: ${esc(view.consecutive_expansions)}` +
-    ` / ${esc(configuration.max_stagnation_expansions)}</div>` +
-    `<div class="amend-hint">Scores are evaluations against this objective, not probabilities of success.</div>`;
-  if (view.phase === "rebaseline")
+    ` / ${esc(configuration.max_stagnation_expansions)}</div>`;
+  html += `<div class="amend-hint">Scores are evaluations against this objective, not probabilities of success or proof of creativity.</div>`;
+  if (!sparse && view.phase === "rebaseline")
     html += `<div class="story-note">Reassessing candidates under the current evaluator.</div>`;
   if (open && view.job === "complete")
     html += `<div class="story-note">Search result prepared; awaiting task completion.</div>`;
-  html += creativitySearchMaterial(view.search_material);
-  html += creativityCandidateEvaluations(view.candidate_evaluations);
-  if (open) html += `<h4>Best candidates from the last completed comparison</h4>` +
-    (view.best_candidates.length ? creativityProposals(view.best_candidates)
-      : `<div class="story-note">No candidates available from a completed comparison.</div>`);
+  html += creativitySearchMaterial(view.search_material, sparse);
+  html += creativityCandidateEvaluations(view.candidate_evaluations, sparse);
+  if (open) html += `<h4>${sparse ? "Best candidates from all accepted evaluations"
+    : "Best candidates from the last completed comparison"}</h4>` +
+    (view.best_candidates.length ? creativityProposals(view.best_candidates, view.search_material, sparse)
+      : `<div class="story-note">${sparse ? "No accepted candidate evaluations yet."
+        : "No candidates available from a completed comparison."}</div>`);
   return html + `</div>`;
 }
-function creativityResult(native) {
+function creativityResult(native, material = null, sparse = false) {
   return `<div class="story-note"><b>${native.outcome === "no_valid_candidates"
     ? "No valid proposal was found." : "Proposals"}</b></div>` +
     `<div class="story-note">Stop reason: ${esc(native.stop_reason)}</div>` +
     `<div class="story-note">Generations completed: ${esc(native.generations_completed)}` +
     ` · accepted candidate evaluations: ${esc(native.evaluated_candidates)}` +
-    ` · expansion interventions: ${esc(native.expansion_interventions)}</div>` +
-    `<div class="amend-hint">Scores are evaluations against this objective, not probabilities of success.</div>` +
-    creativityProposals(native.proposals);
+    (sparse ? "" : ` · expansion interventions: ${esc(native.expansion_interventions)}`) + `</div>` +
+    `<div class="amend-hint">Scores are evaluations against this objective, not probabilities of success or proof of creativity.</div>` +
+    creativityProposals(native.proposals, material, sparse);
 }
 function taskPhysicalCalls(lifecycle) {
   const calls = lifecycle ? lifecycle.history.filter(event => event.physical_dispatch) : [];
@@ -5736,6 +5763,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
   fullRequestText = String(request.request || "");
   const context = request.context || {};
   const configuration = (record.order || {}).configuration || {};
+  const sparse = record.order.creativity_semantics === "sparse_v2";
   const state = open ? ((lifecycle || {}).status || "running") : result.status;
   const stateCls = taskStateClassName(record, lifecycle);
   const standalone = !taskPageRunId;
@@ -5823,7 +5851,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
       tokenUsageHtml(accounting.token_usage, accounting.token_usage_partial) + `</div>`;
   html += taskControlHistory(lifecycle);
   if (executor === "creativity") {
-    html += creativityProgress(taskPipeline, configuration, open);
+    html += creativityProgress(taskPipeline, configuration, open, sparse);
     html += taskPhysicalCalls(lifecycle);
   }
   if (executor === "deep_task") html += deepTaskPipeline(taskPipeline);
@@ -5853,7 +5881,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
       costHtml(result.cost, result.cost_partial) +
       tokenUsageHtml(result.token_usage, result.token_usage_partial) +
       (executor === "creativity" && result.status === "success"
-        ? creativityResult(result.native_result) : "") +
+        ? creativityResult(result.native_result, sparse ? taskPipeline.search_material : null, sparse) : "") +
       `<details data-task-detail-key="native-result"><summary class="amend-hint">Native result (opaque TaskExecutor output)</summary>
        <pre class="story-note mono">${esc(typeof result.native_result === "string"
          ? result.native_result : JSON.stringify(result.native_result, null, 2))}</pre></details></div>`;
