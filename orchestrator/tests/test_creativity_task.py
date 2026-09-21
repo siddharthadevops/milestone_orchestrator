@@ -128,6 +128,44 @@ class CreativityTaskTest(unittest.TestCase):
                     for dispatch in dispatches
                 ))
 
+    def test_invalid_candidates_remain_visible_and_breed_but_never_publish(self):
+        self.valid = False
+        record = self.admit(
+            generation_limit=1,
+            max_evaluated_candidates=2,
+            population_size=2,
+            elite_count=1,
+            diversity_count=1,
+        )
+        host = self.host()
+        host.start(record, self.config)
+        terminal = self._terminal(host, record["id"])
+        native = terminal["result"]["native_result"]
+        self.assertEqual(native["outcome"], "no_valid_candidates")
+        self.assertEqual(native["proposals"], [])
+
+        checkpoint = self.checkpoint(record)
+        self.assertTrue(checkpoint["progress"]["archive"])
+        self.assertTrue(all(
+            not evaluation["constraint_valid"]
+            for _genome, evaluation in checkpoint["progress"]["archive"]
+        ))
+        view = task_api.creativity_view(
+            self.home,
+            task_api.StandaloneTaskStore(self.home).record(record["id"]),
+        )
+        self.assertEqual(view["search_material"], self.material)
+        self.assertEqual(len(view["candidate_evaluations"]), 2)
+        self.assertTrue(all(
+            not evaluation["constraint_valid"]
+            and evaluation["constraint_violations"] == ["budget"]
+            and evaluation["components"]
+            for evaluation in view["candidate_evaluations"]
+        ))
+        self.assertFalse(view["best_candidate_valid"])
+        self.assertEqual(view["best_score"], 0.4)
+        self.assertEqual(view["best_candidates"], [])
+
     def host(self, physical=None):
         return task_api.DirectTaskHost(
             self.home, runner_factory=lambda _config, _workspace: SimpleNamespace(call=physical or self.physical),
@@ -502,12 +540,16 @@ class CreativityTaskTest(unittest.TestCase):
                                 "COMPLETE SEARCH MATERIAL (JSON):\n",
                             )[1].splitlines()[0]), self.material)
                             promising = json.loads(prompt.split(
-                                "PROMISING VALID CANDIDATES (JSON; no historical scores or prestige):\n",
+                                "PROMISING EVALUATED CANDIDATES (JSON):\n",
                             )[1].splitlines()[0])
                             promising_ids = {item["candidate_id"] for item in promising}
                             self.assertTrue(promising_ids.isdisjoint(invalid_ids))
                             self.assertTrue(set(best_ids) <= promising_ids)
-                            self.assertTrue(all("score" not in item for item in promising))
+                            self.assertTrue(all(set(item) == {
+                                "candidate_id", "proposal", "constraint_valid",
+                                "constraint_violations", "reason", "assumptions",
+                                "score", "components",
+                            } for item in promising))
 
                     receipts = [event for event in public["lifecycle"]["history"] if "physical_dispatch" in event]
                     self.assertEqual(len(receipts), len(self.calls))

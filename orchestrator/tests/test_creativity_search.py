@@ -171,8 +171,13 @@ class CreativitySearchTest(unittest.TestCase):
         self.assertIsNot(survivors[0][0], genomes[3])
         self.assertEqual(evaluated, original)
         self.assertEqual(search.select_survivors(evaluated[:2], configuration), [evaluated[1]])
-        self.assertEqual(search.select_survivors(evaluated[:1], configuration), [])
+        self.assertEqual(search.select_survivors(evaluated[:1], configuration), [evaluated[0]])
         self.assertEqual(search.select_survivors([], configuration), [])
+
+        invalid = self.evaluated(genomes[:4], [0.4, 0.9, 0.7, 0.6], invalid=range(4))
+        provisional = search.select_survivors(invalid, configuration)
+        self.assertEqual([item[1]["score"] for item in provisional[:2]], [0.9, 0.7])
+        self.assertTrue(all(not item[1]["constraint_valid"] for item in provisional))
 
     def test_reserved_structural_diversity(self):
         dimensions = [{
@@ -504,17 +509,18 @@ class CreativitySearchTest(unittest.TestCase):
 
         empty = search.new_progress()
         empty.update(consecutive_expansions=1, expansion_interventions=1)
-        for index in range(3):
+        for index in range(4):
             observe(empty, genomes[index:index + 1], [1], invalid=(0,))
-            self.assertIsNone(empty["reference_score"])
-            self.assertIsNone(empty["best_score"])
-            self.assertEqual(empty["archive"], [])
-            self.assertEqual(empty["window_complete"], index == 2)
-        observe(empty, genomes[3:4], [0.25])
+            self.assertEqual(empty["reference_score"], 1)
+            self.assertEqual(empty["best_score"], 1)
+            self.assertTrue(empty["archive"])
+            self.assertFalse(empty["archive"][0][1]["constraint_valid"])
+            self.assertEqual(empty["window_complete"], index == 3)
+        observe(empty, genomes[4:5], [0.25])
         self.assertEqual(empty["reference_score"], 0.25)
         self.assertEqual(empty["stagnant_generations"], 0)
-        self.assertFalse(empty["progress_made"])
-        self.assertEqual(empty["consecutive_expansions"], 1)
+        self.assertTrue(empty["progress_made"])
+        self.assertEqual(empty["consecutive_expansions"], 0)
 
     def test_full_windows_bound_expansion(self):
         configuration = creativity_configuration(
@@ -603,16 +609,15 @@ class CreativitySearchTest(unittest.TestCase):
                 progress = search.new_progress()
                 pairs = self.evaluated(choices[:len(explored)], [1] * len(explored), invalid=(0, 1))
                 self.observe_generation(progress, pairs, configuration)
+                progress["window_complete"] = True
                 self.assertTrue(search.expansion_due(progress, configuration))
-                self.assertEqual(search.reproduce(material["dimensions"], progress["archive"],
-                                                  2, configuration, explored=explored), [])
                 with mock.patch.object(search.random, "randrange", return_value=0):
                     search.accept_expansion(progress, material, {"additions": []},
                                             configuration, explored=explored)
                 self.assertEqual(progress["stop_reason"],
                                  "repertoire_exhausted" if explored == all_keys else None)
-                self.assertEqual(progress["archive"], [])
-                self.assertIsNone(progress["best_score"])
+                self.assertEqual(len(progress["archive"]), len(explored))
+                self.assertEqual(progress["best_score"], 1 if explored else None)
                 self.assertEqual(progress["evaluated_candidates"], len(explored))
                 self.assertEqual(progress["generations_completed"], 1)
                 self.assertEqual(progress["expansion_interventions"], 1)

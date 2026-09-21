@@ -1524,12 +1524,16 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                    'you '
                                                                                    'wrote>"'],
                                                                           'variables': []}},
-                        'material_layers': {'create_genes@creativity': {'literature': {'instructions': {'parts': [{'text': ["LITERATURE REFINEMENT: derive useful choices from this work's imagery, voice,",
-                                                                                                                            'rhythm, tension and character agency when they serve the stated objective.',
-                                                                                                                            'Preserve supplied continuity and stylistic constraints; distinguish textual',
-                                                                                                                            'evidence from interpretive assumptions. These are lenses, not required',
-                                                                                                                            'dimensions. Preserve logical, position-independent units and the declared order',
-                                                                                                                            'semantics. Keep the generic objective and result contract unchanged.'],
+                        'material_layers': {'create_genes@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: derive movable narrative units such as actions, decisions,',
+                                                                                                                            'disclosures, reversals or experiential beats when they serve the objective. Use',
+                                                                                                                            'imagery, voice, rhythm, tension and agency as judgment lenses, not as abstract',
+                                                                                                                            'dimensions or fixed slots. Preserve supplied continuity and stylistic constraints;',
+                                                                                                                            'only operator or canon requirements, or dependencies grounded in supplied evidence,',
+                                                                                                                            'are hard constraints. Put unresolved',
+                                                                                                                            'risk or feasibility in assumptions, unknowns or criteria instead of manufacturing',
+                                                                                                                            'a prohibition. order_semantics must name how relative placement changes the story,',
+                                                                                                                            'causal execution or reader experience; never define it as merely the order in which',
+                                                                                                                            'the proposal is explained. Keep the generic objective and result contract unchanged.'],
                                                                         'variables': []}]},
                                             'questions': {'intro': [],
                                                           'items': []},
@@ -1544,22 +1548,13 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                           'questions': {'intro': [],
                                                         'items': []},
                                           'output_contract': {'sections': []}}},
- 'evaluate_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: assess '
-                                                                                        'how the chosen components '
-                                                                                        'affect imagery, voice,',
-                                                                                        'rhythm, tension and character '
-                                                                                        'agency where these serve the '
-                                                                                        'objective. Interpret',
-                                                                                        'the combination faithfully; '
-                                                                                        'preserve continuity and '
-                                                                                        'stylistic constraints rather',
-                                                                                        'than smoothing away the '
-                                                                                        "work's character. Distinguish "
-                                                                                        'textual evidence from',
-                                                                                        'interpretive assumptions. '
-                                                                                        'Keep the generic objective '
-                                                                                        'and result contract '
-                                                                                        'unchanged.'],
+ 'evaluate_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: assess the ordered combination exactly as supplied and judge',
+                                                                                        'its effect on imagery, voice, rhythm, tension, agency and reader experience where',
+                                                                                        'these serve the objective. Do not normalize a weak order into a better one. Preserve',
+                                                                                        "continuity and stylistic constraints rather than smoothing away the work's character.",
+                                                                                        'Mark a candidate invalid only when it violates an explicit supplied constraint; an',
+                                                                                        'unresolved risk or assumption may lower its score without becoming a new prohibition.',
+                                                                                        'Distinguish textual evidence from interpretation. Keep the generic contract unchanged.'],
                                                                                'variables': []}]},
                                                    'questions': {'intro': [], 'items': []},
                                                    'output_contract': {'sections': []}},
@@ -1580,21 +1575,12 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                              'variables': []}]},
                                                  'questions': {'intro': [], 'items': []},
                                                  'output_contract': {'sections': []}}},
- 'expand_genes@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: seek '
-                                                                                 'alternatives in imagery, voice, '
-                                                                                 'rhythm, tension and',
-                                                                                 'character agency only where the '
-                                                                                 'existing dimensions and objective '
-                                                                                 'support them.',
-                                                                                 'Preserve continuity and stylistic '
-                                                                                 'constraints; explain the useful '
-                                                                                 'difference',
-                                                                                 'rather than merely renaming a '
-                                                                                 'choice. Distinguish textual evidence '
-                                                                                 'from',
-                                                                                 'interpretive assumptions. Keep the '
-                                                                                 'generic objective and result '
-                                                                                 'contract unchanged.'],
+ 'expand_genes@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: add substantive alternatives for the same movable narrative',
+                                                                                 'unit, using scored invalid combinations and their violations as evidence without',
+                                                                                 'treating the unit itself as discarded. Seek differences in action, disclosure,',
+                                                                                 'reversal, experience, voice, rhythm, tension or agency only where the existing',
+                                                                                 'dimension supports them. Preserve continuity and stylistic constraints; do not',
+                                                                                 'rename a lens or encode a position. Keep the generic contract unchanged.'],
                                                                         'variables': []}]},
                                             'questions': {'intro': [], 'items': []},
                                             'output_contract': {'sections': []}},
@@ -5762,7 +5748,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                             {'ref': 'creativity_exploration'},
                                                             {'text': ['TASK: expand the repertoire after exploration has stalled, using the formulated search '
                                                                       'objective.',
-                                                                      'Read the complete search material, promising valid candidates and compact explored',
+                                                                      'Read the complete search material, promising evaluated candidates and compact explored',
                                                                       'account. Identify useful alternatives that the existing repertoire leaves unexplored.',
                                                                       'Suggest new variants only within existing dimensions, keeping their position-independent',
                                                                       'unit meanings intact wherever they move on the declared order axis.',
@@ -5772,8 +5758,9 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'Make each addition concrete and compatible with combining one variant per dimension.',
                                                                       'Explain why it may open a useful direction toward the objective while respecting hard',
                                                                       'constraints. Distinguish evidence from assumptions in that reason; do not invent facts.',
-                                                                      'Use promising candidates as context without historical scores, rank or prestige; their',
-                                                                      'presence is not proof of quality. Use the explored account to avoid merely relabeling',
+                                                                      'Use promising candidates as context, including their validity, violations and scores;',
+                                                                      'an invalid candidate is evidence about a combination, not proof that its individual',
+                                                                      'genes are useless. Use the explored account to avoid merely relabeling',
                                                                       'existing choices. Seek meaningful alternatives, not novelty for its own sake.',
                                                                       'Return an empty additions list when no useful new variant is apparent. The driver owns',
                                                                       'applying additions, selection and stopping. New IDs do not prove semantic novelty;',
@@ -5783,8 +5770,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       '{{objective}}',
                                                                       'COMPLETE SEARCH MATERIAL (JSON):',
                                                                       '{{search_material}}',
-                                                                      'PROMISING VALID CANDIDATES (JSON; no historical '
-                                                                      'scores or prestige):',
+                                                                      'PROMISING EVALUATED CANDIDATES (JSON):',
                                                                       '{{promising_candidates}}',
                                                                       'COMPACT EXPLORED ACCOUNT:',
                                                                       '{{explored_account}}'],
@@ -5799,10 +5785,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                            'dimensions and variants.'},
                                                                            {'name': 'promising_candidates',
                                                                             'required': True,
-                                                                            'description': 'Promising valid candidates '
-                                                                                           'as JSON, without '
-                                                                                           'historical scores or '
-                                                                                           'prestige; may be empty.'},
+                                                                            'description': 'Promising evaluated candidates as JSON, including validity evidence and scores; may be empty.'},
                                                                            {'name': 'explored_account',
                                                                             'required': True,
                                                                             'description': 'Compact account of '

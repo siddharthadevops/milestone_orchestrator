@@ -45,7 +45,7 @@ class TaskPanelTests(unittest.TestCase):
         )
         names = (
             "esc", "taskExecutorEntry", "taskConfigurationApplicable", "taskConfigurationValue",
-            "taskConfigurationOption", "renderTaskConfigurationSchema", "taskUsesExecutionBinding",
+            "taskConfigurationOption", "taskConfigurationLabel", "renderTaskConfigurationSchema", "taskUsesExecutionBinding",
             "setTaskConfigurationValue", "currentTaskConfiguration", "submitTaskForm",
             "snapshotTaskExecutorConfiguration", "onTaskConfigurationChange",
             "taskConfigurationLayers", "renderTaskExecutorEditor", "onTaskExecutorChange",
@@ -130,6 +130,7 @@ async function postJSON(path, payload) {
   const defaults = Object.fromEntries(Object.entries(schema).filter(([, definition]) => definition.default !== undefined)
     .map(([key, definition]) => [key, definition.default]));
   renderTaskExecutorEditor();
+  assert.match(fields.task_configuration.innerHTML, /Candidates per generation/);
   assert.equal(control('order_mode').value, 'interchangeable');
   for (const [key, value] of Object.entries(defaults)) assert.equal(control(key).value, String(value));
   assert.equal(control('max_evaluated_candidates').value, '');
@@ -412,6 +413,20 @@ async function postJSON(path, payload) {
                       self.task_ui)
         self.assertIn('if (initialGenesText)', self.task_ui)
         self.assertIn('#t_initial_genes {', self.panel)
+        self.assertIn("The generator decides how many genes", task_dialog)
+        self.assertIn('return "Candidates per generation"', self.task_ui)
+
+    def test_creativity_renders_search_genes_and_every_evaluation(self):
+        for text in (
+            "function creativitySearchMaterial",
+            "Search genes (${dimensions.length})",
+            "function creativityCandidateEvaluations",
+            "Evaluated candidates (${items.length})",
+            "constraint-invalid",
+            "Constraint violations",
+            "creativityCandidateEvaluations(view.candidate_evaluations)",
+        ):
+            self.assertIn(text, self.panel)
 
     def test_slice_plan_values_are_visible_and_read_only(self):
         self.assertIn("function slicePlanSummary(producerMap)",
@@ -530,8 +545,26 @@ async function postJSON(path, payload) {
         painter = re.search(
             r"function paintTaskPage\(\) \{(.*?)\n\}", self.panel, re.S
         ).group(1)
-        self.assertIn("wasOpen", painter)
+        self.assertIn("detailsOpen", painter)
+        self.assertIn('details[data-task-detail-key]', painter)
+        self.assertIn("node.dataset.taskDetailKey", painter)
+        self.assertIn("detailsOpen.has(key)", painter)
+        self.assertIn("paintSeq !== taskPagePaintSeq", painter)
+        self.assertIn("selectedTask !== taskId", painter)
         self.assertIn("syncRequestMore(det)", painter)
+        self.assertIn('pendingLanding === "top" ? 0 : det.scrollTop', painter)
+        self.assertEqual(painter.count("det.scrollTop = top;"), 2)
+        settled = painter.split("requestAnimationFrame(() => {", 1)[1]
+        self.assertLess(
+            settled.index("syncRequestMore(det);"),
+            settled.index("det.scrollTop = top;"),
+        )
+        for key in (
+            "task-control-history", "creativity-search",
+            "creativity-evaluations", "creativity-candidate:",
+            "physical-calls", "native-result",
+        ):
+            self.assertIn(f'data-task-detail-key="{key}', self.panel)
 
     def test_milestone_verification_renders_as_task_backed_peer(self):
         row = re.search(

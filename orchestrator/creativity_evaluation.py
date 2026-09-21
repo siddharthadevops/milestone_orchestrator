@@ -158,7 +158,10 @@ def expand_progress(
         search_material=json.dumps(search_material, ensure_ascii=False),
         promising_candidates=json.dumps([
             dict(candidate_id=item["candidate_id"], proposal=item["proposal"],
-                 assumptions=item["assumptions"], components=creativity_search.genome_components(
+                 constraint_valid=item["constraint_valid"],
+                 constraint_violations=item["constraint_violations"],
+                 reason=item["reason"], assumptions=item["assumptions"],
+                 score=item["score"], components=creativity_search.genome_components(
                      search_material["dimensions"], genome, configuration.get("order_mode"),
                  ))
             for genome, item in progress["archive"]

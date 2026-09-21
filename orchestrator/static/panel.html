@@ -823,6 +823,7 @@
   <div id="task_configuration"></div>
   <div class="field" id="t_initial_genes_field" style="display:none">
     <label>Initial genes JSON (optional)</label>
+    <div class="hint">The generator decides how many genes the problem needs. “Candidates per generation” controls combinations, not genes.</div>
     <textarea id="t_initial_genes" class="mono" spellcheck="false"
       placeholder='{"search_material": { … }}'></textarea>
     <div class="pathrow">
@@ -5479,6 +5480,7 @@ let lastTaskLifecycle = null;
 let lastTaskPipeline = null;
 let lastTaskPageSession = null;
 let taskPageSeq = 0;
+let taskPagePaintSeq = 0;
 let taskStopping = false;
 let taskControlPending = null;
 let taskStopNotice = "";
@@ -5605,7 +5607,8 @@ function taskControlHistory(lifecycle) {
   const history = (lifecycle && Array.isArray(lifecycle.history) ? lifecycle.history : [])
     .filter(event => !event.physical_dispatch);
   if (!history.length) return "";
-  return `<details class="card"><summary>Pause and recovery history (${history.length})</summary>` +
+  return `<details class="card" data-task-detail-key="task-control-history">` +
+    `<summary>Pause and recovery history (${history.length})</summary>` +
     history.map(event => `<div class="story-meta"><b>${esc(event.status || "")}</b>` +
       ` · ${esc([event.at, event.source].filter(Boolean).join(" · "))}` +
       (event.reason ? `<div class="story-note">${esc(event.reason)}</div>` : "") +
@@ -5622,6 +5625,45 @@ function creativityProposals(proposals) {
     `<div class="story-note"><b>Assumptions</b> · ${esc(proposal.assumptions.length
       ? proposal.assumptions.join("\n") : "None stated")}</div></div>`).join("");
 }
+function creativitySearchMaterial(material) {
+  if (!material) return `<div class="card"><h3>Search genes</h3>` +
+    `<div class="story-note">The generator has not returned search material yet.</div></div>`;
+  const dimensions = material.dimensions || [];
+  return `<details class="card" data-task-detail-key="creativity-search" open>` +
+    `<summary>Search genes (${dimensions.length})</summary>` +
+    `<div class="story-note"><b>Objective</b> · ${esc(material.objective)}</div>` +
+    `<div class="story-note"><b>Order semantics</b> · ${esc(material.order_semantics)}</div>` +
+    dimensions.map(dimension => `<details class="card" ` +
+      `data-task-detail-key="creativity-dimension:${esc(dimension.id)}"><summary>${esc(dimension.id)}` +
+      ` · ${esc(dimension.meaning)} · ${esc(dimension.variants.length)} variants</summary>` +
+      `<ul>${dimension.variants.map(variant => `<li><b>${esc(variant.id)}</b> · ` +
+        `${esc(variant.text)}</li>`).join("")}</ul></details>`).join("") + `</details>`;
+}
+function creativityCandidateEvaluations(evaluations) {
+  const items = evaluations || [];
+  return `<details class="card" data-task-detail-key="creativity-evaluations" open>` +
+    `<summary>Evaluated candidates (${items.length})</summary>` +
+    (items.length ? items.map(item => {
+      const validity = item.constraint_valid ? "valid" : "constraint-invalid";
+      const violations = item.constraint_violations.length
+        ? item.constraint_violations.join(", ") : "None";
+      return `<details class="card" ` +
+        `data-task-detail-key="creativity-candidate:${esc(item.regime_revision)}:` +
+        `${esc(item.candidate_id)}">` +
+        `<summary>Generation ${esc(item.generation)}` +
+        ` · score ${esc(item.score)} · ${esc(validity)} · ${esc(item.candidate_id)}</summary>` +
+        (!item.current_regime ? `<div class="amend-hint">Historical evaluator regime ` +
+          `${esc(item.regime_revision)}</div>` : "") +
+        `<ol>${item.components.map(component => `<li><b>${esc(component.dimension)}</b> · ` +
+          `${esc(component.variant)}</li>`).join("")}</ol>` +
+        `<div class="story-note"><b>Proposal</b> · ${esc(item.proposal)}</div>` +
+        `<div class="story-note"><b>Constraint violations</b> · ${esc(violations)}</div>` +
+        `<div class="story-note"><b>Reason</b> · ${esc(item.reason)}</div>` +
+        `<div class="story-note"><b>Assumptions</b> · ${esc(item.assumptions.length
+          ? item.assumptions.join("\n") : "None stated")}</div></details>`;
+    }).join("") : `<div class="story-note">No candidate evaluations have completed yet.</div>`) +
+    `</details>`;
+}
 function creativityProgress(view, configuration, open) {
   if (!view) return `<div class="card"><h3>Search progress</h3>` +
     `<div class="story-note">No saved progress available.</div></div>`;
@@ -5632,7 +5674,9 @@ function creativityProgress(view, configuration, open) {
     ` · ${esc(view.generations_completed)} completed</div>` +
     `<div class="story-note">Accepted candidate evaluations: ${esc(view.evaluated_candidates)}` +
     ` / ${esc(view.evaluation_budget)}</div>` +
-    `<div class="story-note">Best evaluation: ${esc(score(view.best_score))}` +
+    `<div class="story-note">Best retained evaluation: ${esc(score(view.best_score))}` +
+    (view.best_candidate_valid === null || view.best_candidate_valid === undefined ? "" :
+      ` (${view.best_candidate_valid ? "valid" : "constraint-invalid"})`) +
     ` · reference: ${esc(score(view.reference_score))}</div>` +
     `<div class="story-note">Generations without required improvement: ${esc(view.stagnant_generations)}` +
     ` / ${esc(configuration.patience_generations)}` +
@@ -5645,6 +5689,8 @@ function creativityProgress(view, configuration, open) {
     html += `<div class="story-note">Reassessing candidates under the current evaluator.</div>`;
   if (open && view.job === "complete")
     html += `<div class="story-note">Search result prepared; awaiting task completion.</div>`;
+  html += creativitySearchMaterial(view.search_material);
+  html += creativityCandidateEvaluations(view.candidate_evaluations);
   if (open) html += `<h4>Best candidates from the last completed comparison</h4>` +
     (view.best_candidates.length ? creativityProposals(view.best_candidates)
       : `<div class="story-note">No candidates available from a completed comparison.</div>`);
@@ -5662,7 +5708,8 @@ function creativityResult(native) {
 }
 function taskPhysicalCalls(lifecycle) {
   const calls = lifecycle ? lifecycle.history.filter(event => event.physical_dispatch) : [];
-  return `<details class="card"><summary>Physical calls (${calls.length})</summary>` +
+  return `<details class="card" data-task-detail-key="physical-calls">` +
+    `<summary>Physical calls (${calls.length})</summary>` +
     calls.map(event => {
       const call = event.physical_dispatch, context = call.call_context, attempt = event.attempt;
       const meta = [context.job, `generation ${context.generation}`, `batch ${context.batch}`,
@@ -5807,7 +5854,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
       tokenUsageHtml(result.token_usage, result.token_usage_partial) +
       (executor === "creativity" && result.status === "success"
         ? creativityResult(result.native_result) : "") +
-      `<details><summary class="amend-hint">Native result (opaque TaskExecutor output)</summary>
+      `<details data-task-detail-key="native-result"><summary class="amend-hint">Native result (opaque TaskExecutor output)</summary>
        <pre class="story-note mono">${esc(typeof result.native_result === "string"
          ? result.native_result : JSON.stringify(result.native_result, null, 2))}</pre></details></div>`;
   }
@@ -5819,17 +5866,29 @@ function paintTaskPage() {
     row => row.record && row.record.id === selectedTask
   );
   const det = document.getElementById("detail");
-  const wasOpen = Array.from(det.querySelectorAll("details"))
-    .map(node => node.open);
+  // Keep the reader anchored while the 2s poll replaces the task page.
+  // A newly opened task is the exception: it must land at the top rather
+  // than inherit the previous page's scroll position.
+  const top = pendingLanding === "top" ? 0 : det.scrollTop;
+  const taskId = selectedTask;
+  const paintSeq = ++taskPagePaintSeq;
+  const detailsOpen = new Map(Array.from(
+    det.querySelectorAll("details[data-task-detail-key]"),
+    node => [node.dataset.taskDetailKey, node.open]
+  ));
   det.innerHTML = renderTaskPage(
     lastTaskPage, listed ? listed.admitted_at : null, lastTaskPipeline
   );
-  Array.from(det.querySelectorAll("details")).forEach((node, i) => {
-    if (wasOpen[i]) node.open = true;
+  det.querySelectorAll("details[data-task-detail-key]").forEach(node => {
+    const key = node.dataset.taskDetailKey;
+    if (detailsOpen.has(key)) node.open = detailsOpen.get(key);
   });
   syncRequestMore(det);
+  det.scrollTop = top;
   requestAnimationFrame(() => {
+    if (paintSeq !== taskPagePaintSeq || selectedTask !== taskId) return;
     syncRequestMore(det);
+    det.scrollTop = top;
     updateBottomJump();
   });
 }
@@ -6272,6 +6331,11 @@ function taskConfigurationOption(choice) {
     ? {value: choice.value, label: choice.label ?? choice.value}
     : {value: choice, label: choice};
 }
+function taskConfigurationLabel(name, definition) {
+  if (definition.label) return definition.label;
+  if (name === "population_size") return "Candidates per generation";
+  return name.replace(/_/g, " ").replace(/^./, letter => letter.toUpperCase());
+}
 function renderTaskConfigurationSchema(schema, draft, prefix = "") {
   return Object.entries(schema || {}).map(([name, definition]) => {
     const path = prefix ? `${prefix}.${name}` : name;
@@ -6294,7 +6358,7 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
       const greaterThan = definition.greater_than
         ? `data-task-config-greater-than="${esc(parent.concat(definition.greater_than).join("."))}"`
         : "";
-      return `<label>${esc(name)}</label><input type="number"
+      return `<label>${esc(taskConfigurationLabel(name, definition))}</label><input type="number"
         step="${definition.type === "integer" ? "1" : "any"}" ${minimum} ${maximum}
         value="${esc(value)}" data-task-config="${esc(path)}"
         data-task-config-type="${esc(definition.type)}" ${optional}
@@ -6302,7 +6366,7 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
     }
     if (definition.type === "choice") {
       const choices = (definition.choices || []).map(taskConfigurationOption);
-      return `<label>${esc(name)}</label><select data-task-config="${esc(path)}"
+      return `<label>${esc(taskConfigurationLabel(name, definition))}</label><select data-task-config="${esc(path)}"
         data-task-config-type="choice" ${optional} ${change}>
         ${definition.optional ? '<option value="">— inherit —</option>' : ""}
         ${choices.map(choice =>
@@ -6310,7 +6374,7 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
         ).join("")}</select>`;
     }
     if (definition.type === "boolean")
-      return `<label>${esc(name)}</label><select data-task-config="${esc(path)}"
+      return `<label>${esc(taskConfigurationLabel(name, definition))}</label><select data-task-config="${esc(path)}"
         data-task-config-type="boolean" ${optional} ${change}>
         <option value="">— inherit —</option>
         <option value="true"${value === "true" ? " selected" : ""}>true</option>
@@ -6319,7 +6383,7 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
       const nested = renderTaskConfigurationSchema(
         definition.properties, draft, path
       );
-      return `<div class="executor-config-group"><label>${esc(name)}</label>
+      return `<div class="executor-config-group"><label>${esc(taskConfigurationLabel(name, definition))}</label>
         <div class="executor-config">${nested}</div></div>`;
     }
     if (definition.type === "task_executor") {

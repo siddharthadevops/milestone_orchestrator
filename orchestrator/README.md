@@ -475,6 +475,15 @@ evaluator change; it is not a limit on tokens, money, or all physical calls.
 Stagnation and repertoire exhaustion may still end a search before its maximum
 generation count.
 
+The generator, not the order form, decides the number of semantic genes.
+`population_size` is the number of candidate combinations per generation and
+the panel labels it accordingly. The task view exposes the accepted search
+material and every scored candidate evaluation, including invalid combinations
+and their violation reasons. Invalid candidates never enter the final proposal
+shortlist. If no valid candidate exists yet, the strongest invalid candidates
+remain provisional parents so crossover and mutation can reuse useful genes
+instead of restarting from an unrelated random population.
+
 ### Standalone task Pause, Resume and Cancel
 
 Standalone `agent_call`, `reviewed_task` and `deep_task` orders share durable

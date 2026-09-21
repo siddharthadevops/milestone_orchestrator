@@ -700,12 +700,16 @@
           "parts": [
             {
               "text": [
-                "LITERATURE REFINEMENT: derive useful choices from this work's imagery, voice,",
-                "rhythm, tension and character agency when they serve the stated objective.",
-                "Preserve supplied continuity and stylistic constraints; distinguish textual",
-                "evidence from interpretive assumptions. These are lenses, not required",
-                "dimensions. Preserve logical, position-independent units and the declared order",
-                "semantics. Keep the generic objective and result contract unchanged."
+                "LITERATURE REFINEMENT: derive movable narrative units such as actions, decisions,",
+                "disclosures, reversals or experiential beats when they serve the objective. Use",
+                "imagery, voice, rhythm, tension and agency as judgment lenses, not as abstract",
+                "dimensions or fixed slots. Preserve supplied continuity and stylistic constraints;",
+                "only operator or canon requirements, or dependencies grounded in supplied evidence,",
+                "are hard constraints. Put unresolved",
+                "risk or feasibility in assumptions, unknowns or criteria instead of manufacturing",
+                "a prohibition. order_semantics must name how relative placement changes the story,",
+                "causal execution or reader experience; never define it as merely the order in which",
+                "the proposal is explained. Keep the generic objective and result contract unchanged."
               ],
               "variables": []
             }
@@ -740,11 +744,13 @@
           "parts": [
             {
               "text": [
-                "LITERATURE REFINEMENT: assess how the chosen components affect imagery, voice,",
-                "rhythm, tension and character agency where these serve the objective. Interpret",
-                "the combination faithfully; preserve continuity and stylistic constraints rather",
-                "than smoothing away the work's character. Distinguish textual evidence from",
-                "interpretive assumptions. Keep the generic objective and result contract unchanged."
+                "LITERATURE REFINEMENT: assess the ordered combination exactly as supplied and judge",
+                "its effect on imagery, voice, rhythm, tension, agency and reader experience where",
+                "these serve the objective. Do not normalize a weak order into a better one. Preserve",
+                "continuity and stylistic constraints rather than smoothing away the work's character.",
+                "Mark a candidate invalid only when it violates an explicit supplied constraint; an",
+                "unresolved risk or assumption may lower its score without becoming a new prohibition.",
+                "Distinguish textual evidence from interpretation. Keep the generic contract unchanged."
               ],
               "variables": []
             }
@@ -788,11 +794,12 @@
           "parts": [
             {
               "text": [
-                "LITERATURE REFINEMENT: seek alternatives in imagery, voice, rhythm, tension and",
-                "character agency only where the existing dimensions and objective support them.",
-                "Preserve continuity and stylistic constraints; explain the useful difference",
-                "rather than merely renaming a choice. Distinguish textual evidence from",
-                "interpretive assumptions. Keep the generic objective and result contract unchanged."
+                "LITERATURE REFINEMENT: add substantive alternatives for the same movable narrative",
+                "unit, using scored invalid combinations and their violations as evidence without",
+                "treating the unit itself as discarded. Seek differences in action, disclosure,",
+                "reversal, experience, voice, rhythm, tension or agency only where the existing",
+                "dimension supports them. Preserve continuity and stylistic constraints; do not",
+                "rename a lens or encode a position. Keep the generic contract unchanged."
               ],
               "variables": []
             }

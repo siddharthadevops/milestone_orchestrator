@@ -554,7 +554,22 @@ class TaskApiTest(unittest.TestCase):
                         "consecutive_expansions", "expansion_interventions", "generations_completed"):
                 self.assertEqual(view[key], checkpoint["progress"][key])
             self.assertEqual(view["evaluation_budget"], 20)
+            self.assertEqual(view["search_material"], checkpoint["search_material"])
+            expected_evaluations = sum(
+                len(batch["evaluations"])
+                for batch in checkpoint.get("evaluation", {}).get("batches", [])
+            )
+            self.assertEqual(len(view["candidate_evaluations"]), expected_evaluations)
+            for evaluation in view["candidate_evaluations"]:
+                self.assertIn("generation", evaluation)
+                self.assertIn("regime_revision", evaluation)
+                self.assertIn("current_regime", evaluation)
+                self.assertEqual(
+                    len(evaluation["components"]),
+                    len(checkpoint["search_material"]["dimensions"]),
+                )
         self.assertEqual(pages["comparison"]["creativity"]["best_score"], 0.4)
+        self.assertTrue(pages["comparison"]["creativity"]["best_candidate_valid"])
         self.assertEqual(pages["rebaseline"]["creativity"]["best_candidates"], [])
         self.assertIsNone(pages["rebaseline"]["creativity"]["reference_score"])
         self.assertEqual(pages["expanded"]["creativity"]["expansion_interventions"], 1)

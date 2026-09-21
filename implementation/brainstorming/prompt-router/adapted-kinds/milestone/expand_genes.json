@@ -16,7 +16,7 @@
       {
         "text": [
           "TASK: expand the repertoire after exploration has stalled, using the formulated search objective.",
-          "Read the complete search material, promising valid candidates and compact explored",
+          "Read the complete search material, promising evaluated candidates and compact explored",
           "account. Identify useful alternatives that the existing repertoire leaves unexplored.",
           "Suggest new variants only within existing dimensions, keeping their position-independent",
           "unit meanings intact wherever they move on the declared order axis.",
@@ -25,8 +25,9 @@
           "Make each addition concrete and compatible with combining one variant per dimension.",
           "Explain why it may open a useful direction toward the objective while respecting hard",
           "constraints. Distinguish evidence from assumptions in that reason; do not invent facts.",
-          "Use promising candidates as context without historical scores, rank or prestige; their",
-          "presence is not proof of quality. Use the explored account to avoid merely relabeling",
+          "Use promising candidates as context, including their validity, violations and scores;",
+          "an invalid candidate is evidence about a combination, not proof that its individual",
+          "genes are useless. Use the explored account to avoid merely relabeling",
           "existing choices. Seek meaningful alternatives, not novelty for its own sake.",
           "Return an empty additions list when no useful new variant is apparent. The driver owns",
           "applying additions, selection and stopping. New IDs do not prove semantic novelty;",
@@ -40,7 +41,7 @@
           "{{objective}}",
           "COMPLETE SEARCH MATERIAL (JSON):",
           "{{search_material}}",
-          "PROMISING VALID CANDIDATES (JSON; no historical scores or prestige):",
+          "PROMISING EVALUATED CANDIDATES (JSON):",
           "{{promising_candidates}}",
           "COMPACT EXPLORED ACCOUNT:",
           "{{explored_account}}"
@@ -59,7 +60,7 @@
           {
             "name": "promising_candidates",
             "required": true,
-            "description": "Promising valid candidates as JSON, without historical scores or prestige; may be empty."
+            "description": "Promising evaluated candidates as JSON, including validity evidence and scores; may be empty."
           },
           {
             "name": "explored_account",

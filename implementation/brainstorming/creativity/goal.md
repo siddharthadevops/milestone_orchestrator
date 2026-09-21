@@ -68,9 +68,12 @@ criteria, and one or more candidates. It interprets each combination faithfully
 as a proposal and returns constraint validity, an explanation, relevant
 assumptions, and a numeric score in **`0..1`**. It cannot quietly replace the
 selected components with a different proposal to make the combination work.
-Constraint violations exclude a candidate from selection; a high score cannot
-compensate for invalidity. Unsupported feasibility or demand remains an
-assumption rather than an invented fact.
+Constraint violations exclude a candidate from the final shortlist; a high
+score cannot make an invalid candidate a solution. Valid candidates always
+take precedence in selection. When no valid candidate exists yet, however,
+the strongest scored invalid candidates remain provisional parents: one bad
+combination does not make its individual genes useless. Unsupported feasibility
+or demand remains an assumption rather than an invented fact.
 
 Evaluation should support bounded batches and concurrent calls so throughput
 does not require one serial model invocation per candidate. One evaluator is a
@@ -89,8 +92,10 @@ cosmetic variations of one winner.
 **While the search is progressing, continue within the current repertoire.
 When it stagnates, ask an LLM to expand that repertoire.**
 
-Progress is a meaningful improvement in the best valid candidate against a
-reference, using a configurable minimum improvement and patience window.
+Progress is a meaningful improvement in the best retained candidate against a
+reference, using a configurable minimum improvement and patience window. The
+first transition from provisional invalid parents to a valid survivor is
+progress regardless of the raw score change.
 Small cumulative improvements count. A single poor generation does not trigger
 an intervention, and a lower population average after introducing diversity
 does not establish stagnation.
@@ -192,8 +197,10 @@ judge as a better candidate.
 ## Integration and evidence of completion
 
 Reuse the public task lifecycle and presentation. The operator can inspect
-the current job and generation, progress/stagnation, expansion interventions,
-best candidates, resolved staffing, and aggregate usage and cost. Physical
+the generated dimensions and variants, every scored evaluation including
+invalid combinations and their violations, the current job and generation,
+progress/stagnation, expansion interventions, valid best candidates, resolved
+staffing, and aggregate usage and cost. Physical
 calls are inspectable work within the task; creating one durable child task
 per candidate is not required. Preserve existing task controls and charge
 accounting without building a parallel scheduler or recovery system.

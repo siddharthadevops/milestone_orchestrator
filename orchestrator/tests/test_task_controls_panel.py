@@ -24,6 +24,7 @@ class TaskControlsPanelTest(unittest.TestCase):
             "renderTaskPage", "taskState", "taskRow", "sidebarItems",
             "taskStatusClock", "deepTaskPipeline", "reviewedTaskPipeline",
             "taskControlHistory", "creativityProgress", "creativityProposals",
+            "creativitySearchMaterial", "creativityCandidateEvaluations",
             "creativityResult", "taskPhysicalCalls", "esc", "fmtTokenCount",
             "fmtTokenUsage", "costReading", "costHtml", "tokenUsageHtml",
         ) + functions
@@ -254,11 +255,11 @@ function render(data) {
   return renderTaskPage(data.task, 'today', data.creativity);
 }
 assert(render(pages.no_progress).includes('No saved progress available'));
-assert(render(pages.genes).includes('Best evaluation: unavailable · reference: unavailable'));
+assert(render(pages.genes).includes('Best retained evaluation: unavailable · reference: unavailable'));
 assert(render(pages.batch).includes('Accepted candidate evaluations: 1 / 20'));
-assert(render(pages.comparison).includes('Best evaluation: 0.4 · reference: 0.4'));
+assert(render(pages.comparison).includes('Best retained evaluation: 0.4 (valid) · reference: 0.4'));
 assert(render(pages.rebaseline).includes('Reassessing candidates'));
-assert(render(pages.rebaseline).includes('Best evaluation: unavailable'));
+assert(render(pages.rebaseline).includes('Best retained evaluation: unavailable'));
 assert(render(pages.expansion).includes('Job: expand genes'));
 assert(render(pages.expansion).includes('patience window complete'));
 assert(render(pages.expanded).includes('Expansion interventions: 1 · consecutive: 1 / 1'));
@@ -268,6 +269,20 @@ assert(render(pages.prepared).includes('awaiting task completion'));
 assert(!render(pages.prepared).includes('<h3>Result</h3>'));
 assert(render(pages.prepared).includes('>Pause</button>'));
 let html = render(pages.terminal);
+const repeated = pages.terminal.creativity.candidate_evaluations.find(
+  (item, index, items) => items.slice(0, index).some(previous =>
+    previous.candidate_id === item.candidate_id &&
+    previous.regime_revision !== item.regime_revision)
+);
+assert(repeated, 'fixture must exercise a survivor evaluated under two regimes');
+for (const data of [pages.expansion, pages.expanded, pages.prepared,
+    pages.terminal, pages.paused]) {
+  const rendered = render(data);
+  const detailKeys = [...rendered.matchAll(/data-task-detail-key="([^"]+)"/g)]
+    .map(match => match[1]);
+  assert.equal(new Set(detailKeys).size, detailKeys.length,
+    'every rendered disclosure key must be unique');
+}
 for (const text of ['proposals', 'generation_limit', 'not probabilities of success',
     '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;', 'A second line.',
     'Fits the objective &amp; constraints.', 'Readers have time.', 'Budget holds.',
@@ -311,10 +326,18 @@ for (const reason of ['generation_limit', 'evaluation_budget', 'persistent_stagn
   assert(render(ended).includes(`Stop reason: ${reason}`));
   ended.task.result.native_result.outcome = 'no_valid_candidates';
   ended.task.result.native_result.proposals = [];
+  ended.creativity.best_candidates = [];
+  ended.creativity.best_candidate_valid = false;
+  for (const item of ended.creativity.candidate_evaluations) {
+    item.constraint_valid = false;
+    item.constraint_violations = ['budget'];
+  }
   html = render(ended);
   assert(html.includes('No valid proposal was found.'));
   assert(html.includes('success'));
-  assert(!html.includes('A useful proposal'));
+  assert(html.includes('Evaluated candidates'));
+  assert(html.includes('constraint-invalid'));
+  assert(html.includes('A useful proposal')); // Retained as diagnostic evidence, not a proposal.
 }
 const failed = structuredClone(pages.terminal);
 failed.task.result = {...failed.task.result, status: 'failure', native_result: null, reason: 'Cancelled by operator'};
@@ -330,7 +353,8 @@ const detail = {innerHTML: '', querySelectorAll: () => []};
 const document = {getElementById: () => detail};
 const syncRequestMore = () => {}, updateBottomJump = () => {}, refreshRuns = () => {};
 const requestAnimationFrame = callback => callback();
-let lastTaskPage = null, lastTaskPipeline = null, taskPageSeq = 0, pendingLanding = null;
+let lastTaskPage = null, lastTaskPipeline = null, taskPageSeq = 0;
+let taskPagePaintSeq = 0, pendingLanding = null;
 const lastTaskRows = [];
 selectedTask = pages.terminal.task.id;
 (async () => {
@@ -350,6 +374,88 @@ selectedTask = pages.terminal.task.id;
   assert(detail.innerHTML.includes('stale Resume'));
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """, ("refreshTaskPage", "paintTaskPage", "controlSelectedTask"))
+
+    def test_task_repaint_preserves_reading_position_and_keyed_details(self):
+        self.javascript(r"""
+const detailNode = (key, open) => ({
+  dataset: {taskDetailKey: key}, open,
+});
+const detail = {
+  scrollTop: 640,
+  nodes: [
+    detailNode('creativity-search', false),
+    detailNode('creativity-candidate:1:survivor', true),
+    detailNode('creativity-candidate:2:survivor', false),
+    detailNode('physical-calls', true),
+  ],
+  querySelectorAll(selector) {
+    assert.equal(selector, 'details[data-task-detail-key]');
+    return this.nodes;
+  },
+  set innerHTML(value) {
+    this.html = value;
+    this.nodes = [
+      detailNode('creativity-search', true),
+      detailNode('creativity-candidate:1:survivor', false),
+      detailNode('creativity-candidate:2:survivor', true),
+      // Newly arrived content keeps its markup default.
+      detailNode('creativity-candidate:2:new', false),
+      detailNode('physical-calls', false),
+    ];
+  },
+  get innerHTML() { return this.html; },
+};
+const document = {getElementById: id => {
+  assert.equal(id, 'detail');
+  return detail;
+}};
+let lastTaskPage = {}, lastTaskPipeline = null, pendingLanding = null;
+let taskPagePaintSeq = 0;
+const lastTaskRows = [];
+const syncRequestMore = () => {};
+const frames = [];
+const requestAnimationFrame = callback => frames.push(callback);
+let bottomUpdates = 0;
+const updateBottomJump = () => { bottomUpdates += 1; };
+renderTaskPage = () => '<main>updated</main>';
+
+paintTaskPage();
+assert.equal(detail.scrollTop, 640);
+assert.deepEqual(detail.nodes.map(node => [node.dataset.taskDetailKey, node.open]), [
+  ['creativity-search', false],
+  ['creativity-candidate:1:survivor', true],
+  ['creativity-candidate:2:survivor', false],
+  ['creativity-candidate:2:new', false],
+  ['physical-calls', true],
+]);
+assert.equal(frames.length, 1);
+detail.scrollTop = 900;
+frames.shift()();
+assert.equal(detail.scrollTop, 640);
+assert.equal(bottomUpdates, 1);
+
+// Opening a different task must not inherit the previous page position,
+// including after the deferred layout pass.
+pendingLanding = 'top';
+detail.scrollTop = 700;
+paintTaskPage();
+assert.equal(detail.scrollTop, 0);
+detail.scrollTop = 80;
+frames.shift()();
+assert.equal(detail.scrollTop, 0);
+
+// A deferred callback from the task page must not touch the shared pane
+// after the operator has navigated elsewhere.
+pendingLanding = null;
+detail.scrollTop = 300;
+paintTaskPage();
+assert.equal(frames.length, 1);
+selectedTask = 'another-task';
+detail.scrollTop = 27;
+frames.shift()();
+assert.equal(detail.scrollTop, 27);
+assert.equal(bottomUpdates, 2);
+""", ("paintTaskPage",))
 
 
 if __name__ == "__main__":

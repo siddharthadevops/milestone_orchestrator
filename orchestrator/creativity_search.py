@@ -188,17 +188,21 @@ def make_population(dimensions, count, configuration, *, explored=(), rng=random
 
 
 def select_survivors(evaluated, configuration):
-    """Keep valid elites followed by structurally diverse survivors.
+    """Keep feasible survivors, or the best provisional parents if none exist.
 
     Input and output are (genome, accepted evaluation) pairs. The caller can
     combine retained and newly evaluated pairs from one evaluator regime here.
-    Duplicate genomes keep their highest valid score. Genome mappings are
+    Valid candidates always exclude invalid candidates from the pool. When no
+    valid candidate exists, scored invalid candidates remain useful genetic
+    evidence: retain the strongest ones as provisional parents while their
+    validity continues to prevent them from becoming final proposals.
+    Duplicate genomes keep their highest eligible score. Genome mappings are
     copied; evaluations are retained unchanged.
     """
-    ranked = sorted(
-        (pair for pair in evaluated if pair[1]["constraint_valid"]),
-        key=lambda pair: pair[1]["score"], reverse=True,
-    )
+    eligible = [pair for pair in evaluated if pair[1]["constraint_valid"]]
+    if not eligible:
+        eligible = list(evaluated)
+    ranked = sorted(eligible, key=lambda pair: pair[1]["score"], reverse=True)
     seen = set()
     distinct = []
     for pair in ranked:
@@ -358,8 +362,16 @@ def accept_evaluation_wave(progress, wave, configuration):
     if changed:
         return
 
+    previous_had_valid = any(
+        evaluation["constraint_valid"]
+        for _genome, evaluation in progress["archive"]
+    )
     progress["archive"] = select_survivors(wave["evaluated"], configuration)
     best = progress["archive"][0][1]["score"] if progress["archive"] else None
+    best_is_valid = bool(
+        progress["archive"]
+        and progress["archive"][0][1]["constraint_valid"]
+    )
     progress["best_score"] = best
     progress["reference_revision"] = wave["regime_revision"]
     if pending["phase"] == "rebaseline":
@@ -382,6 +394,11 @@ def accept_evaluation_wave(progress, wave, configuration):
     if reference is None and best is not None:
         progress["reference_score"] = best
         progress["stagnant_generations"] = 0
+    elif best is not None and best_is_valid and not previous_had_valid:
+        progress["reference_score"] = best
+        progress["stagnant_generations"] = 0
+        progress["consecutive_expansions"] = 0
+        progress["progress_made"] = True
     elif best is not None and (
         Fraction(str(best)) - Fraction(str(reference))
         >= Fraction(str(configuration["minimum_improvement"]))
@@ -409,11 +426,12 @@ def expansion_due(progress, configuration):
     """
     if progress["stop_reason"] is not None or progress["pending"] is not None:
         return False
-    if not progress["window_complete"]:
-        return False
     if progress["evaluated_candidates"] == configuration["max_evaluated_candidates"]:
         progress["stop_reason"] = "evaluation_budget"
-    elif progress["consecutive_expansions"] == configuration["max_stagnation_expansions"]:
+        return False
+    if not progress["window_complete"]:
+        return False
+    if progress["consecutive_expansions"] == configuration["max_stagnation_expansions"]:
         progress["stop_reason"] = "persistent_stagnation"
     else:
         return True

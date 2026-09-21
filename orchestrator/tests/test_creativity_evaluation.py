@@ -207,10 +207,13 @@ class CreativityEvaluationTest(unittest.TestCase):
             supplied = json.loads(prompt.split("COMPLETE SEARCH MATERIAL (JSON):\n")[1].splitlines()[0])
             self.assertEqual(supplied, self.material if index < 2 else expanded)
             promising = json.loads(prompt.split(
-                "PROMISING VALID CANDIDATES (JSON; no historical scores or prestige):\n",
+                "PROMISING EVALUATED CANDIDATES (JSON):\n",
             )[1].splitlines()[0])
             self.assertEqual(len(promising), 1)
-            self.assertEqual(set(promising[0]), {"candidate_id", "proposal", "assumptions", "components"})
+            self.assertEqual(set(promising[0]), {
+                "candidate_id", "proposal", "constraint_valid",
+                "constraint_violations", "reason", "assumptions", "score", "components",
+            })
             self.assertEqual(promising[0]["candidate_id"], "c-0")
         records, accounting = self.evidence()
         expansions = records[1:]

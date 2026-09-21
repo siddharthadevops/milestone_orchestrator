@@ -74,7 +74,34 @@ def _creativity_proposals(checkpoint, limit, order_mode=None):
             checkpoint["search_material"]["dimensions"], genome,
             order_mode=order_mode,
         ),
-    ) for genome, item in checkpoint["progress"]["archive"][:limit]]
+    ) for genome, item in checkpoint["progress"]["archive"]
+       if item["constraint_valid"]][:limit]
+
+
+def _creativity_candidate_evaluations(checkpoint, order_mode=None):
+    """Project every durable evaluation without making it a final proposal."""
+    material = checkpoint.get("search_material")
+    state = checkpoint.get("evaluation")
+    if not material or not state:
+        return []
+    dimensions = material["dimensions"]
+    current_revision = state["regime_revision"]
+    projected = []
+    for batch in state["batches"]:
+        for item in batch["evaluations"]:
+            candidate_id = item["candidate_id"]
+            projected.append({
+                **copy.deepcopy(item),
+                "generation": batch["generation"],
+                "regime_revision": batch["regime_revision"],
+                "current_regime": batch["regime_revision"] == current_revision,
+                "components": creativity_search.genome_components(
+                    dimensions,
+                    batch["genomes"][candidate_id],
+                    order_mode=order_mode,
+                ),
+            })
+    return projected
 
 
 def creativity_view(home, record):
@@ -96,10 +123,18 @@ def creativity_view(home, record):
         evaluated_candidates=(checkpoint["evaluation"]["accepted_count"]
                               if "evaluation" in checkpoint else progress["evaluated_candidates"]),
         evaluation_budget=configuration["max_evaluated_candidates"],
+        best_candidate_valid=(
+            progress["archive"][0][1]["constraint_valid"]
+            if progress["archive"] else None
+        ),
         best_candidates=_creativity_proposals(
             checkpoint,
             configuration["shortlist_size"],
             configuration.get("order_mode"),
+        ),
+        search_material=copy.deepcopy(checkpoint.get("search_material")),
+        candidate_evaluations=_creativity_candidate_evaluations(
+            checkpoint, configuration.get("order_mode")
         ),
         initial_genes_supplied="initial_genes" in record["order"],
     )

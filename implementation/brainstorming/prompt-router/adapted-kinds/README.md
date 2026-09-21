@@ -13,7 +13,8 @@ captured evidence it was pruned from.
 - One directory per PROCESS, one JSON per kind:
   - `milestone/`: `draft_skeleton`, `draft_slice_note`, `implement`,
     `review_round`, `delta_review`, `reclassify`, `fix_findings`,
-    `suite_checkpoint`, `merge_repair`.
+    `suite_checkpoint`, `merge_repair`, `create_genes`,
+    `evaluate_candidates`, `expand_genes`.
   - `brainstorming/` (the session executor's kinds): `discussion_turn`
     and `questioner_turn` (Dante). (production_effect and the closure
     kinds are retired — decisions 42-43.)
@@ -69,8 +70,9 @@ captured evidence it was pruned from.
   lookup key. The resolver mounts the base job cell and then its exact override
   when one exists; no match returns the unchanged base without an error or
   fallback note. This borrows staffing's precedence only, not its material
-  admission/catalogue semantics. This seed ships no real overrides, while resolver tests use a
-  synthetic `code` layer to pin the data-only extension seam.
+  admission/catalogue semantics. Creativity ships focused `literature` and
+  `business` refinements; resolver tests also use a synthetic `code` layer to
+  pin the data-only extension seam.
 - **Dynamic payloads are variables, never stored text.** Operator amendments,
   project context, adjudicated rejections, deferred
   debt, queued findings, and catalogues are all `{{variables}}`.
