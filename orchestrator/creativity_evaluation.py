@@ -321,7 +321,8 @@ def evaluate_wave(
     }
 
 
-def evaluate_progress_wave(group, runner, *, progress, configuration, **call_options):
+def evaluate_progress_wave(group, runner, *, progress, configuration,
+                           creativity_semantics=None, **call_options):
     """Advance one search comparison through the existing bounded wave.
 
     The task owner opens generations with creativity_search.begin_generation
@@ -333,6 +334,11 @@ def evaluate_progress_wave(group, runner, *, progress, configuration, **call_opt
         return None
     wave = evaluate_wave(
         group, runner, configuration=configuration, **request, **call_options,
+        creativity_semantics=creativity_semantics,
     )
-    creativity_search.accept_evaluation_wave(progress, wave, configuration)
+    creativity_search.accept_evaluation_wave(
+        progress, wave, configuration,
+        dimensions=call_options["search_material"]["dimensions"],
+        creativity_semantics=creativity_semantics,
+    )
     return wave

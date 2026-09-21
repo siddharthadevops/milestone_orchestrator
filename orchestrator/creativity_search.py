@@ -252,19 +252,17 @@ def _effective_distance(left, right):
 
 
 def select_survivors(evaluated, configuration, *, dimensions=None, creativity_semantics=None):
-    """Keep feasible survivors, or the best provisional parents if none exist.
+    """Keep scored elites and structural diversity under the saved semantics.
 
     Input and output are (genome, accepted evaluation) pairs. The caller can
-    combine retained and newly evaluated pairs from one evaluator regime here.
-    Valid candidates always exclude invalid candidates from the pool. When no
-    valid candidate exists, scored invalid candidates remain useful genetic
-    evidence: retain the strongest ones as provisional parents while their
-    validity continues to prevent them from becoming final proposals.
-    Duplicate identities keep their highest eligible score. Sparse_v2 uses
-    effective sequences for identity and structural distance. Genome mappings
-    are copied; evaluations are retained unchanged.
+    combine retained and newly evaluated pairs here. Legacy selection prefers
+    valid candidates, falling back to provisional invalid parents. Sparse_v2
+    uses all returned scores, with effective identity and structural distance.
+    Duplicate identities keep their highest eligible score. Genome mappings
+    are copied; evaluations remain unchanged.
     """
-    eligible = [pair for pair in evaluated if pair[1]["constraint_valid"]]
+    eligible = (list(evaluated) if creativity_semantics == "sparse_v2" else
+                [pair for pair in evaluated if pair[1]["constraint_valid"]])
     if not eligible:
         eligible = list(evaluated)
     ranked = sorted(eligible, key=lambda pair: pair[1]["score"], reverse=True)
@@ -374,7 +372,7 @@ def new_progress():
 
     Archive entries use the selector's (genome, evaluation) pairs. A pending
     generation retains score-free candidate identities across bounded waves.
-    Only a complete comparison may update selection or the progress window.
+    Only a complete comparison updates selection or the legacy progress window.
     """
     return {
         "archive": [], "best_score": None, "reference_score": None,
@@ -386,16 +384,21 @@ def new_progress():
     }
 
 
-def begin_generation(progress, candidates, configuration):
+def begin_generation(progress, candidates, configuration, *, creativity_semantics=None):
     """Open one generation with owner-supplied fresh candidate ids and genomes.
 
-    The owner calls this after the previous comparison completes. An empty
-    population can observe stagnation, but does not itself prove exhaustion.
+    The owner calls this after the previous comparison completes. For sparse
+    search, no fresh candidates from the exact population supplier means
+    exhaustion. Legacy empty populations can still observe stagnation.
     """
     if progress["stop_reason"] is not None:
         return
-    if candidates and progress["evaluated_candidates"] == configuration["max_evaluated_candidates"]:
+    sparse = creativity_semantics == "sparse_v2"
+    if (candidates or sparse) and progress["evaluated_candidates"] == configuration["max_evaluated_candidates"]:
         progress["stop_reason"] = "evaluation_budget"
+        return
+    if sparse and not candidates:
+        progress["stop_reason"] = "repertoire_exhausted"
         return
     retained = {item["candidate_id"]: dict(genome) for genome, item in progress["archive"]}
     progress["pending"] = {
@@ -427,12 +430,14 @@ def progress_evaluation_request(progress):
     }
 
 
-def accept_evaluation_wave(progress, wave, configuration):
+def accept_evaluation_wave(progress, wave, configuration, *, dimensions=None,
+                           creativity_semantics=None):
     """Consume the trusted wave handoff without rechecking its eligibility.
 
     Reassessment is a separate comparison, not a generation or progress event.
     The original generation remains pending through any number of bounded
     waves; only the wave's accepted count charges the evaluation allowance.
+    Sparse comparisons retain scores without calculating a stagnation window.
     Interruptions remain task-control outcomes, never normal search stops.
     """
     pending = progress["pending"]
@@ -455,16 +460,15 @@ def accept_evaluation_wave(progress, wave, configuration):
     if changed:
         return
 
-    previous_had_valid = any(
+    previous_had_valid = creativity_semantics != "sparse_v2" and any(
         evaluation["constraint_valid"]
         for _genome, evaluation in progress["archive"]
     )
-    progress["archive"] = select_survivors(wave["evaluated"], configuration)
-    best = progress["archive"][0][1]["score"] if progress["archive"] else None
-    best_is_valid = bool(
-        progress["archive"]
-        and progress["archive"][0][1]["constraint_valid"]
+    progress["archive"] = select_survivors(
+        wave["evaluated"], configuration,
+        dimensions=dimensions, creativity_semantics=creativity_semantics,
     )
+    best = progress["archive"][0][1]["score"] if progress["archive"] else None
     progress["best_score"] = best
     progress["reference_revision"] = wave["regime_revision"]
     if pending["phase"] == "rebaseline":
@@ -481,8 +485,19 @@ def accept_evaluation_wave(progress, wave, configuration):
         pending["phase"] = "generation"
         return
 
+    progress["generations_completed"] += 1
+    progress["pending"] = None
+    if progress["generations_completed"] == configuration["generation_limit"]:
+        progress["stop_reason"] = "generation_limit"
+    if creativity_semantics == "sparse_v2":
+        return
+
     # Compare decimal spellings exactly: binary subtraction can put a gain
     # that reaches the threshold just below it.
+    best_is_valid = bool(
+        progress["archive"]
+        and progress["archive"][0][1]["constraint_valid"]
+    )
     reference = progress["reference_score"]
     if reference is None and best is not None:
         progress["reference_score"] = best
@@ -502,27 +517,24 @@ def accept_evaluation_wave(progress, wave, configuration):
         progress["progress_made"] = True
     else:
         progress["stagnant_generations"] += 1
-    progress["generations_completed"] += 1
-    progress["pending"] = None
     progress["window_complete"] = (
         progress["stagnant_generations"] >= configuration["patience_generations"]
     )
-    if progress["generations_completed"] == configuration["generation_limit"]:
-        progress["stop_reason"] = "generation_limit"
 
 
-def expansion_due(progress, configuration):
+def expansion_due(progress, configuration, *, creativity_semantics=None):
     """Decide the completed window's intervention or exact limiting stop.
 
     Pending comparisons cannot request expansion. Generation completion has
     already chosen its stop; no intervention can bypass evaluation capacity.
+    Sparse search keeps its fixed repertoire and never requests expansion.
     """
     if progress["stop_reason"] is not None or progress["pending"] is not None:
         return False
     if progress["evaluated_candidates"] == configuration["max_evaluated_candidates"]:
         progress["stop_reason"] = "evaluation_budget"
         return False
-    if not progress["window_complete"]:
+    if creativity_semantics == "sparse_v2" or not progress["window_complete"]:
         return False
     if progress["consecutive_expansions"] == configuration["max_stagnation_expansions"]:
         progress["stop_reason"] = "persistent_stagnation"

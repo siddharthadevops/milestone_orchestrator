@@ -90,6 +90,7 @@ class CreativityEvaluationFixture(unittest.TestCase):
             configuration=self.configuration, search_material=self.material,
             generation=progress["generations_completed"] + 1, execution_context=None,
             store=self.store, checkpoint_key="checkpoint",
+            creativity_semantics=self.creativity_semantics,
         )
         options.update(changes)
         return evaluation.evaluate_progress_wave(
@@ -1150,6 +1151,126 @@ class SparseCreativityEvaluationTest(CreativityEvaluationFixture):
     test_wave_evidence_uses_common_accounting = CreativityEvaluationTest.test_wave_evidence_uses_common_accounting
     test_wave_uses_task_controls_and_surfaces_faults = CreativityEvaluationTest.test_wave_uses_task_controls_and_surfaces_faults
     test_batch_faults_keep_existing_conditions_and_no_retry = CreativityEvaluationTest.test_batch_faults_keep_existing_conditions_and_no_retry
+
+    def test_sparse_progress_resume_preserves_scored_work(self):
+        search = evaluation.creativity_search
+        self.configuration = dict(
+            self.configuration, order_mode="interchangeable", generation_limit=2,
+            max_evaluated_candidates=3, evaluation_batch_size=1, evaluation_concurrency=2,
+        )
+        self.candidates = {
+            "c-0": {"format": "a", "channel": search.OMIT, "__order__": 1},
+            "c-1": {"format": "b", "channel": "a", "__order__": 1},
+        }
+        original_candidates, original_material = copy.deepcopy((self.candidates, self.material))
+        progress = search.new_progress()
+        search.begin_generation(progress, self.candidates, self.configuration,
+                                creativity_semantics="sparse_v2")
+        calls, interrupt = [], True
+
+        def physical(*args, **kwargs):
+            batch = args[1].split("CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n")[1]
+            sent = json.loads(batch.splitlines()[0])
+            calls.extend(sent)
+            if interrupt and sent[0]["candidate_id"] == "c-0":
+                return runners.ControlledInterruptionResult("", 0, 0.1, "paused")
+            return self.batch_result(*args, **kwargs)
+
+        partial = self.progress_wave(progress, physical)
+        self.assertEqual(partial["interruption"].interrupt_reason, "paused")
+        self.assertEqual(progress["evaluated_candidates"], 1)
+        self.assertEqual(progress["generations_completed"], 0)
+        self.assertEqual(progress["pending"]["unfinished"], ["c-0"])
+        self.assertIsNone(progress["stop_reason"])
+        accepted = copy.deepcopy(self.checkpoint()["evaluation"]["batches"])
+
+        def reopen():
+            checkpoint = self.checkpoint()
+            # Use the task owner's existing JSON representation of pairs.
+            progress["archive"] = [list(pair) for pair in progress["archive"]]
+            checkpoint.update(progress=progress, candidates=self.candidates)
+            self.store.put("checkpoint", checkpoint)
+            self.store = kvstore.LocalKVClient(self.store.directory)
+            return self.checkpoint()["progress"]
+
+        progress = reopen()
+        interrupt = False
+        staffing.edit_session(self.home, self.session, {"rigor": "high"})
+        self.write_prompt("UPDATED SPARSE EVALUATOR")
+        resumed = self.progress_wave(progress, physical, prompt_set="operator")
+        self.assertFalse(resumed["rebaseline_required"])
+        self.assertTrue(resumed["comparison_ready"])
+        self.assertEqual(progress["evaluated_candidates"], 2)
+        self.assertEqual(progress["generations_completed"], 1)
+        self.assertEqual(progress["best_score"], 1)
+        self.assertFalse(progress["archive"][0][1]["constraint_valid"])
+        self.assertEqual([g for g, _ in progress["archive"]],
+                         [self.candidates["c-1"], self.candidates["c-0"]])
+        self.assertEqual(self.checkpoint()["evaluation"]["batches"][:1], accepted)
+        batches = self.checkpoint()["evaluation"]["batches"]
+        self.assertNotEqual(batches[0]["regime"], batches[1]["regime"])
+        for index, batch in enumerate(batches):
+            with open(batch["prompt_path"], encoding="utf-8") as trace:
+                self.assertEqual("UPDATED SPARSE EVALUATOR" in trace.read(), index == 1)
+
+        progress = reopen()
+        completed = copy.deepcopy(progress)
+        before = self.evidence()
+        self.assertIsNone(self.progress_wave(progress, physical, prompt_set="operator"))
+        self.assertEqual(progress, completed)
+        self.assertEqual(self.evidence(), before)
+        fresh = {"c-2": {"format": search.OMIT, "channel": "c", "__order__": 0}}
+        search.begin_generation(progress, fresh, self.configuration, creativity_semantics="sparse_v2")
+        self.candidates.update(fresh)
+        progress = reopen()
+        self.assertIn("c-1", search.progress_evaluation_request(progress)["comparison_ids"])
+        self.progress_wave(progress, physical, prompt_set="operator")
+        self.assertEqual(progress["stop_reason"], "generation_limit")
+        self.assertEqual(progress["generations_completed"], 2)
+        self.assertEqual(progress["evaluated_candidates"], 3)
+        self.assertEqual(progress["archive"][0][1], accepted[0]["evaluations"][0])
+        self.assertEqual(sorted(item["candidate_id"] for item in calls), ["c-0", "c-0", "c-1", "c-2"])
+        expected_seeds = {
+            "c-0": [("format", "a")], "c-1": [("channel", "a"), ("format", "b")],
+            "c-2": [("channel", "c")],
+        }
+        for item in calls:
+            self.assertEqual([(c["dimension_id"], c["variant_id"]) for c in item["components"]],
+                             expected_seeds[item["candidate_id"]])
+        self.assertEqual(self.checkpoint()["evaluation"]["batches"][:1], accepted)
+        self.assertEqual(self.checkpoint()["search_material"], original_material)
+        self.assertEqual(self.checkpoint()["candidates"], dict(original_candidates, **fresh))
+        self.assertEqual(progress["expansion_interventions"], 0)
+        self.assertIsNone(progress["reference_score"])
+
+    def test_sparse_progress_budget_keeps_unfinished_work(self):
+        search = evaluation.creativity_search
+        self.configuration = dict(self.configuration, generation_limit=5, max_evaluated_candidates=3)
+        progress = search.new_progress()
+        search.begin_generation(progress, self.candidates, self.configuration, creativity_semantics="sparse_v2")
+        self.progress_wave(progress)
+        retained = copy.deepcopy(progress["archive"])
+        accepted = copy.deepcopy(self.checkpoint()["evaluation"]["batches"])
+        fresh = {
+            "c-2": {"format": search.OMIT, "channel": "c"},
+            "c-3": {"format": "b", "channel": search.OMIT},
+        }
+        search.begin_generation(progress, fresh, self.configuration, creativity_semantics="sparse_v2")
+        wave = self.progress_wave(progress)
+        self.assertFalse(wave["comparison_ready"])
+        self.assertEqual(progress["stop_reason"], "evaluation_budget")
+        self.assertEqual(progress["generations_completed"], 1)
+        self.assertEqual(progress["evaluated_candidates"], 3)
+        self.assertEqual(progress["pending"]["unfinished"], ["c-3"])
+        self.assertEqual(progress["archive"], retained)
+        batches = self.checkpoint()["evaluation"]["batches"]
+        self.assertEqual(batches[:1], accepted)
+        self.assertEqual(batches[1]["genomes"], {"c-2": fresh["c-2"]})
+        self.assertEqual(batches[1]["evaluations"][0]["candidate_id"], "c-2")
+        self.assertEqual(batches[1]["evaluations"][0]["score"], 0.4)
+        before = self.evidence()
+        self.assertIsNone(self.progress_wave(progress))
+        self.assertEqual(self.evidence(), before)
 
     def test_sparse_evaluation_input(self):
         material = self.source.sparse_material(10, 3)

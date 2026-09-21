@@ -412,4 +412,5 @@ the following:
 | slice_impl-02 (Evolve participation and effective ordered seeds) | reviewed | 1 | satisfied | e1a19da |
 | slice_doc-03 (Materialize and evaluate the exact seed) | reviewed | 1 | satisfied | 79ed60d |
 | slice_impl-03 (Materialize and evaluate the exact seed) | reviewed | 1 | satisfied | 27fbe84 |
-| slice_doc-04 (Run scored evolution over a fixed repertoire) | reviewed | 1 | satisfied | - |
+| slice_doc-04 (Run scored evolution over a fixed repertoire) | reviewed | 1 | satisfied | 03713be |
+| slice_impl-04-a (Run scored evolution over a fixed repertoire) | reviewed | 1 | satisfied | - |

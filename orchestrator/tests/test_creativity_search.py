@@ -96,16 +96,17 @@ class CreativitySearchTest(unittest.TestCase):
                 [(dimension["id"], genome[dimension["id"]]) for dimension in dimensions],
             )
 
-    def observe_generation(self, progress, pairs, configuration):
+    def observe_generation(self, progress, pairs, configuration, *, dimensions=None,
+                           creativity_semantics=None):
         search.begin_generation(progress, {
             item["candidate_id"]: genome for genome, item in pairs
-        }, configuration)
+        }, configuration, creativity_semantics=creativity_semantics)
         search.accept_evaluation_wave(progress, {
             "accepted_count": progress["evaluated_candidates"] + len(pairs),
             "regime_revision": 1, "rebaseline_required": False,
             "comparison_ready": True, "unfinished": [], "interruption": None,
             "evaluated": progress["archive"] + pairs,
-        }, configuration)
+        }, configuration, dimensions=dimensions, creativity_semantics=creativity_semantics)
 
     def sparse_material(self, dimension_count=3, variant_count=2):
         material = self.accepted_material()
@@ -374,6 +375,138 @@ class CreativitySearchTest(unittest.TestCase):
                         self.assertEqual(search.reproduce(
                             dimensions, parents, 10, configuration, explored=expected, rng=rng, **context,
                         ), [])
+
+    def test_sparse_score_selection_and_rediscovery(self):
+        material = self.sparse_material()
+        original_material = copy.deepcopy(material)
+        context = dict(dimensions=material["dimensions"], creativity_semantics="sparse_v2")
+        for mode in ("fixed", "interchangeable"):
+            with self.subTest(order_mode=mode):
+                configuration = creativity_configuration(
+                    order_mode=mode, generation_limit=3, max_evaluated_candidates=10,
+                    population_size=3, mutation_rate=0.5,
+                )
+                elite = {"d0": "v0", "d1": "v0", "d2": search.OMIT}
+                near = dict(elite, d0="v1")
+                harmful = {"d0": search.OMIT, "d1": "v1", "d2": "v1"}
+                if mode == "interchangeable":
+                    for genome in (elite, near, harmful):
+                        genome[search.ORDER_GENE] = 0
+                pairs = self.evaluated([elite, near, harmful], [0.9, 0.8, 0.1], invalid=(0, 2))
+                pairs[2][1]["reason"] = "The d2 action undermines the d1 action."
+                original_pairs = copy.deepcopy(pairs)
+                progress = search.new_progress()
+                self.observe_generation(progress, pairs, configuration, **context)
+                self.assertEqual([g for g, _ in progress["archive"]], [elite, harmful])
+                self.assertEqual(progress["best_score"], 0.9)
+                self.assertFalse(progress["archive"][0][1]["constraint_valid"])
+
+                changed_validity = copy.deepcopy(pairs)
+                for _, item in changed_validity:
+                    item["constraint_valid"] = not item["constraint_valid"]
+                    item["constraint_violations"] = [] if item["constraint_valid"] else ["budget"]
+                self.assertEqual([g for g, _ in search.select_survivors(
+                    changed_validity, configuration, **context,
+                )], [elite, harmful])
+
+                # Retained diversity supplies the failed pairing; ordinary
+                # mutation omits only its harmful companion.
+                rng = random.Random(7)
+                draws = ([0.75] if mode == "interchangeable" else []) + [0.75, 0.75, 0.25, 0.25]
+                with mock.patch.object(rng, "random", side_effect=draws), \
+                     mock.patch.object(rng, "choice", side_effect=lambda choices: choices[0]):
+                    children = search.reproduce(
+                        material["dimensions"], progress["archive"][1:], 1, configuration,
+                        explored={self.sparse_key(material, g, mode) for g, _ in pairs},
+                        rng=rng, variants=material["variants"], creativity_semantics="sparse_v2",
+                    )
+                self.assertEqual([self.sparse_key(material, g, mode) for g in children], [(("d1", "v1"),)])
+                self.assertEqual(progress["best_score"], 0.9)
+                fresh = self.evaluated(children, [1], prefix="rediscovered")
+                self.observe_generation(progress, fresh, configuration, **context)
+                self.assertEqual([g for g, _ in progress["archive"]], children + [elite])
+                self.assertIs(progress["archive"][0][1], fresh[0][1])
+                self.assertIs(progress["archive"][1][1], pairs[0][1])
+                self.assertEqual(progress["best_score"], 1)
+                self.assertEqual(progress["evaluated_candidates"], 4)
+                self.assertEqual(pairs, original_pairs)
+                self.assertEqual(material, original_material)
+
+    def test_sparse_fixed_repertoire_and_stops(self):
+        material = self.sparse_material(2)
+        original_material = copy.deepcopy(material)
+        context = dict(dimensions=material["dimensions"], creativity_semantics="sparse_v2")
+        for mode, capacity in (("fixed", 8), ("interchangeable", 12)):
+            for patience, improvement, expansions in ((1, 1, 0), (7, 0, 3)):
+                cases = (
+                    (3, 100, "generation_limit", 3, min(9, capacity)),
+                    (100, 4, "evaluation_budget", 1, 4),
+                    (100, 6, "evaluation_budget", 2, 6),
+                    (2, 6, "generation_limit", 2, 6),
+                    (100, 100, "repertoire_exhausted", math.ceil(capacity / 3), capacity),
+                    (100, capacity, "evaluation_budget", math.ceil(capacity / 3), capacity),
+                )
+                for generations, budget, stop, completed, accepted in cases:
+                    with self.subTest(mode=mode, patience=patience, generations=generations, budget=budget):
+                        configuration = creativity_configuration(
+                            order_mode=mode, population_size=3, generation_limit=generations,
+                            max_evaluated_candidates=budget, patience_generations=patience,
+                            minimum_improvement=improvement, max_stagnation_expansions=expansions,
+                        )
+                        progress, explored, evidence = search.new_progress(), set(), []
+                        rng = random.Random(9)
+                        for generation in range(1, 10):
+                            self.assertFalse(search.expansion_due(
+                                progress, configuration, creativity_semantics="sparse_v2",
+                            ))
+                            if progress["stop_reason"] is not None:
+                                break
+                            options = dict(explored=explored, rng=rng, variants=material["variants"],
+                                           creativity_semantics="sparse_v2")
+                            population = (search.reproduce(
+                                material["dimensions"], progress["archive"], 3, configuration, **options,
+                            ) if progress["archive"] else search.make_population(
+                                material["dimensions"], 3, configuration, **options,
+                            ))
+                            keys = {self.sparse_key(material, g, mode) for g in population}
+                            self.assertEqual(len(keys), len(population))
+                            self.assertNotIn(None, keys)
+                            self.assertTrue(keys.isdisjoint(explored))
+                            explored.update(keys)
+                            pairs = self.evaluated(population, [0] * len(population),
+                                                   invalid=range(len(population)), prefix=str(generation))
+                            search.begin_generation(progress, {
+                                item["candidate_id"]: genome for genome, item in pairs
+                            }, configuration, creativity_semantics="sparse_v2")
+                            if progress["stop_reason"] is not None:
+                                break
+                            allowance = budget - progress["evaluated_candidates"]
+                            evidence.extend(pairs[:allowance])
+                            unfinished = [item["candidate_id"] for _, item in pairs[allowance:]]
+                            search.accept_evaluation_wave(progress, {
+                                "accepted_count": len(evidence), "regime_revision": 1,
+                                "rebaseline_required": False, "comparison_ready": not unfinished,
+                                "unfinished": unfinished, "interruption": None,
+                                "evaluated": [] if unfinished else progress["archive"] + pairs,
+                            }, configuration, **context)
+                        self.assertEqual(progress["stop_reason"], stop)
+                        self.assertEqual(progress["generations_completed"], completed)
+                        self.assertEqual(progress["evaluated_candidates"], accepted)
+                        self.assertEqual(len(evidence), accepted)
+                        self.assertEqual(progress["best_score"], 0)
+                        self.assertTrue(all(not item["constraint_valid"] for _, item in progress["archive"]))
+                        self.assertEqual(progress["expansion_interventions"], 0)
+                        self.assertEqual(progress["expansions"], [])
+                        self.assertEqual(progress["stagnant_generations"], 0)
+                        self.assertEqual(progress["consecutive_expansions"], 0)
+                        self.assertFalse(progress["window_complete"])
+                        self.assertFalse(progress["progress_made"])
+                        self.assertIsNone(progress["reference_score"])
+                        self.assertEqual(material, original_material)
+                        if budget == 4:
+                            self.assertEqual(len(progress["pending"]["unfinished"]), 2)
+                        else:
+                            self.assertIsNone(progress["pending"])
 
     def test_population_bounds_and_explored_identity(self):
         dimensions = self.accepted_material()["dimensions"]
