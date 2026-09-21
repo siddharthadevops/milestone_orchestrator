@@ -1403,13 +1403,14 @@ def validate_order(order, reviewed_defaults=None):
             )
         if "initial_genes" in order:
             try:
-                prompt_contracts.validate_create_genes_reply(
-                    order["initial_genes"], context="task order.initial_genes"
+                initial = prompt_contracts.validate_create_genes_reply(
+                    order["initial_genes"], context="task order.initial_genes",
+                    creativity_semantics="sparse_v2",
                 )
             except contracts.ContractError as exc:
                 raise ContractError(str(exc)) from exc
             checked["initial_genes"] = _json_copy(
-                order["initial_genes"], "task order.initial_genes"
+                initial, "task order.initial_genes"
             )
         return _json_copy(checked, "task order")
     except (ContractError, TypeError, ValueError) as exc:
@@ -1664,6 +1665,8 @@ def admit_task(
     checked_order = _canonical_output_directory(
         validate_order(order), primary_workspace
     )
+    if checked_order["task_executor"] == "creativity":
+        checked_order["creativity_semantics"] = "sparse_v2"
     try:
         staffing = _json_copy(resolved_staffing, "resolved staffing")
     except ContractError as exc:

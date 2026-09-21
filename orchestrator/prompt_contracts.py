@@ -544,14 +544,20 @@ def _id_records(obj, key, fields, ctx, *, nonempty=False, id_key="id"):
     return records
 
 
-def validate_create_genes_reply(obj, context="create_genes reply"):
-    """Validate the one current create_genes envelope for every entry path.
+def validate_create_genes_reply(
+    obj, context="create_genes reply", *, creativity_semantics=None,
+):
+    """Admit material under the caller's saved semantics, never its shape.
 
     Routed model replies and operator-supplied initial material deliberately
-    share this boundary.  Callers that persist the accepted value remain
-    responsible for detaching it from their input.
+    share validation and sparse normalization. The input is unchanged;
+    callers persisting the returned value remain responsible for detaching it.
+    Missing semantics preserves the legacy envelope without normalization.
     """
     ctx = context
+    sparse = creativity_semantics == "sparse_v2"
+    if not isinstance(obj, dict):
+        raise contracts.ContractError("%s must be an object" % ctx)
     _exact_keys(obj, ("search_material",), ctx)
     material = _require(obj, "search_material", dict, ctx)
     ctx += ".search_material"
@@ -559,7 +565,7 @@ def validate_create_genes_reply(obj, context="create_genes reply"):
         "objective", "context_summary", "facts", "constraints", "assumptions",
         "unknowns", "dimensions", "composition_guidance", "criteria",
         "order_semantics",
-    ), ctx)
+    ) + (("variants",) if sparse else ()), ctx)
     for key in (
         "objective", "context_summary", "composition_guidance", "order_semantics",
     ):
@@ -572,25 +578,44 @@ def validate_create_genes_reply(obj, context="create_genes reply"):
         ):
             _text(record, "text", "%s.%s" % (ctx, key))
     for dimension in _id_records(
-        material, "dimensions", ("id", "meaning", "variants"), ctx,
+        material, "dimensions",
+        ("id", "meaning") if sparse else ("id", "meaning", "variants"), ctx,
         nonempty=True,
     ):
         dctx = "%s.dimensions[%s]" % (ctx, dimension["id"])
-        if dimension["id"] == "__order__":
+        if dimension["id"] == "__order__" or (sparse and dimension["id"] == "__omit__"):
             raise contracts.ContractError(
                 "%s.id is reserved for the creativity engine" % dctx
             )
         _text(dimension, "meaning", dctx)
+        if sparse:
+            continue
         for variant in _id_records(
             dimension, "variants", ("id", "text"), dctx, nonempty=True
         ):
             _text(variant, "text", "%s.variants" % dctx)
+    if sparse:
+        variants = _id_records(material, "variants", ("id", "text"), ctx, nonempty=True)
+        for variant in variants:
+            _text(variant, "text", "%s.variants" % ctx)
+            if variant["id"] == "__omit__":
+                raise contracts.ContractError(
+                    "%s.variants.id is reserved for the creativity engine" % ctx
+                )
+        # The smallest ID represents equal text; ID order makes admission
+        # independent of repertoire listing order without rewriting records.
+        distinct = {}
+        for variant in sorted(variants, key=lambda item: item["id"]):
+            distinct.setdefault(variant["text"], variant)
+        return {"search_material": dict(material, variants=list(distinct.values()))}
     return obj
 
 
 def _create_genes(obj, bound, options, ctx):
     _kind(bound, ("create_genes",))
-    validate_create_genes_reply(obj, context=ctx)
+    obj.update(validate_create_genes_reply(
+        obj, context=ctx, creativity_semantics=options["creativity_semantics"],
+    ))
 
 
 def _evaluate_candidates(obj, bound, options, ctx):
@@ -909,7 +934,7 @@ def validate(bound, obj, *, queued_findings=None,
              configured_suite_commands=None, workspace=None,
              expected_artifact=None, extension_fields=(),
              candidate_ids=None, constraint_ids=None,
-             dimensions=None):
+             dimensions=None, creativity_semantics=None):
     """Validate a reply against served sections, using trusted caller context."""
     if not isinstance(bound, BoundContract):
         raise contracts.ContractError("bound must be a BoundContract")
@@ -923,6 +948,7 @@ def validate(bound, obj, *, queued_findings=None,
         "candidate_ids": candidate_ids,
         "constraint_ids": constraint_ids,
         "dimensions": dimensions,
+        "creativity_semantics": creativity_semantics,
     }
     for section_id in bound.registered_section_ids:
         REGISTERED_SECTIONS[section_id](

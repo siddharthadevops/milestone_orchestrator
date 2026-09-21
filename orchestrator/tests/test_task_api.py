@@ -361,6 +361,9 @@ class TaskApiTest(unittest.TestCase):
         project_order = dict(order, request=dict(order["request"], reference_documents=[],
                              work_area={"project": "orchestrators", "work_area": "main"}))
         for invalid, headers, expected in (
+            (dict(order, initial_genes={"search_material": search.material}), None,
+             (400, tasks.INVALID_TASK_REQUEST)),
+            (dict(order, creativity_semantics="legacy"), None, (400, tasks.INVALID_TASK_REQUEST)),
             (dict(order, configuration={"population_size": 2}), None, (400, tasks.INVALID_TASK_REQUEST)),
             (dict(order, configuration=dict(configuration, mutation_rate=0)), None,
              (400, tasks.INVALID_TASK_REQUEST)),
@@ -377,6 +380,7 @@ class TaskApiTest(unittest.TestCase):
         code, response = self.request("POST", "/api/tasks", order)
         self.assertEqual(code, 201, response)
         record = response["task"]
+        self.assertEqual(record["order"]["creativity_semantics"], "sparse_v2")
         path = "/api/tasks/" + record["id"]
         self.assertEqual(self.request("GET", path)[1]["task"], record)
         self.assertEqual(self.request("GET", "/api/tasks")[1]["tasks"], [record])
@@ -398,6 +402,10 @@ class TaskApiTest(unittest.TestCase):
         self.assertTrue(refused["error"])
         self.assertEqual(held.started, [record["id"]])
 
+        # Full search is still a legacy regression; sparse acceptance ends at material admission.
+        legacy = copy.deepcopy(record)
+        legacy["order"].pop("creativity_semantics")
+        self._age_stored_record(held.store, legacy)
         host = search.host()
         self.start_server(host)
         code, resumed = self.request("POST", path + "/resume", {"revision": paused["revision"]})
@@ -438,6 +446,7 @@ class TaskApiTest(unittest.TestCase):
         defaults = {key: definition["default"] for key, definition in schema.items()
                     if "default" in definition}
         omitted = {key: value for key, value in order.items() if key != "configuration"}
+        self.start_server(held)
         for submitted in (omitted, dict(order, configuration={}),
                           dict(order, configuration={"mutation_rate": 0.2}),
                           dict(order, configuration={"population_size": 8, "generation_limit": 10}),
@@ -449,6 +458,9 @@ class TaskApiTest(unittest.TestCase):
                 expected = dict(defaults, **submitted.get("configuration", {}))
                 expected["max_evaluated_candidates"] = expected["population_size"] * expected["generation_limit"]
                 self.assertEqual(record["order"]["configuration"], expected)
+                self.assertEqual(record["order"].pop("creativity_semantics"), "sparse_v2")
+                self._age_stored_record(held.store, record)
+                host.start(record, search.config)
                 path = "/api/tasks/" + record["id"]
                 self.assertEqual(self.request("GET", path)[1]["task"]["order"]["configuration"], expected)
                 self.assertEqual(search._terminal(host, record["id"])["result"]["status"], "success")

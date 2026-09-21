@@ -22,6 +22,7 @@ from orchestrator.tests import test_task_cancel_recovery as cancel_fixture
 from orchestrator.tests import test_task_controls_api as controls_fixture
 from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
 from orchestrator.tests.test_tasks import creativity_configuration
+from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
 
 
 class CreativityTaskTest(unittest.TestCase):
@@ -73,7 +74,86 @@ class CreativityTaskTest(unittest.TestCase):
             staffing_session=self.session, prompt_set=prompt_set,
             configuration=creativity_configuration(**configuration),
         )
-        return task_api.StandaloneTaskStore(self.home).admit(order, {}, self.primary)
+        return self.legacy_order(order)
+
+    def legacy_order(self, order):
+        """Persist historical unmarked orders for the full-search regressions."""
+        source = dict(order)
+        initial = source.pop("initial_genes", None)
+        store = task_api.StandaloneTaskStore(self.home)
+        record = store.admit(source, {}, self.primary)
+        record["order"].pop("creativity_semantics")
+        if initial is not None:
+            record["order"]["initial_genes"] = copy.deepcopy(initial)
+        api_fixture.TaskApiTest._age_stored_record(store, record)
+        return record
+
+    def test_sparse_admission_parity_and_material_resume_preserves_semantics(self):
+        legacy = copy.deepcopy(self.material)
+        for semantics in (None, "sparse_v2"):
+            for supplied in (False, True):
+                with self.subTest(semantics=semantics, supplied=supplied):
+                    self.calls.clear()
+                    source = sparse_creation_reply() if semantics else {"search_material": copy.deepcopy(legacy)}
+                    self.material = copy.deepcopy(source["search_material"])
+                    expected = copy.deepcopy(self.material)
+                    if semantics:
+                        expected["variants"] = [{"id": "a", "text": "Share"}, {"id": "b", "text": "Exchange"}]
+                    order = self.order("creativity", request=self.material["objective"])
+                    order.update(staffing_session=self.session, configuration=creativity_configuration())
+                    if supplied:
+                        order["initial_genes"] = source
+                    store = task_api.StandaloneTaskStore(self.home)
+                    record = store.admit(order, {}, self.primary) if semantics else self.legacy_order(order)
+                    source["search_material"]["objective"] = "Caller mutation after admission"
+                    first = self.host()
+                    first.adopt_open_tasks(lambda _record: self.config)
+                    reopened = first.store.record(record["id"])
+                    self.assertEqual(reopened, record)
+                    self.assertEqual(reopened["order"].get("creativity_semantics"), semantics)
+                    if supplied:
+                        self.assertEqual(reopened["order"]["initial_genes"]["search_material"], expected)
+                    self.assertEqual(self.calls, [])
+                    paused = self._paused(first, record["id"])
+                    directory = task_api.creativity_checkpoint_store(self.home, record["id"]).directory
+                    put = kvstore.LocalKVClient.put
+
+                    def interrupt_after_material_save(client, key, value):
+                        revision = put(client, key, value)
+                        if client.directory == directory and value["search_material"] is not None:
+                            raise SystemExit("material handoff saved")
+                        return revision
+
+                    with mock.patch.object(kvstore.LocalKVClient, "put", new=interrupt_after_material_save):
+                        first.resume(record["id"], self.config, paused["revision"])
+                        self._wait(lambda: not first.is_active(record["id"]), "material handoff did not stop")
+                    before = self.checkpoint(record)
+                    self.assertEqual(before["search_material"], expected)
+                    expected_jobs = [] if supplied else ["create_genes"]
+                    self.assertEqual([call["job"] for call in self.calls], expected_jobs)
+                    if not supplied:
+                        self.assertIn("SAVED MATERIAL SEMANTICS: " + (semantics or "legacy"), self.calls[0]["prompt"])
+                    fresh = self.host()
+                    fresh.adopt_open_tasks(lambda _record: self.config)
+                    self.assertEqual(fresh.store.record(record["id"]), reopened)
+                    self.assertEqual(self.checkpoint(record), before)
+                    paused = self._paused(fresh, record["id"])
+                    with mock.patch.object(task_api.creativity_search, "make_population",
+                                           side_effect=SystemExit("next slice boundary")) as search, \
+                         mock.patch.object(tasks.prompt_contracts, "validate_create_genes_reply") as readmit:
+                        fresh.resume(record["id"], self.config, paused["revision"])
+                        self._wait(lambda: not fresh.is_active(record["id"]), "resumed handoff did not stop")
+                    search.assert_called_once()
+                    readmit.assert_not_called()
+                    self.assertEqual(self.checkpoint(record), before)
+                    self.assertEqual([call["job"] for call in self.calls], expected_jobs)
+                    lifecycle = fresh.store.lifecycle(record["id"])
+                    receipts = [event["physical_dispatch"] for event in lifecycle["history"] if "physical_dispatch" in event]
+                    self.assertEqual([receipt["call_context"]["job"] for receipt in receipts], expected_jobs)
+                    if supplied:
+                        self.assertNotIn("accounting", lifecycle)
+                    else:
+                        self.assertGreater(lifecycle["accounting"]["cost"]["api_usd"], 0)
 
     def test_operator_supplied_genes_skip_creation_in_both_order_modes(self):
         for order_mode in ("fixed", "interchangeable"):
@@ -96,7 +176,7 @@ class CreativityTaskTest(unittest.TestCase):
                     ),
                 )
                 store = task_api.StandaloneTaskStore(self.home)
-                record = store.admit(order, {}, self.primary)
+                record = self.legacy_order(order)
                 supplied["search_material"]["objective"] = "mutated caller value"
                 self.assertEqual(record["order"]["initial_genes"], expected)
                 self.assertEqual(
@@ -259,7 +339,7 @@ class CreativityTaskTest(unittest.TestCase):
             "patience_generations": 20,
         })
         store = task_api.StandaloneTaskStore(self.home)
-        record = store.admit(order, {}, self.primary)
+        record = self.legacy_order(order)
         self.assertEqual(record["order"]["configuration"]["max_evaluated_candidates"], 80)
         host = self.host()
         host.start(record, self.config)
@@ -286,7 +366,7 @@ class CreativityTaskTest(unittest.TestCase):
             configuration=creativity_configuration(generation_limit=3, max_evaluated_candidates=6),
         )
         store = task_api.StandaloneTaskStore(self.home)
-        record = store.admit(order, {}, self.primary)
+        record = self.legacy_order(order)
         admitted_order = copy.deepcopy(record["order"])
         host = self.host()
         host.start(record, self.config)
@@ -436,10 +516,16 @@ class CreativityTaskTest(unittest.TestCase):
                     self.assertIn("creativity", [item["id"] for item in catalogue["task_executors"]])
                     order = self.order("creativity", **problem)
                     order.update(configuration=configuration, staffing_session=self.session)
-                    with mock.patch.object(service, "_direct_task_config", return_value=self.config()):
+                    with mock.patch.object(service, "_direct_task_config", return_value=self.config()), \
+                         mock.patch.object(host, "start"):
                         code, response = self.request("POST", "/api/tasks", order)
                     self.assertEqual(code, 201, response)
-                    record = self._terminal(host, response["task"]["id"])
+                    # Continue this full-search fixture as a historical task.
+                    record = response["task"]
+                    self.assertEqual(record["order"].pop("creativity_semantics"), "sparse_v2")
+                    api_fixture.TaskApiTest._age_stored_record(host.store, record)
+                    host.start(record, self.config)
+                    record = self._terminal(host, record["id"])
                     code, public = self.request("GET", "/api/tasks/" + record["id"])
                     self.assertEqual(code, 200)
                     self.assertEqual(public["task"], record)

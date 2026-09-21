@@ -261,11 +261,11 @@ class TaskContractsTest(unittest.TestCase):
             "dimensions": [{
                 "id": "format",
                 "meaning": "Reading format",
-                "variants": [
-                    {"id": "full", "text": "Read the full story."},
-                    {"id": "excerpt", "text": "Read an excerpt."},
-                ],
             }],
+            "variants": [
+                {"id": "excerpt", "text": "Read an excerpt."},
+                {"id": "full", "text": "Read the full story."},
+            ],
             "composition_guidance": "Apply the selected components in order.",
             "criteria": [{"id": "reach", "text": "Reach interested readers."}],
             "order_semantics": "sequence in which the components are applied",
@@ -300,6 +300,11 @@ class TaskContractsTest(unittest.TestCase):
             tasks.validate_order,
             dict(task_order("agent_call"), initial_genes=initial),
         )
+        for semantics in ("legacy", "sparse_v2"):
+            self.assert_request_error(
+                tasks.INVALID_TASK_REQUEST, tasks.validate_order,
+                dict(task_order("creativity"), creativity_semantics=semantics),
+            )
 
     def test_creativity_native_result_contract(self):
         dimensions = [

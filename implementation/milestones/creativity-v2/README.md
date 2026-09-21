@@ -406,4 +406,5 @@ the following:
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
 | skeleton | reviewed | 1 | satisfied | 9a54acb |
-| slice_doc-01 (Admit shared search material with durable semantics) | reviewed | 1 | satisfied | - |
+| slice_doc-01 (Admit shared search material with durable semantics) | reviewed | 1 | satisfied | 4b4c5fc |
+| slice_impl-01 (Admit shared search material with durable semantics) | reviewed | 1 | satisfied | - |

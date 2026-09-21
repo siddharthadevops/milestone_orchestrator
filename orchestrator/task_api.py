@@ -2724,6 +2724,7 @@ class DirectTaskHost:
             if material is None:
                 material, result = creativity_evaluation.create_genes(
                     group, runner, objective=request["request"], context=request["context"],
+                    creativity_semantics=order.get("creativity_semantics"),
                     references=request["reference_documents"], **options,
                 )
                 if isinstance(result, runners.ControlledInterruptionResult):

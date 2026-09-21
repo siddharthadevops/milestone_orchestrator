@@ -1159,6 +1159,30 @@ class PromptRouterTest(unittest.TestCase):
                         self.assertEqual(resolved[material]["output_contract"],
                                          resolved["default"]["output_contract"])
 
+    def test_creation_prompt_semantics(self):
+        from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
+
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            for semantics in ("legacy", "sparse_v2"):
+                for material in ("default", "literature", "business"):
+                    with self.subTest(semantics=semantics, material=material):
+                        values = dict(workspace="/workspace", objective="Explore the room.", context="",
+                                      references="[]", creativity_semantics=semantics)
+                        selected = prompt_router.resolve(home, job="create_genes@creativity",
+                                                         executor="agent_call", material=material, values=values)
+                        rendered = prompt_router.render(selected.prompt, values)
+                        self.assertIn("SAVED MATERIAL SEMANTICS: " + semantics, rendered)
+                        self.assertIn("Every value is available to every focus", rendered)
+                        self.assertIn("it need not use every focus", rendered)
+                        reply = sparse_creation_reply()
+                        if semantics == "legacy":
+                            variants = reply["search_material"].pop("variants")
+                            for dimension in reply["search_material"]["dimensions"]:
+                                dimension["variants"] = variants
+                        prompt_contracts.validate(prompt_contracts.bind(selected.prompt), reply,
+                                                  creativity_semantics=semantics)
+
     def test_creativity_live_whole_set_resolution(self):
         kinds = ("create_genes", "evaluate_candidates", "expand_genes")
         routes = tuple(kind + "@creativity" for kind in kinds) + ("implement@slice_impl",)

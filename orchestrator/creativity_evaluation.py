@@ -18,10 +18,12 @@ from . import creativity_search, prompt_contracts, prompt_router, runners, staff
 def create_genes(
     group, runner, *, objective, context, references, home, session, workspace,
     configuration, execution_context, prompt_set="default", prompt_values=None,
+    creativity_semantics=None,
 ):
     """Derive compact search material from the original operator request."""
     values = dict(prompt_values or {})
     values.update(workspace=workspace, objective=objective,
+                  creativity_semantics=creativity_semantics or "legacy",
                   context=json.dumps(context, ensure_ascii=False),
                   references=json.dumps(references, ensure_ascii=False))
     group.ensure_quiescent()
@@ -29,7 +31,7 @@ def create_genes(
         reply, result = _call_semantic_job(
             group, runner, job="create_genes", home=home, session=session,
             workspace=workspace, configuration=configuration, values=values,
-            validation_context={},
+            validation_context={"creativity_semantics": creativity_semantics},
             context={"job": "create_genes", "generation": 0, "batch": uuid.uuid4().hex},
             execution_context=execution_context, prompt_set=prompt_set,
         )

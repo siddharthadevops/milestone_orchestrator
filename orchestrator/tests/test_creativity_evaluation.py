@@ -19,6 +19,7 @@ from orchestrator.tests import test_prompt_router as router_fixture
 from orchestrator.tests import test_task_call_group as group_fixture
 from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
 from orchestrator.tests.test_tasks import creativity_configuration
+from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
 
 
 class CreativityEvaluationTest(unittest.TestCase):
@@ -144,6 +145,33 @@ class CreativityEvaluationTest(unittest.TestCase):
         )
         options.update(changes)
         return evaluation.expand_progress(self.group, SimpleNamespace(call=physical), progress=progress, **options)
+
+    def test_creation_uses_matching_semantics_for_prompt_and_reply(self):
+        for semantics in (None, "sparse_v2"):
+            with self.subTest(semantics=semantics):
+                source = (sparse_creation_reply() if semantics else {"search_material": self.material})
+                calls = []
+
+                def physical(_family, prompt, _workspace, **_kwargs):
+                    calls.append(prompt)
+                    self.assertIn("SAVED MATERIAL SEMANTICS: " + (semantics or "legacy"), prompt)
+                    return self.result(source)
+
+                material, result = evaluation.create_genes(
+                    self.group, SimpleNamespace(call=physical), objective=search_fixture.OBJECTIVE,
+                    context="", references=[], home=self.home, session=self.session,
+                    workspace=self.workspace, configuration=self.configuration, execution_context=None,
+                    creativity_semantics=semantics,
+                )
+                self.assertEqual(len(calls), 1)
+                self.assertIsInstance(result, runners.RunnerResult)
+                if semantics:
+                    expected = dict(source["search_material"], variants=[
+                        {"id": "a", "text": "Share"}, {"id": "b", "text": "Exchange"},
+                    ])
+                    self.assertEqual(material, expected)
+                else:
+                    self.assertEqual(material, self.material)
 
     def test_expansion_uses_live_routed_contract(self):
         progress = self.stagnant_progress()

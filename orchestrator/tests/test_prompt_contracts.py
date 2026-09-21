@@ -83,6 +83,22 @@ def closed_object_defects(record):
     return defects
 
 
+def sparse_creation_reply():
+    return {"search_material": {
+        "objective": "Find a useful next step.", "context_summary": "An existing community room.",
+        "facts": ["The room is available."], "constraints": [{"id": "budget", "text": "No spend."}],
+        "assumptions": ["People may join."], "unknowns": ["Attendance."],
+        "dimensions": [{"id": "room", "meaning": "The shared room"},
+                       {"id": "readers", "meaning": "Current readers"},
+                       {"id": "neighbors", "meaning": "Potential participants"}],
+        "variants": [{"id": "z", "text": "Share"}, {"id": "b", "text": "Exchange"},
+                     {"id": "a", "text": "Share"}],
+        "composition_guidance": "Interpret the selected pairs in order.",
+        "criteria": [{"id": "useful", "text": "Serves current participants."}],
+        "order_semantics": "Sequence in which actions take effect.",
+    }}
+
+
 class PromptContractsTest(unittest.TestCase):
     def assert_creativity_replies(self, kind, accepted, rejected, **context):
         values = validation_values(prompt_sets.default_seed())
@@ -279,6 +295,86 @@ class PromptContractsTest(unittest.TestCase):
                 self.assertEqual(prompt_contracts.validate(
                     prompt_contracts.bind(served), {"operator": "reply"},
                 ), {"operator": "reply"})
+
+    def test_sparse_material_contract(self):
+        reply = sparse_creation_reply()
+        larger = copy.deepcopy(reply)
+        larger["search_material"]["variants"] = [
+            {"id": str(index), "text": "Action %d" % index} for index in range(15)
+        ]
+        minimal = copy.deepcopy(reply)
+        minimal["search_material"]["dimensions"] = reply["search_material"]["dimensions"][:1]
+        minimal["search_material"]["variants"] = reply["search_material"]["variants"][:1]
+        for key in ("facts", "constraints", "assumptions", "unknowns"):
+            minimal["search_material"][key] = []
+        invalid = {}
+
+        def replace(path, value):
+            changed = copy.deepcopy(reply)
+            target = changed
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            return changed
+
+        objects = [(), ("search_material",)] + [
+            ("search_material", key, 0) for key in ("dimensions", "variants", "constraints", "criteria")
+        ]
+        for path in objects:
+            record = reply
+            for key in path:
+                record = record[key]
+            for defect, value in closed_object_defects(record).items():
+                invalid[str(path) + defect] = replace(path, value) if path else value
+        for key in ("facts", "assumptions", "unknowns"):
+            for value in ([""], [42]):
+                invalid[key + str(value)] = replace(("search_material", key), value)
+        for key in ("dimensions", "variants", "constraints", "criteria"):
+            first = reply["search_material"][key][0]
+            invalid[key + " duplicate"] = replace(("search_material", key), [first, first])
+            if key != "constraints":
+                invalid[key + " empty"] = replace(("search_material", key), [])
+        for key, identifier in (("dimensions", "__order__"), ("dimensions", "__omit__"),
+                                ("variants", "__omit__")):
+            invalid[key + identifier] = replace(("search_material", key, 0, "id"), identifier)
+        invalid["per_dimension_variants"] = replace(
+            ("search_material", "dimensions", 0), dict(reply["search_material"]["dimensions"][0],
+                                                      variants=reply["search_material"]["variants"]),
+        )
+        accepted = {"minimal": minimal, "more_dimensions_than_values": reply, "larger_repertoire": larger}
+        for case, value in accepted.items():
+            with self.subTest(supplied=case):
+                prompt_contracts.validate_create_genes_reply(value, creativity_semantics="sparse_v2")
+        for case, value in invalid.items():
+            with self.subTest(supplied=case), self.assertRaises(contracts.ContractError):
+                prompt_contracts.validate_create_genes_reply(value, creativity_semantics="sparse_v2")
+        with self.assertRaises(contracts.ContractError):
+            prompt_contracts.validate_create_genes_reply(reply)
+        self.assert_creativity_replies("create_genes", accepted, invalid, creativity_semantics="sparse_v2")
+
+    def test_sparse_material_normalization(self):
+        from itertools import permutations
+
+        source = sparse_creation_reply()
+        # Exact text equality only: whitespace and case are not rewritten.
+        source["search_material"]["variants"].extend([
+            {"id": "c", "text": "share"}, {"id": "d", "text": "Share "},
+        ])
+        expected = copy.deepcopy(source)
+        expected["search_material"]["variants"] = sorted(
+            expected["search_material"]["variants"][1:], key=lambda item: item["id"],
+        )
+        bound = prompt_contracts.bind(prompt("create_genes", ["create_genes_result"]))
+        for variants in permutations(source["search_material"]["variants"]):
+            value = copy.deepcopy(source)
+            value["search_material"]["variants"] = list(variants)
+            before = copy.deepcopy(value)
+            admitted = prompt_contracts.validate_create_genes_reply(value, creativity_semantics="sparse_v2")
+            self.assertEqual(value, before)
+            self.assertEqual(admitted, expected)
+            self.assertEqual(prompt_contracts.validate(
+                bound, value, creativity_semantics="sparse_v2",
+            ), expected)
 
     def test_shipped_contract_section_registry_is_complete(self):
         documents = prompt_sets.default_seed().documents

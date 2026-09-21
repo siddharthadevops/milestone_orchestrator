@@ -700,7 +700,7 @@
           "parts": [
             {
               "text": [
-                "LITERATURE REFINEMENT: derive movable narrative units such as actions, decisions,",
+                "LITERATURE REFINEMENT: for legacy, derive movable narrative units such as actions, decisions,",
                 "disclosures, reversals or experiential beats when they serve the objective. Use",
                 "imagery, voice, rhythm, tension and agency as judgment lenses, not as abstract",
                 "dimensions or fixed slots. Preserve supplied continuity and stylistic constraints;",
@@ -709,7 +709,10 @@
                 "risk or feasibility in assumptions, unknowns or criteria instead of manufacturing",
                 "a prohibition. order_semantics must name how relative placement changes the story,",
                 "causal execution or reader experience; never define it as merely the order in which",
-                "the proposal is explained. Keep the generic objective and result contract unchanged."
+                "the proposal is explained. For sparse_v2, start with essential subjects and verbs admitted",
+                "by the supplied text, plus clearly proposed exploratory subjects. Keep foci position-independent",
+                "and verbs or transformations in one broad shared repertoire, without per-focus subsets,",
+                "pre-composed solutions or suppressing collisions. Keep the generic objective and result contract unchanged."
               ],
               "variables": []
             }
@@ -728,7 +731,9 @@
                 "other hard conditions; label assumptions about demand, access and willingness",
                 "to agree. These are lenses, not a required business-plan schema. Keep the",
                 "generic objective and result contract unchanged. Preserve logical, position-independent",
-                "units and the declared order semantics."
+                "units and the declared order semantics. For sparse_v2, treat these as independent foci",
+                "with one shared collection of possible actions or transformations, not pre-composed plans",
+                "or per-focus subsets. Code chooses which foci participate."
               ],
               "variables": []
             }
