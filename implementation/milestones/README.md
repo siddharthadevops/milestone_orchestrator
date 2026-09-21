@@ -45,5 +45,5 @@ milestones.
 | [Prompt Router](prompt-router/) | open | 14 | 2026-08-24 | - |
 | [Deep & Reviewed Tasks](deep-reviewed-tasks/) | closed | 12 | 2026-08-28 | 2026-09-02 |
 | [Creativity](creativity/) | closed | 10 | 2026-09-11 | 2026-09-12 |
-| [Creativity v2](creativity-v2/) | open | 0 | 2026-09-21 | - |
+| [Creativity v2](creativity-v2/) | open | 6 | 2026-09-21 | - |
 <!-- impl_roadmap:milestones:end -->

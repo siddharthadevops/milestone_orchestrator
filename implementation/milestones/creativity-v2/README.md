@@ -394,9 +394,16 @@ the following:
 
 | Slice | Title |
 |---|---|
+| 01 | Admit shared search material with durable semantics |
+| 02 | Evolve participation and effective ordered seeds |
+| 03 | Materialize and evaluate the exact seed |
+| 04 | Run scored evolution over a fixed repertoire |
+| 05 | Expose sparse controls and inspectable evidence |
+| 06 | Compare prompt formulations on three different problems |
 
 ## Units
 
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
-| skeleton | reviewed | 1 | satisfied | - |
+| skeleton | reviewed | 1 | satisfied | 9a54acb |
+| slice_doc-01 (Admit shared search material with durable semantics) | reviewed | 1 | satisfied | - |
