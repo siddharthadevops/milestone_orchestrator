@@ -107,6 +107,274 @@ class CreativitySearchTest(unittest.TestCase):
             "evaluated": progress["archive"] + pairs,
         }, configuration)
 
+    def sparse_material(self, dimension_count=3, variant_count=2):
+        material = self.accepted_material()
+        material["dimensions"] = [
+            {"id": "d%s" % i, "meaning": "Focus %s" % i} for i in range(dimension_count)
+        ]
+        material["variants"] = [
+            {"id": "v%s" % i, "text": "Action %s" % i} for i in range(variant_count)
+        ]
+        return prompt_contracts.validate_create_genes_reply(
+            {"search_material": material}, creativity_semantics="sparse_v2",
+        )["search_material"]
+
+    def sparse_key(self, material, genome, mode=None):
+        return search.genome_key(
+            genome, material["dimensions"], mode, creativity_semantics="sparse_v2",
+        )
+
+    def test_sparse_search_context_and_legacy_compatibility(self):
+        material = self.sparse_material(2)
+        dimensions = material["dimensions"]
+        context = dict(variants=material["variants"], creativity_semantics="sparse_v2")
+        for mode in (None, "fixed", "interchangeable"):
+            configuration = creativity_configuration(population_size=20, order_mode=mode)
+            population = search.make_population(dimensions, 20, configuration, **context)
+            self.assertEqual(len(population), 12 if mode == "interchangeable" else 8)
+            for dimension in dimensions:
+                self.assertEqual({g[dimension["id"]] for g in population}, {search.OMIT, "v0", "v1"})
+            reversed_values = search.make_population(
+                dimensions, 20, configuration, variants=list(reversed(material["variants"])),
+                creativity_semantics="sparse_v2",
+            )
+            self.assertEqual(
+                {self.sparse_key(material, g, mode) for g in population},
+                {self.sparse_key(material, g, mode) for g in reversed_values},
+            )
+            legacy = self.accepted_material()["dimensions"]
+            self.assertEqual(
+                search.make_population(legacy, 20, configuration, rng=random.Random(3)),
+                search.make_population(legacy, 20, configuration, rng=random.Random(3),
+                                       variants=material["variants"]),
+            )
+
+    def test_sparse_participation_and_variation(self):
+        for width in (2, 100):
+            material = self.sparse_material(5, width)
+            original = copy.deepcopy(material)
+            dimensions = material["dimensions"]
+            context = dict(variants=material["variants"], creativity_semantics="sparse_v2")
+            rng = random.Random(7)
+            with mock.patch.object(rng, "random", side_effect=[0.75, 0.25, 0.75, 0.25, 0.75]), \
+                 mock.patch.object(rng, "randrange", return_value=0):
+                population = search.make_population(
+                    dimensions, 1, creativity_configuration(), rng=rng, **context,
+                )
+            parent = {"d0": "v0", "d1": search.OMIT, "d2": "v0", "d3": search.OMIT, "d4": "v0"}
+            self.assertEqual(population, [parent])
+            parents = self.evaluated(population, [0.8])
+            before = copy.deepcopy((material, parents))
+            # Deactivate, activate, change value, then leave the last two unchanged.
+            draws = [0.25, 0.25, 0.25, 0.25, 0.25, 0.75, 0.75, 0.75]
+            with mock.patch.object(rng, "random", side_effect=draws), \
+                 mock.patch.object(rng, "choice", side_effect=lambda choices: choices[0]):
+                child = search.make_child(dimensions, parents, 0.5, rng=rng, **context)
+            self.assertEqual(child, {
+                "d0": search.OMIT, "d1": "v0", "d2": "v1", "d3": search.OMIT, "d4": "v0",
+            })
+            self.assertEqual((material, parents), before)
+            other = self.evaluated([{d["id"]: "v1" for d in dimensions}], [0.7])
+            inherited_from = [other[0], parents[0], other[0], parents[0], other[0]]
+            with mock.patch.object(rng, "sample", return_value=parents + other), \
+                 mock.patch.object(rng, "choice", side_effect=inherited_from):
+                inherited = search.make_child(dimensions, parents + other, 0, rng=rng, **context)
+            self.assertEqual(inherited, {
+                "d0": "v1", "d1": search.OMIT, "d2": "v1", "d3": search.OMIT, "d4": "v1",
+            })
+            self.assertEqual(material, original)
+
+        material = self.sparse_material(5, 1)
+        dimensions = material["dimensions"]
+        context = dict(variants=material["variants"], creativity_semantics="sparse_v2")
+        for active_count in range(1, 6):
+            with mock.patch.object(rng, "random", side_effect=[0.75] * active_count + [0.25] * (5 - active_count)):
+                population = search.make_population(
+                    dimensions, 1, creativity_configuration(), rng=rng, **context,
+                )
+            self.assertEqual(sum(value != search.OMIT for value in population[0].values()), active_count)
+        with mock.patch.object(rng, "random", return_value=0.75):
+            population = search.make_population(dimensions, 1, creativity_configuration(), rng=rng, **context)
+            self.assertEqual(population, [{d["id"]: "v0" for d in dimensions}])
+            self.assertEqual(search.make_child(dimensions, self.evaluated(population, [1]), 1,
+                                               rng=rng, **context), population[0])
+        with mock.patch.object(rng, "random", return_value=0.25):
+            empty = search.make_child(dimensions, self.evaluated(population, [1]), 1, rng=rng, **context)
+            self.assertEqual(empty, {d["id"]: search.OMIT for d in dimensions})
+            self.assertEqual(
+                search.make_child(dimensions, [(empty, {})], 1, rng=rng, **context), population[0],
+            )
+
+    def test_sparse_ordered_components(self):
+        material = self.sparse_material(10)
+        dimensions = material["dimensions"]
+        context = dict(variants=material["variants"], creativity_semantics="sparse_v2")
+        genome = {d["id"]: search.OMIT for d in dimensions}
+        genome.update(d0="v0", d4="v1", d9="v0")
+        expected = [{"dimension_id": "d%s" % i, "dimension": "Focus %s" % i,
+                     "variant_id": "v%s" % v, "variant": "Action %s" % v}
+                    for i, v in ((0, 0), (4, 1), (9, 0))]
+        self.assertEqual(search.genome_components(dimensions, genome, "fixed", **context), expected)
+        genome[search.ORDER_GENE] = math.factorial(10) - 1
+        self.assertEqual(
+            search.genome_components(dimensions, genome, "interchangeable", **context), expected[::-1],
+        )
+
+        material = self.sparse_material(3, 1)
+        dimensions = material["dimensions"]
+        context = dict(variants=material["variants"], creativity_semantics="sparse_v2")
+        parent = {search.ORDER_GENE: 0, "d0": "v0", "d1": search.OMIT, "d2": "v0"}
+        reversed_parent = dict(parent, **{search.ORDER_GENE: 5})
+        parents = self.evaluated([parent, reversed_parent], [1, 0.8])
+        rng = random.Random(2)
+        with mock.patch.object(rng, "choice", return_value=parents[1]):
+            self.assertEqual(search.make_child(dimensions, parents, 0, order_mode="interchangeable",
+                                               rng=rng, **context), reversed_parent)
+        with mock.patch.object(rng, "random", return_value=0.75), \
+             mock.patch.object(rng, "randrange", return_value=4):
+            children = search.reproduce(dimensions, parents[:1], 1, creativity_configuration(
+                order_mode="interchangeable", mutation_rate=1,
+            ), rng=rng, **context)
+        self.assertEqual(children, [reversed_parent])
+
+    def test_sparse_effective_identity_and_nonempty_handoff(self):
+        material = self.sparse_material()
+        dimensions = material["dimensions"]
+        context = dict(variants=material["variants"], creativity_semantics="sparse_v2")
+        genome = {search.ORDER_GENE: 0, "d0": "v0", "d1": search.OMIT, "d2": "v0"}
+        key = self.sparse_key(material, genome, "interchangeable")
+        self.assertEqual(key, (("d0", "v0"), ("d2", "v0")))
+        for order in (0, 1, 2):
+            equivalent = dict(reversed(list(dict(genome, **{search.ORDER_GENE: order}).items())))
+            self.assertEqual(self.sparse_key(material, equivalent, "interchangeable"), key)
+        for changes in ({"d0": "v1"}, {"d2": search.OMIT}, {search.ORDER_GENE: 5}):
+            self.assertNotEqual(self.sparse_key(material, dict(genome, **changes), "interchangeable"), key)
+        empty = {search.ORDER_GENE: 5, **{d["id"]: search.OMIT for d in dimensions}}
+        self.assertIsNone(self.sparse_key(material, empty, "interchangeable"))
+        configuration = creativity_configuration(order_mode="interchangeable", population_size=4)
+        rng = random.Random(2)
+        with mock.patch.object(rng, "random", return_value=0), \
+             mock.patch.object(search, "make_child", return_value=empty):
+            populations = [
+                search.make_population(dimensions, 4, configuration, explored={key}, rng=rng, **context),
+                search.reproduce(
+                    dimensions, self.evaluated([genome], [1]), 4, configuration, rng=rng, **context,
+                ),
+            ]
+        for population in populations:
+            keys = {self.sparse_key(material, g, "interchangeable") for g in population}
+            self.assertEqual(len(keys), 4)
+            self.assertTrue(keys.isdisjoint({None, key}))
+
+    def test_sparse_effective_diversity(self):
+        material = self.sparse_material()
+        base = {"d0": "v0", "d1": search.OMIT, "d2": "v0"}
+        for mode in ("fixed", "interchangeable"):
+            context = dict(dimensions=material["dimensions"], creativity_semantics="sparse_v2")
+            configuration = creativity_configuration(order_mode=mode)
+            elite = dict(base)
+            if mode == "interchangeable":
+                elite[search.ORDER_GENE] = 0
+            equivalent = dict(elite)
+            if mode == "interchangeable":
+                equivalent[search.ORDER_GENE] = 2  # Only the omitted position moves.
+            differences = [({"d0": "v1"}, {"d1": "v0"}),
+                           ({"d1": "v0"}, {"d0": "v1"})]
+            if mode == "interchangeable":
+                differences.append(({"d0": "v1"}, {search.ORDER_GENE: 5}))
+            for first, second in differences:
+                near = dict(elite, **first)
+                far = dict(near, **second)
+                pairs = self.evaluated([elite, equivalent, near, far], [1, 0.99, 0.8, 0.8])
+                before = copy.deepcopy(pairs)
+                selected = search.select_survivors(pairs, configuration, **context)
+                self.assertEqual([g for g, _ in selected], [elite, far])
+                self.assertIs(selected[1][1], pairs[3][1])
+                self.assertEqual(pairs, before)
+            pairs = self.evaluated([
+                elite, equivalent, dict(elite, d0="v1"), dict(elite, d1="v0"),
+                dict(elite, d0="v1", d2="v1"),
+            ], [1, 0.99, 0.9, 0.8, 0.7])
+            configuration.update(elite_count=2, diversity_count=2, population_size=4)
+            selected = search.select_survivors(pairs, configuration, **context)
+            self.assertEqual([e["score"] for _, e in selected[:2]], [1, 0.9])
+            self.assertEqual(len({self.sparse_key(material, g, mode) for g, _ in selected}), 4)
+            relabeled = copy.deepcopy(material)
+            for dimension in relabeled["dimensions"]:
+                dimension["meaning"] = "New label " + dimension["id"]
+            for _, evaluation in pairs:
+                evaluation["proposal"] = "Unrelated prose"
+            self.assertEqual([g for g, _ in search.select_survivors(
+                pairs, configuration, dimensions=relabeled["dimensions"], creativity_semantics="sparse_v2",
+            )], [g for g, _ in selected])
+
+    def test_sparse_effective_exhaustion(self):
+        # Independent oracle: extend visible sequences, never raw omission/order genes.
+        def seeds(ids, values, interchangeable, prefix=()):
+            result = {prefix} if prefix else set()
+            for index, dimension_id in enumerate(ids):
+                remaining = ids[:index] + ids[index + 1:] if interchangeable else ids[index + 1:]
+                for value in values:
+                    result.update(seeds(
+                        remaining, values, interchangeable, prefix + ((dimension_id, value),),
+                    ))
+            return result
+
+        for size, width, fixed_count, ordered_count in ((2, 2, 8, 12), (3, 1, 7, 15), (1, 1, 1, 1)):
+            material = self.sparse_material(size, width)
+            dimensions = material["dimensions"]
+            ids = [d["id"] for d in dimensions]
+            context = dict(variants=material["variants"], creativity_semantics="sparse_v2")
+            for mode, capacity in (("fixed", fixed_count), ("interchangeable", ordered_count)):
+                configuration = creativity_configuration(order_mode=mode, population_size=10)
+                expected = seeds(ids, [v["id"] for v in material["variants"]], mode == "interchangeable")
+                self.assertEqual(len(expected), capacity)
+                parent = {d: "v0" for d in ids}
+                if mode == "interchangeable":
+                    parent[search.ORDER_GENE] = 0
+                parents = self.evaluated([parent], [1])
+                parent_key = self.sparse_key(material, parent, mode)
+                for draw in (0, 0.75):
+                    proposal = {d: search.OMIT for d in ids} if draw == 0 else dict(parent)
+                    if mode == "interchangeable":
+                        proposal[search.ORDER_GENE] = 0
+                    rng = random.Random(5)
+                    with self.subTest(size=size, width=width, mode=mode, draw=draw), \
+                         mock.patch.object(rng, "random", return_value=draw), \
+                         mock.patch.object(rng, "randrange", return_value=0), \
+                         mock.patch.object(search, "make_child", return_value=proposal):
+                        for request in (0, 1, 4, 30):
+                            initial = search.make_population(
+                                dimensions, request, configuration, rng=rng, **context,
+                            )
+                            offspring = search.reproduce(
+                                dimensions, parents, request, configuration, rng=rng, **context,
+                            )
+                            for population, available in ((initial, expected), (offspring, expected - {parent_key})):
+                                keys = {self.sparse_key(material, g, mode) for g in population}
+                                self.assertEqual(len(keys), len(population))
+                                self.assertEqual(len(keys), min(request, 10, len(available)))
+                                self.assertTrue(keys <= available)
+                        for last in expected:
+                            explored = expected - {last}
+                            initial = search.make_population(
+                                dimensions, 10, configuration, explored=explored, rng=rng, **context,
+                            )
+                            offspring = search.reproduce(
+                                dimensions, parents, 10, configuration, explored=explored, rng=rng, **context,
+                            )
+                            self.assertEqual([self.sparse_key(material, g, mode) for g in initial], [last])
+                            self.assertEqual(
+                                [self.sparse_key(material, g, mode) for g in offspring],
+                                [] if last == parent_key else [last],
+                            )
+                        self.assertEqual(search.make_population(
+                            dimensions, 10, configuration, explored=expected, rng=rng, **context,
+                        ), [])
+                        self.assertEqual(search.reproduce(
+                            dimensions, parents, 10, configuration, explored=expected, rng=rng, **context,
+                        ), [])
+
     def test_population_bounds_and_explored_identity(self):
         dimensions = self.accepted_material()["dimensions"]
         configuration = tasks.resolve_creativity_configuration(creativity_configuration(

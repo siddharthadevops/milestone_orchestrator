@@ -4,16 +4,20 @@ Callers admit model material through the served create_genes_result contract.
 These helpers trust its dimensions, admitted configuration and evaluations.
 The caller supplies comparable evaluations and explored genome identities.
 Fixed problem fields stay with the caller and never become candidate state.
+Sparse callers pass the saved order.creativity_semantics and shared variants
+alongside admitted dimensions. Omitting semantics keeps legacy interpretation;
+material shape does not select search behavior.
 """
 
 import copy
 from fractions import Fraction
-from itertools import chain, product
+from itertools import chain, permutations, product
 import math
 import random
 
 
 ORDER_GENE = "__order__"
+OMIT = "__omit__"
 FIXED_ORDER = "fixed"
 INTERCHANGEABLE_ORDER = "interchangeable"
 
@@ -73,11 +77,13 @@ def rank_order(dimension_ids, ordered_ids):
     return value
 
 
-def make_genome(dimensions, variant_indices, *, order=None):
+def make_genome(dimensions, variant_indices, *, order=None, variants=None,
+                creativity_semantics=None):
     """Build an independent genome from a variant index per dimension id.
 
     Each index is a zero-based position in that dimension's variants list. An
     optional validated order integer is inserted first as synthetic material.
+    Explicit sparse_v2 calls use shared variants and allow the OMIT sentinel.
     """
     dimension_ids = _dimension_ids(dimensions)
     genome = {}
@@ -86,24 +92,27 @@ def make_genome(dimensions, variant_indices, *, order=None):
         if type(order) is not int or not 0 <= order < order_count:
             raise ValueError("order value must be an integer in [0, %s)" % order_count)
         genome[ORDER_GENE] = order
-    genome.update({
-        dimension["id"]: dimension["variants"][variant_indices[dimension["id"]]]["id"]
-        for dimension in dimensions
-    })
+    sparse = creativity_semantics == "sparse_v2"
+    for dimension in dimensions:
+        index = variant_indices[dimension["id"]]
+        values = variants if sparse else dimension["variants"]
+        genome[dimension["id"]] = OMIT if sparse and index == OMIT else values[index]["id"]
     return genome
 
 
-def genome_key(genome):
-    """Identify choices within one material, independent of mapping order."""
+def genome_key(genome, dimensions=None, order_mode=None, *, creativity_semantics=None):
+    """Identify choices within one material, independent of mapping order.
+
+    Sparse identity is the effective sequence; empty proposals have no key.
+    Pass the admitted dimensions and recorded order mode for sparse_v2.
+    """
+    if creativity_semantics == "sparse_v2":
+        return _genome_pairs(dimensions, genome, order_mode, creativity_semantics) or None
     return frozenset(genome.items())
 
 
-def genome_components(dimensions, genome, order_mode=None):
-    """Return readable semantic components in their effective order.
-
-    Missing ``order_mode`` is the legacy fixed interpretation. The synthetic
-    gene is consumed here and never becomes an evaluator-facing component.
-    """
+def _genome_pairs(dimensions, genome, order_mode, creativity_semantics):
+    """Share effective composition between readable components and identity."""
     mode = _order_mode({"order_mode": order_mode})
     dimension_ids = _dimension_ids(dimensions)
     if mode == INTERCHANGEABLE_ORDER:
@@ -112,13 +121,28 @@ def genome_components(dimensions, genome, order_mode=None):
         if ORDER_GENE in genome:
             raise ValueError("fixed-order genome cannot contain %s" % ORDER_GENE)
         ordered_ids = dimension_ids
+    return tuple(
+        (dimension_id, genome[dimension_id]) for dimension_id in ordered_ids
+        if creativity_semantics != "sparse_v2" or genome[dimension_id] != OMIT
+    )
+
+
+def genome_components(dimensions, genome, order_mode=None, *, variants=None,
+                      creativity_semantics=None):
+    """Return active semantic components in their effective order.
+
+    Missing order_mode remains fixed. Only explicit sparse_v2 calls use the
+    shared variants and omit inactive choices; legacy calls stay unchanged.
+    """
     by_id = {dimension["id"]: dimension for dimension in dimensions}
     components = []
-    for dimension_id in ordered_ids:
+    for dimension_id, variant_id in _genome_pairs(
+        dimensions, genome, order_mode, creativity_semantics,
+    ):
         dimension = by_id[dimension_id]
-        variant_id = genome[dimension_id]
+        values = variants if creativity_semantics == "sparse_v2" else dimension["variants"]
         variant = next(
-            variant for variant in dimension["variants"]
+            variant for variant in values
             if variant["id"] == variant_id
         )
         components.append({
@@ -130,9 +154,24 @@ def genome_components(dimensions, genome, order_mode=None):
     return components
 
 
-def _repertoire(dimensions, order_mode):
-    """Yield every genome lazily, including order when interchangeable."""
+def _repertoire(dimensions, order_mode, *, variants=None, creativity_semantics=None):
+    """Yield every effective seed lazily, including active interchangeable order."""
     dimension_ids = _dimension_ids(dimensions)
+    if creativity_semantics == "sparse_v2":
+        for choices in product([OMIT] + [v["id"] for v in variants], repeat=len(dimensions)):
+            active = [d for d, value in zip(dimension_ids, choices) if value != OMIT]
+            if not active:
+                continue
+            omitted = [d for d, value in zip(dimension_ids, choices) if value == OMIT]
+            orders = permutations(active) if order_mode == INTERCHANGEABLE_ORDER else (active,)
+            for ordered in orders:
+                # Enumerate each effective order once, without hidden permutations.
+                genome = {}
+                if order_mode == INTERCHANGEABLE_ORDER:
+                    genome[ORDER_GENE] = rank_order(dimension_ids, list(ordered) + omitted)
+                genome.update(zip(dimension_ids, choices))
+                yield genome
+        return
     order_values = (
         range(math.factorial(len(dimension_ids)))
         if order_mode == INTERCHANGEABLE_ORDER else (None,)
@@ -149,15 +188,18 @@ def _repertoire(dimensions, order_mode):
             )
 
 
-def _fill_population(dimensions, proposals, count, explored, order_mode):
+def _fill_population(dimensions, proposals, count, explored, order_mode, *,
+                     variants=None, creativity_semantics=None):
     """Take distinct proposals, then scan the repertoire to settle shortages."""
     if count == 0:
         return []
     seen = set(explored)
     population = []
-    for genome in chain(proposals, _repertoire(dimensions, order_mode)):
-        key = genome_key(genome)
-        if key in seen:
+    for genome in chain(proposals, _repertoire(
+        dimensions, order_mode, variants=variants, creativity_semantics=creativity_semantics,
+    )):
+        key = genome_key(genome, dimensions, order_mode, creativity_semantics=creativity_semantics)
+        if key is None or key in seen:
             continue
         seen.add(key)
         population.append(genome)
@@ -166,7 +208,8 @@ def _fill_population(dimensions, proposals, count, explored, order_mode):
     return population
 
 
-def make_population(dimensions, count, configuration, *, explored=(), rng=random):
+def make_population(dimensions, count, configuration, *, explored=(), rng=random,
+                    variants=None, creativity_semantics=None):
     """Draw a bounded fresh population, returning fewer only for a shortage.
 
     Random collisions fall through to finite enumeration; they never establish
@@ -176,18 +219,39 @@ def make_population(dimensions, count, configuration, *, explored=(), rng=random
     order_mode = _order_mode(configuration)
     dimension_ids = _dimension_ids(dimensions)
     order_count = math.factorial(len(dimension_ids))
+    sparse = creativity_semantics == "sparse_v2"
     proposals = (
         make_genome(dimensions, {
-            dimension["id"]: rng.randrange(len(dimension["variants"]))
+            dimension["id"]: OMIT if sparse and rng.random() < 0.5 else rng.randrange(
+                len(variants if sparse else dimension["variants"])
+            )
             for dimension in dimensions
         }, order=(rng.randrange(order_count)
-                  if order_mode == INTERCHANGEABLE_ORDER else None))
+                  if order_mode == INTERCHANGEABLE_ORDER else None),
+            variants=variants, creativity_semantics=creativity_semantics)
         for _ in range(count)
     )
-    return _fill_population(dimensions, proposals, count, explored, order_mode)
+    return _fill_population(
+        dimensions, proposals, count, explored, order_mode,
+        variants=variants, creativity_semantics=creativity_semantics,
+    )
 
 
-def select_survivors(evaluated, configuration):
+def _effective_distance(left, right):
+    """Count participation/value changes and a change in common active order."""
+    left_values, right_values = dict(left), dict(right)
+    common = left_values.keys() & right_values.keys()
+    changes = sum(
+        left_values.get(dimension) != right_values.get(dimension)
+        for dimension in left_values.keys() | right_values.keys()
+    )
+    return changes + (
+        [dimension for dimension, _ in left if dimension in common]
+        != [dimension for dimension, _ in right if dimension in common]
+    )
+
+
+def select_survivors(evaluated, configuration, *, dimensions=None, creativity_semantics=None):
     """Keep feasible survivors, or the best provisional parents if none exist.
 
     Input and output are (genome, accepted evaluation) pairs. The caller can
@@ -196,26 +260,37 @@ def select_survivors(evaluated, configuration):
     valid candidate exists, scored invalid candidates remain useful genetic
     evidence: retain the strongest ones as provisional parents while their
     validity continues to prevent them from becoming final proposals.
-    Duplicate genomes keep their highest eligible score. Genome mappings are
-    copied; evaluations are retained unchanged.
+    Duplicate identities keep their highest eligible score. Sparse_v2 uses
+    effective sequences for identity and structural distance. Genome mappings
+    are copied; evaluations are retained unchanged.
     """
     eligible = [pair for pair in evaluated if pair[1]["constraint_valid"]]
     if not eligible:
         eligible = list(evaluated)
     ranked = sorted(eligible, key=lambda pair: pair[1]["score"], reverse=True)
+    order_mode = _order_mode(configuration)
     seen = set()
     distinct = []
     for pair in ranked:
-        key = genome_key(pair[0])
+        key = genome_key(pair[0], dimensions, order_mode, creativity_semantics=creativity_semantics)
         if key not in seen:
             seen.add(key)
             distinct.append(pair)
+
+    def distance(left, right):
+        if creativity_semantics == "sparse_v2":
+            return _effective_distance(
+                genome_key(left, dimensions, order_mode, creativity_semantics=creativity_semantics),
+                genome_key(right, dimensions, order_mode, creativity_semantics=creativity_semantics),
+            )
+        return sum(left[dimension] != right[dimension] for dimension in left)
+
     elite_count = configuration["elite_count"]
     selected, remaining = distinct[:elite_count], distinct[elite_count:]
     for _ in range(min(configuration["diversity_count"], len(remaining))):
         # Greedily prefer the greatest distance from the nearest survivor.
         diverse = max(remaining, key=lambda pair: min(
-            sum(pair[0][dimension] != kept[0][dimension] for dimension in pair[0])
+            distance(pair[0], kept[0])
             for kept in selected
         ))
         selected.append(diverse)
@@ -223,12 +298,14 @@ def select_survivors(evaluated, configuration):
     return [(dict(genome), evaluation) for genome, evaluation in selected]
 
 
-def make_child(dimensions, parents, mutation_rate, *, order_mode=None, rng=random):
+def make_child(dimensions, parents, mutation_rate, *, order_mode=None, rng=random,
+               variants=None, creativity_semantics=None):
     """Cross nonempty selected parent pairs and mutate each mutable choice.
 
     A child contains only choices, with no inherited evaluation. Each semantic
     dimension and the optional order gene independently receive the configured
-    mutation probability; mutation chooses a different categorical value.
+    mutation probability. Sparse mutation independently chooses participation
+    toggling or active-value change, regardless of shared repertoire width.
     """
     mates = rng.sample(parents, min(2, len(parents)))
     child = {}
@@ -240,20 +317,29 @@ def make_child(dimensions, parents, mutation_rate, *, order_mode=None, rng=rando
             replacement = rng.randrange(order_count - 1)
             choice = replacement + (replacement >= choice)
         child[ORDER_GENE] = choice
+    sparse = creativity_semantics == "sparse_v2"
     for dimension in dimensions:
         dimension_id = dimension["id"]
         choice = rng.choice(mates)[0][dimension_id]
+        values = variants if sparse else dimension["variants"]
         alternatives = [
-            variant["id"] for variant in dimension["variants"]
+            variant["id"] for variant in values
             if variant["id"] != choice
         ]
-        if alternatives and rng.random() < mutation_rate:
+        if sparse:
+            if rng.random() < mutation_rate:
+                if rng.random() < 0.5:
+                    choice = rng.choice(values)["id"] if choice == OMIT else OMIT
+                elif choice != OMIT and alternatives:
+                    choice = rng.choice(alternatives)
+        elif alternatives and rng.random() < mutation_rate:
             choice = rng.choice(alternatives)
         child[dimension_id] = choice
     return child
 
 
-def reproduce(dimensions, parents, count, configuration, *, explored=(), rng=random):
+def reproduce(dimensions, parents, count, configuration, *, explored=(), rng=random,
+              variants=None, creativity_semantics=None):
     """Build a bounded fresh population from selected parent pairs.
 
     Offspring capacity is independent of survivor quotas. Each requested place
@@ -265,15 +351,22 @@ def reproduce(dimensions, parents, count, configuration, *, explored=(), rng=ran
         return []
     count = min(count, configuration["population_size"])
     order_mode = _order_mode(configuration)
-    excluded = set(explored) | {genome_key(genome) for genome, _ in parents}
+    excluded = set(explored) | {
+        genome_key(genome, dimensions, order_mode, creativity_semantics=creativity_semantics)
+        for genome, _ in parents
+    }
     proposals = (
         make_child(
             dimensions, parents, configuration["mutation_rate"],
             order_mode=order_mode, rng=rng,
+            variants=variants, creativity_semantics=creativity_semantics,
         )
         for _ in range(count)
     )
-    return _fill_population(dimensions, proposals, count, excluded, order_mode)
+    return _fill_population(
+        dimensions, proposals, count, excluded, order_mode,
+        variants=variants, creativity_semantics=creativity_semantics,
+    )
 
 
 def new_progress():
