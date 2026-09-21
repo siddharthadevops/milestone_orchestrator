@@ -2,7 +2,7 @@
 
 # Milestone
 
-Status: **open**
+Status: **closed**
 
 ## Goal
 
@@ -422,4 +422,4 @@ the following:
 | slice_doc-06 (Compare prompt formulations on three different problems) | reviewed | 1 | satisfied | 01b4a9e |
 | milestone_verification-2 (?) | reviewed | 0 | satisfied | c81d1d3 |
 | slice_impl-06 (Compare prompt formulations on three different problems) | reviewed | 1 | satisfied | f907c71 |
-| milestone_verification-3 (?) | reviewed | 0 | satisfied | - |
+| milestone_verification-3 (?) | reviewed | 0 | satisfied | d19eb55 |
