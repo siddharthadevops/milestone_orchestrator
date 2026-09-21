@@ -419,5 +419,6 @@ the following:
 | slice_impl-05-a (Expose sparse controls and inspectable evidence) | reviewed | 1 | satisfied | 6cd1b5f |
 | slice_impl-05-b (Expose sparse controls and inspectable evidence) | reviewed | 1 | satisfied | 1ee2d4a |
 | milestone_verification-1 (?) | fixing | 3 | - | - |
-| slice_doc-06 (Compare prompt formulations on three different problems) | reviewed | 1 | satisfied | - |
+| slice_doc-06 (Compare prompt formulations on three different problems) | reviewed | 1 | satisfied | 01b4a9e |
 | milestone_verification-2 (?) | reviewed | 0 | satisfied | c81d1d3 |
+| slice_impl-06 (Compare prompt formulations on three different problems) | reviewed | 1 | satisfied | - |
