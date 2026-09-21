@@ -1143,14 +1143,28 @@ class SparseCreativityEvaluationTest(CreativityEvaluationFixture):
         ], variants=[{"id": key, "text": "Action " + key} for key in ("a", "b", "c")])
         self.store.put("checkpoint", {"search_material": self.material, "generation": 2})
 
-    # Exercise the same host, routers, correction and checkpoint seams for both contracts.
-    test_sparse_evaluation_provenance = CreativityEvaluationTest.test_each_attempt_reads_live_authorities
-    test_sparse_evaluation_configuration_continuity = CreativityEvaluationTest.test_regime_changes_withhold_comparison
-    test_wave_bounds_and_candidate_allowance = CreativityEvaluationTest.test_wave_bounds_and_candidate_allowance
-    test_checkpoint_reentry_keeps_accepted_work = CreativityEvaluationTest.test_checkpoint_reentry_keeps_accepted_work
-    test_wave_evidence_uses_common_accounting = CreativityEvaluationTest.test_wave_evidence_uses_common_accounting
-    test_wave_uses_task_controls_and_surfaces_faults = CreativityEvaluationTest.test_wave_uses_task_controls_and_surfaces_faults
-    test_batch_faults_keep_existing_conditions_and_no_retry = CreativityEvaluationTest.test_batch_faults_keep_existing_conditions_and_no_retry
+    # Explicit entry points distinguish sparse fixtures in the suite inventory
+    # while reusing the same host, router, correction and checkpoint scenarios.
+    def test_sparse_evaluation_provenance(self):
+        CreativityEvaluationTest.test_each_attempt_reads_live_authorities(self)
+
+    def test_sparse_evaluation_configuration_continuity(self):
+        CreativityEvaluationTest.test_regime_changes_withhold_comparison(self)
+
+    def test_wave_bounds_and_candidate_allowance(self):
+        CreativityEvaluationTest.test_wave_bounds_and_candidate_allowance(self)
+
+    def test_checkpoint_reentry_keeps_accepted_work(self):
+        CreativityEvaluationTest.test_checkpoint_reentry_keeps_accepted_work(self)
+
+    def test_wave_evidence_uses_common_accounting(self):
+        CreativityEvaluationTest.test_wave_evidence_uses_common_accounting(self)
+
+    def test_wave_uses_task_controls_and_surfaces_faults(self):
+        CreativityEvaluationTest.test_wave_uses_task_controls_and_surfaces_faults(self)
+
+    def test_batch_faults_keep_existing_conditions_and_no_retry(self):
+        CreativityEvaluationTest.test_batch_faults_keep_existing_conditions_and_no_retry(self)
 
     def test_sparse_progress_resume_preserves_scored_work(self):
         search = evaluation.creativity_search

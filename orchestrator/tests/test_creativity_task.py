@@ -1385,10 +1385,20 @@ class SparseCreativityTaskTest(unittest.TestCase):
     _wait = CreativityTaskTest._wait
     _paused = CreativityTaskTest._paused
     _terminal = CreativityTaskTest._terminal
-    test_sparse_resume_preserves_scored_work = CreativityTaskTest.test_creativity_resume_keeps_saved_work
-    test_sparse_task_controls = CreativityTaskTest.test_creativity_controls_wait_for_quiescence
-    test_sparse_faults_keep_accepted_siblings = CreativityTaskTest.test_creativity_provider_and_protocol_faults_keep_saved_work
-    test_sparse_cancel_wins_over_saved_result = CreativityTaskTest.test_creativity_cancel_wins_over_saved_success
+
+    # These shared scenarios run with sparse material and jobs. Keep distinct
+    # entry points so the suite inventory retains both semantic contracts.
+    def test_sparse_resume_preserves_scored_work(self):
+        CreativityTaskTest.test_creativity_resume_keeps_saved_work(self)
+
+    def test_sparse_task_controls(self):
+        CreativityTaskTest.test_creativity_controls_wait_for_quiescence(self)
+
+    def test_sparse_faults_keep_accepted_siblings(self):
+        CreativityTaskTest.test_creativity_provider_and_protocol_faults_keep_saved_work(self)
+
+    def test_sparse_cancel_wins_over_saved_result(self):
+        CreativityTaskTest.test_creativity_cancel_wins_over_saved_success(self)
 
     def test_sparse_task_composes_search(self):
         material = copy.deepcopy(self.material)
