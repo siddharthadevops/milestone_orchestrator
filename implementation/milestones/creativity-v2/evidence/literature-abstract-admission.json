@@ -1,0 +1,226 @@
+{
+  "ok": true,
+  "task": {
+    "id": "46bded23-2bd0-4d80-bedf-81e9bdee5d5d",
+    "order": {
+      "configuration": {
+        "diversity_count": 1,
+        "elite_count": 2,
+        "evaluation_batch_size": 4,
+        "evaluation_concurrency": 1,
+        "generation_limit": 2,
+        "max_evaluated_candidates": 8,
+        "mutation_rate": 0.35,
+        "order_mode": "interchangeable",
+        "population_size": 4,
+        "rigor": {
+          "default": "medium",
+          "evaluate_candidates": "low"
+        },
+        "shortlist_size": 3
+      },
+      "creativity_semantics": "sparse_v2",
+      "initial_genes": {
+        "search_material": {
+          "assumptions": [
+            "The intended reader accepts an unexplained speculative premise."
+          ],
+          "composition_guidance": "Connect the daughter's action to a sensory trace of the missing minute and her relationship with her father.",
+          "constraints": [
+            {
+              "id": "length",
+              "text": "Each proposal is one Spanish sentence of at most 24 words."
+            },
+            {
+              "id": "exposition",
+              "text": "Do not explain the missing minute's cause or introduce new proper names."
+            },
+            {
+              "id": "agency",
+              "text": "Give the daughter a concrete action; do not end with a question."
+            }
+          ],
+          "context_summary": "An adult daughter repairs fishing nets with her father. Only she remembers the missing minute. The opening should create tension without explaining the mechanism.",
+          "criteria": [
+            {
+              "id": "tension",
+              "text": "A concrete action implies an emotional cost without explaining it."
+            },
+            {
+              "id": "language",
+              "text": "Natural, economical Spanish with a memorable sensory detail."
+            },
+            {
+              "id": "difference",
+              "text": "Offer a specific action and emotional possibility, beyond a generic missing-time opening."
+            }
+          ],
+          "dimensions": [
+            {
+              "id": "d1",
+              "meaning": "Individual memory"
+            },
+            {
+              "id": "d2",
+              "meaning": "Inherited routine"
+            },
+            {
+              "id": "d3",
+              "meaning": "Shared labour"
+            },
+            {
+              "id": "d4",
+              "meaning": "Temporal absence"
+            },
+            {
+              "id": "d5",
+              "meaning": "A memory token: proposed exploratory concept, not an admitted fact"
+            }
+          ],
+          "facts": [
+            "The setting is a coastal town.",
+            "One minute disappears each evening.",
+            "The daughter remembers it; her father does not.",
+            "They repair fishing nets together."
+          ],
+          "objective": "Write one Spanish opening sentence for a story in which a coastal town loses one minute each evening. Make the missing minute felt through a concrete action and an emotional stake.",
+          "order_semantics": "sequence in which the selected sentence components appear",
+          "unknowns": [
+            "The cause of the missing minute is deliberately unspecified."
+          ],
+          "variants": [
+            {
+              "id": "v1",
+              "text": "preserve"
+            },
+            {
+              "id": "v10",
+              "text": "iterate"
+            },
+            {
+              "id": "v11",
+              "text": "attend"
+            },
+            {
+              "id": "v12",
+              "text": "resist"
+            },
+            {
+              "id": "v2",
+              "text": "erase"
+            },
+            {
+              "id": "v3",
+              "text": "reconstruct"
+            },
+            {
+              "id": "v4",
+              "text": "separate"
+            },
+            {
+              "id": "v5",
+              "text": "connect"
+            },
+            {
+              "id": "v6",
+              "text": "conceal"
+            },
+            {
+              "id": "v7",
+              "text": "quantify"
+            },
+            {
+              "id": "v8",
+              "text": "suspend"
+            },
+            {
+              "id": "v9",
+              "text": "transfer"
+            }
+          ]
+        }
+      },
+      "prompt_set": "default",
+      "request": {
+        "context": {
+          "assumptions": [
+            "The intended reader accepts an unexplained speculative premise."
+          ],
+          "composition_guidance": "Connect the daughter's action to a sensory trace of the missing minute and her relationship with her father.",
+          "constraints": [
+            {
+              "id": "length",
+              "text": "Each proposal is one Spanish sentence of at most 24 words."
+            },
+            {
+              "id": "exposition",
+              "text": "Do not explain the missing minute's cause or introduce new proper names."
+            },
+            {
+              "id": "agency",
+              "text": "Give the daughter a concrete action; do not end with a question."
+            }
+          ],
+          "context_summary": "An adult daughter repairs fishing nets with her father. Only she remembers the missing minute. The opening should create tension without explaining the mechanism.",
+          "criteria": [
+            {
+              "id": "tension",
+              "text": "A concrete action implies an emotional cost without explaining it."
+            },
+            {
+              "id": "language",
+              "text": "Natural, economical Spanish with a memorable sensory detail."
+            },
+            {
+              "id": "difference",
+              "text": "Offer a specific action and emotional possibility, beyond a generic missing-time opening."
+            }
+          ],
+          "facts": [
+            "The setting is a coastal town.",
+            "One minute disappears each evening.",
+            "The daughter remembers it; her father does not.",
+            "They repair fishing nets together."
+          ],
+          "order_semantics": "sequence in which the selected sentence components appear",
+          "unknowns": [
+            "The cause of the missing minute is deliberately unspecified."
+          ]
+        },
+        "reference_documents": [],
+        "request": "Write one Spanish opening sentence for a story in which a coastal town loses one minute each evening. Make the missing minute felt through a concrete action and an emotional stake.",
+        "work_area": {
+          "additional": [
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/agent_99"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/life_product_components"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/tutor"
+            }
+          ],
+          "directory": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/projects",
+          "primary": {
+            "device": "local",
+            "path": "/Users/siddhartha/Development/source/milestone_orchestrator_impl"
+          },
+          "project": "orchestrators",
+          "work_area": "implementation"
+        }
+      },
+      "staffing_session": "stf-c6e6dde874e69da5a445549c66bebe0f",
+      "task_executor": "creativity"
+    },
+    "resolved_staffing": {},
+    "result": null
+  }
+}

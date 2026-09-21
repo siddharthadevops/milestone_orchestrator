@@ -1,0 +1,40 @@
+{
+  "declared_at": "2026-09-21T14:22:08.565884+00:00",
+  "execution_revision": "1f62e323ee05dbf584d19fdbf42bbd7e22c8a32c",
+  "service_home": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq",
+  "sequence": [
+    "literature-literal",
+    "literature-abstract",
+    "strategy-literal",
+    "strategy-abstract",
+    "planning-literal",
+    "planning-abstract"
+  ],
+  "configuration": {
+    "population_size": 4,
+    "generation_limit": 2,
+    "max_evaluated_candidates": 8,
+    "elite_count": 2,
+    "diversity_count": 1,
+    "mutation_rate": 0.35,
+    "evaluation_batch_size": 4,
+    "evaluation_concurrency": 1,
+    "shortlist_size": 3,
+    "order_mode": "interchangeable",
+    "rigor": {
+      "default": "medium",
+      "evaluate_candidates": "low"
+    }
+  },
+  "random_seed_per_task": 20260921,
+  "formulation_authority": "Six supplied initial_genes files; unchanged default prompt set and sparse_v2 engine.",
+  "comparison": "Identical immutable problem, five foci, twelve shared values and initial RNG state per pair. Later selection can diverge with returned scores.",
+  "low_score_threshold": {
+    "operator": "<",
+    "value": 0.5
+  },
+  "work_bound": "Six tasks, two generations and eight distinct evaluated seeds per task. Twelve planned evaluation calls; existing contract correction may add attempts, all retained. No creation, expansion, judge or automatic rerun calls.",
+  "cost_basis": "Existing physical-call/task accounting: API-equivalent USD and configured subscription real USD. No asserted equal spend or enforced dollar cap.",
+  "assessment": "Model validity and scores are diagnostics. Record assistant inspection separately from actual operator judgments; do not infer human approval.",
+  "limitations": "Small authored-vocabulary pilot, literal first, one draw per cell, supplied rather than model-generated material. No superiority or causal effect estimate."
+}

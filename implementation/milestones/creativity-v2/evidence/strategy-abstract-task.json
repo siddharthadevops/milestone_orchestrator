@@ -1,0 +1,1133 @@
+{
+  "ok": true,
+  "task": {
+    "id": "3355df66-e9b7-4332-a2c3-c849b129856f",
+    "order": {
+      "configuration": {
+        "diversity_count": 1,
+        "elite_count": 2,
+        "evaluation_batch_size": 4,
+        "evaluation_concurrency": 1,
+        "generation_limit": 2,
+        "max_evaluated_candidates": 8,
+        "mutation_rate": 0.35,
+        "order_mode": "interchangeable",
+        "population_size": 4,
+        "rigor": {
+          "default": "medium",
+          "evaluate_candidates": "low"
+        },
+        "shortlist_size": 3
+      },
+      "creativity_semantics": "sparse_v2",
+      "initial_genes": {
+        "search_material": {
+          "assumptions": [
+            "The owner may set pilot prices and reserve limited service appointments."
+          ],
+          "composition_guidance": "Combine a paid service offer with a bounded delivery arrangement; count all preparation and delivery effort.",
+          "constraints": [
+            {
+              "id": "budget",
+              "text": "Spend at most EUR 120 in total, with no recurring spending commitment."
+            },
+            {
+              "id": "time",
+              "text": "Use at most six additional staff hours including preparation, contact and delivery, and finish within two weeks."
+            },
+            {
+              "id": "resources",
+              "text": "Use existing tools and the counter; no new software, hires or paid advertising."
+            },
+            {
+              "id": "contact",
+              "text": "Contact only the forty customers who opted in, using the existing email channel."
+            }
+          ],
+          "context_summary": "One owner runs the shop. The goal is to test paid demand with existing tools and customer relationships, without committing to a continuing programme.",
+          "criteria": [
+            {
+              "id": "feasibility",
+              "text": "Itemise cash and staff time and show that the complete pilot fits both limits."
+            },
+            {
+              "id": "demand",
+              "text": "State the paid demand signal, assumptions and an observable continue-or-stop decision."
+            },
+            {
+              "id": "difference",
+              "text": "Test a distinct paid service proposition beyond ordinary walk-in repair."
+            }
+          ],
+          "dimensions": [
+            {
+              "id": "d1",
+              "meaning": "Operator capacity"
+            },
+            {
+              "id": "d2",
+              "meaning": "Existing customer relationship"
+            },
+            {
+              "id": "d3",
+              "meaning": "Point of exchange"
+            },
+            {
+              "id": "d4",
+              "meaning": "Technical capability"
+            },
+            {
+              "id": "d5",
+              "meaning": "Time allowance"
+            }
+          ],
+          "facts": [
+            "The shop has ordinary bicycle repair tools and a service counter.",
+            "Forty existing customers have opted in to service emails.",
+            "The owner can devote six additional staff hours over the next two weeks.",
+            "The total additional cash allowance is EUR 120."
+          ],
+          "objective": "Develop one two-week pilot through which a neighbourhood bicycle repair shop could earn additional service revenue from existing customers, within the stated cash and staff-time limits.",
+          "order_semantics": "sequence in which the selected pilot components are carried out",
+          "unknowns": [
+            "Customer willingness to pay and response rate have not been measured."
+          ],
+          "variants": [
+            {
+              "id": "v1",
+              "text": "restore"
+            },
+            {
+              "id": "v10",
+              "text": "make visible"
+            },
+            {
+              "id": "v11",
+              "text": "measure"
+            },
+            {
+              "id": "v12",
+              "text": "withdraw"
+            },
+            {
+              "id": "v2",
+              "text": "diagnose"
+            },
+            {
+              "id": "v3",
+              "text": "allocate"
+            },
+            {
+              "id": "v4",
+              "text": "monetize"
+            },
+            {
+              "id": "v5",
+              "text": "transfer temporarily"
+            },
+            {
+              "id": "v6",
+              "text": "pool"
+            },
+            {
+              "id": "v7",
+              "text": "cap"
+            },
+            {
+              "id": "v8",
+              "text": "aggregate"
+            },
+            {
+              "id": "v9",
+              "text": "defer"
+            }
+          ]
+        }
+      },
+      "prompt_set": "default",
+      "request": {
+        "context": {
+          "assumptions": [
+            "The owner may set pilot prices and reserve limited service appointments."
+          ],
+          "composition_guidance": "Combine a paid service offer with a bounded delivery arrangement; count all preparation and delivery effort.",
+          "constraints": [
+            {
+              "id": "budget",
+              "text": "Spend at most EUR 120 in total, with no recurring spending commitment."
+            },
+            {
+              "id": "time",
+              "text": "Use at most six additional staff hours including preparation, contact and delivery, and finish within two weeks."
+            },
+            {
+              "id": "resources",
+              "text": "Use existing tools and the counter; no new software, hires or paid advertising."
+            },
+            {
+              "id": "contact",
+              "text": "Contact only the forty customers who opted in, using the existing email channel."
+            }
+          ],
+          "context_summary": "One owner runs the shop. The goal is to test paid demand with existing tools and customer relationships, without committing to a continuing programme.",
+          "criteria": [
+            {
+              "id": "feasibility",
+              "text": "Itemise cash and staff time and show that the complete pilot fits both limits."
+            },
+            {
+              "id": "demand",
+              "text": "State the paid demand signal, assumptions and an observable continue-or-stop decision."
+            },
+            {
+              "id": "difference",
+              "text": "Test a distinct paid service proposition beyond ordinary walk-in repair."
+            }
+          ],
+          "facts": [
+            "The shop has ordinary bicycle repair tools and a service counter.",
+            "Forty existing customers have opted in to service emails.",
+            "The owner can devote six additional staff hours over the next two weeks.",
+            "The total additional cash allowance is EUR 120."
+          ],
+          "order_semantics": "sequence in which the selected pilot components are carried out",
+          "unknowns": [
+            "Customer willingness to pay and response rate have not been measured."
+          ]
+        },
+        "reference_documents": [],
+        "request": "Develop one two-week pilot through which a neighbourhood bicycle repair shop could earn additional service revenue from existing customers, within the stated cash and staff-time limits.",
+        "work_area": {
+          "additional": [
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/agent_99"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/life_product_components"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/tutor"
+            }
+          ],
+          "directory": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/projects",
+          "primary": {
+            "device": "local",
+            "path": "/Users/siddhartha/Development/source/milestone_orchestrator_impl"
+          },
+          "project": "orchestrators",
+          "work_area": "implementation"
+        }
+      },
+      "staffing_session": "stf-a5b0544b490638c7f34bc3c8da36cf71",
+      "task_executor": "creativity"
+    },
+    "resolved_staffing": {},
+    "result": {
+      "cost": {
+        "api_usd": 0.0068937600000000005,
+        "real_usd": 0.0
+      },
+      "cost_partial": false,
+      "duration_s": 77.24928092956543,
+      "native_result": {
+        "evaluated_candidates": 8,
+        "expansion_interventions": 0,
+        "generations_completed": 2,
+        "outcome": "proposals",
+        "proposals": [
+          {
+            "assumptions": [
+              "The owner can define a useful paid assessment distinct from ordinary repair.",
+              "The owner can set a pilot price and reserve a limited appointment pool within six additional staff hours.",
+              "Only the forty opted-in customers are contacted through the existing email channel.",
+              "Preparation, email handling, booking, delivery and measurement together remain within six staff hours.",
+              "Any cash expenditure remains at or below EUR 120 with no recurring commitment.",
+              "A pre-set paid-booking or conversion threshold is established before launch."
+            ],
+            "candidate_id": "5fe14eae567f4849a71fa4f1c472cf48",
+            "components": [
+              {
+                "dimension": "Technical capability",
+                "dimension_id": "d4",
+                "variant": "measure",
+                "variant_id": "v11"
+              },
+              {
+                "dimension": "Existing customer relationship",
+                "dimension_id": "d2",
+                "variant": "restore",
+                "variant_id": "v1"
+              },
+              {
+                "dimension": "Point of exchange",
+                "dimension_id": "d3",
+                "variant": "pool",
+                "variant_id": "v6"
+              }
+            ],
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Measure customer-reported bicycle condition through a paid, bounded assessment; restore engagement with the existing opted-in customer relationship by sending one service email; and pool a limited set of assessment appointments at the existing counter. Charge for the assessment, track paid bookings and completed appointments, and continue only if a pre-set number or conversion rate is reached. The seed gives the proposal a coherent measurement, relationship and pooled-exchange sequence; pricing, message content and exact appointment cap are supporting proposals.",
+            "reason": "This is the strongest complete proposal in the batch. It tests a distinct paid assessment service rather than ordinary walk-in repair and can fit the limits if the email preparation and sending, booking administration, assessments and recording are capped at six hours and incidental costs at EUR 120. It uses only the existing tools, counter and opted-in customers. The proposal still assumes customers will agree to pay and that the owner can deliver the pooled appointments within the stated capacity; those are unmeasured rather than established facts.",
+            "score": 0.86
+          },
+          {
+            "assumptions": [
+              "The owner can define and reserve a limited health-check service using existing tools.",
+              "The owner can email all forty opted-in customers through the existing channel without new software or advertising.",
+              "The owner sets prices, a paid-booking threshold and appointment durations that keep total work within six hours and cash within EUR 120.",
+              "Customers are willing to pay for the proposed health-check service; this remains unmeasured."
+            ],
+            "candidate_id": "36a1d68dc92249bbbbeae9626a80d2c2",
+            "components": [
+              {
+                "dimension": "Existing customer relationship",
+                "dimension_id": "d2",
+                "variant": "restore",
+                "variant_id": "v1"
+              },
+              {
+                "dimension": "Operator capacity",
+                "dimension_id": "d1",
+                "variant": "pool",
+                "variant_id": "v6"
+              },
+              {
+                "dimension": "Point of exchange",
+                "dimension_id": "d3",
+                "variant": "cap",
+                "variant_id": "v7"
+              }
+            ],
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Restore the existing customer relationship by emailing the forty opted-in customers a paid bicycle health-check service, pool the owner's six available hours into a small set of reserved appointments, and cap the number of bookings and total delivery effort during the two-week pilot.",
+            "reason": "This sequence supports a distinct paid service beyond ordinary walk-in repair and can fit the limits if the owner uses the existing email channel and tools, spends no more than EUR 120, and caps preparation, customer contact and appointments within six total staff hours. The observable demand signal is paid bookings or deposits from the emailed customers; continue only if the defined minimum number of paid bookings is reached, otherwise stop. Exact prices, booking threshold, appointment duration and cash allocation are not supplied, so feasibility depends on the owner setting them within the limits.",
+            "score": 0.82
+          },
+          {
+            "assumptions": [
+              "Transfer temporarily means reallocating, not increasing, the owner's maximum six additional staff hours.",
+              "Pooling the customer relationship means contacting only the forty opted-in customers by existing email.",
+              "Pooling capacity means a bounded number of diagnostic appointments whose preparation and delivery fit within six hours.",
+              "The owner can offer and price a paid diagnostic service using the existing tools and counter.",
+              "The owner defines a paid-booking threshold and stops if it is not reached.",
+              "Any pilot cash expenditure, including incidental materials, remains at or below EUR 120 with no recurring commitment."
+            ],
+            "candidate_id": "8c8c90dd4c434fce80bb14811882a0fd",
+            "components": [
+              {
+                "dimension": "Time allowance",
+                "dimension_id": "d5",
+                "variant": "transfer temporarily",
+                "variant_id": "v5"
+              },
+              {
+                "dimension": "Existing customer relationship",
+                "dimension_id": "d2",
+                "variant": "pool",
+                "variant_id": "v6"
+              },
+              {
+                "dimension": "Operator capacity",
+                "dimension_id": "d1",
+                "variant": "pool",
+                "variant_id": "v6"
+              },
+              {
+                "dimension": "Technical capability",
+                "dimension_id": "d4",
+                "variant": "diagnose",
+                "variant_id": "v2"
+              }
+            ],
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Transfer the owner's available time temporarily into a two-week pilot, pool the forty opted-in customers as the permitted audience, pool the owner's capacity into limited appointments, and diagnose bicycles as a paid pre-service assessment using the existing tools and counter.",
+            "reason": "The ordered components can support a distinct paid diagnostic service for existing customers, with limited appointments and no continuing programme. It can satisfy the resource and contact constraints if outreach uses only the existing email channel and delivery uses the existing tools and counter. It is valid only if the temporary time transfer still means no more than six additional staff hours, and if the owner sets a price, any cash spend at or below EUR 120, and a booking or payment threshold. Paid diagnostic bookings provide the demand signal; continue only if the threshold is met, otherwise stop. The proposal does not itself establish those numerical limits, so its feasibility is conditional rather than demonstrated by the seed alone.",
+            "score": 0.76
+          }
+        ],
+        "stop_reason": "generation_limit"
+      },
+      "status": "success",
+      "token_usage": {
+        "cached_input_tokens": 19968,
+        "input_tokens": 37464,
+        "output_tokens": 2496,
+        "reasoning_output_tokens": 374,
+        "total_tokens": 39960
+      },
+      "token_usage_partial": false
+    }
+  },
+  "lifecycle": {
+    "history": [
+      {
+        "at": "2026-09-21T14:26:40.340752+0000",
+        "attempt": {
+          "cost": {
+            "api_usd": 0.0034256800000000004,
+            "real_usd": 0.0
+          },
+          "cost_partial": false,
+          "duration_s": 49.78183698654175,
+          "native_result": null,
+          "status": "success",
+          "token_usage": {
+            "cached_input_tokens": 9984,
+            "input_tokens": 18692,
+            "output_tokens": 1237,
+            "reasoning_output_tokens": 190,
+            "total_tokens": 19929
+          },
+          "token_usage_partial": false
+        },
+        "call_id": "e329e4af2ba64220a8bbb422fa75d50f",
+        "physical_dispatch": {
+          "call_context": {
+            "batch": "0075461bcc4c4b23923bad90ae4a9995",
+            "generation": 1,
+            "job": "evaluate_candidates",
+            "material": "business",
+            "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/0075461bcc4c4b23923bad90ae4a9995-codex-evaluate_candidates.txt",
+            "regime_revision": 1
+          },
+          "call_id": "e329e4af2ba64220a8bbb422fa75d50f",
+          "completed": true,
+          "cost_payloads": [
+            {
+              "cacheWriteInputTokens": 0,
+              "cachedInputTokens": 9984,
+              "inputTokens": 18692,
+              "outputTokens": 1237,
+              "reasoningOutputTokens": 190,
+              "totalTokens": 19929
+            }
+          ],
+          "duration_s": 49.78183698654175,
+          "effort": "low",
+          "error": null,
+          "family": "codex",
+          "model": "gpt-5.6-luna",
+          "prompt_set_fallback": null,
+          "token_usage": {
+            "cached_input_tokens": 9984,
+            "input_tokens": 18692,
+            "output_tokens": 1237,
+            "reasoning_output_tokens": 190,
+            "total_tokens": 19929
+          },
+          "token_usage_partial": false
+        },
+        "status": "running"
+      },
+      {
+        "at": "2026-09-21T14:27:07.861470+0000",
+        "attempt": {
+          "cost": {
+            "api_usd": 0.00346808,
+            "real_usd": 0.0
+          },
+          "cost_partial": false,
+          "duration_s": 27.46744394302368,
+          "native_result": null,
+          "status": "success",
+          "token_usage": {
+            "cached_input_tokens": 9984,
+            "input_tokens": 18772,
+            "output_tokens": 1259,
+            "reasoning_output_tokens": 184,
+            "total_tokens": 20031
+          },
+          "token_usage_partial": false
+        },
+        "call_id": "17c4e036a132453380f24e625b9b9e62",
+        "physical_dispatch": {
+          "call_context": {
+            "batch": "dcf8b48033f44b4d846f5bddd9f6cae7",
+            "generation": 2,
+            "job": "evaluate_candidates",
+            "material": "business",
+            "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/dcf8b48033f44b4d846f5bddd9f6cae7-codex-evaluate_candidates.txt",
+            "regime_revision": 1
+          },
+          "call_id": "17c4e036a132453380f24e625b9b9e62",
+          "completed": true,
+          "cost_payloads": [
+            {
+              "cacheWriteInputTokens": 0,
+              "cachedInputTokens": 9984,
+              "inputTokens": 18772,
+              "outputTokens": 1259,
+              "reasoningOutputTokens": 184,
+              "totalTokens": 20031
+            }
+          ],
+          "duration_s": 27.46744394302368,
+          "effort": "low",
+          "error": null,
+          "family": "codex",
+          "model": "gpt-5.6-luna",
+          "prompt_set_fallback": null,
+          "token_usage": {
+            "cached_input_tokens": 9984,
+            "input_tokens": 18772,
+            "output_tokens": 1259,
+            "reasoning_output_tokens": 184,
+            "total_tokens": 20031
+          },
+          "token_usage_partial": false
+        },
+        "status": "running"
+      }
+    ],
+    "reason": null,
+    "revision": 0,
+    "source": null,
+    "status": "success",
+    "accounting": {
+      "duration_s": 77.24928092956543,
+      "token_usage": {
+        "cached_input_tokens": 19968,
+        "input_tokens": 37464,
+        "output_tokens": 2496,
+        "reasoning_output_tokens": 374,
+        "total_tokens": 39960
+      },
+      "token_usage_partial": false,
+      "cost": {
+        "api_usd": 0.0068937600000000005,
+        "real_usd": 0.0
+      },
+      "cost_partial": false
+    },
+    "root_task_id": "3355df66-e9b7-4332-a2c3-c849b129856f",
+    "can_pause": false,
+    "can_resume": false,
+    "blocked_reason": null
+  },
+  "creativity": {
+    "best_score": 0.86,
+    "reference_score": null,
+    "stagnant_generations": 0,
+    "consecutive_expansions": 0,
+    "expansion_interventions": 0,
+    "generations_completed": 2,
+    "window_complete": false,
+    "job": "complete",
+    "generation": 2,
+    "phase": null,
+    "evaluated_candidates": 8,
+    "evaluation_budget": 8,
+    "best_candidate_valid": true,
+    "best_candidates": [
+      {
+        "candidate_id": "5fe14eae567f4849a71fa4f1c472cf48",
+        "components": [
+          {
+            "dimension_id": "d4",
+            "dimension": "Technical capability",
+            "variant_id": "v11",
+            "variant": "measure"
+          },
+          {
+            "dimension_id": "d2",
+            "dimension": "Existing customer relationship",
+            "variant_id": "v1",
+            "variant": "restore"
+          },
+          {
+            "dimension_id": "d3",
+            "dimension": "Point of exchange",
+            "variant_id": "v6",
+            "variant": "pool"
+          }
+        ],
+        "proposal": "Measure customer-reported bicycle condition through a paid, bounded assessment; restore engagement with the existing opted-in customer relationship by sending one service email; and pool a limited set of assessment appointments at the existing counter. Charge for the assessment, track paid bookings and completed appointments, and continue only if a pre-set number or conversion rate is reached. The seed gives the proposal a coherent measurement, relationship and pooled-exchange sequence; pricing, message content and exact appointment cap are supporting proposals.",
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "reason": "This is the strongest complete proposal in the batch. It tests a distinct paid assessment service rather than ordinary walk-in repair and can fit the limits if the email preparation and sending, booking administration, assessments and recording are capped at six hours and incidental costs at EUR 120. It uses only the existing tools, counter and opted-in customers. The proposal still assumes customers will agree to pay and that the owner can deliver the pooled appointments within the stated capacity; those are unmeasured rather than established facts.",
+        "assumptions": [
+          "The owner can define a useful paid assessment distinct from ordinary repair.",
+          "The owner can set a pilot price and reserve a limited appointment pool within six additional staff hours.",
+          "Only the forty opted-in customers are contacted through the existing email channel.",
+          "Preparation, email handling, booking, delivery and measurement together remain within six staff hours.",
+          "Any cash expenditure remains at or below EUR 120 with no recurring commitment.",
+          "A pre-set paid-booking or conversion threshold is established before launch."
+        ],
+        "score": 0.86
+      },
+      {
+        "candidate_id": "36a1d68dc92249bbbbeae9626a80d2c2",
+        "components": [
+          {
+            "dimension_id": "d2",
+            "dimension": "Existing customer relationship",
+            "variant_id": "v1",
+            "variant": "restore"
+          },
+          {
+            "dimension_id": "d1",
+            "dimension": "Operator capacity",
+            "variant_id": "v6",
+            "variant": "pool"
+          },
+          {
+            "dimension_id": "d3",
+            "dimension": "Point of exchange",
+            "variant_id": "v7",
+            "variant": "cap"
+          }
+        ],
+        "proposal": "Restore the existing customer relationship by emailing the forty opted-in customers a paid bicycle health-check service, pool the owner's six available hours into a small set of reserved appointments, and cap the number of bookings and total delivery effort during the two-week pilot.",
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "reason": "This sequence supports a distinct paid service beyond ordinary walk-in repair and can fit the limits if the owner uses the existing email channel and tools, spends no more than EUR 120, and caps preparation, customer contact and appointments within six total staff hours. The observable demand signal is paid bookings or deposits from the emailed customers; continue only if the defined minimum number of paid bookings is reached, otherwise stop. Exact prices, booking threshold, appointment duration and cash allocation are not supplied, so feasibility depends on the owner setting them within the limits.",
+        "assumptions": [
+          "The owner can define and reserve a limited health-check service using existing tools.",
+          "The owner can email all forty opted-in customers through the existing channel without new software or advertising.",
+          "The owner sets prices, a paid-booking threshold and appointment durations that keep total work within six hours and cash within EUR 120.",
+          "Customers are willing to pay for the proposed health-check service; this remains unmeasured."
+        ],
+        "score": 0.82
+      },
+      {
+        "candidate_id": "8c8c90dd4c434fce80bb14811882a0fd",
+        "components": [
+          {
+            "dimension_id": "d5",
+            "dimension": "Time allowance",
+            "variant_id": "v5",
+            "variant": "transfer temporarily"
+          },
+          {
+            "dimension_id": "d2",
+            "dimension": "Existing customer relationship",
+            "variant_id": "v6",
+            "variant": "pool"
+          },
+          {
+            "dimension_id": "d1",
+            "dimension": "Operator capacity",
+            "variant_id": "v6",
+            "variant": "pool"
+          },
+          {
+            "dimension_id": "d4",
+            "dimension": "Technical capability",
+            "variant_id": "v2",
+            "variant": "diagnose"
+          }
+        ],
+        "proposal": "Transfer the owner's available time temporarily into a two-week pilot, pool the forty opted-in customers as the permitted audience, pool the owner's capacity into limited appointments, and diagnose bicycles as a paid pre-service assessment using the existing tools and counter.",
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "reason": "The ordered components can support a distinct paid diagnostic service for existing customers, with limited appointments and no continuing programme. It can satisfy the resource and contact constraints if outreach uses only the existing email channel and delivery uses the existing tools and counter. It is valid only if the temporary time transfer still means no more than six additional staff hours, and if the owner sets a price, any cash spend at or below EUR 120, and a booking or payment threshold. Paid diagnostic bookings provide the demand signal; continue only if the threshold is met, otherwise stop. The proposal does not itself establish those numerical limits, so its feasibility is conditional rather than demonstrated by the seed alone.",
+        "assumptions": [
+          "Transfer temporarily means reallocating, not increasing, the owner's maximum six additional staff hours.",
+          "Pooling the customer relationship means contacting only the forty opted-in customers by existing email.",
+          "Pooling capacity means a bounded number of diagnostic appointments whose preparation and delivery fit within six hours.",
+          "The owner can offer and price a paid diagnostic service using the existing tools and counter.",
+          "The owner defines a paid-booking threshold and stops if it is not reached.",
+          "Any pilot cash expenditure, including incidental materials, remains at or below EUR 120 with no recurring commitment."
+        ],
+        "score": 0.76
+      }
+    ],
+    "search_material": {
+      "assumptions": [
+        "The owner may set pilot prices and reserve limited service appointments."
+      ],
+      "composition_guidance": "Combine a paid service offer with a bounded delivery arrangement; count all preparation and delivery effort.",
+      "constraints": [
+        {
+          "id": "budget",
+          "text": "Spend at most EUR 120 in total, with no recurring spending commitment."
+        },
+        {
+          "id": "time",
+          "text": "Use at most six additional staff hours including preparation, contact and delivery, and finish within two weeks."
+        },
+        {
+          "id": "resources",
+          "text": "Use existing tools and the counter; no new software, hires or paid advertising."
+        },
+        {
+          "id": "contact",
+          "text": "Contact only the forty customers who opted in, using the existing email channel."
+        }
+      ],
+      "context_summary": "One owner runs the shop. The goal is to test paid demand with existing tools and customer relationships, without committing to a continuing programme.",
+      "criteria": [
+        {
+          "id": "feasibility",
+          "text": "Itemise cash and staff time and show that the complete pilot fits both limits."
+        },
+        {
+          "id": "demand",
+          "text": "State the paid demand signal, assumptions and an observable continue-or-stop decision."
+        },
+        {
+          "id": "difference",
+          "text": "Test a distinct paid service proposition beyond ordinary walk-in repair."
+        }
+      ],
+      "dimensions": [
+        {
+          "id": "d1",
+          "meaning": "Operator capacity"
+        },
+        {
+          "id": "d2",
+          "meaning": "Existing customer relationship"
+        },
+        {
+          "id": "d3",
+          "meaning": "Point of exchange"
+        },
+        {
+          "id": "d4",
+          "meaning": "Technical capability"
+        },
+        {
+          "id": "d5",
+          "meaning": "Time allowance"
+        }
+      ],
+      "facts": [
+        "The shop has ordinary bicycle repair tools and a service counter.",
+        "Forty existing customers have opted in to service emails.",
+        "The owner can devote six additional staff hours over the next two weeks.",
+        "The total additional cash allowance is EUR 120."
+      ],
+      "objective": "Develop one two-week pilot through which a neighbourhood bicycle repair shop could earn additional service revenue from existing customers, within the stated cash and staff-time limits.",
+      "order_semantics": "sequence in which the selected pilot components are carried out",
+      "unknowns": [
+        "Customer willingness to pay and response rate have not been measured."
+      ],
+      "variants": [
+        {
+          "id": "v1",
+          "text": "restore"
+        },
+        {
+          "id": "v10",
+          "text": "make visible"
+        },
+        {
+          "id": "v11",
+          "text": "measure"
+        },
+        {
+          "id": "v12",
+          "text": "withdraw"
+        },
+        {
+          "id": "v2",
+          "text": "diagnose"
+        },
+        {
+          "id": "v3",
+          "text": "allocate"
+        },
+        {
+          "id": "v4",
+          "text": "monetize"
+        },
+        {
+          "id": "v5",
+          "text": "transfer temporarily"
+        },
+        {
+          "id": "v6",
+          "text": "pool"
+        },
+        {
+          "id": "v7",
+          "text": "cap"
+        },
+        {
+          "id": "v8",
+          "text": "aggregate"
+        },
+        {
+          "id": "v9",
+          "text": "defer"
+        }
+      ]
+    },
+    "candidate_evaluations": [
+      {
+        "assumptions": [
+          "The owner can define and reserve a limited health-check service using existing tools.",
+          "The owner can email all forty opted-in customers through the existing channel without new software or advertising.",
+          "The owner sets prices, a paid-booking threshold and appointment durations that keep total work within six hours and cash within EUR 120.",
+          "Customers are willing to pay for the proposed health-check service; this remains unmeasured."
+        ],
+        "candidate_id": "36a1d68dc92249bbbbeae9626a80d2c2",
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Restore the existing customer relationship by emailing the forty opted-in customers a paid bicycle health-check service, pool the owner's six available hours into a small set of reserved appointments, and cap the number of bookings and total delivery effort during the two-week pilot.",
+        "reason": "This sequence supports a distinct paid service beyond ordinary walk-in repair and can fit the limits if the owner uses the existing email channel and tools, spends no more than EUR 120, and caps preparation, customer contact and appointments within six total staff hours. The observable demand signal is paid bookings or deposits from the emailed customers; continue only if the defined minimum number of paid bookings is reached, otherwise stop. Exact prices, booking threshold, appointment duration and cash allocation are not supplied, so feasibility depends on the owner setting them within the limits.",
+        "score": 0.82,
+        "generation": 1,
+        "regime_revision": 1,
+        "current_regime": true,
+        "components": [
+          {
+            "dimension_id": "d2",
+            "dimension": "Existing customer relationship",
+            "variant_id": "v1",
+            "variant": "restore"
+          },
+          {
+            "dimension_id": "d1",
+            "dimension": "Operator capacity",
+            "variant_id": "v6",
+            "variant": "pool"
+          },
+          {
+            "dimension_id": "d3",
+            "dimension": "Point of exchange",
+            "variant_id": "v7",
+            "variant": "cap"
+          }
+        ],
+        "active_count": 3,
+        "omitted_count": 2,
+        "call_id": "e329e4af2ba64220a8bbb422fa75d50f",
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/0075461bcc4c4b23923bad90ae4a9995-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "assumptions": [
+          "The owner could later define payment, contact and delivery arrangements without changing the proposal's deferred-exchange meaning.",
+          "The owner can choose a distinct paid service offer and fit it within the stated limits."
+        ],
+        "candidate_id": "823659c1e4fc4fd29e5c0a2676045881",
+        "constraint_valid": false,
+        "constraint_violations": [
+          "budget",
+          "time",
+          "contact"
+        ],
+        "proposal": "Restore the existing customer relationship by presenting a paid bicycle service offer, use the owner's available capacity to deliver it, and defer the point of exchange until later rather than specifying how customers will pay or how appointments will be confirmed.",
+        "reason": "The sequence contains a potentially feasible paid offer, but it does not establish a bounded delivery arrangement or a point at which payment and customer commitment occur. Because exchange is deferred, the proposal gives no complete pilot with an observable paid-demand signal, no itemised cash or staff-time accounting, and no defined use of the existing opted-in email channel. It therefore cannot demonstrate compliance with the budget, time or contact constraints, even though the missing details could theoretically be supplied without changing the seed.",
+        "score": 0.28,
+        "generation": 1,
+        "regime_revision": 1,
+        "current_regime": true,
+        "components": [
+          {
+            "dimension_id": "d1",
+            "dimension": "Operator capacity",
+            "variant_id": "v1",
+            "variant": "restore"
+          },
+          {
+            "dimension_id": "d3",
+            "dimension": "Point of exchange",
+            "variant_id": "v9",
+            "variant": "defer"
+          }
+        ],
+        "active_count": 2,
+        "omitted_count": 3,
+        "call_id": "e329e4af2ba64220a8bbb422fa75d50f",
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/0075461bcc4c4b23923bad90ae4a9995-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "assumptions": [
+          "Withdraw means that no owner time is available for preparation, contact or delivery.",
+          "A later exchange could be designed, although that would require adding material components not present in the seed."
+        ],
+        "candidate_id": "874b1056782d49d3bd0fb72a68803286",
+        "constraint_valid": false,
+        "constraint_violations": [
+          "time",
+          "contact"
+        ],
+        "proposal": "Withdraw the owner's available time from the pilot, defer the point of exchange, and consequently offer no bounded paid service delivery during the two-week period.",
+        "reason": "Withdrawing the available time leaves no stated preparation, customer contact or delivery capacity. Deferring exchange also prevents a concrete paid-demand test and observable continue-or-stop decision. The proposal does not form the required combination of a paid service offer and bounded delivery arrangement, and it cannot show that the contact constraint is met because no permitted customer contact is specified.",
+        "score": 0.04,
+        "generation": 1,
+        "regime_revision": 1,
+        "current_regime": true,
+        "components": [
+          {
+            "dimension_id": "d5",
+            "dimension": "Time allowance",
+            "variant_id": "v12",
+            "variant": "withdraw"
+          },
+          {
+            "dimension_id": "d3",
+            "dimension": "Point of exchange",
+            "variant_id": "v9",
+            "variant": "defer"
+          }
+        ],
+        "active_count": 2,
+        "omitted_count": 3,
+        "call_id": "e329e4af2ba64220a8bbb422fa75d50f",
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/0075461bcc4c4b23923bad90ae4a9995-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "assumptions": [
+          "Transfer temporarily means reallocating, not increasing, the owner's maximum six additional staff hours.",
+          "Pooling the customer relationship means contacting only the forty opted-in customers by existing email.",
+          "Pooling capacity means a bounded number of diagnostic appointments whose preparation and delivery fit within six hours.",
+          "The owner can offer and price a paid diagnostic service using the existing tools and counter.",
+          "The owner defines a paid-booking threshold and stops if it is not reached.",
+          "Any pilot cash expenditure, including incidental materials, remains at or below EUR 120 with no recurring commitment."
+        ],
+        "candidate_id": "8c8c90dd4c434fce80bb14811882a0fd",
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Transfer the owner's available time temporarily into a two-week pilot, pool the forty opted-in customers as the permitted audience, pool the owner's capacity into limited appointments, and diagnose bicycles as a paid pre-service assessment using the existing tools and counter.",
+        "reason": "The ordered components can support a distinct paid diagnostic service for existing customers, with limited appointments and no continuing programme. It can satisfy the resource and contact constraints if outreach uses only the existing email channel and delivery uses the existing tools and counter. It is valid only if the temporary time transfer still means no more than six additional staff hours, and if the owner sets a price, any cash spend at or below EUR 120, and a booking or payment threshold. Paid diagnostic bookings provide the demand signal; continue only if the threshold is met, otherwise stop. The proposal does not itself establish those numerical limits, so its feasibility is conditional rather than demonstrated by the seed alone.",
+        "score": 0.76,
+        "generation": 1,
+        "regime_revision": 1,
+        "current_regime": true,
+        "components": [
+          {
+            "dimension_id": "d5",
+            "dimension": "Time allowance",
+            "variant_id": "v5",
+            "variant": "transfer temporarily"
+          },
+          {
+            "dimension_id": "d2",
+            "dimension": "Existing customer relationship",
+            "variant_id": "v6",
+            "variant": "pool"
+          },
+          {
+            "dimension_id": "d1",
+            "dimension": "Operator capacity",
+            "variant_id": "v6",
+            "variant": "pool"
+          },
+          {
+            "dimension_id": "d4",
+            "dimension": "Technical capability",
+            "variant_id": "v2",
+            "variant": "diagnose"
+          }
+        ],
+        "active_count": 4,
+        "omitted_count": 1,
+        "call_id": "e329e4af2ba64220a8bbb422fa75d50f",
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/0075461bcc4c4b23923bad90ae4a9995-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "assumptions": [
+          "The owner can define and reserve a limited number of diagnostic appointments within six additional hours.",
+          "The owner may set a diagnostic price and use the existing email channel for the forty opted-in customers.",
+          "Any consumables or incidental cash costs remain within EUR 120 and no recurring commitment is made.",
+          "A continue-or-stop threshold can be set before contacting customers."
+        ],
+        "candidate_id": "0e0a3ba25ad84d7e9c891dea038bd8b3",
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Temporarily transfer a small portion of the owner's existing availability into a two-week paid diagnostic service, using the shop's tools and counter. Email the forty opted-in customers, offer limited diagnostic appointments, charge a stated pilot fee, record bookings and completed paid diagnoses, and stop if demand does not meet the owner's threshold. The seed supports diagnosis and temporary capacity allocation, but the offer, price, email execution and delivery limits are supporting proposals.",
+        "reason": "This can be bounded within six additional staff hours and EUR 120 by limiting preparation, opted-in email contact, appointments and materials, with no recurring spend or new resources. It tests a distinct paid diagnostic proposition beyond ordinary walk-in repair. Its main weakness is that “transfer temporarily” does not specify how much capacity is available, so feasibility depends on the owner reserving sufficiently few appointments. Demand and willingness to pay remain unknown.",
+        "score": 0.74,
+        "generation": 2,
+        "regime_revision": 1,
+        "current_regime": true,
+        "components": [
+          {
+            "dimension_id": "d5",
+            "dimension": "Time allowance",
+            "variant_id": "v5",
+            "variant": "transfer temporarily"
+          },
+          {
+            "dimension_id": "d4",
+            "dimension": "Technical capability",
+            "variant_id": "v2",
+            "variant": "diagnose"
+          }
+        ],
+        "active_count": 2,
+        "omitted_count": 3,
+        "call_id": "17c4e036a132453380f24e625b9b9e62",
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/dcf8b48033f44b4d846f5bddd9f6cae7-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "assumptions": [],
+        "candidate_id": "16c39702f10d4025b4c3faff2c80d579",
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Withdraw from the pilot during the two-week period. This preserves the owner's time and cash but does not create or test a paid service offer, contact customers, deliver a bounded service, or generate an observable paid-demand signal.",
+        "reason": "The proposal does not violate the resource, budget, time or contact constraints because it undertakes no activity. However, it fails the objective and the composition guidance: it contains neither a paid service offer nor a bounded delivery arrangement, and therefore cannot assess additional service revenue or demand. The score reflects objective failure, not feasibility risk.",
+        "score": 0.02,
+        "generation": 2,
+        "regime_revision": 1,
+        "current_regime": true,
+        "components": [
+          {
+            "dimension_id": "d5",
+            "dimension": "Time allowance",
+            "variant_id": "v12",
+            "variant": "withdraw"
+          }
+        ],
+        "active_count": 1,
+        "omitted_count": 4,
+        "call_id": "17c4e036a132453380f24e625b9b9e62",
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/dcf8b48033f44b4d846f5bddd9f6cae7-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "assumptions": [
+          "The owner can define a useful paid assessment distinct from ordinary repair.",
+          "The owner can set a pilot price and reserve a limited appointment pool within six additional staff hours.",
+          "Only the forty opted-in customers are contacted through the existing email channel.",
+          "Preparation, email handling, booking, delivery and measurement together remain within six staff hours.",
+          "Any cash expenditure remains at or below EUR 120 with no recurring commitment.",
+          "A pre-set paid-booking or conversion threshold is established before launch."
+        ],
+        "candidate_id": "5fe14eae567f4849a71fa4f1c472cf48",
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Measure customer-reported bicycle condition through a paid, bounded assessment; restore engagement with the existing opted-in customer relationship by sending one service email; and pool a limited set of assessment appointments at the existing counter. Charge for the assessment, track paid bookings and completed appointments, and continue only if a pre-set number or conversion rate is reached. The seed gives the proposal a coherent measurement, relationship and pooled-exchange sequence; pricing, message content and exact appointment cap are supporting proposals.",
+        "reason": "This is the strongest complete proposal in the batch. It tests a distinct paid assessment service rather than ordinary walk-in repair and can fit the limits if the email preparation and sending, booking administration, assessments and recording are capped at six hours and incidental costs at EUR 120. It uses only the existing tools, counter and opted-in customers. The proposal still assumes customers will agree to pay and that the owner can deliver the pooled appointments within the stated capacity; those are unmeasured rather than established facts.",
+        "score": 0.86,
+        "generation": 2,
+        "regime_revision": 1,
+        "current_regime": true,
+        "components": [
+          {
+            "dimension_id": "d4",
+            "dimension": "Technical capability",
+            "variant_id": "v11",
+            "variant": "measure"
+          },
+          {
+            "dimension_id": "d2",
+            "dimension": "Existing customer relationship",
+            "variant_id": "v1",
+            "variant": "restore"
+          },
+          {
+            "dimension_id": "d3",
+            "dimension": "Point of exchange",
+            "variant_id": "v6",
+            "variant": "pool"
+          }
+        ],
+        "active_count": 3,
+        "omitted_count": 2,
+        "call_id": "17c4e036a132453380f24e625b9b9e62",
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/dcf8b48033f44b4d846f5bddd9f6cae7-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "assumptions": [
+          "“Withdraw” means the owner removes or withholds the available pilot time rather than merely limiting appointment volume.",
+          "A paid service proposition and demand threshold would need to be invented as supporting details.",
+          "No substitute staff or external delivery capacity is available, consistent with the supplied resources constraint."
+        ],
+        "candidate_id": "a6841d3a20c448e68cc5953adf3c7a04",
+        "constraint_valid": false,
+        "constraint_violations": [
+          "time"
+        ],
+        "proposal": "Pool the owner's capacity and the existing customer relationship into a monetized service offer, while withdrawing the available time commitment. In practice this would attempt to email the forty opted-in customers, offer a limited paid service and pool appointments, but the withdrawal component leaves no stated delivery capacity. The proposal cannot establish a complete two-week pilot without adding an unstated replacement for the withdrawn time.",
+        "reason": "The seed is internally incoherent: it pools operator capacity and customer access, then withdraws the time needed for preparation, contact and delivery, while monetizing technical capability. Without available staff time, the complete pilot cannot be delivered within the required six-hour ceiling. It also leaves the service proposition and continue-or-stop demand signal unspecified. The budget, resource and contact constraints could be respected if activity occurred, but the time constraint is violated by the proposed withdrawal of delivery capacity.",
+        "score": 0.19,
+        "generation": 2,
+        "regime_revision": 1,
+        "current_regime": true,
+        "components": [
+          {
+            "dimension_id": "d1",
+            "dimension": "Operator capacity",
+            "variant_id": "v6",
+            "variant": "pool"
+          },
+          {
+            "dimension_id": "d5",
+            "dimension": "Time allowance",
+            "variant_id": "v12",
+            "variant": "withdraw"
+          },
+          {
+            "dimension_id": "d2",
+            "dimension": "Existing customer relationship",
+            "variant_id": "v6",
+            "variant": "pool"
+          },
+          {
+            "dimension_id": "d4",
+            "dimension": "Technical capability",
+            "variant_id": "v4",
+            "variant": "monetize"
+          }
+        ],
+        "active_count": 4,
+        "omitted_count": 1,
+        "call_id": "17c4e036a132453380f24e625b9b9e62",
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/3355df66-e9b7-4332-a2c3-c849b129856f/prompts/dcf8b48033f44b4d846f5bddd9f6cae7-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        }
+      }
+    ],
+    "initial_genes_supplied": true,
+    "stop_reason": "generation_limit"
+  }
+}

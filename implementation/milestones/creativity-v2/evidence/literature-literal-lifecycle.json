@@ -1,0 +1,142 @@
+{
+  "history": [
+    {
+      "at": "2026-09-21T14:22:30.762325+0000",
+      "attempt": {
+        "cost": {
+          "api_usd": 0.0031776800000000004,
+          "real_usd": 0.0
+        },
+        "cost_partial": false,
+        "duration_s": 22.148969888687134,
+        "native_result": null,
+        "status": "success",
+        "token_usage": {
+          "cached_input_tokens": 9984,
+          "input_tokens": 18796,
+          "output_tokens": 1013,
+          "reasoning_output_tokens": 440,
+          "total_tokens": 19809
+        },
+        "token_usage_partial": false
+      },
+      "call_id": "76e230233dbb4ae6b57c707e8abe8bed",
+      "physical_dispatch": {
+        "call_context": {
+          "batch": "366ae34ed404490583dc5ad739f3e140",
+          "generation": 1,
+          "job": "evaluate_candidates",
+          "material": "literature",
+          "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/ee2395c9-d638-4b51-9346-e581130b89c8/prompts/366ae34ed404490583dc5ad739f3e140-codex-evaluate_candidates.txt",
+          "regime_revision": 1
+        },
+        "call_id": "76e230233dbb4ae6b57c707e8abe8bed",
+        "completed": true,
+        "cost_payloads": [
+          {
+            "cacheWriteInputTokens": 0,
+            "cachedInputTokens": 9984,
+            "inputTokens": 18796,
+            "outputTokens": 1013,
+            "reasoningOutputTokens": 440,
+            "totalTokens": 19809
+          }
+        ],
+        "duration_s": 22.148969888687134,
+        "effort": "low",
+        "error": null,
+        "family": "codex",
+        "model": "gpt-5.6-luna",
+        "prompt_set_fallback": null,
+        "token_usage": {
+          "cached_input_tokens": 9984,
+          "input_tokens": 18796,
+          "output_tokens": 1013,
+          "reasoning_output_tokens": 440,
+          "total_tokens": 19809
+        },
+        "token_usage_partial": false
+      },
+      "status": "running"
+    },
+    {
+      "at": "2026-09-21T14:23:05.349478+0000",
+      "attempt": {
+        "cost": {
+          "api_usd": 0.00401208,
+          "real_usd": 0.0
+        },
+        "cost_partial": false,
+        "duration_s": 34.55331897735596,
+        "native_result": null,
+        "status": "success",
+        "token_usage": {
+          "cached_input_tokens": 9984,
+          "input_tokens": 18972,
+          "output_tokens": 1679,
+          "reasoning_output_tokens": 983,
+          "total_tokens": 20651
+        },
+        "token_usage_partial": false
+      },
+      "call_id": "f15328b5eda54738b58b412eda5224c1",
+      "physical_dispatch": {
+        "call_context": {
+          "batch": "fb4aab35798548779ce08bf2a7b56478",
+          "generation": 2,
+          "job": "evaluate_candidates",
+          "material": "literature",
+          "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/ee2395c9-d638-4b51-9346-e581130b89c8/prompts/fb4aab35798548779ce08bf2a7b56478-codex-evaluate_candidates.txt",
+          "regime_revision": 1
+        },
+        "call_id": "f15328b5eda54738b58b412eda5224c1",
+        "completed": true,
+        "cost_payloads": [
+          {
+            "cacheWriteInputTokens": 0,
+            "cachedInputTokens": 9984,
+            "inputTokens": 18972,
+            "outputTokens": 1679,
+            "reasoningOutputTokens": 983,
+            "totalTokens": 20651
+          }
+        ],
+        "duration_s": 34.55331897735596,
+        "effort": "low",
+        "error": null,
+        "family": "codex",
+        "model": "gpt-5.6-luna",
+        "prompt_set_fallback": null,
+        "token_usage": {
+          "cached_input_tokens": 9984,
+          "input_tokens": 18972,
+          "output_tokens": 1679,
+          "reasoning_output_tokens": 983,
+          "total_tokens": 20651
+        },
+        "token_usage_partial": false
+      },
+      "status": "running"
+    }
+  ],
+  "reason": null,
+  "revision": 0,
+  "source": null,
+  "status": "success",
+  "accounting": {
+    "duration_s": 56.70228886604309,
+    "token_usage": {
+      "cached_input_tokens": 19968,
+      "input_tokens": 37768,
+      "output_tokens": 2692,
+      "reasoning_output_tokens": 1423,
+      "total_tokens": 40460
+    },
+    "token_usage_partial": false,
+    "cost": {
+      "api_usd": 0.007189760000000001,
+      "real_usd": 0.0
+    },
+    "cost_partial": false
+  }
+}

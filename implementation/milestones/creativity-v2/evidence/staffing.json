@@ -1,0 +1,327 @@
+{
+  "name": "creativity-v2-comparison",
+  "families": {
+    "1": {
+      "name": "codex",
+      "models": [
+        "gpt-5.6-luna",
+        "gpt-5.6-terra",
+        "gpt-5.6-sol"
+      ],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "2": {
+      "name": "claude",
+      "models": [
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-fable-5"
+      ],
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    }
+  },
+  "roles": {
+    "plan": {},
+    "draft": {},
+    "implement": {},
+    "fix": {},
+    "classify": {},
+    "review": {
+      "distinct_families": true
+    },
+    "brainstorm": {},
+    "consult": {},
+    "sync": {}
+  },
+  "materials": {
+    "literature": {
+      "examples": [
+        "literature exploration"
+      ]
+    },
+    "business": {
+      "examples": [
+        "business exploration"
+      ]
+    }
+  },
+  "tuning": {
+    "low": {
+      "1": {
+        "plan": [
+          1,
+          1
+        ],
+        "draft": [
+          3,
+          2
+        ],
+        "implement": [
+          3,
+          4
+        ],
+        "fix": [
+          3,
+          2
+        ],
+        "classify": [
+          3,
+          2
+        ],
+        "review": [
+          1,
+          1
+        ],
+        "brainstorm": [
+          1,
+          1
+        ],
+        "consult": [
+          3,
+          4
+        ],
+        "sync": [
+          3,
+          4
+        ]
+      },
+      "2": {
+        "plan": [
+          1,
+          2
+        ],
+        "draft": [
+          2,
+          4
+        ],
+        "implement": [
+          1,
+          2
+        ],
+        "fix": [
+          2,
+          4
+        ],
+        "classify": [
+          2,
+          4
+        ],
+        "review": [
+          1,
+          2
+        ],
+        "brainstorm": [
+          1,
+          2
+        ],
+        "consult": [
+          2,
+          2
+        ],
+        "sync": [
+          2,
+          4
+        ]
+      }
+    },
+    "medium": {
+      "1": {
+        "plan": [
+          1,
+          2
+        ],
+        "draft": [
+          3,
+          4
+        ],
+        "implement": [
+          3,
+          4
+        ],
+        "fix": [
+          3,
+          4
+        ],
+        "classify": [
+          3,
+          4
+        ],
+        "review": [
+          1,
+          2
+        ],
+        "brainstorm": [
+          1,
+          2
+        ],
+        "consult": [
+          3,
+          4
+        ],
+        "sync": [
+          3,
+          4
+        ]
+      },
+      "2": {
+        "plan": [
+          3,
+          5
+        ],
+        "draft": [
+          2,
+          4
+        ],
+        "implement": [
+          3,
+          5
+        ],
+        "fix": [
+          2,
+          4
+        ],
+        "classify": [
+          2,
+          4
+        ],
+        "review": [
+          2,
+          4
+        ],
+        "brainstorm": [
+          3,
+          5
+        ],
+        "consult": [
+          2,
+          4
+        ],
+        "sync": [
+          2,
+          4
+        ]
+      }
+    },
+    "high": {
+      "1": {
+        "plan": [
+          1,
+          5
+        ],
+        "draft": [
+          3,
+          5
+        ],
+        "implement": [
+          3,
+          4
+        ],
+        "fix": [
+          3,
+          5
+        ],
+        "classify": [
+          3,
+          5
+        ],
+        "review": [
+          1,
+          5
+        ],
+        "brainstorm": [
+          1,
+          5
+        ],
+        "consult": [
+          3,
+          4
+        ],
+        "sync": [
+          3,
+          4
+        ]
+      },
+      "2": {
+        "plan": [
+          3,
+          5
+        ],
+        "draft": [
+          2,
+          4
+        ],
+        "implement": [
+          3,
+          5
+        ],
+        "fix": [
+          2,
+          4
+        ],
+        "classify": [
+          2,
+          4
+        ],
+        "review": [
+          2,
+          5
+        ],
+        "brainstorm": [
+          3,
+          5
+        ],
+        "consult": [
+          2,
+          5
+        ],
+        "sync": [
+          2,
+          4
+        ]
+      }
+    }
+  },
+  "assignment": {
+    "plan": {
+      "1": 1
+    },
+    "draft": {
+      "1": 1
+    },
+    "implement": {
+      "1": 2
+    },
+    "fix": {
+      "1": 1
+    },
+    "classify": {
+      "1": 1
+    },
+    "review": {
+      "1": 1
+    },
+    "brainstorm": {
+      "1": 1
+    },
+    "consult": {
+      "1": 2
+    },
+    "sync": {
+      "1": 1
+    }
+  },
+  "overrides": {},
+  "rules": []
+}

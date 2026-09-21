@@ -174,3 +174,23 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-05-b-codex-r1`
 
+## milestone_verification-1 (?)
+
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| milestone_verification-1-codex-r1 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/creativity-v2/.run/raw/milestone_verification-1-fix1.txt` |
+| milestone_verification-1-codex-r2 | delta_review | codex | 0 | clean | `implementation/milestones/creativity-v2/.run/raw/milestone_verification-1-delta1.txt` |
+| milestone_verification-1-codex-r3 | review_round | codex | 1 | 1 reported | `implementation/milestones/creativity-v2/.run/raw/milestone_verification-1-codex-r1.txt` |
+
+## slice_doc-06 (Compare prompt formulations on three different problems)
+
+
+## milestone_verification-2 (?)
+
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- scheduled verification event: `236`
+

@@ -1,0 +1,224 @@
+{
+  "ok": true,
+  "task": {
+    "id": "a135b80e-bf5f-4f76-8872-f051ecf1d91e",
+    "order": {
+      "configuration": {
+        "diversity_count": 1,
+        "elite_count": 2,
+        "evaluation_batch_size": 4,
+        "evaluation_concurrency": 1,
+        "generation_limit": 2,
+        "max_evaluated_candidates": 8,
+        "mutation_rate": 0.35,
+        "order_mode": "interchangeable",
+        "population_size": 4,
+        "rigor": {
+          "default": "medium",
+          "evaluate_candidates": "low"
+        },
+        "shortlist_size": 3
+      },
+      "creativity_semantics": "sparse_v2",
+      "initial_genes": {
+        "search_material": {
+          "assumptions": [
+            "The cook is willing to repeat a base component with different accompaniments."
+          ],
+          "composition_guidance": "Arrange the selected batch-cooked and quick fresh components into a safe five-day schedule, explaining reuse and storage without turning weekdays into gene dimensions.",
+          "constraints": [
+            {
+              "id": "time",
+              "text": "Use at most ninety minutes of active preparation across the week."
+            },
+            {
+              "id": "coverage",
+              "text": "Provide one complete evening meal for each weekday."
+            },
+            {
+              "id": "storage",
+              "text": "Refrigerated cooked food must be eaten within three days or frozen."
+            }
+          ],
+          "context_summary": "The plan covers five evening meals. The cook can batch-cook once and prepare one quick fresh component, then reuse them through Friday.",
+          "criteria": [
+            {
+              "id": "practicality",
+              "text": "The schedule fits the preparation, coverage and storage constraints."
+            },
+            {
+              "id": "variety",
+              "text": "The ordering creates useful weekday variety from the same components."
+            },
+            {
+              "id": "clarity",
+              "text": "The five-day sequence and reuse decisions are easy to follow."
+            }
+          ],
+          "dimensions": [
+            {
+              "id": "d1",
+              "meaning": "Protein base"
+            },
+            {
+              "id": "d2",
+              "meaning": "Energy base"
+            },
+            {
+              "id": "d3",
+              "meaning": "Freshness and variety"
+            },
+            {
+              "id": "d4",
+              "meaning": "Deferred availability"
+            },
+            {
+              "id": "d5",
+              "meaning": "Preparation capacity"
+            }
+          ],
+          "facts": [
+            "The kitchen has a hob, oven, refrigerator and freezer.",
+            "Available staples include chickpeas, lentils, rice, pasta, tomatoes and seasonal vegetables.",
+            "The plan is for one adult from Monday through Friday."
+          ],
+          "objective": "Develop one practical weekday meal plan for one adult that uses the available ingredients, keeps active preparation within the stated limit, and arranges the selected meal components across the week.",
+          "order_semantics": "sequence in which the selected meal components are scheduled across the week",
+          "unknowns": [
+            "Exact seasonal vegetables and personal seasoning preferences are unspecified."
+          ],
+          "variants": [
+            {
+              "id": "v1",
+              "text": "transform thermally"
+            },
+            {
+              "id": "v10",
+              "text": "restore warmth"
+            },
+            {
+              "id": "v11",
+              "text": "fragment"
+            },
+            {
+              "id": "v12",
+              "text": "allocate"
+            },
+            {
+              "id": "v2",
+              "text": "concentrate"
+            },
+            {
+              "id": "v3",
+              "text": "preserve"
+            },
+            {
+              "id": "v4",
+              "text": "combine"
+            },
+            {
+              "id": "v5",
+              "text": "partition"
+            },
+            {
+              "id": "v6",
+              "text": "distribute"
+            },
+            {
+              "id": "v7",
+              "text": "reuse"
+            },
+            {
+              "id": "v8",
+              "text": "reactivate"
+            },
+            {
+              "id": "v9",
+              "text": "retain"
+            }
+          ]
+        }
+      },
+      "prompt_set": "default",
+      "request": {
+        "context": {
+          "assumptions": [
+            "The cook is willing to repeat a base component with different accompaniments."
+          ],
+          "composition_guidance": "Arrange the selected batch-cooked and quick fresh components into a safe five-day schedule, explaining reuse and storage without turning weekdays into gene dimensions.",
+          "constraints": [
+            {
+              "id": "time",
+              "text": "Use at most ninety minutes of active preparation across the week."
+            },
+            {
+              "id": "coverage",
+              "text": "Provide one complete evening meal for each weekday."
+            },
+            {
+              "id": "storage",
+              "text": "Refrigerated cooked food must be eaten within three days or frozen."
+            }
+          ],
+          "context_summary": "The plan covers five evening meals. The cook can batch-cook once and prepare one quick fresh component, then reuse them through Friday.",
+          "criteria": [
+            {
+              "id": "practicality",
+              "text": "The schedule fits the preparation, coverage and storage constraints."
+            },
+            {
+              "id": "variety",
+              "text": "The ordering creates useful weekday variety from the same components."
+            },
+            {
+              "id": "clarity",
+              "text": "The five-day sequence and reuse decisions are easy to follow."
+            }
+          ],
+          "facts": [
+            "The kitchen has a hob, oven, refrigerator and freezer.",
+            "Available staples include chickpeas, lentils, rice, pasta, tomatoes and seasonal vegetables.",
+            "The plan is for one adult from Monday through Friday."
+          ],
+          "order_semantics": "sequence in which the selected meal components are scheduled across the week",
+          "unknowns": [
+            "Exact seasonal vegetables and personal seasoning preferences are unspecified."
+          ]
+        },
+        "reference_documents": [],
+        "request": "Develop one practical weekday meal plan for one adult that uses the available ingredients, keeps active preparation within the stated limit, and arranges the selected meal components across the week.",
+        "work_area": {
+          "additional": [
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/agent_99"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/life_product_components"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/tutor"
+            }
+          ],
+          "directory": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/projects",
+          "primary": {
+            "device": "local",
+            "path": "/Users/siddhartha/Development/source/milestone_orchestrator_impl"
+          },
+          "project": "orchestrators",
+          "work_area": "implementation"
+        }
+      },
+      "staffing_session": "stf-bb78048b5f0b28577ecafac36c35865b",
+      "task_executor": "creativity"
+    },
+    "resolved_staffing": {},
+    "result": null
+  }
+}

@@ -1,0 +1,602 @@
+{
+  "candidates": {
+    "557effafba7942afa72fb60921d1fde8": {
+      "__order__": 116,
+      "d1": "v6",
+      "d2": "v1",
+      "d3": "v7",
+      "d4": "__omit__",
+      "d5": "__omit__"
+    },
+    "571721292f044da486a975bbafe79798": {
+      "__order__": 19,
+      "d1": "v6",
+      "d2": "v6",
+      "d3": "__omit__",
+      "d4": "v4",
+      "d5": "__omit__"
+    },
+    "5c116e7d99524239a6c7578955cc0870": {
+      "__order__": 116,
+      "d1": "v1",
+      "d2": "v4",
+      "d3": "__omit__",
+      "d4": "v11",
+      "d5": "v4"
+    },
+    "7d19d98a02db4956b03b1d2d8e88feb7": {
+      "__order__": 68,
+      "d1": "v6",
+      "d2": "v6",
+      "d3": "v9",
+      "d4": "__omit__",
+      "d5": "__omit__"
+    },
+    "9b532c443ab04f8e93149edfd0bdfc5b": {
+      "__order__": 79,
+      "d1": "v6",
+      "d2": "v6",
+      "d3": "v9",
+      "d4": "v1",
+      "d5": "__omit__"
+    },
+    "ad8e94f6ed214e5882416d8662664982": {
+      "__order__": 92,
+      "d1": "v1",
+      "d2": "__omit__",
+      "d3": "v9",
+      "d4": "__omit__",
+      "d5": "__omit__"
+    },
+    "e9f9d364becd4237a8b9f4fa5f6c1ac5": {
+      "__order__": 68,
+      "d1": "v6",
+      "d2": "v6",
+      "d3": "__omit__",
+      "d4": "v2",
+      "d5": "v5"
+    },
+    "fdc3146602904e32aa3ef4eb45af5963": {
+      "__order__": 111,
+      "d1": "__omit__",
+      "d2": "__omit__",
+      "d3": "v9",
+      "d4": "__omit__",
+      "d5": "v12"
+    }
+  },
+  "evaluation": {
+    "accepted_count": 8,
+    "batches": [
+      {
+        "batch": "7832a20598814cb1bac1989d7a8f3702",
+        "call_id": "7d55d344a55845b49f86bfab3df53fc2",
+        "evaluations": [
+          {
+            "assumptions": [
+              "Rice, pasta, chickpeas and lentils can be batch-cooked within ninety minutes of active preparation.",
+              "Some later portions are frozen promptly rather than refrigerated beyond three days.",
+              "Seasonal vegetables can be prepared as one adaptable accompaniment."
+            ],
+            "candidate_id": "557effafba7942afa72fb60921d1fde8",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Batch-cook rice and pasta, portion the chickpeas and lentils, and prepare one tomato-and-seasonal-vegetable component to repeat with different portions. Schedule rice with vegetables Monday, lentils with rice Tuesday, pasta with vegetables Wednesday, chickpeas with pasta Thursday, and a frozen or freshly reheated lentil-and-vegetable combination Friday. Freeze portions that will not be eaten within three days.",
+            "reason": "The ordered components directly support batch cooking, portioning and varied reuse across five complete weekday meals. The schedule can fit within ninety minutes of active preparation if quantities remain modest, and freezing later portions satisfies the three-day storage rule. Variety is moderate because the same bases and vegetable component recur, while the sequence is clear.",
+            "score": 0.86
+          },
+          {
+            "assumptions": [
+              "Rice or pasta is available and can be prepared within the active-time limit.",
+              "Stored vegetables are divided safely and either eaten within three days or frozen.",
+              "The cooked legumes are portioned immediately after cooking."
+            ],
+            "candidate_id": "ad8e94f6ed214e5882416d8662664982",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Cook and portion chickpeas and lentils first, then store the tomato-and-seasonal-vegetable component in meal-sized portions. Add rice or pasta as a supporting fresh component for each evening: chickpea-and-rice Monday, lentil-and-vegetable pasta Tuesday, chickpea-and-vegetable rice Wednesday, lentil pasta Thursday, and a frozen portion reheated with the remaining accompaniment Friday. Freeze any cooked component that would otherwise exceed three refrigerated days.",
+            "reason": "The exact ordered seed gives a useful legume base followed by stored vegetable accompaniment, and the proposed rice or pasta completes five meals. It can satisfy coverage and storage, but the need to prepare a separate starch component is less explicitly supported by the seed and may make the ninety-minute limit tighter. Variety is adequate but relies heavily on changing starch pairings.",
+            "score": 0.72
+          },
+          {
+            "assumptions": [
+              "Separate portions refer to meal-sized storage portions rather than extra cooking steps.",
+              "Roasted vegetables freeze and reheat acceptably.",
+              "All batch cooking, including rice or pasta and legumes, stays within ninety minutes of active preparation."
+            ],
+            "candidate_id": "e9f9d364becd4237a8b9f4fa5f6c1ac5",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Keep the adult cook's portions separate, portion rice or pasta and chickpeas or lentils, and roast a vegetable component intended for freezer storage. Schedule rice with roasted vegetables Monday, lentils with vegetables Tuesday, pasta with chickpeas Wednesday, a reheated frozen rice-and-legume meal Thursday, and a second frozen pasta-and-vegetable combination Friday. Use separate portions to control the one-adult serving size.",
+            "reason": "The ordered seed supports portion control, a roasted accompaniment and freezer use, which makes five-day coverage and storage manageable. However, separating the adult cook is not a meal component and adds little practical value; the proposal also requires several supporting combinations. With disciplined batch preparation it can fit the time limit, but its variety is only moderate and the causal role of the first pair is weak.",
+            "score": 0.63
+          },
+          {
+            "assumptions": [
+              "Chickpeas or lentils and rice or pasta are batch-cooked as supporting components.",
+              "Reserved portions are frozen when they will not be eaten within three days.",
+              "The stored vegetable preparation remains suitable for the proposed reheated meals.",
+              "The complete batch preparation fits within ninety minutes of active preparation."
+            ],
+            "candidate_id": "fdc3146602904e32aa3ef4eb45af5963",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Reserve meal-sized portions for the adult cook and store the tomato-and-seasonal-vegetable component. Complete the meals with batch-cooked legumes plus rice or pasta: vegetable-and-chickpea rice Monday, vegetable-and-lentil pasta Tuesday, frozen vegetable-and-rice Wednesday, vegetable-and-chickpea pasta Thursday, and a final frozen lentil meal Friday.",
+            "reason": "The seed can be expanded into a five-day plan through reserved portions, stored vegetables and proposed staple-legume bases. Freezing can satisfy storage, and the schedule is understandable, but the candidate supplies too little of the meal structure itself: most substantive components must be invented. The adult-reservation pair adds portion handling rather than variety, so practicality depends on several unestablished preparation assumptions.",
+            "score": 0.48
+          }
+        ],
+        "generation": 1,
+        "genomes": {
+          "557effafba7942afa72fb60921d1fde8": {
+            "__order__": 116,
+            "d1": "v6",
+            "d2": "v1",
+            "d3": "v7",
+            "d4": "__omit__",
+            "d5": "__omit__"
+          },
+          "ad8e94f6ed214e5882416d8662664982": {
+            "__order__": 92,
+            "d1": "v1",
+            "d2": "__omit__",
+            "d3": "v9",
+            "d4": "__omit__",
+            "d5": "__omit__"
+          },
+          "e9f9d364becd4237a8b9f4fa5f6c1ac5": {
+            "__order__": 68,
+            "d1": "v6",
+            "d2": "v6",
+            "d3": "__omit__",
+            "d4": "v2",
+            "d5": "v5"
+          },
+          "fdc3146602904e32aa3ef4eb45af5963": {
+            "__order__": 111,
+            "d1": "__omit__",
+            "d2": "__omit__",
+            "d3": "v9",
+            "d4": "__omit__",
+            "d5": "v12"
+          }
+        },
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/52db0bfe-537e-4b48-ae5d-e8f5912d981b/prompts/7832a20598814cb1bac1989d7a8f3702-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "default",
+          "model": "gpt-5.6-luna"
+        },
+        "regime_revision": 1
+      },
+      {
+        "batch": "2bcc1e6e34de4337a3dd1fecd3492f49",
+        "call_id": "0da0d04bd0a742c19fcbc4e1ff9011eb",
+        "evaluations": [
+          {
+            "assumptions": [
+              "A seasonal-vegetable component can be prepared quickly and reused safely across the week.",
+              "The batch quantities and cooking method can be completed within ninety minutes of active work.",
+              "Portions for Thursday and Friday are frozen promptly after cooling."
+            ],
+            "candidate_id": "571721292f044da486a975bbafe79798",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Batch-cook chickpeas and lentils and rice or pasta, portion them, freeze the portions intended for Thursday and Friday, and prepare one quick fresh seasonal-vegetable component for serving Monday through Friday. Schedule Monday chickpeas with rice and vegetables, Tuesday lentils with pasta and vegetables, Wednesday chickpeas with pasta, Thursday thawed lentils with rice, and Friday thawed chickpeas with the remaining grain and vegetables.",
+            "reason": "The ordered meanings support portioning the legumes and starches and using the freezer to satisfy the three-day storage limit. The proposed batch and one quick fresh component can fit within ninety minutes of active preparation if the batch is kept simple. The sequence provides five complete meals and meaningful variation through different legume-starch pairings and accompaniments.",
+            "score": 0.84
+          },
+          {
+            "assumptions": [
+              "The cook can complete the legume, starch and chopped-vegetable batch within ninety minutes of active preparation.",
+              "The final Friday legume choice is portioned in advance.",
+              "Cooked portions for later days are frozen promptly."
+            ],
+            "candidate_id": "5c116e7d99524239a6c7578955cc0870",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "The adult cook prepares a simple batch of chickpeas and lentils, mixes or portions rice and pasta as the accompanying starches, chops seasonal vegetables as the quick fresh component, and uses the freezer for later portions. Schedule Monday chickpeas with rice and vegetables, Tuesday lentils with pasta and vegetables, Wednesday chickpeas with pasta, Thursday thawed lentils with rice, and Friday thawed lentils or chickpeas with the remaining starch and vegetables.",
+            "reason": "The ordered seed covers the cook, freezer, starches and legumes, allowing a practical five-day plan with frozen later portions and a quick fresh vegetable component. It meets coverage and storage constraints and offers some variety, although mixing rice and pasta and the unspecified final legume portion make the proposal less precise. The active-preparation limit is plausible but depends on a deliberately simple batch.",
+            "score": 0.78
+          },
+          {
+            "assumptions": [
+              "The tomato-and-vegetable component is suitable for refrigerated reuse or is refreshed as needed.",
+              "Later cooked portions are frozen promptly rather than kept refrigerated beyond three days.",
+              "The batch cooking and quick fresh preparation together require no more than ninety minutes of active work."
+            ],
+            "candidate_id": "7d19d98a02db4956b03b1d2d8e88feb7",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Store a quick fresh tomato-and-seasonal-vegetable component, portion batch-cooked rice and pasta, and portion batch-cooked chickpeas and lentils. Schedule Monday chickpeas with rice and vegetables, Tuesday lentils with pasta and vegetables, Wednesday chickpeas with pasta and vegetables, Thursday lentils with rice using a frozen portion, and Friday chickpeas with the remaining starch and vegetables using another frozen portion.",
+            "reason": "The sequence preserves the supplied order of vegetable storage, starch portioning and legume portioning while proposing freezing for portions beyond three days. It provides five complete meals and useful pairing variety. The plan is practical within the active-preparation limit if the stored vegetable component is genuinely quick, but safe freezing is supporting work not explicit in the seed and must be carried out correctly.",
+            "score": 0.74
+          },
+          {
+            "assumptions": [
+              "The tomato-and-vegetable component remains safe for the planned storage period or is prepared in a quick fresh batch.",
+              "The batch size and cooking method fit within ninety minutes of active preparation.",
+              "Frozen portions are cooled and frozen promptly, then thawed safely before use."
+            ],
+            "candidate_id": "9b532c443ab04f8e93149edfd0bdfc5b",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Cook and freeze the main batch, portion rice and pasta, portion chickpeas and lentils, and store a tomato-and-seasonal-vegetable component. Schedule Monday chickpeas with rice and vegetables, Tuesday lentils with pasta and vegetables, Wednesday chickpeas with pasta and vegetables, Thursday thawed lentils with rice, and Friday thawed chickpeas with the remaining starch and vegetables.",
+            "reason": "This ordered seed directly supports cooking and freezing, portion control, legume-starch variation and a stored vegetable accompaniment. The proposed schedule covers all weekdays and keeps refrigerated cooked food within three days by freezing later portions. It is clear and highly practical, subject to a simple batch being achievable within ninety minutes of active preparation.",
+            "score": 0.9
+          }
+        ],
+        "generation": 2,
+        "genomes": {
+          "571721292f044da486a975bbafe79798": {
+            "__order__": 19,
+            "d1": "v6",
+            "d2": "v6",
+            "d3": "__omit__",
+            "d4": "v4",
+            "d5": "__omit__"
+          },
+          "5c116e7d99524239a6c7578955cc0870": {
+            "__order__": 116,
+            "d1": "v1",
+            "d2": "v4",
+            "d3": "__omit__",
+            "d4": "v11",
+            "d5": "v4"
+          },
+          "7d19d98a02db4956b03b1d2d8e88feb7": {
+            "__order__": 68,
+            "d1": "v6",
+            "d2": "v6",
+            "d3": "v9",
+            "d4": "__omit__",
+            "d5": "__omit__"
+          },
+          "9b532c443ab04f8e93149edfd0bdfc5b": {
+            "__order__": 79,
+            "d1": "v6",
+            "d2": "v6",
+            "d3": "v9",
+            "d4": "v1",
+            "d5": "__omit__"
+          }
+        },
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/52db0bfe-537e-4b48-ae5d-e8f5912d981b/prompts/2bcc1e6e34de4337a3dd1fecd3492f49-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "default",
+          "model": "gpt-5.6-luna"
+        },
+        "regime_revision": 1
+      }
+    ],
+    "regime": {
+      "agent": "codex",
+      "effort": "low",
+      "material": "default",
+      "model": "gpt-5.6-luna"
+    },
+    "regime_revision": 1
+  },
+  "generation": 2,
+  "job": "complete",
+  "native_result": {
+    "evaluated_candidates": 8,
+    "expansion_interventions": 0,
+    "generations_completed": 2,
+    "outcome": "proposals",
+    "proposals": [
+      {
+        "assumptions": [
+          "The tomato-and-vegetable component remains safe for the planned storage period or is prepared in a quick fresh batch.",
+          "The batch size and cooking method fit within ninety minutes of active preparation.",
+          "Frozen portions are cooled and frozen promptly, then thawed safely before use."
+        ],
+        "candidate_id": "9b532c443ab04f8e93149edfd0bdfc5b",
+        "components": [
+          {
+            "dimension": "The freezer",
+            "dimension_id": "d4",
+            "variant": "cook",
+            "variant_id": "v1"
+          },
+          {
+            "dimension": "Rice and pasta",
+            "dimension_id": "d2",
+            "variant": "portion",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "Chickpeas and lentils",
+            "dimension_id": "d1",
+            "variant": "portion",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "Tomatoes and seasonal vegetables",
+            "dimension_id": "d3",
+            "variant": "store",
+            "variant_id": "v9"
+          }
+        ],
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Cook and freeze the main batch, portion rice and pasta, portion chickpeas and lentils, and store a tomato-and-seasonal-vegetable component. Schedule Monday chickpeas with rice and vegetables, Tuesday lentils with pasta and vegetables, Wednesday chickpeas with pasta and vegetables, Thursday thawed lentils with rice, and Friday thawed chickpeas with the remaining starch and vegetables.",
+        "reason": "This ordered seed directly supports cooking and freezing, portion control, legume-starch variation and a stored vegetable accompaniment. The proposed schedule covers all weekdays and keeps refrigerated cooked food within three days by freezing later portions. It is clear and highly practical, subject to a simple batch being achievable within ninety minutes of active preparation.",
+        "score": 0.9
+      },
+      {
+        "assumptions": [
+          "Rice, pasta, chickpeas and lentils can be batch-cooked within ninety minutes of active preparation.",
+          "Some later portions are frozen promptly rather than refrigerated beyond three days.",
+          "Seasonal vegetables can be prepared as one adaptable accompaniment."
+        ],
+        "candidate_id": "557effafba7942afa72fb60921d1fde8",
+        "components": [
+          {
+            "dimension": "Rice and pasta",
+            "dimension_id": "d2",
+            "variant": "cook",
+            "variant_id": "v1"
+          },
+          {
+            "dimension": "Chickpeas and lentils",
+            "dimension_id": "d1",
+            "variant": "portion",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "Tomatoes and seasonal vegetables",
+            "dimension_id": "d3",
+            "variant": "repeat",
+            "variant_id": "v7"
+          }
+        ],
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Batch-cook rice and pasta, portion the chickpeas and lentils, and prepare one tomato-and-seasonal-vegetable component to repeat with different portions. Schedule rice with vegetables Monday, lentils with rice Tuesday, pasta with vegetables Wednesday, chickpeas with pasta Thursday, and a frozen or freshly reheated lentil-and-vegetable combination Friday. Freeze portions that will not be eaten within three days.",
+        "reason": "The ordered components directly support batch cooking, portioning and varied reuse across five complete weekday meals. The schedule can fit within ninety minutes of active preparation if quantities remain modest, and freezing later portions satisfies the three-day storage rule. Variety is moderate because the same bases and vegetable component recur, while the sequence is clear.",
+        "score": 0.86
+      },
+      {
+        "assumptions": [
+          "A seasonal-vegetable component can be prepared quickly and reused safely across the week.",
+          "The batch quantities and cooking method can be completed within ninety minutes of active work.",
+          "Portions for Thursday and Friday are frozen promptly after cooling."
+        ],
+        "candidate_id": "571721292f044da486a975bbafe79798",
+        "components": [
+          {
+            "dimension": "Chickpeas and lentils",
+            "dimension_id": "d1",
+            "variant": "portion",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "Rice and pasta",
+            "dimension_id": "d2",
+            "variant": "portion",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "The freezer",
+            "dimension_id": "d4",
+            "variant": "mix",
+            "variant_id": "v4"
+          }
+        ],
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Batch-cook chickpeas and lentils and rice or pasta, portion them, freeze the portions intended for Thursday and Friday, and prepare one quick fresh seasonal-vegetable component for serving Monday through Friday. Schedule Monday chickpeas with rice and vegetables, Tuesday lentils with pasta and vegetables, Wednesday chickpeas with pasta, Thursday thawed lentils with rice, and Friday thawed chickpeas with the remaining grain and vegetables.",
+        "reason": "The ordered meanings support portioning the legumes and starches and using the freezer to satisfy the three-day storage limit. The proposed batch and one quick fresh component can fit within ninety minutes of active preparation if the batch is kept simple. The sequence provides five complete meals and meaningful variation through different legume-starch pairings and accompaniments.",
+        "score": 0.84
+      }
+    ],
+    "stop_reason": "generation_limit"
+  },
+  "progress": {
+    "archive": [
+      [
+        {
+          "__order__": 79,
+          "d1": "v6",
+          "d2": "v6",
+          "d3": "v9",
+          "d4": "v1",
+          "d5": "__omit__"
+        },
+        {
+          "assumptions": [
+            "The tomato-and-vegetable component remains safe for the planned storage period or is prepared in a quick fresh batch.",
+            "The batch size and cooking method fit within ninety minutes of active preparation.",
+            "Frozen portions are cooled and frozen promptly, then thawed safely before use."
+          ],
+          "candidate_id": "9b532c443ab04f8e93149edfd0bdfc5b",
+          "constraint_valid": true,
+          "constraint_violations": [],
+          "proposal": "Cook and freeze the main batch, portion rice and pasta, portion chickpeas and lentils, and store a tomato-and-seasonal-vegetable component. Schedule Monday chickpeas with rice and vegetables, Tuesday lentils with pasta and vegetables, Wednesday chickpeas with pasta and vegetables, Thursday thawed lentils with rice, and Friday thawed chickpeas with the remaining starch and vegetables.",
+          "reason": "This ordered seed directly supports cooking and freezing, portion control, legume-starch variation and a stored vegetable accompaniment. The proposed schedule covers all weekdays and keeps refrigerated cooked food within three days by freezing later portions. It is clear and highly practical, subject to a simple batch being achievable within ninety minutes of active preparation.",
+          "score": 0.9
+        }
+      ],
+      [
+        {
+          "__order__": 116,
+          "d1": "v6",
+          "d2": "v1",
+          "d3": "v7",
+          "d4": "__omit__",
+          "d5": "__omit__"
+        },
+        {
+          "assumptions": [
+            "Rice, pasta, chickpeas and lentils can be batch-cooked within ninety minutes of active preparation.",
+            "Some later portions are frozen promptly rather than refrigerated beyond three days.",
+            "Seasonal vegetables can be prepared as one adaptable accompaniment."
+          ],
+          "candidate_id": "557effafba7942afa72fb60921d1fde8",
+          "constraint_valid": true,
+          "constraint_violations": [],
+          "proposal": "Batch-cook rice and pasta, portion the chickpeas and lentils, and prepare one tomato-and-seasonal-vegetable component to repeat with different portions. Schedule rice with vegetables Monday, lentils with rice Tuesday, pasta with vegetables Wednesday, chickpeas with pasta Thursday, and a frozen or freshly reheated lentil-and-vegetable combination Friday. Freeze portions that will not be eaten within three days.",
+          "reason": "The ordered components directly support batch cooking, portioning and varied reuse across five complete weekday meals. The schedule can fit within ninety minutes of active preparation if quantities remain modest, and freezing later portions satisfies the three-day storage rule. Variety is moderate because the same bases and vegetable component recur, while the sequence is clear.",
+          "score": 0.86
+        }
+      ],
+      [
+        {
+          "__order__": 116,
+          "d1": "v1",
+          "d2": "v4",
+          "d3": "__omit__",
+          "d4": "v11",
+          "d5": "v4"
+        },
+        {
+          "assumptions": [
+            "The cook can complete the legume, starch and chopped-vegetable batch within ninety minutes of active preparation.",
+            "The final Friday legume choice is portioned in advance.",
+            "Cooked portions for later days are frozen promptly."
+          ],
+          "candidate_id": "5c116e7d99524239a6c7578955cc0870",
+          "constraint_valid": true,
+          "constraint_violations": [],
+          "proposal": "The adult cook prepares a simple batch of chickpeas and lentils, mixes or portions rice and pasta as the accompanying starches, chops seasonal vegetables as the quick fresh component, and uses the freezer for later portions. Schedule Monday chickpeas with rice and vegetables, Tuesday lentils with pasta and vegetables, Wednesday chickpeas with pasta, Thursday thawed lentils with rice, and Friday thawed lentils or chickpeas with the remaining starch and vegetables.",
+          "reason": "The ordered seed covers the cook, freezer, starches and legumes, allowing a practical five-day plan with frozen later portions and a quick fresh vegetable component. It meets coverage and storage constraints and offers some variety, although mixing rice and pasta and the unspecified final legume portion make the proposal less precise. The active-preparation limit is plausible but depends on a deliberately simple batch.",
+          "score": 0.78
+        }
+      ]
+    ],
+    "best_score": 0.9,
+    "consecutive_expansions": 0,
+    "evaluated_candidates": 8,
+    "expansion_interventions": 0,
+    "expansions": [],
+    "generations_completed": 2,
+    "pending": null,
+    "progress_made": false,
+    "reference_revision": 1,
+    "reference_score": null,
+    "stagnant_generations": 0,
+    "stop_reason": "generation_limit",
+    "window_complete": false
+  },
+  "search_material": {
+    "assumptions": [
+      "The cook is willing to repeat a base component with different accompaniments."
+    ],
+    "composition_guidance": "Arrange the selected batch-cooked and quick fresh components into a safe five-day schedule, explaining reuse and storage without turning weekdays into gene dimensions.",
+    "constraints": [
+      {
+        "id": "time",
+        "text": "Use at most ninety minutes of active preparation across the week."
+      },
+      {
+        "id": "coverage",
+        "text": "Provide one complete evening meal for each weekday."
+      },
+      {
+        "id": "storage",
+        "text": "Refrigerated cooked food must be eaten within three days or frozen."
+      }
+    ],
+    "context_summary": "The plan covers five evening meals. The cook can batch-cook once and prepare one quick fresh component, then reuse them through Friday.",
+    "criteria": [
+      {
+        "id": "practicality",
+        "text": "The schedule fits the preparation, coverage and storage constraints."
+      },
+      {
+        "id": "variety",
+        "text": "The ordering creates useful weekday variety from the same components."
+      },
+      {
+        "id": "clarity",
+        "text": "The five-day sequence and reuse decisions are easy to follow."
+      }
+    ],
+    "dimensions": [
+      {
+        "id": "d1",
+        "meaning": "Chickpeas and lentils"
+      },
+      {
+        "id": "d2",
+        "meaning": "Rice and pasta"
+      },
+      {
+        "id": "d3",
+        "meaning": "Tomatoes and seasonal vegetables"
+      },
+      {
+        "id": "d4",
+        "meaning": "The freezer"
+      },
+      {
+        "id": "d5",
+        "meaning": "The adult cook"
+      }
+    ],
+    "facts": [
+      "The kitchen has a hob, oven, refrigerator and freezer.",
+      "Available staples include chickpeas, lentils, rice, pasta, tomatoes and seasonal vegetables.",
+      "The plan is for one adult from Monday through Friday."
+    ],
+    "objective": "Develop one practical weekday meal plan for one adult that uses the available ingredients, keeps active preparation within the stated limit, and arranges the selected meal components across the week.",
+    "order_semantics": "sequence in which the selected meal components are scheduled across the week",
+    "unknowns": [
+      "Exact seasonal vegetables and personal seasoning preferences are unspecified."
+    ],
+    "variants": [
+      {
+        "id": "v1",
+        "text": "cook"
+      },
+      {
+        "id": "v10",
+        "text": "reheat"
+      },
+      {
+        "id": "v11",
+        "text": "chop"
+      },
+      {
+        "id": "v12",
+        "text": "reserve"
+      },
+      {
+        "id": "v2",
+        "text": "roast"
+      },
+      {
+        "id": "v3",
+        "text": "freeze"
+      },
+      {
+        "id": "v4",
+        "text": "mix"
+      },
+      {
+        "id": "v5",
+        "text": "separate"
+      },
+      {
+        "id": "v6",
+        "text": "portion"
+      },
+      {
+        "id": "v7",
+        "text": "repeat"
+      },
+      {
+        "id": "v8",
+        "text": "thaw"
+      },
+      {
+        "id": "v9",
+        "text": "store"
+      }
+    ]
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "status": "awaiting_operator",
+  "respondent": "operator",
+  "assistant_inspection": "../evidence.md#assistant-inspection-not-operator-judgment",
+  "selection": "The highest model-scored proposal in each run, selected for a bounded human excerpt assessment after capture; no selection is evidence of usefulness.",
+  "judgments": [
+    {
+      "problem": "literature",
+      "request": "El skeleton exige juicio humano sobre sorpresas útiles. En el caso literario (hija y padre remiendan redes; solo ella recuerda el minuto que desaparece), ¿cuál de estas propuestas conservarías por aportar algo útil o inesperado, y por qué? Literal: «Recuerda el minuto perdido mientras cambia con su padre la red que aún gotea sal». Abstracta: «Cada tarde, oculto el minuto ausente, sigo remendando con mi padre y escucho cómo el mar calla antes de que él lo note». Son las propuestas mejor puntuadas por el modelo en cada ejecución; tu valoración puede ser ninguna. Registraré tu respuesta como juicio humano y mantendré aparte mi análisis.",
+      "response": null,
+      "candidate_ids": {
+        "literal": "a88d2d058d2945e880503c61dab263ed",
+        "abstract": "116abc3bd8634e52815327d0fe17d0aa"
+      },
+      "useful_surprises": null
+    },
+    {
+      "problem": "strategy",
+      "request": "Para el juicio humano del caso estratégico: un taller dispone de seis horas y 120 €, y solo puede contactar a sus 40 clientes autorizados. La mejor propuesta literal ofrece reparaciones con cita, una hora para preparar/contactar, cinco para atender y continuidad si consigue tres reservas. La abstracta propone diagnósticos de pago y citas agrupadas, pero deja sin concretar precio, cupo y umbral de continuidad. ¿Alguna te aporta una sorpresa útil que conservarías —literal, abstracta, ambas o ninguna— y por qué? Las propuestas completas están en implementation/milestones/creativity-v2/evidence/strategy-literal-task.json y strategy-abstract-task.json.",
+      "response": null,
+      "candidate_ids": {
+        "literal": "52a33d0f90214422857f0e81db4076d8",
+        "abstract": "5fe14eae567f4849a71fa4f1c472cf48"
+      },
+      "useful_surprises": null
+    },
+    {
+      "problem": "planning",
+      "request": "Último juicio humano: para cinco cenas y como máximo 90 minutos de preparación, la mejor propuesta literal organiza garbanzos/lentejas con arroz/pasta y verduras por día, congelando las raciones finales; nace de una semilla «congelador → cocinar», que el modelo convierte en cocinar y congelar. La abstracta propone repartir bases de proteína y energía en cinco raciones, reutilizar verduras y congelar jueves/viernes, sin detallar cada cena. ¿Conservarías alguna por aportar una sorpresa útil —literal, abstracta, ambas o ninguna— y por qué? Los textos completos están en implementation/milestones/creativity-v2/evidence/planning-literal-task.json y planning-abstract-task.json. No hace falta una valoración positiva para completar el experimento.",
+      "response": null,
+      "candidate_ids": {
+        "literal": "9b532c443ab04f8e93149edfd0bdfc5b",
+        "abstract": "2ce5a6553aeb4669ae7664cbf2d272ae"
+      },
+      "useful_surprises": null
+    }
+  ]
+}

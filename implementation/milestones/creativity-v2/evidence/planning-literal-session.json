@@ -1,0 +1,13 @@
+{
+  "id": "stf-c850382b259146cc5590b3fe2411a64d",
+  "work_area": {
+    "project": "orchestrators",
+    "work_area": "implementation"
+  },
+  "families": [
+    "codex"
+  ],
+  "document": "creativity-v2-comparison",
+  "rigor": "medium",
+  "material": "default"
+}

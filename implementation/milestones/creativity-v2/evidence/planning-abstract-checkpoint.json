@@ -1,0 +1,595 @@
+{
+  "candidates": {
+    "2b2a80b60d2541b7990114038c50e53c": {
+      "__order__": 111,
+      "d1": "__omit__",
+      "d2": "__omit__",
+      "d3": "v9",
+      "d4": "__omit__",
+      "d5": "v12"
+    },
+    "2ce5a6553aeb4669ae7664cbf2d272ae": {
+      "__order__": 116,
+      "d1": "v6",
+      "d2": "v1",
+      "d3": "v7",
+      "d4": "__omit__",
+      "d5": "__omit__"
+    },
+    "346939e42b60407dbc60d97837fe6c1a": {
+      "__order__": 116,
+      "d1": "__omit__",
+      "d2": "v1",
+      "d3": "v6",
+      "d4": "v11",
+      "d5": "__omit__"
+    },
+    "34afc3ff964745879531ff33b48e4ebd": {
+      "__order__": 111,
+      "d1": "__omit__",
+      "d2": "__omit__",
+      "d3": "__omit__",
+      "d4": "v2",
+      "d5": "v5"
+    },
+    "3af956fac32848c48228426c4db1b2a4": {
+      "__order__": 80,
+      "d1": "__omit__",
+      "d2": "__omit__",
+      "d3": "__omit__",
+      "d4": "__omit__",
+      "d5": "v12"
+    },
+    "44e02440a2834326abf5ab3aa27b6e40": {
+      "__order__": 68,
+      "d1": "v6",
+      "d2": "v6",
+      "d3": "__omit__",
+      "d4": "v2",
+      "d5": "v5"
+    },
+    "9767f5d2ff10494aab8d43b4d43205c6": {
+      "__order__": 92,
+      "d1": "v1",
+      "d2": "__omit__",
+      "d3": "v9",
+      "d4": "__omit__",
+      "d5": "__omit__"
+    },
+    "e4ea40c7619346b8baf6e90f0cbcb501": {
+      "__order__": 19,
+      "d1": "v6",
+      "d2": "v6",
+      "d3": "__omit__",
+      "d4": "v4",
+      "d5": "v12"
+    }
+  },
+  "evaluation": {
+    "accepted_count": 8,
+    "batches": [
+      {
+        "batch": "4987f0d748184729aab66afb5ee64f63",
+        "call_id": "38aa35654d9c4152b209b19d2bb78141",
+        "evaluations": [
+          {
+            "assumptions": [
+              "A batch-cooked protein base and staple accompaniment can be prepared within ninety active minutes.",
+              "Later-week batch portions are frozen promptly.",
+              "Seasonal vegetables can be prepared quickly and varied across the week."
+            ],
+            "candidate_id": "2b2a80b60d2541b7990114038c50e53c",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Allocate the preparation window to batch-cooking a protein base and staple accompaniment, then retain a quick fresh seasonal-vegetable component for each weekday. Schedule refrigerated portions early in the week and freeze later portions so the same base remains safe through Friday.",
+            "reason": "The allocation and retention sequence can fit within ninety minutes and cover five complete meals, provided later portions are frozen. It offers useful freshness variation, but the candidate leaves the exact protein, energy accompaniment and weekday schedule implicit, so clarity and variety depend on those supporting choices.",
+            "score": 0.71
+          },
+          {
+            "assumptions": [
+              "The selected rice, pasta, chickpea or lentil preparation can be completed within ninety active minutes.",
+              "Thursday and Friday portions are frozen promptly and safely reheated.",
+              "Different combinations of the same protein, energy and fresh component provide acceptable variety."
+            ],
+            "candidate_id": "2ce5a6553aeb4669ae7664cbf2d272ae",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Thermally transform an energy base such as rice or pasta during the batch cook, distribute a chickpea or lentil protein base across five portions, and reuse a quick fresh vegetable component with different combinations. Eat refrigerated portions Monday through Wednesday and freeze the remaining portions for Thursday and Friday.",
+            "reason": "This ordered proposal directly supports a practical five-evening plan: batch cooking supplies the energy and protein, while the reused fresh component creates weekday variation. The refrigeration and freezing schedule satisfies the three-day storage limit, and the plan is clear enough to execute within the stated preparation ceiling if the batch quantities remain modest.",
+            "score": 0.88
+          },
+          {
+            "assumptions": [
+              "Partitioning occurs during the single batch-cooking session without exceeding ninety active minutes.",
+              "Deferred portions are frozen promptly rather than held refrigerated beyond three days.",
+              "Seasonal vegetables can provide enough accompaniment variation."
+            ],
+            "candidate_id": "44e02440a2834326abf5ab3aa27b6e40",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Partition the batch-cooking work into manageable portions, distribute energy and protein across the five meals, and concentrate deferred availability by freezing the portions intended for Thursday and Friday. Serve the refrigerated portions earlier in the week, with seasonal vegetables as the fresh accompaniment.",
+            "reason": "Partitioning and distribution make five complete meals feasible within the preparation limit, while concentrating deferred portions in the freezer addresses storage safely. The proposal is practical but less explicit about how the components create variety, and the repeated distribution steps risk producing nearly identical meals unless the seasonal accompaniments are deliberately varied.",
+            "score": 0.77
+          },
+          {
+            "assumptions": [
+              "A staple energy component can be prepared or portioned within the same ninety-minute active-preparation limit.",
+              "Later portions are frozen promptly.",
+              "The fresh component remains suitable for reuse through Friday or is refreshed quickly as needed."
+            ],
+            "candidate_id": "9767f5d2ff10494aab8d43b4d43205c6",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Thermally transform a chickpea or lentil protein base during the batch cook and retain a quick fresh seasonal-vegetable component for weekday use. Pair these with rice, pasta or another available staple, using refrigerated meals early in the week and frozen portions later in the week.",
+            "reason": "The transformed protein and retained fresh component can support five complete meals, with staples supplying the missing energy role and freezing protecting later portions. However, the exact schedule, portion partitioning and reuse pattern are underspecified, so the proposal is less clear and offers less assured variety than candidates that explicitly distribute components.",
+            "score": 0.7
+          }
+        ],
+        "generation": 1,
+        "genomes": {
+          "2b2a80b60d2541b7990114038c50e53c": {
+            "__order__": 111,
+            "d1": "__omit__",
+            "d2": "__omit__",
+            "d3": "v9",
+            "d4": "__omit__",
+            "d5": "v12"
+          },
+          "2ce5a6553aeb4669ae7664cbf2d272ae": {
+            "__order__": 116,
+            "d1": "v6",
+            "d2": "v1",
+            "d3": "v7",
+            "d4": "__omit__",
+            "d5": "__omit__"
+          },
+          "44e02440a2834326abf5ab3aa27b6e40": {
+            "__order__": 68,
+            "d1": "v6",
+            "d2": "v6",
+            "d3": "__omit__",
+            "d4": "v2",
+            "d5": "v5"
+          },
+          "9767f5d2ff10494aab8d43b4d43205c6": {
+            "__order__": 92,
+            "d1": "v1",
+            "d2": "__omit__",
+            "d3": "v9",
+            "d4": "__omit__",
+            "d5": "__omit__"
+          }
+        },
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/a135b80e-bf5f-4f76-8872-f051ecf1d91e/prompts/4987f0d748184729aab66afb5ee64f63-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "default",
+          "model": "gpt-5.6-luna"
+        },
+        "regime_revision": 1
+      },
+      {
+        "batch": "7664dc6cf5324bd2bee358dd6f9d8448",
+        "call_id": "e71a7296c892406881253fbb676d6d04",
+        "evaluations": [
+          {
+            "assumptions": [
+              "The fragmented ingredients can be combined into complete meals.",
+              "At least some cooked portions will be frozen rather than refrigerated beyond three days.",
+              "Seasonal vegetables can provide the quick fresh component."
+            ],
+            "candidate_id": "346939e42b60407dbc60d97837fe6c1a",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Treat availability as fragmented across chickpeas, lentils, rice, pasta, tomatoes and seasonal vegetables; thermally transform selected staples in one batch, then distribute the resulting meals and a quick fresh vegetable component from Monday through Friday. Freeze portions beyond three days and thaw them safely before use.",
+            "reason": "The ordered sequence supports a workable batch-cooking plan with varied weekday assembly, complete coverage, and compliant storage. Its weakness is that fragmentation is underspecified, so the exact meals and variety depend on selecting suitable combinations from the available ingredients.",
+            "score": 0.78
+          },
+          {
+            "assumptions": [
+              "The batch can be portioned into five complete evening meals.",
+              "Frozen portions can be thawed in time for Thursday and Friday.",
+              "Different available accompaniments are sufficient to create meaningful variety."
+            ],
+            "candidate_id": "34afc3ff964745879531ff33b48e4ebd",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Partition the ninety-minute preparation capacity into one batch-cooking session and a small fresh-component session, then concentrate the deferred availability into clearly portioned meals: refrigerate portions for the first three days and freeze the remainder for Thursday and Friday. Reuse the base with different rice, pasta, tomato or vegetable accompaniments.",
+            "reason": "The ordered sequence directly manages preparation capacity and delayed use, yielding a practical five-evening schedule with storage compliance and moderate variety. It is less explicit about the actual weekday order and relies on proposed portioning and accompaniments to make the meals complete.",
+            "score": 0.82
+          },
+          {
+            "assumptions": [
+              "The cook can complete the batch and fresh component within ninety active minutes.",
+              "Five portions can be made from the available staples.",
+              "Later-week portions are frozen promptly."
+            ],
+            "candidate_id": "3af956fac32848c48228426c4db1b2a4",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Allocate the ninety-minute weekly capacity to one batch-cooked base, five portions, and one quick fresh component prepared for use across the week. Schedule complete meals Monday through Friday, refrigerating the first three days' portions and freezing later portions, while varying the base with available rice, pasta, tomatoes, chickpeas, lentils and seasonal vegetables.",
+            "reason": "The allocation principle can support all hard constraints and a clear five-day plan, but the seed provides no explicit storage or sequencing mechanism. Those necessary details must be proposed, and the resulting variety is only moderate unless the accompaniments are deliberately varied.",
+            "score": 0.74
+          },
+          {
+            "assumptions": [
+              "Protein and energy bases can be batch-cooked within ninety active minutes.",
+              "Chickpeas or lentils provide the planned protein base.",
+              "The available seasonal vegetables can serve as the quick fresh component."
+            ],
+            "candidate_id": "e4ea40c7619346b8baf6e90f0cbcb501",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Distribute the protein base across five portions, allocate the preparation capacity between batch cooking and one quick fresh component, distribute energy bases such as rice and pasta across the weekdays, and combine them with tomatoes and seasonal vegetables. Refrigerate Monday through Wednesday meals and freeze Thursday and Friday meals, using different combinations to create variety.",
+            "reason": "The ordered sequence gives the strongest complete structure: protein coverage, bounded preparation, varied energy bases, and final meal assembly. It can satisfy coverage, time and storage constraints, though distributing both protein and energy bases may require more cooking and portion management than the ninety-minute limit allows unless the bases are batch-cooked efficiently.",
+            "score": 0.86
+          }
+        ],
+        "generation": 2,
+        "genomes": {
+          "346939e42b60407dbc60d97837fe6c1a": {
+            "__order__": 116,
+            "d1": "__omit__",
+            "d2": "v1",
+            "d3": "v6",
+            "d4": "v11",
+            "d5": "__omit__"
+          },
+          "34afc3ff964745879531ff33b48e4ebd": {
+            "__order__": 111,
+            "d1": "__omit__",
+            "d2": "__omit__",
+            "d3": "__omit__",
+            "d4": "v2",
+            "d5": "v5"
+          },
+          "3af956fac32848c48228426c4db1b2a4": {
+            "__order__": 80,
+            "d1": "__omit__",
+            "d2": "__omit__",
+            "d3": "__omit__",
+            "d4": "__omit__",
+            "d5": "v12"
+          },
+          "e4ea40c7619346b8baf6e90f0cbcb501": {
+            "__order__": 19,
+            "d1": "v6",
+            "d2": "v6",
+            "d3": "__omit__",
+            "d4": "v4",
+            "d5": "v12"
+          }
+        },
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/a135b80e-bf5f-4f76-8872-f051ecf1d91e/prompts/7664dc6cf5324bd2bee358dd6f9d8448-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "default",
+          "model": "gpt-5.6-luna"
+        },
+        "regime_revision": 1
+      }
+    ],
+    "regime": {
+      "agent": "codex",
+      "effort": "low",
+      "material": "default",
+      "model": "gpt-5.6-luna"
+    },
+    "regime_revision": 1
+  },
+  "generation": 2,
+  "job": "complete",
+  "native_result": {
+    "evaluated_candidates": 8,
+    "expansion_interventions": 0,
+    "generations_completed": 2,
+    "outcome": "proposals",
+    "proposals": [
+      {
+        "assumptions": [
+          "The selected rice, pasta, chickpea or lentil preparation can be completed within ninety active minutes.",
+          "Thursday and Friday portions are frozen promptly and safely reheated.",
+          "Different combinations of the same protein, energy and fresh component provide acceptable variety."
+        ],
+        "candidate_id": "2ce5a6553aeb4669ae7664cbf2d272ae",
+        "components": [
+          {
+            "dimension": "Energy base",
+            "dimension_id": "d2",
+            "variant": "transform thermally",
+            "variant_id": "v1"
+          },
+          {
+            "dimension": "Protein base",
+            "dimension_id": "d1",
+            "variant": "distribute",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "Freshness and variety",
+            "dimension_id": "d3",
+            "variant": "reuse",
+            "variant_id": "v7"
+          }
+        ],
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Thermally transform an energy base such as rice or pasta during the batch cook, distribute a chickpea or lentil protein base across five portions, and reuse a quick fresh vegetable component with different combinations. Eat refrigerated portions Monday through Wednesday and freeze the remaining portions for Thursday and Friday.",
+        "reason": "This ordered proposal directly supports a practical five-evening plan: batch cooking supplies the energy and protein, while the reused fresh component creates weekday variation. The refrigeration and freezing schedule satisfies the three-day storage limit, and the plan is clear enough to execute within the stated preparation ceiling if the batch quantities remain modest.",
+        "score": 0.88
+      },
+      {
+        "assumptions": [
+          "Protein and energy bases can be batch-cooked within ninety active minutes.",
+          "Chickpeas or lentils provide the planned protein base.",
+          "The available seasonal vegetables can serve as the quick fresh component."
+        ],
+        "candidate_id": "e4ea40c7619346b8baf6e90f0cbcb501",
+        "components": [
+          {
+            "dimension": "Protein base",
+            "dimension_id": "d1",
+            "variant": "distribute",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "Preparation capacity",
+            "dimension_id": "d5",
+            "variant": "allocate",
+            "variant_id": "v12"
+          },
+          {
+            "dimension": "Energy base",
+            "dimension_id": "d2",
+            "variant": "distribute",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "Deferred availability",
+            "dimension_id": "d4",
+            "variant": "combine",
+            "variant_id": "v4"
+          }
+        ],
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Distribute the protein base across five portions, allocate the preparation capacity between batch cooking and one quick fresh component, distribute energy bases such as rice and pasta across the weekdays, and combine them with tomatoes and seasonal vegetables. Refrigerate Monday through Wednesday meals and freeze Thursday and Friday meals, using different combinations to create variety.",
+        "reason": "The ordered sequence gives the strongest complete structure: protein coverage, bounded preparation, varied energy bases, and final meal assembly. It can satisfy coverage, time and storage constraints, though distributing both protein and energy bases may require more cooking and portion management than the ninety-minute limit allows unless the bases are batch-cooked efficiently.",
+        "score": 0.86
+      },
+      {
+        "assumptions": [
+          "The batch can be portioned into five complete evening meals.",
+          "Frozen portions can be thawed in time for Thursday and Friday.",
+          "Different available accompaniments are sufficient to create meaningful variety."
+        ],
+        "candidate_id": "34afc3ff964745879531ff33b48e4ebd",
+        "components": [
+          {
+            "dimension": "Preparation capacity",
+            "dimension_id": "d5",
+            "variant": "partition",
+            "variant_id": "v5"
+          },
+          {
+            "dimension": "Deferred availability",
+            "dimension_id": "d4",
+            "variant": "concentrate",
+            "variant_id": "v2"
+          }
+        ],
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Partition the ninety-minute preparation capacity into one batch-cooking session and a small fresh-component session, then concentrate the deferred availability into clearly portioned meals: refrigerate portions for the first three days and freeze the remainder for Thursday and Friday. Reuse the base with different rice, pasta, tomato or vegetable accompaniments.",
+        "reason": "The ordered sequence directly manages preparation capacity and delayed use, yielding a practical five-evening schedule with storage compliance and moderate variety. It is less explicit about the actual weekday order and relies on proposed portioning and accompaniments to make the meals complete.",
+        "score": 0.82
+      }
+    ],
+    "stop_reason": "generation_limit"
+  },
+  "progress": {
+    "archive": [
+      [
+        {
+          "__order__": 116,
+          "d1": "v6",
+          "d2": "v1",
+          "d3": "v7",
+          "d4": "__omit__",
+          "d5": "__omit__"
+        },
+        {
+          "assumptions": [
+            "The selected rice, pasta, chickpea or lentil preparation can be completed within ninety active minutes.",
+            "Thursday and Friday portions are frozen promptly and safely reheated.",
+            "Different combinations of the same protein, energy and fresh component provide acceptable variety."
+          ],
+          "candidate_id": "2ce5a6553aeb4669ae7664cbf2d272ae",
+          "constraint_valid": true,
+          "constraint_violations": [],
+          "proposal": "Thermally transform an energy base such as rice or pasta during the batch cook, distribute a chickpea or lentil protein base across five portions, and reuse a quick fresh vegetable component with different combinations. Eat refrigerated portions Monday through Wednesday and freeze the remaining portions for Thursday and Friday.",
+          "reason": "This ordered proposal directly supports a practical five-evening plan: batch cooking supplies the energy and protein, while the reused fresh component creates weekday variation. The refrigeration and freezing schedule satisfies the three-day storage limit, and the plan is clear enough to execute within the stated preparation ceiling if the batch quantities remain modest.",
+          "score": 0.88
+        }
+      ],
+      [
+        {
+          "__order__": 19,
+          "d1": "v6",
+          "d2": "v6",
+          "d3": "__omit__",
+          "d4": "v4",
+          "d5": "v12"
+        },
+        {
+          "assumptions": [
+            "Protein and energy bases can be batch-cooked within ninety active minutes.",
+            "Chickpeas or lentils provide the planned protein base.",
+            "The available seasonal vegetables can serve as the quick fresh component."
+          ],
+          "candidate_id": "e4ea40c7619346b8baf6e90f0cbcb501",
+          "constraint_valid": true,
+          "constraint_violations": [],
+          "proposal": "Distribute the protein base across five portions, allocate the preparation capacity between batch cooking and one quick fresh component, distribute energy bases such as rice and pasta across the weekdays, and combine them with tomatoes and seasonal vegetables. Refrigerate Monday through Wednesday meals and freeze Thursday and Friday meals, using different combinations to create variety.",
+          "reason": "The ordered sequence gives the strongest complete structure: protein coverage, bounded preparation, varied energy bases, and final meal assembly. It can satisfy coverage, time and storage constraints, though distributing both protein and energy bases may require more cooking and portion management than the ninety-minute limit allows unless the bases are batch-cooked efficiently.",
+          "score": 0.86
+        }
+      ],
+      [
+        {
+          "__order__": 111,
+          "d1": "__omit__",
+          "d2": "__omit__",
+          "d3": "__omit__",
+          "d4": "v2",
+          "d5": "v5"
+        },
+        {
+          "assumptions": [
+            "The batch can be portioned into five complete evening meals.",
+            "Frozen portions can be thawed in time for Thursday and Friday.",
+            "Different available accompaniments are sufficient to create meaningful variety."
+          ],
+          "candidate_id": "34afc3ff964745879531ff33b48e4ebd",
+          "constraint_valid": true,
+          "constraint_violations": [],
+          "proposal": "Partition the ninety-minute preparation capacity into one batch-cooking session and a small fresh-component session, then concentrate the deferred availability into clearly portioned meals: refrigerate portions for the first three days and freeze the remainder for Thursday and Friday. Reuse the base with different rice, pasta, tomato or vegetable accompaniments.",
+          "reason": "The ordered sequence directly manages preparation capacity and delayed use, yielding a practical five-evening schedule with storage compliance and moderate variety. It is less explicit about the actual weekday order and relies on proposed portioning and accompaniments to make the meals complete.",
+          "score": 0.82
+        }
+      ]
+    ],
+    "best_score": 0.88,
+    "consecutive_expansions": 0,
+    "evaluated_candidates": 8,
+    "expansion_interventions": 0,
+    "expansions": [],
+    "generations_completed": 2,
+    "pending": null,
+    "progress_made": false,
+    "reference_revision": 1,
+    "reference_score": null,
+    "stagnant_generations": 0,
+    "stop_reason": "generation_limit",
+    "window_complete": false
+  },
+  "search_material": {
+    "assumptions": [
+      "The cook is willing to repeat a base component with different accompaniments."
+    ],
+    "composition_guidance": "Arrange the selected batch-cooked and quick fresh components into a safe five-day schedule, explaining reuse and storage without turning weekdays into gene dimensions.",
+    "constraints": [
+      {
+        "id": "time",
+        "text": "Use at most ninety minutes of active preparation across the week."
+      },
+      {
+        "id": "coverage",
+        "text": "Provide one complete evening meal for each weekday."
+      },
+      {
+        "id": "storage",
+        "text": "Refrigerated cooked food must be eaten within three days or frozen."
+      }
+    ],
+    "context_summary": "The plan covers five evening meals. The cook can batch-cook once and prepare one quick fresh component, then reuse them through Friday.",
+    "criteria": [
+      {
+        "id": "practicality",
+        "text": "The schedule fits the preparation, coverage and storage constraints."
+      },
+      {
+        "id": "variety",
+        "text": "The ordering creates useful weekday variety from the same components."
+      },
+      {
+        "id": "clarity",
+        "text": "The five-day sequence and reuse decisions are easy to follow."
+      }
+    ],
+    "dimensions": [
+      {
+        "id": "d1",
+        "meaning": "Protein base"
+      },
+      {
+        "id": "d2",
+        "meaning": "Energy base"
+      },
+      {
+        "id": "d3",
+        "meaning": "Freshness and variety"
+      },
+      {
+        "id": "d4",
+        "meaning": "Deferred availability"
+      },
+      {
+        "id": "d5",
+        "meaning": "Preparation capacity"
+      }
+    ],
+    "facts": [
+      "The kitchen has a hob, oven, refrigerator and freezer.",
+      "Available staples include chickpeas, lentils, rice, pasta, tomatoes and seasonal vegetables.",
+      "The plan is for one adult from Monday through Friday."
+    ],
+    "objective": "Develop one practical weekday meal plan for one adult that uses the available ingredients, keeps active preparation within the stated limit, and arranges the selected meal components across the week.",
+    "order_semantics": "sequence in which the selected meal components are scheduled across the week",
+    "unknowns": [
+      "Exact seasonal vegetables and personal seasoning preferences are unspecified."
+    ],
+    "variants": [
+      {
+        "id": "v1",
+        "text": "transform thermally"
+      },
+      {
+        "id": "v10",
+        "text": "restore warmth"
+      },
+      {
+        "id": "v11",
+        "text": "fragment"
+      },
+      {
+        "id": "v12",
+        "text": "allocate"
+      },
+      {
+        "id": "v2",
+        "text": "concentrate"
+      },
+      {
+        "id": "v3",
+        "text": "preserve"
+      },
+      {
+        "id": "v4",
+        "text": "combine"
+      },
+      {
+        "id": "v5",
+        "text": "partition"
+      },
+      {
+        "id": "v6",
+        "text": "distribute"
+      },
+      {
+        "id": "v7",
+        "text": "reuse"
+      },
+      {
+        "id": "v8",
+        "text": "reactivate"
+      },
+      {
+        "id": "v9",
+        "text": "retain"
+      }
+    ]
+  }
+}

@@ -1,0 +1,194 @@
+{
+  "task_executor": "creativity",
+  "request": {
+    "request": "Write one Spanish opening sentence for a story in which a coastal town loses one minute each evening. Make the missing minute felt through a concrete action and an emotional stake.",
+    "context": {
+      "context_summary": "An adult daughter repairs fishing nets with her father. Only she remembers the missing minute. The opening should create tension without explaining the mechanism.",
+      "facts": [
+        "The setting is a coastal town.",
+        "One minute disappears each evening.",
+        "The daughter remembers it; her father does not.",
+        "They repair fishing nets together."
+      ],
+      "constraints": [
+        {
+          "id": "length",
+          "text": "Each proposal is one Spanish sentence of at most 24 words."
+        },
+        {
+          "id": "exposition",
+          "text": "Do not explain the missing minute's cause or introduce new proper names."
+        },
+        {
+          "id": "agency",
+          "text": "Give the daughter a concrete action; do not end with a question."
+        }
+      ],
+      "assumptions": [
+        "The intended reader accepts an unexplained speculative premise."
+      ],
+      "unknowns": [
+        "The cause of the missing minute is deliberately unspecified."
+      ],
+      "order_semantics": "sequence in which the selected sentence components appear",
+      "composition_guidance": "Connect the daughter's action to a sensory trace of the missing minute and her relationship with her father.",
+      "criteria": [
+        {
+          "id": "tension",
+          "text": "A concrete action implies an emotional cost without explaining it."
+        },
+        {
+          "id": "language",
+          "text": "Natural, economical Spanish with a memorable sensory detail."
+        },
+        {
+          "id": "difference",
+          "text": "Offer a specific action and emotional possibility, beyond a generic missing-time opening."
+        }
+      ]
+    },
+    "reference_documents": [],
+    "work_area": {
+      "project": "orchestrators",
+      "work_area": "implementation"
+    }
+  },
+  "configuration": {
+    "population_size": 4,
+    "generation_limit": 2,
+    "max_evaluated_candidates": 8,
+    "elite_count": 2,
+    "diversity_count": 1,
+    "mutation_rate": 0.35,
+    "evaluation_batch_size": 4,
+    "evaluation_concurrency": 1,
+    "shortlist_size": 3,
+    "order_mode": "interchangeable",
+    "rigor": {
+      "default": "medium",
+      "evaluate_candidates": "low"
+    }
+  },
+  "staffing_session": "stf-c6e6dde874e69da5a445549c66bebe0f",
+  "prompt_set": "default",
+  "initial_genes": {
+    "search_material": {
+      "objective": "Write one Spanish opening sentence for a story in which a coastal town loses one minute each evening. Make the missing minute felt through a concrete action and an emotional stake.",
+      "context_summary": "An adult daughter repairs fishing nets with her father. Only she remembers the missing minute. The opening should create tension without explaining the mechanism.",
+      "facts": [
+        "The setting is a coastal town.",
+        "One minute disappears each evening.",
+        "The daughter remembers it; her father does not.",
+        "They repair fishing nets together."
+      ],
+      "constraints": [
+        {
+          "id": "length",
+          "text": "Each proposal is one Spanish sentence of at most 24 words."
+        },
+        {
+          "id": "exposition",
+          "text": "Do not explain the missing minute's cause or introduce new proper names."
+        },
+        {
+          "id": "agency",
+          "text": "Give the daughter a concrete action; do not end with a question."
+        }
+      ],
+      "assumptions": [
+        "The intended reader accepts an unexplained speculative premise."
+      ],
+      "unknowns": [
+        "The cause of the missing minute is deliberately unspecified."
+      ],
+      "order_semantics": "sequence in which the selected sentence components appear",
+      "composition_guidance": "Connect the daughter's action to a sensory trace of the missing minute and her relationship with her father.",
+      "criteria": [
+        {
+          "id": "tension",
+          "text": "A concrete action implies an emotional cost without explaining it."
+        },
+        {
+          "id": "language",
+          "text": "Natural, economical Spanish with a memorable sensory detail."
+        },
+        {
+          "id": "difference",
+          "text": "Offer a specific action and emotional possibility, beyond a generic missing-time opening."
+        }
+      ],
+      "dimensions": [
+        {
+          "id": "d1",
+          "meaning": "Individual memory"
+        },
+        {
+          "id": "d2",
+          "meaning": "Inherited routine"
+        },
+        {
+          "id": "d3",
+          "meaning": "Shared labour"
+        },
+        {
+          "id": "d4",
+          "meaning": "Temporal absence"
+        },
+        {
+          "id": "d5",
+          "meaning": "A memory token: proposed exploratory concept, not an admitted fact"
+        }
+      ],
+      "variants": [
+        {
+          "id": "v1",
+          "text": "preserve"
+        },
+        {
+          "id": "v2",
+          "text": "erase"
+        },
+        {
+          "id": "v3",
+          "text": "reconstruct"
+        },
+        {
+          "id": "v4",
+          "text": "separate"
+        },
+        {
+          "id": "v5",
+          "text": "connect"
+        },
+        {
+          "id": "v6",
+          "text": "conceal"
+        },
+        {
+          "id": "v7",
+          "text": "quantify"
+        },
+        {
+          "id": "v8",
+          "text": "suspend"
+        },
+        {
+          "id": "v9",
+          "text": "transfer"
+        },
+        {
+          "id": "v10",
+          "text": "iterate"
+        },
+        {
+          "id": "v11",
+          "text": "attend"
+        },
+        {
+          "id": "v12",
+          "text": "resist"
+        }
+      ]
+    }
+  }
+}

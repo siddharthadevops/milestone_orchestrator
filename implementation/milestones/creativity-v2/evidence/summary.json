@@ -1,0 +1,215 @@
+{
+  "low_score_threshold": "score < 0.5",
+  "runs": [
+    {
+      "label": "literature-literal",
+      "task_id": "ee2395c9-d638-4b51-9346-e581130b89c8",
+      "evaluated_candidates": 8,
+      "seed_size_counts": {
+        "2": 2,
+        "3": 2,
+        "4": 3,
+        "5": 1
+      },
+      "mean_seed_size": 3.375,
+      "low_score_count": 2,
+      "model_valid_count": 8,
+      "repeated_seeds_avoided": 0,
+      "empty_draws_ignored": 0,
+      "physical_calls": 2,
+      "accounting": {
+        "duration_s": 56.70228886604309,
+        "token_usage": {
+          "cached_input_tokens": 19968,
+          "input_tokens": 37768,
+          "output_tokens": 2692,
+          "reasoning_output_tokens": 1423,
+          "total_tokens": 40460
+        },
+        "token_usage_partial": false,
+        "cost": {
+          "api_usd": 0.007189760000000001,
+          "real_usd": 0.0
+        },
+        "cost_partial": false
+      },
+      "stop_reason": "generation_limit",
+      "mechanical_checks": "passed"
+    },
+    {
+      "label": "literature-abstract",
+      "task_id": "46bded23-2bd0-4d80-bedf-81e9bdee5d5d",
+      "evaluated_candidates": 8,
+      "seed_size_counts": {
+        "1": 1,
+        "2": 3,
+        "3": 3,
+        "4": 1
+      },
+      "mean_seed_size": 2.5,
+      "low_score_count": 0,
+      "model_valid_count": 8,
+      "repeated_seeds_avoided": 0,
+      "empty_draws_ignored": 0,
+      "physical_calls": 2,
+      "accounting": {
+        "duration_s": 88.5543646812439,
+        "token_usage": {
+          "cached_input_tokens": 19968,
+          "input_tokens": 37425,
+          "output_tokens": 3224,
+          "reasoning_output_tokens": 1998,
+          "total_tokens": 40649
+        },
+        "token_usage_partial": false,
+        "cost": {
+          "api_usd": 0.00775956,
+          "real_usd": 0.0
+        },
+        "cost_partial": false
+      },
+      "stop_reason": "generation_limit",
+      "mechanical_checks": "passed"
+    },
+    {
+      "label": "strategy-literal",
+      "task_id": "2bf6d9b2-9ab8-4cde-a112-a80c43e25e1d",
+      "evaluated_candidates": 8,
+      "seed_size_counts": {
+        "1": 1,
+        "2": 3,
+        "3": 2,
+        "4": 2
+      },
+      "mean_seed_size": 2.625,
+      "low_score_count": 6,
+      "model_valid_count": 5,
+      "repeated_seeds_avoided": 0,
+      "empty_draws_ignored": 0,
+      "physical_calls": 2,
+      "accounting": {
+        "duration_s": 75.78815293312073,
+        "token_usage": {
+          "cached_input_tokens": 19968,
+          "input_tokens": 37382,
+          "output_tokens": 2444,
+          "reasoning_output_tokens": 834,
+          "total_tokens": 39826
+        },
+        "token_usage_partial": false,
+        "cost": {
+          "api_usd": 0.00681496,
+          "real_usd": 0.0
+        },
+        "cost_partial": false
+      },
+      "stop_reason": "generation_limit",
+      "mechanical_checks": "passed"
+    },
+    {
+      "label": "strategy-abstract",
+      "task_id": "3355df66-e9b7-4332-a2c3-c849b129856f",
+      "evaluated_candidates": 8,
+      "seed_size_counts": {
+        "1": 1,
+        "2": 3,
+        "3": 2,
+        "4": 2
+      },
+      "mean_seed_size": 2.625,
+      "low_score_count": 4,
+      "model_valid_count": 5,
+      "repeated_seeds_avoided": 0,
+      "empty_draws_ignored": 0,
+      "physical_calls": 2,
+      "accounting": {
+        "duration_s": 77.24928092956543,
+        "token_usage": {
+          "cached_input_tokens": 19968,
+          "input_tokens": 37464,
+          "output_tokens": 2496,
+          "reasoning_output_tokens": 374,
+          "total_tokens": 39960
+        },
+        "token_usage_partial": false,
+        "cost": {
+          "api_usd": 0.0068937600000000005,
+          "real_usd": 0.0
+        },
+        "cost_partial": false
+      },
+      "stop_reason": "generation_limit",
+      "mechanical_checks": "passed"
+    },
+    {
+      "label": "planning-literal",
+      "task_id": "52db0bfe-537e-4b48-ae5d-e8f5912d981b",
+      "evaluated_candidates": 8,
+      "seed_size_counts": {
+        "2": 2,
+        "3": 3,
+        "4": 3
+      },
+      "mean_seed_size": 3.125,
+      "low_score_count": 1,
+      "model_valid_count": 8,
+      "repeated_seeds_avoided": 0,
+      "empty_draws_ignored": 0,
+      "physical_calls": 2,
+      "accounting": {
+        "duration_s": 71.06959652900696,
+        "token_usage": {
+          "cached_input_tokens": 19968,
+          "input_tokens": 37398,
+          "output_tokens": 2437,
+          "reasoning_output_tokens": 421,
+          "total_tokens": 39835
+        },
+        "token_usage_partial": false,
+        "cost": {
+          "api_usd": 0.00680976,
+          "real_usd": 0.0
+        },
+        "cost_partial": false
+      },
+      "stop_reason": "generation_limit",
+      "mechanical_checks": "passed"
+    },
+    {
+      "label": "planning-abstract",
+      "task_id": "a135b80e-bf5f-4f76-8872-f051ecf1d91e",
+      "evaluated_candidates": 8,
+      "seed_size_counts": {
+        "1": 1,
+        "2": 3,
+        "3": 2,
+        "4": 2
+      },
+      "mean_seed_size": 2.625,
+      "low_score_count": 0,
+      "model_valid_count": 8,
+      "repeated_seeds_avoided": 0,
+      "empty_draws_ignored": 0,
+      "physical_calls": 2,
+      "accounting": {
+        "duration_s": 68.12826132774353,
+        "token_usage": {
+          "cached_input_tokens": 19968,
+          "input_tokens": 37152,
+          "output_tokens": 2079,
+          "reasoning_output_tokens": 451,
+          "total_tokens": 39231
+        },
+        "token_usage_partial": false,
+        "cost": {
+          "api_usd": 0.00633096,
+          "real_usd": 0.0
+        },
+        "cost_partial": false
+      },
+      "stop_reason": "generation_limit",
+      "mechanical_checks": "passed"
+    }
+  ],
+  "checks": "All six terminal runs reconcile with admitted inputs, exact sent seeds, accepted replies, physical receipts and task totals; immutable problems and first-generation genetic draws match within pairs."
+}

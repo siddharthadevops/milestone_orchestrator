@@ -1,0 +1,602 @@
+{
+  "candidates": {
+    "3f3aa29265914468a4456a117baed6ed": {
+      "__order__": 111,
+      "d1": "__omit__",
+      "d2": "__omit__",
+      "d3": "v9",
+      "d4": "__omit__",
+      "d5": "v12"
+    },
+    "4dcf76e1ed2b4111944999feb524d98c": {
+      "__order__": 19,
+      "d1": "v6",
+      "d2": "v6",
+      "d3": "__omit__",
+      "d4": "v4",
+      "d5": "v12"
+    },
+    "52a33d0f90214422857f0e81db4076d8": {
+      "__order__": 116,
+      "d1": "v6",
+      "d2": "v1",
+      "d3": "v7",
+      "d4": "__omit__",
+      "d5": "__omit__"
+    },
+    "62770159db9547abb4134b6cb0fceb85": {
+      "__order__": 68,
+      "d1": "v6",
+      "d2": "v6",
+      "d3": "__omit__",
+      "d4": "v2",
+      "d5": "v5"
+    },
+    "6603ead7e83e48e88b975040061dbc31": {
+      "__order__": 80,
+      "d1": "__omit__",
+      "d2": "__omit__",
+      "d3": "__omit__",
+      "d4": "__omit__",
+      "d5": "v12"
+    },
+    "9876c62fe28b402d98273a008a19fbd1": {
+      "__order__": 116,
+      "d1": "__omit__",
+      "d2": "v1",
+      "d3": "v6",
+      "d4": "v11",
+      "d5": "__omit__"
+    },
+    "c3ab4c2cce084e0a802a1656a261d4b1": {
+      "__order__": 92,
+      "d1": "v1",
+      "d2": "__omit__",
+      "d3": "v9",
+      "d4": "__omit__",
+      "d5": "__omit__"
+    },
+    "df63dac7ade04ad59600455a22bc09b6": {
+      "__order__": 111,
+      "d1": "__omit__",
+      "d2": "__omit__",
+      "d3": "__omit__",
+      "d4": "v2",
+      "d5": "v5"
+    }
+  },
+  "evaluation": {
+    "accepted_count": 8,
+    "batches": [
+      {
+        "batch": "0c90746ba05d42b38a03e38f04920130",
+        "call_id": "bae6544eb5e14934850e680201b3ad0e",
+        "evaluations": [
+          {
+            "assumptions": [],
+            "candidate_id": "3f3aa29265914468a4456a117baed6ed",
+            "constraint_valid": false,
+            "constraint_violations": [
+              "time",
+              "contact"
+            ],
+            "proposal": "Cancel the six available staff hours and delay use of the service counter, producing no paid service pilot.",
+            "reason": "The sequence removes the available delivery capacity and does not contact the forty opted-in customers. It therefore cannot create or test paid demand, provide a bounded delivery arrangement, or meet the objective.",
+            "score": 0.0
+          },
+          {
+            "assumptions": [
+              "The owner can define a paid repair or maintenance package that is meaningfully different from an unplanned walk-in repair.",
+              "The owner can complete the reserved appointments within five delivery hours.",
+              "Customers can book and pay through the shop's existing arrangements without new software or cash expenditure.  "
+            ],
+            "candidate_id": "52a33d0f90214422857f0e81db4076d8",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Repair the bicycles of opted-in customers through a paid, pre-booked service offer emailed only to those forty customers; the owner shares the offer and reserves a limited number of service-counter appointments. Use EUR 0 additional cash and up to six hours: one hour to define the offer and email it, and five hours to deliver up to the reserved appointments. Measure replies, bookings and completed paid services; continue only if at least three customers book and the work fits the six-hour cap, otherwise stop.",
+            "reason": "The ordered components support a paid service offer, targeted contact and bounded delivery. The proposal uses existing tools and the counter, no software, hiring or advertising, and no recurring spend. It is distinct from ordinary walk-in repair through advance booking and a limited service allocation, although the exact paid service and prices remain to be set. Demand is not assumed: bookings and completed payments provide the signal.",
+            "score": 0.82
+          },
+          {
+            "assumptions": [
+              "The owner may devote and schedule all six hours for the inspection pilot.",
+              "A paid inspection is sufficiently distinct from ordinary walk-in repair for existing customers.",
+              "The existing counter can support limited inspection appointments without disrupting ordinary operations.",
+              "Customers will accept the proposed price and booking process."
+            ],
+            "candidate_id": "62770159db9547abb4134b6cb0fceb85",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Allocate the six hours, share a paid limited-time inspection offer with the forty opted-in customers, and use the existing repair tools to deliver booked bicycle inspections. Email preparation and contact would use about one hour, with up to five hours for inspections. Charge a set price, record bookings and completed payments, and continue only if at least three customers purchase; otherwise stop after two weeks.",
+            "reason": "The proposal can fit the supplied time, cash and resource limits and uses the permitted email audience. A paid inspection can be distinct from ordinary walk-in repair, and the booking/payment threshold gives an observable decision rule. However, the component meaning is somewhat strained: 'lend' does not clearly establish how the owner provides the six hours, and the candidate does not specify the bounded appointment arrangement as clearly as required. The inspection proposition, price and customer willingness remain assumptions.",
+            "score": 0.68
+          },
+          {
+            "assumptions": [
+              "The delayed counter would eventually become available.",
+              "The owner could contact customers and deliver repairs within the limits despite no stated time allocation."
+            ],
+            "candidate_id": "c3ab4c2cce084e0a802a1656a261d4b1",
+            "constraint_valid": false,
+            "constraint_violations": [
+              "time",
+              "contact"
+            ],
+            "proposal": "Have the owner perform a paid repair service, while delaying use of the service counter and delivery. Contact the opted-in customers with the offer and complete work only when capacity becomes available.",
+            "reason": "The sequence does not establish a bounded delivery arrangement within two weeks and provides no allocation for preparation, customer contact or delivery. Delaying the counter also weakens the only supplied delivery location. A paid repair is not clearly distinct from ordinary walk-in repair, and no measurable demand signal or continue-or-stop rule is supplied.",
+            "score": 0.16
+          }
+        ],
+        "generation": 1,
+        "genomes": {
+          "3f3aa29265914468a4456a117baed6ed": {
+            "__order__": 111,
+            "d1": "__omit__",
+            "d2": "__omit__",
+            "d3": "v9",
+            "d4": "__omit__",
+            "d5": "v12"
+          },
+          "52a33d0f90214422857f0e81db4076d8": {
+            "__order__": 116,
+            "d1": "v6",
+            "d2": "v1",
+            "d3": "v7",
+            "d4": "__omit__",
+            "d5": "__omit__"
+          },
+          "62770159db9547abb4134b6cb0fceb85": {
+            "__order__": 68,
+            "d1": "v6",
+            "d2": "v6",
+            "d3": "__omit__",
+            "d4": "v2",
+            "d5": "v5"
+          },
+          "c3ab4c2cce084e0a802a1656a261d4b1": {
+            "__order__": 92,
+            "d1": "v1",
+            "d2": "__omit__",
+            "d3": "v9",
+            "d4": "__omit__",
+            "d5": "__omit__"
+          }
+        },
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/2bf6d9b2-9ab8-4cde-a112-a80c43e25e1d/prompts/0c90746ba05d42b38a03e38f04920130-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        },
+        "regime_revision": 1
+      },
+      {
+        "batch": "ca77f4a4d2fb4e1ab565141d2aaee4fe",
+        "call_id": "ec26409c1d344ac38a7055def68a4e29",
+        "evaluations": [
+          {
+            "assumptions": [
+              "Sharing customers would still use only the opted-in list and existing email channel.",
+              "Selling the tools would be part of the pilot rather than unrelated disposal."
+            ],
+            "candidate_id": "4dcf76e1ed2b4111944999feb524d98c",
+            "constraint_valid": false,
+            "constraint_violations": [
+              "resources"
+            ],
+            "proposal": "Share the owner's involvement, cancel the six available staff hours, share the opted-in customer base, then sell the existing repair tools. This does not form a coherent paid pilot or bounded delivery arrangement; selling the tools conflicts with using them as an existing resource.",
+            "reason": "The exact sequence contains no paid service offer, price, demand test, or delivery plan. The final component sells rather than uses the existing repair tools, violating the required resource boundary. The cancelled staff hours also leave no capacity for preparation, contact, or delivery. The meaning of sharing customers and the sales proceeds is unspecified.",
+            "score": 0.02
+          },
+          {
+            "assumptions": [],
+            "candidate_id": "6603ead7e83e48e88b975040061dbc31",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Cancel the six available staff hours. The strongest interpretation is that the shop declines to allocate additional labour, so no paid service pilot is delivered.",
+            "reason": "The candidate does not itself breach a stated budget, resource, or contact constraint, but it cannot satisfy the objective or composition guidance: it contains no paid service proposition, customer contact, bounded delivery arrangement, demand signal, or continue-or-stop decision. The cancellation makes delivery impossible within the proposed sequence.",
+            "score": 0.01
+          },
+          {
+            "assumptions": [
+              "Customer contact would occur only by email to the forty opted-in customers.",
+              "The repairs would be offered as a separately priced, limited pilot rather than ordinary walk-in work.",
+              "The shop has enough unallocated capacity within six additional hours."
+            ],
+            "candidate_id": "9876c62fe28b402d98273a008a19fbd1",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Count the existing repair tools, repair the forty existing customers, then share the service counter. A possible completion would use an email invitation to opted-in customers for a limited counter-based paid repair service, but the seed only establishes ordinary repair activity and does not establish a distinct proposition, price, capacity, or measurement rule.",
+            "reason": "This is operationally more coherent than the other seeds and could use existing tools and the counter without new software, hires, or advertising. However, repairing customers is not clearly a service proposition beyond ordinary walk-in repair, and the sequence supplies no staff-time or cash accounting, bounded appointment arrangement, paid-demand signal, or continue-or-stop rule. Contact-channel compliance depends on the proposed email completion rather than the supplied components.",
+            "score": 0.2
+          },
+          {
+            "assumptions": [
+              "Lending means allocating, rather than transferring away, the owner's six available hours.",
+              "Inspection would use only the existing tools and require no additional spending."
+            ],
+            "candidate_id": "df63dac7ade04ad59600455a22bc09b6",
+            "constraint_valid": true,
+            "constraint_violations": [],
+            "proposal": "Lend the six available staff hours, then inspect the existing repair tools. The sequence could support a preparatory inspection, but it never reaches opted-in customers, a paid service offer, delivery, or demand measurement.",
+            "reason": "The candidate does not explicitly exceed the budget, time, resource, or contact limits, but it is incomplete for the objective and composition guidance. Lending the available hours is ambiguous about who performs the work and may remove the owner's delivery capacity. Tool inspection alone is not a distinct paid service proposition and provides no observable continue-or-stop decision.",
+            "score": 0.04
+          }
+        ],
+        "generation": 2,
+        "genomes": {
+          "4dcf76e1ed2b4111944999feb524d98c": {
+            "__order__": 19,
+            "d1": "v6",
+            "d2": "v6",
+            "d3": "__omit__",
+            "d4": "v4",
+            "d5": "v12"
+          },
+          "6603ead7e83e48e88b975040061dbc31": {
+            "__order__": 80,
+            "d1": "__omit__",
+            "d2": "__omit__",
+            "d3": "__omit__",
+            "d4": "__omit__",
+            "d5": "v12"
+          },
+          "9876c62fe28b402d98273a008a19fbd1": {
+            "__order__": 116,
+            "d1": "__omit__",
+            "d2": "v1",
+            "d3": "v6",
+            "d4": "v11",
+            "d5": "__omit__"
+          },
+          "df63dac7ade04ad59600455a22bc09b6": {
+            "__order__": 111,
+            "d1": "__omit__",
+            "d2": "__omit__",
+            "d3": "__omit__",
+            "d4": "v2",
+            "d5": "v5"
+          }
+        },
+        "prompt_path": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/task-runtime/2bf6d9b2-9ab8-4cde-a112-a80c43e25e1d/prompts/ca77f4a4d2fb4e1ab565141d2aaee4fe-codex-evaluate_candidates.txt",
+        "regime": {
+          "agent": "codex",
+          "effort": "low",
+          "material": "business",
+          "model": "gpt-5.6-luna"
+        },
+        "regime_revision": 1
+      }
+    ],
+    "regime": {
+      "agent": "codex",
+      "effort": "low",
+      "material": "business",
+      "model": "gpt-5.6-luna"
+    },
+    "regime_revision": 1
+  },
+  "generation": 2,
+  "job": "complete",
+  "native_result": {
+    "evaluated_candidates": 8,
+    "expansion_interventions": 0,
+    "generations_completed": 2,
+    "outcome": "proposals",
+    "proposals": [
+      {
+        "assumptions": [
+          "The owner can define a paid repair or maintenance package that is meaningfully different from an unplanned walk-in repair.",
+          "The owner can complete the reserved appointments within five delivery hours.",
+          "Customers can book and pay through the shop's existing arrangements without new software or cash expenditure.  "
+        ],
+        "candidate_id": "52a33d0f90214422857f0e81db4076d8",
+        "components": [
+          {
+            "dimension": "The forty opted-in customers",
+            "dimension_id": "d2",
+            "variant": "repair",
+            "variant_id": "v1"
+          },
+          {
+            "dimension": "The bicycle repair shop owner",
+            "dimension_id": "d1",
+            "variant": "share",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "The service counter",
+            "dimension_id": "d3",
+            "variant": "limit",
+            "variant_id": "v7"
+          }
+        ],
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Repair the bicycles of opted-in customers through a paid, pre-booked service offer emailed only to those forty customers; the owner shares the offer and reserves a limited number of service-counter appointments. Use EUR 0 additional cash and up to six hours: one hour to define the offer and email it, and five hours to deliver up to the reserved appointments. Measure replies, bookings and completed paid services; continue only if at least three customers book and the work fits the six-hour cap, otherwise stop.",
+        "reason": "The ordered components support a paid service offer, targeted contact and bounded delivery. The proposal uses existing tools and the counter, no software, hiring or advertising, and no recurring spend. It is distinct from ordinary walk-in repair through advance booking and a limited service allocation, although the exact paid service and prices remain to be set. Demand is not assumed: bookings and completed payments provide the signal.",
+        "score": 0.82
+      },
+      {
+        "assumptions": [
+          "The owner may devote and schedule all six hours for the inspection pilot.",
+          "A paid inspection is sufficiently distinct from ordinary walk-in repair for existing customers.",
+          "The existing counter can support limited inspection appointments without disrupting ordinary operations.",
+          "Customers will accept the proposed price and booking process."
+        ],
+        "candidate_id": "62770159db9547abb4134b6cb0fceb85",
+        "components": [
+          {
+            "dimension": "The six available staff hours",
+            "dimension_id": "d5",
+            "variant": "lend",
+            "variant_id": "v5"
+          },
+          {
+            "dimension": "The forty opted-in customers",
+            "dimension_id": "d2",
+            "variant": "share",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "The bicycle repair shop owner",
+            "dimension_id": "d1",
+            "variant": "share",
+            "variant_id": "v6"
+          },
+          {
+            "dimension": "The existing repair tools",
+            "dimension_id": "d4",
+            "variant": "inspect",
+            "variant_id": "v2"
+          }
+        ],
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Allocate the six hours, share a paid limited-time inspection offer with the forty opted-in customers, and use the existing repair tools to deliver booked bicycle inspections. Email preparation and contact would use about one hour, with up to five hours for inspections. Charge a set price, record bookings and completed payments, and continue only if at least three customers purchase; otherwise stop after two weeks.",
+        "reason": "The proposal can fit the supplied time, cash and resource limits and uses the permitted email audience. A paid inspection can be distinct from ordinary walk-in repair, and the booking/payment threshold gives an observable decision rule. However, the component meaning is somewhat strained: 'lend' does not clearly establish how the owner provides the six hours, and the candidate does not specify the bounded appointment arrangement as clearly as required. The inspection proposition, price and customer willingness remain assumptions.",
+        "score": 0.68
+      },
+      {
+        "assumptions": [
+          "Customer contact would occur only by email to the forty opted-in customers.",
+          "The repairs would be offered as a separately priced, limited pilot rather than ordinary walk-in work.",
+          "The shop has enough unallocated capacity within six additional hours."
+        ],
+        "candidate_id": "9876c62fe28b402d98273a008a19fbd1",
+        "components": [
+          {
+            "dimension": "The existing repair tools",
+            "dimension_id": "d4",
+            "variant": "count",
+            "variant_id": "v11"
+          },
+          {
+            "dimension": "The forty opted-in customers",
+            "dimension_id": "d2",
+            "variant": "repair",
+            "variant_id": "v1"
+          },
+          {
+            "dimension": "The service counter",
+            "dimension_id": "d3",
+            "variant": "share",
+            "variant_id": "v6"
+          }
+        ],
+        "constraint_valid": true,
+        "constraint_violations": [],
+        "proposal": "Count the existing repair tools, repair the forty existing customers, then share the service counter. A possible completion would use an email invitation to opted-in customers for a limited counter-based paid repair service, but the seed only establishes ordinary repair activity and does not establish a distinct proposition, price, capacity, or measurement rule.",
+        "reason": "This is operationally more coherent than the other seeds and could use existing tools and the counter without new software, hires, or advertising. However, repairing customers is not clearly a service proposition beyond ordinary walk-in repair, and the sequence supplies no staff-time or cash accounting, bounded appointment arrangement, paid-demand signal, or continue-or-stop rule. Contact-channel compliance depends on the proposed email completion rather than the supplied components.",
+        "score": 0.2
+      }
+    ],
+    "stop_reason": "generation_limit"
+  },
+  "progress": {
+    "archive": [
+      [
+        {
+          "__order__": 116,
+          "d1": "v6",
+          "d2": "v1",
+          "d3": "v7",
+          "d4": "__omit__",
+          "d5": "__omit__"
+        },
+        {
+          "assumptions": [
+            "The owner can define a paid repair or maintenance package that is meaningfully different from an unplanned walk-in repair.",
+            "The owner can complete the reserved appointments within five delivery hours.",
+            "Customers can book and pay through the shop's existing arrangements without new software or cash expenditure.  "
+          ],
+          "candidate_id": "52a33d0f90214422857f0e81db4076d8",
+          "constraint_valid": true,
+          "constraint_violations": [],
+          "proposal": "Repair the bicycles of opted-in customers through a paid, pre-booked service offer emailed only to those forty customers; the owner shares the offer and reserves a limited number of service-counter appointments. Use EUR 0 additional cash and up to six hours: one hour to define the offer and email it, and five hours to deliver up to the reserved appointments. Measure replies, bookings and completed paid services; continue only if at least three customers book and the work fits the six-hour cap, otherwise stop.",
+          "reason": "The ordered components support a paid service offer, targeted contact and bounded delivery. The proposal uses existing tools and the counter, no software, hiring or advertising, and no recurring spend. It is distinct from ordinary walk-in repair through advance booking and a limited service allocation, although the exact paid service and prices remain to be set. Demand is not assumed: bookings and completed payments provide the signal.",
+          "score": 0.82
+        }
+      ],
+      [
+        {
+          "__order__": 68,
+          "d1": "v6",
+          "d2": "v6",
+          "d3": "__omit__",
+          "d4": "v2",
+          "d5": "v5"
+        },
+        {
+          "assumptions": [
+            "The owner may devote and schedule all six hours for the inspection pilot.",
+            "A paid inspection is sufficiently distinct from ordinary walk-in repair for existing customers.",
+            "The existing counter can support limited inspection appointments without disrupting ordinary operations.",
+            "Customers will accept the proposed price and booking process."
+          ],
+          "candidate_id": "62770159db9547abb4134b6cb0fceb85",
+          "constraint_valid": true,
+          "constraint_violations": [],
+          "proposal": "Allocate the six hours, share a paid limited-time inspection offer with the forty opted-in customers, and use the existing repair tools to deliver booked bicycle inspections. Email preparation and contact would use about one hour, with up to five hours for inspections. Charge a set price, record bookings and completed payments, and continue only if at least three customers purchase; otherwise stop after two weeks.",
+          "reason": "The proposal can fit the supplied time, cash and resource limits and uses the permitted email audience. A paid inspection can be distinct from ordinary walk-in repair, and the booking/payment threshold gives an observable decision rule. However, the component meaning is somewhat strained: 'lend' does not clearly establish how the owner provides the six hours, and the candidate does not specify the bounded appointment arrangement as clearly as required. The inspection proposition, price and customer willingness remain assumptions.",
+          "score": 0.68
+        }
+      ],
+      [
+        {
+          "__order__": 80,
+          "d1": "__omit__",
+          "d2": "__omit__",
+          "d3": "__omit__",
+          "d4": "__omit__",
+          "d5": "v12"
+        },
+        {
+          "assumptions": [],
+          "candidate_id": "6603ead7e83e48e88b975040061dbc31",
+          "constraint_valid": true,
+          "constraint_violations": [],
+          "proposal": "Cancel the six available staff hours. The strongest interpretation is that the shop declines to allocate additional labour, so no paid service pilot is delivered.",
+          "reason": "The candidate does not itself breach a stated budget, resource, or contact constraint, but it cannot satisfy the objective or composition guidance: it contains no paid service proposition, customer contact, bounded delivery arrangement, demand signal, or continue-or-stop decision. The cancellation makes delivery impossible within the proposed sequence.",
+          "score": 0.01
+        }
+      ]
+    ],
+    "best_score": 0.82,
+    "consecutive_expansions": 0,
+    "evaluated_candidates": 8,
+    "expansion_interventions": 0,
+    "expansions": [],
+    "generations_completed": 2,
+    "pending": null,
+    "progress_made": false,
+    "reference_revision": 1,
+    "reference_score": null,
+    "stagnant_generations": 0,
+    "stop_reason": "generation_limit",
+    "window_complete": false
+  },
+  "search_material": {
+    "assumptions": [
+      "The owner may set pilot prices and reserve limited service appointments."
+    ],
+    "composition_guidance": "Combine a paid service offer with a bounded delivery arrangement; count all preparation and delivery effort.",
+    "constraints": [
+      {
+        "id": "budget",
+        "text": "Spend at most EUR 120 in total, with no recurring spending commitment."
+      },
+      {
+        "id": "time",
+        "text": "Use at most six additional staff hours including preparation, contact and delivery, and finish within two weeks."
+      },
+      {
+        "id": "resources",
+        "text": "Use existing tools and the counter; no new software, hires or paid advertising."
+      },
+      {
+        "id": "contact",
+        "text": "Contact only the forty customers who opted in, using the existing email channel."
+      }
+    ],
+    "context_summary": "One owner runs the shop. The goal is to test paid demand with existing tools and customer relationships, without committing to a continuing programme.",
+    "criteria": [
+      {
+        "id": "feasibility",
+        "text": "Itemise cash and staff time and show that the complete pilot fits both limits."
+      },
+      {
+        "id": "demand",
+        "text": "State the paid demand signal, assumptions and an observable continue-or-stop decision."
+      },
+      {
+        "id": "difference",
+        "text": "Test a distinct paid service proposition beyond ordinary walk-in repair."
+      }
+    ],
+    "dimensions": [
+      {
+        "id": "d1",
+        "meaning": "The bicycle repair shop owner"
+      },
+      {
+        "id": "d2",
+        "meaning": "The forty opted-in customers"
+      },
+      {
+        "id": "d3",
+        "meaning": "The service counter"
+      },
+      {
+        "id": "d4",
+        "meaning": "The existing repair tools"
+      },
+      {
+        "id": "d5",
+        "meaning": "The six available staff hours"
+      }
+    ],
+    "facts": [
+      "The shop has ordinary bicycle repair tools and a service counter.",
+      "Forty existing customers have opted in to service emails.",
+      "The owner can devote six additional staff hours over the next two weeks.",
+      "The total additional cash allowance is EUR 120."
+    ],
+    "objective": "Develop one two-week pilot through which a neighbourhood bicycle repair shop could earn additional service revenue from existing customers, within the stated cash and staff-time limits.",
+    "order_semantics": "sequence in which the selected pilot components are carried out",
+    "unknowns": [
+      "Customer willingness to pay and response rate have not been measured."
+    ],
+    "variants": [
+      {
+        "id": "v1",
+        "text": "repair"
+      },
+      {
+        "id": "v10",
+        "text": "demonstrate"
+      },
+      {
+        "id": "v11",
+        "text": "count"
+      },
+      {
+        "id": "v12",
+        "text": "cancel"
+      },
+      {
+        "id": "v2",
+        "text": "inspect"
+      },
+      {
+        "id": "v3",
+        "text": "reserve"
+      },
+      {
+        "id": "v4",
+        "text": "sell"
+      },
+      {
+        "id": "v5",
+        "text": "lend"
+      },
+      {
+        "id": "v6",
+        "text": "share"
+      },
+      {
+        "id": "v7",
+        "text": "limit"
+      },
+      {
+        "id": "v8",
+        "text": "bundle"
+      },
+      {
+        "id": "v9",
+        "text": "delay"
+      }
+    ]
+  }
+}

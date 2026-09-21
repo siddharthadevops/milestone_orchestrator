@@ -1,0 +1,234 @@
+{
+  "ok": true,
+  "task": {
+    "id": "2bf6d9b2-9ab8-4cde-a112-a80c43e25e1d",
+    "order": {
+      "configuration": {
+        "diversity_count": 1,
+        "elite_count": 2,
+        "evaluation_batch_size": 4,
+        "evaluation_concurrency": 1,
+        "generation_limit": 2,
+        "max_evaluated_candidates": 8,
+        "mutation_rate": 0.35,
+        "order_mode": "interchangeable",
+        "population_size": 4,
+        "rigor": {
+          "default": "medium",
+          "evaluate_candidates": "low"
+        },
+        "shortlist_size": 3
+      },
+      "creativity_semantics": "sparse_v2",
+      "initial_genes": {
+        "search_material": {
+          "assumptions": [
+            "The owner may set pilot prices and reserve limited service appointments."
+          ],
+          "composition_guidance": "Combine a paid service offer with a bounded delivery arrangement; count all preparation and delivery effort.",
+          "constraints": [
+            {
+              "id": "budget",
+              "text": "Spend at most EUR 120 in total, with no recurring spending commitment."
+            },
+            {
+              "id": "time",
+              "text": "Use at most six additional staff hours including preparation, contact and delivery, and finish within two weeks."
+            },
+            {
+              "id": "resources",
+              "text": "Use existing tools and the counter; no new software, hires or paid advertising."
+            },
+            {
+              "id": "contact",
+              "text": "Contact only the forty customers who opted in, using the existing email channel."
+            }
+          ],
+          "context_summary": "One owner runs the shop. The goal is to test paid demand with existing tools and customer relationships, without committing to a continuing programme.",
+          "criteria": [
+            {
+              "id": "feasibility",
+              "text": "Itemise cash and staff time and show that the complete pilot fits both limits."
+            },
+            {
+              "id": "demand",
+              "text": "State the paid demand signal, assumptions and an observable continue-or-stop decision."
+            },
+            {
+              "id": "difference",
+              "text": "Test a distinct paid service proposition beyond ordinary walk-in repair."
+            }
+          ],
+          "dimensions": [
+            {
+              "id": "d1",
+              "meaning": "The bicycle repair shop owner"
+            },
+            {
+              "id": "d2",
+              "meaning": "The forty opted-in customers"
+            },
+            {
+              "id": "d3",
+              "meaning": "The service counter"
+            },
+            {
+              "id": "d4",
+              "meaning": "The existing repair tools"
+            },
+            {
+              "id": "d5",
+              "meaning": "The six available staff hours"
+            }
+          ],
+          "facts": [
+            "The shop has ordinary bicycle repair tools and a service counter.",
+            "Forty existing customers have opted in to service emails.",
+            "The owner can devote six additional staff hours over the next two weeks.",
+            "The total additional cash allowance is EUR 120."
+          ],
+          "objective": "Develop one two-week pilot through which a neighbourhood bicycle repair shop could earn additional service revenue from existing customers, within the stated cash and staff-time limits.",
+          "order_semantics": "sequence in which the selected pilot components are carried out",
+          "unknowns": [
+            "Customer willingness to pay and response rate have not been measured."
+          ],
+          "variants": [
+            {
+              "id": "v1",
+              "text": "repair"
+            },
+            {
+              "id": "v10",
+              "text": "demonstrate"
+            },
+            {
+              "id": "v11",
+              "text": "count"
+            },
+            {
+              "id": "v12",
+              "text": "cancel"
+            },
+            {
+              "id": "v2",
+              "text": "inspect"
+            },
+            {
+              "id": "v3",
+              "text": "reserve"
+            },
+            {
+              "id": "v4",
+              "text": "sell"
+            },
+            {
+              "id": "v5",
+              "text": "lend"
+            },
+            {
+              "id": "v6",
+              "text": "share"
+            },
+            {
+              "id": "v7",
+              "text": "limit"
+            },
+            {
+              "id": "v8",
+              "text": "bundle"
+            },
+            {
+              "id": "v9",
+              "text": "delay"
+            }
+          ]
+        }
+      },
+      "prompt_set": "default",
+      "request": {
+        "context": {
+          "assumptions": [
+            "The owner may set pilot prices and reserve limited service appointments."
+          ],
+          "composition_guidance": "Combine a paid service offer with a bounded delivery arrangement; count all preparation and delivery effort.",
+          "constraints": [
+            {
+              "id": "budget",
+              "text": "Spend at most EUR 120 in total, with no recurring spending commitment."
+            },
+            {
+              "id": "time",
+              "text": "Use at most six additional staff hours including preparation, contact and delivery, and finish within two weeks."
+            },
+            {
+              "id": "resources",
+              "text": "Use existing tools and the counter; no new software, hires or paid advertising."
+            },
+            {
+              "id": "contact",
+              "text": "Contact only the forty customers who opted in, using the existing email channel."
+            }
+          ],
+          "context_summary": "One owner runs the shop. The goal is to test paid demand with existing tools and customer relationships, without committing to a continuing programme.",
+          "criteria": [
+            {
+              "id": "feasibility",
+              "text": "Itemise cash and staff time and show that the complete pilot fits both limits."
+            },
+            {
+              "id": "demand",
+              "text": "State the paid demand signal, assumptions and an observable continue-or-stop decision."
+            },
+            {
+              "id": "difference",
+              "text": "Test a distinct paid service proposition beyond ordinary walk-in repair."
+            }
+          ],
+          "facts": [
+            "The shop has ordinary bicycle repair tools and a service counter.",
+            "Forty existing customers have opted in to service emails.",
+            "The owner can devote six additional staff hours over the next two weeks.",
+            "The total additional cash allowance is EUR 120."
+          ],
+          "order_semantics": "sequence in which the selected pilot components are carried out",
+          "unknowns": [
+            "Customer willingness to pay and response rate have not been measured."
+          ]
+        },
+        "reference_documents": [],
+        "request": "Develop one two-week pilot through which a neighbourhood bicycle repair shop could earn additional service revenue from existing customers, within the stated cash and staff-time limits.",
+        "work_area": {
+          "additional": [
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/agent_99"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/life_product_components"
+            },
+            {
+              "device": "local",
+              "path": "/Users/siddhartha/Development/source/life_prod/tutor"
+            }
+          ],
+          "directory": "/var/folders/_d/j9g16_hn2psglg_vgfl_8z680000gn/T/creativity-v2-comparison-0kwalyoq/projects",
+          "primary": {
+            "device": "local",
+            "path": "/Users/siddhartha/Development/source/milestone_orchestrator_impl"
+          },
+          "project": "orchestrators",
+          "work_area": "implementation"
+        }
+      },
+      "staffing_session": "stf-09b9d5e25ca0838c4be4ca3edafcca24",
+      "task_executor": "creativity"
+    },
+    "resolved_staffing": {},
+    "result": null
+  }
+}
