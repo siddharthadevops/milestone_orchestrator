@@ -8,6 +8,7 @@ physical evidence.
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import os
 import threading
 import uuid
 from types import SimpleNamespace
@@ -44,7 +45,7 @@ def create_genes(
 def call_evaluation_batch(
     group, runner, *, home, session, workspace, configuration, search_material,
     candidates, generation, batch, execution_context, prompt_set="default",
-    prompt_values=None, record_dispatch=None,
+    prompt_values=None, record_dispatch=None, creativity_semantics=None,
 ):
     """Evaluate one owner-admitted batch, including the runner's one correction.
 
@@ -57,13 +58,21 @@ def call_evaluation_batch(
     immediately before each attempt, so completion order cannot choose it.
     """
     genomes = {candidate_id: dict(genome) for candidate_id, genome in candidates.items()}
+    sparse = creativity_semantics == "sparse_v2"
+    problem = {key: search_material[key] for key in (
+        "objective", "context_summary", "facts", "constraints", "assumptions",
+        "unknowns", "composition_guidance", "criteria", "order_semantics",
+    )} if sparse else search_material
     values = dict(prompt_values or {})
     values.update(
         workspace=workspace,
-        search_material=json.dumps(search_material, ensure_ascii=False),
+        creativity_semantics=creativity_semantics or "legacy",
+        search_material=json.dumps(problem, ensure_ascii=False),
         candidates=json.dumps([
             {"candidate_id": candidate_id, "components": creativity_search.genome_components(
                 search_material["dimensions"], genome, configuration.get("order_mode"),
+                variants=search_material["variants"] if sparse else None,
+                creativity_semantics=creativity_semantics,
             )}
             for candidate_id, genome in genomes.items()
         ], ensure_ascii=False),
@@ -83,6 +92,7 @@ def call_evaluation_batch(
         "generation": generation,
         "batch": batch,
         "call_id": result.call_id,
+        "prompt_path": result.call_context["prompt_path"],
         "regime": {
             "material": result.call_context["material"],
             "agent": result.resolved_family,
@@ -99,8 +109,10 @@ def _call_semantic_job(
     validation_context, context, execution_context, prompt_set, record_dispatch=None,
 ):
     """Share live routing, served validation and correction preparation."""
+    prepared_prompt = None
 
     def prepare_call(error):
+        nonlocal prepared_prompt
         context["material"] = staffing.session_material(home, session)
         selected = prompt_router.resolve(
             home, job=job + "@creativity", executor="agent_call",
@@ -110,6 +122,7 @@ def _call_semantic_job(
         prompt = prompt_router.render(bound.prompt, values)
         if error is not None:
             prompt += runners.REPAIR_SUFFIX % error
+        prepared_prompt = prompt
         return SimpleNamespace(
             prompt=prompt,
             validate=lambda reply: prompt_contracts.validate(
@@ -126,6 +139,11 @@ def _call_semantic_job(
         return answer["agent"], answer["model"], answer["effort"]
 
     def before_dispatch(agent, model, effort, _fallback):
+        if job == "evaluate_candidates":
+            context["prompt_path"] = runners.save_prompt_trace(
+                os.path.join(group.lease.task_dir, "prompts"), agent,
+                prepared_prompt, label=context["batch"],
+            )
         if record_dispatch is not None:
             context["regime_revision"] = record_dispatch({
                 "material": context["material"], "agent": agent,
@@ -190,18 +208,18 @@ def expand_progress(
     return material, result
 
 
-def _current_evaluations(state):
+def _current_evaluations(state, creativity_semantics=None):
     return {
         item["candidate_id"]: (batch["genomes"][item["candidate_id"]], item)
         for batch in state["batches"]
-        if batch["regime_revision"] == state["regime_revision"]
+        if creativity_semantics == "sparse_v2" or batch["regime_revision"] == state["regime_revision"]
         for item in batch["evaluations"]
     }
 
 
 def evaluate_wave(
     group, runner, *, store, checkpoint_key, candidates, comparison_ids,
-    reference_revision=None, **call_options,
+    reference_revision=None, creativity_semantics=None, **call_options,
 ):
     """Assess at most batch_size * concurrency candidates, then hand off.
 
@@ -211,7 +229,8 @@ def evaluate_wave(
     across waves; ``candidates`` is the work the owner requests, whereas
     ``comparison_ids`` includes every requested id and the retained survivors.
 
-    Same-regime accepted work is skipped on explicit re-entry. Old-regime work
+    Sparse accepted work is skipped regardless of evaluator configuration.
+    Legacy same-regime work is skipped on explicit re-entry. Old-regime work
     is assessed again only when the owner includes it in ``candidates``; a live
     regime change never causes automatic reassessment inside this wave.
     ``reference_revision`` is the regime revision of the owner's progress
@@ -231,7 +250,7 @@ def evaluate_wave(
         }
         store.put(checkpoint_key, checkpoint)
     state = checkpoint["evaluation"]
-    current = _current_evaluations(state)
+    current = _current_evaluations(state, creativity_semantics)
     configuration = call_options["configuration"]
     capacity = configuration["max_evaluated_candidates"] - state["accepted_count"]
     batch_size = configuration["evaluation_batch_size"]
@@ -249,15 +268,16 @@ def evaluate_wave(
             if regime != state["regime"]:
                 state["regime"] = regime
                 state["regime_revision"] += 1
-                # Keep invalidation even if this attempt is interrupted or its
-                # reply is rejected, so explicit re-entry cannot revive scores.
+                # Keep dispatch provenance even on interruption or rejection;
+                # only legacy eligibility depends on this revision.
                 store.put(checkpoint_key, checkpoint)
             return state["regime_revision"]
 
     def run_batch(ids, batch_id):
         accepted, result = call_evaluation_batch(
             group, runner, candidates={key: candidates[key] for key in ids},
-            batch=batch_id, record_dispatch=record_dispatch, **call_options,
+            batch=batch_id, record_dispatch=record_dispatch,
+            creativity_semantics=creativity_semantics, **call_options,
         )
         if accepted is not None:
             accepted["regime_revision"] = result.call_context["regime_revision"]
@@ -286,7 +306,7 @@ def evaluate_wave(
             group.ensure_quiescent()
 
     state = store.get(checkpoint_key)["evaluation"]
-    current = _current_evaluations(state)
+    current = _current_evaluations(state, creativity_semantics)
     unfinished = [candidate_id for candidate_id in comparison_ids if candidate_id not in current]
     ready = not unfinished and interruption is None
     return {
@@ -294,7 +314,7 @@ def evaluate_wave(
         "accepted_count": state["accepted_count"], "unfinished": unfinished,
         "comparison_ready": ready,
         "evaluated": [current[key] for key in comparison_ids] if ready else [],
-        "rebaseline_required": state["regime_revision"] > (
+        "rebaseline_required": creativity_semantics != "sparse_v2" and state["regime_revision"] > (
             1 if reference_revision is None else reference_revision
         ),
         "interruption": interruption,

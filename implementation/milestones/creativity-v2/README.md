@@ -410,4 +410,5 @@ the following:
 | slice_impl-01 (Admit shared search material with durable semantics) | reviewed | 1 | satisfied | 5724046 |
 | slice_doc-02 (Evolve participation and effective ordered seeds) | reviewed | 4 | satisfied | 62a47cb |
 | slice_impl-02 (Evolve participation and effective ordered seeds) | reviewed | 1 | satisfied | e1a19da |
-| slice_doc-03 (Materialize and evaluate the exact seed) | reviewed | 1 | satisfied | - |
+| slice_doc-03 (Materialize and evaluate the exact seed) | reviewed | 1 | satisfied | 79ed60d |
+| slice_impl-03 (Materialize and evaluate the exact seed) | reviewed | 1 | satisfied | - |

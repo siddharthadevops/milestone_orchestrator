@@ -16,8 +16,8 @@
       {
         "text": [
           "TASK: interpret and evaluate every supplied candidate against the formulated search objective.",
+          "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching instructions below.",
           "Read the immutable search material, including its criteria and composition guidance.",
-          "Each candidate combines one variant per dimension in an intentional supplied order.",
           "Interpret that sequence under search_material.order_semantics and composition_guidance.",
           "Preserve the supplied component order exactly: do not reorder components, substitute a",
           "better combination, repair a weak ordering, or rewrite",
@@ -27,13 +27,29 @@
           "facts from assumptions; do not invent evidence of feasibility or success.",
           "Check all hard constraints. Report violated constraint IDs and explain the violations",
           "in reason. An invalid candidate is an honest evaluation, even if it scores highly.",
-          "Use a score from 0 (least meets the criteria) to 1 (most meets them), consistently within",
-          "this batch. A score ranks this evaluation; it is not a probability or promise of success.",
           "Evaluate the unlabeled batch on its content without historical scores, rank or prestige.",
           "Return every candidate's evaluation; do not select survivors or repair candidate genes.",
-          "Semantic faithfulness, feasibility and score calibration remain model judgments."
+          "Semantic faithfulness, feasibility and score calibration remain model judgments.",
+          "For legacy only: each candidate combines one variant per dimension in an intentional order.",
+          "Use a score from 0 (least meets the criteria) to 1 (most meets them), consistently within",
+          "this batch. A score ranks this evaluation; it is not a probability or promise of success.",
+          "For sparse_v2 only: each candidate is the exact ordered seed of active pairs.",
+          "Develop the strongest complete proposal supported by that exact seed.",
+          "Retain every active pair's meaning, order and causal importance; no pair may be incidental.",
+          "Supporting inventions must be clearly proposed, never treated as established facts.",
+          "Do not substitute another combination, credit isolated genes or offer evolutionary advice.",
+          "Incoherence is an ordinary evaluation: retain the proposal and explain its limitations.",
+          "Score the whole proposal independently against the immutable task standard, from 0",
+          "(least meets the criteria) to 1 (most meets them), including incoherent or invalid proposals.",
+          "Never rank or calibrate against batch mates or other candidates, or normalize across calls.",
+          "The score is not a probability or promise of success."
         ],
-        "variables": []
+        "variables": [{
+          "name": "creativity_semantics",
+          "required": false,
+          "default": "legacy",
+          "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."
+        }]
       },
       {
         "text": [
@@ -46,7 +62,7 @@
           {
             "name": "search_material",
             "required": true,
-            "description": "Complete compact problem, dimensions, variants, order semantics, guidance and criteria as JSON."
+            "description": "Immutable problem, order semantics, guidance and criteria as JSON; legacy also includes dimensions and variants."
           },
           {
             "name": "candidates",

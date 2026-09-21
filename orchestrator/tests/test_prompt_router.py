@@ -1159,6 +1159,40 @@ class PromptRouterTest(unittest.TestCase):
                         self.assertEqual(resolved[material]["output_contract"],
                                          resolved["default"]["output_contract"])
 
+    def test_sparse_evaluation_prompt_contract(self):
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            for semantics in (None, "sparse_v2"):
+                for material in ("default", "literature", "business"):
+                    with self.subTest(semantics=semantics, material=material):
+                        values = dict(workspace="/workspace", search_material="{}", candidates="[]")
+                        if semantics is not None:
+                            values["creativity_semantics"] = semantics
+                        selected = prompt_router.resolve(home, job="evaluate_candidates@creativity",
+                                                         executor="agent_call", material=material, values=values)
+                        rendered = prompt_router.render(selected.prompt, values)
+                        self.assertIn("SAVED MATERIAL SEMANTICS: " + (semantics or "legacy"), rendered)
+                        legacy, sparse = rendered.split("For legacy only:")[1].split("For sparse_v2 only:")
+                        self.assertIn("one variant per dimension", legacy)
+                        self.assertIn("consistently within\nthis batch", legacy)
+                        for instruction in (
+                            "exact ordered seed of active pairs", "strongest complete proposal",
+                            "every active pair's meaning, order and causal importance",
+                            "no pair may be incidental", "Supporting inventions must be clearly proposed",
+                            "never treated as established facts", "Do not substitute another combination",
+                            "credit isolated genes or offer evolutionary advice",
+                            "Incoherence is an ordinary evaluation",
+                            "Score the whole proposal independently against the immutable task standard",
+                            "Never rank or calibrate against batch mates or other candidates, or normalize across calls",
+                        ):
+                            self.assertIn(instruction, sparse)
+                        self.assertNotIn("consistently within", sparse)
+                        self.assertIn("Preserve the supplied component order exactly", rendered)
+                        if material != "default":
+                            self.assertIn(material.upper() + " REFINEMENT", rendered)
+                        self.assertEqual(prompt_contracts.bind(selected.prompt).registered_section_ids,
+                                         ("evaluate_candidates_result",))
+
     def test_creation_prompt_semantics(self):
         from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
 

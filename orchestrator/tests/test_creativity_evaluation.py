@@ -22,9 +22,10 @@ from orchestrator.tests.test_tasks import creativity_configuration
 from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
 
 
-class CreativityEvaluationTest(unittest.TestCase):
+class CreativityEvaluationFixture(unittest.TestCase):
     order = group_fixture.TaskCallGroupControlTests.order
     _owned_group = group_fixture.TaskCallGroupControlTests._owned_group
+    creativity_semantics = None
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="creativity-evaluation-")
@@ -38,6 +39,7 @@ class CreativityEvaluationTest(unittest.TestCase):
         source = search_fixture.CreativitySearchTest()
         source.setUp()
         self.addCleanup(source.doCleanups)
+        self.source = source
         self.material = source.accepted_material()
         genomes = [{"format": "a", "channel": "b"}, {"format": "b", "channel": "a"}]
         self.candidates = dict(zip(("c-0", "c-1"), genomes))
@@ -68,6 +70,7 @@ class CreativityEvaluationTest(unittest.TestCase):
             search_material=self.material, candidates=self.candidates,
             comparison_ids=list(self.candidates), generation=2, execution_context=None,
             store=self.store, checkpoint_key="checkpoint",
+            creativity_semantics=self.creativity_semantics,
         )
         options.update(changes)
         return evaluation.evaluate_wave(
@@ -101,6 +104,7 @@ class CreativityEvaluationTest(unittest.TestCase):
             home=self.home, session=self.session, workspace=self.workspace,
             configuration=self.configuration, search_material=self.material,
             candidates=self.candidates, generation=2, batch="b1", execution_context=None,
+            creativity_semantics=self.creativity_semantics,
             prompt_values={"ecosystem_map": "ADDITIONAL ROOT /reference — READ-ONLY"},
         )
         options.update(changes)
@@ -146,6 +150,8 @@ class CreativityEvaluationTest(unittest.TestCase):
         options.update(changes)
         return evaluation.expand_progress(self.group, SimpleNamespace(call=physical), progress=progress, **options)
 
+
+class CreativityEvaluationTest(CreativityEvaluationFixture):
     def test_creation_uses_matching_semantics_for_prompt_and_reply(self):
         for semantics in (None, "sparse_v2"):
             with self.subTest(semantics=semantics):
@@ -350,6 +356,7 @@ class CreativityEvaluationTest(unittest.TestCase):
         })
         self.assertEqual(accepted["call_id"], result.physical_dispatches[-1]["call_id"])
         self.assertNotEqual(accepted["call_id"], result.repair["call_id"])
+        self.assertEqual(accepted["prompt_path"], result.call_context["prompt_path"])
         records, _accounting = self.evidence()
         self.assertEqual([item["call_context"]["material"] for item in records], ["literature", "business"])
 
@@ -373,6 +380,13 @@ class CreativityEvaluationTest(unittest.TestCase):
         self.assertNotIn("THIRD PROMPT", dispatched[-1][3])
         self.assertEqual(fallback.prompt_set_fallback, "stored_default")
         self.assertEqual(self.evidence()[0][-1]["prompt_set_fallback"], "stored_default")
+        records, _ = self.evidence()
+        self.assertEqual(len({item["call_context"]["prompt_path"] for item in records}), len(dispatched))
+        for record, dispatch in zip(records, dispatched):
+            with open(record["call_context"]["prompt_path"], encoding="utf-8") as trace:
+                self.assertEqual(trace.read(), dispatch[3])
+            self.assertEqual((record["family"], record["model"], record["effort"]), dispatch[:3])
+        self.assertEqual(accepted["prompt_path"], records[1]["call_context"]["prompt_path"])
 
         for _family, _model, _effort, prompt, workspace in dispatched:
             self.assertEqual(workspace, self.workspace)
@@ -381,7 +395,11 @@ class CreativityEvaluationTest(unittest.TestCase):
             self.assertIn("Do not edit files or execute proposals", prompt)
             material_text = prompt.split("IMMUTABLE SEARCH MATERIAL AND CRITERIA (JSON):\n")[1].splitlines()[0]
             batch_text = prompt.split("CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n")[1].splitlines()[0]
-            self.assertEqual(json.loads(material_text), self.material)
+            problem = dict(self.material)
+            if self.creativity_semantics == "sparse_v2":
+                problem.pop("dimensions")
+                problem.pop("variants")
+            self.assertEqual(json.loads(material_text), problem)
             inputs = json.loads(batch_text)
             self.assertEqual([item["candidate_id"] for item in inputs], list(self.candidates))
             for item in inputs:
@@ -547,8 +565,9 @@ class CreativityEvaluationTest(unittest.TestCase):
 
         handoff = self.wave(corrected)
         self.assertEqual(handoff["accepted_count"], 2)
-        self.assertEqual(handoff["unfinished"], ["c-0"])
-        self.assertTrue(handoff["rebaseline_required"])
+        sparse = self.creativity_semantics == "sparse_v2"
+        self.assertEqual(handoff["unfinished"], [] if sparse else ["c-0"])
+        self.assertEqual(handoff["rebaseline_required"], not sparse)
         accepted = self.checkpoint()["evaluation"]["batches"][-1]
 
         def failed(*_args, **_kwargs):
@@ -557,10 +576,12 @@ class CreativityEvaluationTest(unittest.TestCase):
                 "paid failure", token_usage=result.token_usage, cost_payloads=result.cost_payloads,
             )
 
+        pending = {"c-2": {"format": "a", "channel": "a"}}
         with self.assertRaises(runners.ProviderResponseError):
-            self.wave(failed)
+            self.wave(failed, candidates=pending, comparison_ids=list(pending))
         interrupted = runners.ControlledInterruptionResult("", 0, 1.0, "paused by operator")
-        handoff = self.wave(lambda *_args, **_kwargs: interrupted)
+        handoff = self.wave(lambda *_args, **_kwargs: interrupted,
+                            candidates=pending, comparison_ids=list(pending))
         self.assertEqual(handoff["evaluated"], [])
         self.assertIs(handoff["interruption"], interrupted)
         records, accounting = self.evidence()
@@ -710,12 +731,19 @@ class CreativityEvaluationTest(unittest.TestCase):
         self.assertEqual(partial["unfinished"], ["c-0"])
         self.assertEqual(partial["interruption"].interrupt_reason, "paused")
         records = len(self.evidence()[0])
+        accepted_before = self.checkpoint()["evaluation"]["batches"]
+        self.store = kvstore.LocalKVClient(self.store.directory)
+        if self.creativity_semantics == "sparse_v2":
+            staffing.edit_session(self.home, self.session, {"rigor": "high"})
         resumed = self.wave()
         self.assertTrue(resumed["comparison_ready"])
         self.assertEqual(resumed["accepted_count"], 2)
         self.assertEqual(len(self.evidence()[0]), records + 1)
+        self.assertEqual(self.checkpoint()["evaluation"]["batches"][:1], accepted_before)
+        self.assertFalse(resumed["rebaseline_required"])
 
     def test_regime_changes_withhold_comparison(self):
+        sparse = self.creativity_semantics == "sparse_v2"
         original_call = evaluation.call_evaluation_batch
         original_put = self.store.put
         for component in ("material", "agent", "model", "effort"):
@@ -763,30 +791,37 @@ class CreativityEvaluationTest(unittest.TestCase):
                     finally:
                         release.set()
                     handoff = future.result(5)
-                self.assertEqual(handoff["unfinished"], ["c-0"])
-                self.assertEqual(handoff["evaluated"], [])
-                self.assertTrue(handoff["rebaseline_required"])
+                self.assertEqual(handoff["unfinished"], [] if sparse else ["c-0"])
+                self.assertEqual(handoff["comparison_ready"], sparse)
+                expected = [(self.candidates[item["candidate_id"]], item)
+                            for item in reversed(self.reply["evaluations"])] if sparse else []
+                self.assertEqual(handoff["evaluated"], expected)
+                self.assertEqual(handoff["rebaseline_required"], not sparse)
                 batches = self.checkpoint()["evaluation"]["batches"]
                 self.assertNotEqual(batches[0]["regime"][component], batches[1]["regime"][component])
+                self.store = kvstore.LocalKVClient(self.store.directory)
+                original_put = self.store.put
                 ready = self.wave(reference_revision=1)
                 self.assertTrue(ready["comparison_ready"])
-                self.assertEqual(ready["accepted_count"], 3)
-                self.assertTrue(ready["rebaseline_required"])
-                # Between waves, a changed evaluator invalidates both survivors.
+                self.assertEqual(ready["accepted_count"], 2 if sparse else 3)
+                self.assertEqual(ready["rebaseline_required"], not sparse)
+                # Between waves, evaluator changes invalidate legacy survivors only.
                 change(False)
                 candidates = dict(self.candidates, **{"c-2": {"format": "a", "channel": "a"}})
                 changed = self.wave(candidates=candidates, comparison_ids=list(candidates), reference_revision=2)
-                self.assertEqual(changed["unfinished"], ["c-0", "c-1"])
-                self.assertFalse(changed["comparison_ready"])
+                self.assertEqual(changed["unfinished"], [] if sparse else ["c-0", "c-1"])
+                self.assertEqual(changed["comparison_ready"], sparse)
                 ready = self.wave(candidates=candidates, comparison_ids=list(candidates), reference_revision=2)
                 self.assertTrue(ready["comparison_ready"])
-                self.assertEqual(ready["accepted_count"], 6)
+                self.assertEqual(ready["accepted_count"], 3 if sparse else 6)
                 self.write_prompt("PROMPT ONLY")
                 candidates["c-3"] = {"format": "b", "channel": "b"}
                 ready = self.wave(candidates=candidates, comparison_ids=list(candidates),
                                   reference_revision=3, prompt_set="operator")
                 self.assertTrue(ready["comparison_ready"])
                 self.assertFalse(ready["rebaseline_required"])
+                self.assertEqual(ready["accepted_count"], 4 if sparse else 7)
+                self.assertEqual(self.checkpoint()["evaluation"]["batches"][:2], batches)
 
     def test_decimal_cumulative_progress_at_threshold(self):
         search = evaluation.creativity_search
@@ -1095,3 +1130,83 @@ class CreativityEvaluationTest(unittest.TestCase):
                 with self.assertRaises(runners.RunnerError):
                     self.wave(lambda *_args, **_kwargs: self.fail("fenced wave dispatched"))
                 self.group.ensure_quiescent()
+
+
+class SparseCreativityEvaluationTest(CreativityEvaluationFixture):
+    creativity_semantics = "sparse_v2"
+
+    def setUp(self):
+        super().setUp()
+        self.material = dict(self.material, dimensions=[
+            {"id": item["id"], "meaning": item["meaning"]} for item in self.material["dimensions"]
+        ], variants=[{"id": key, "text": "Action " + key} for key in ("a", "b", "c")])
+        self.store.put("checkpoint", {"search_material": self.material, "generation": 2})
+
+    # Exercise the same host, routers, correction and checkpoint seams for both contracts.
+    test_sparse_evaluation_provenance = CreativityEvaluationTest.test_each_attempt_reads_live_authorities
+    test_sparse_evaluation_configuration_continuity = CreativityEvaluationTest.test_regime_changes_withhold_comparison
+    test_wave_bounds_and_candidate_allowance = CreativityEvaluationTest.test_wave_bounds_and_candidate_allowance
+    test_checkpoint_reentry_keeps_accepted_work = CreativityEvaluationTest.test_checkpoint_reentry_keeps_accepted_work
+    test_wave_evidence_uses_common_accounting = CreativityEvaluationTest.test_wave_evidence_uses_common_accounting
+    test_wave_uses_task_controls_and_surfaces_faults = CreativityEvaluationTest.test_wave_uses_task_controls_and_surfaces_faults
+    test_batch_faults_keep_existing_conditions_and_no_retry = CreativityEvaluationTest.test_batch_faults_keep_existing_conditions_and_no_retry
+
+    def test_sparse_evaluation_input(self):
+        material = self.source.sparse_material(10, 3)
+        original = copy.deepcopy(material)
+        problem = dict(material)
+        problem.pop("dimensions")
+        problem.pop("variants")
+        pairs = [
+            {"dimension_id": "d1", "dimension": "Focus 1", "variant_id": "v1", "variant": "Action 1"},
+            {"dimension_id": "d4", "dimension": "Focus 4", "variant_id": "v2", "variant": "Action 2"},
+            {"dimension_id": "d8", "dimension": "Focus 8", "variant_id": "v0", "variant": "Action 0"},
+        ]
+        for mode in ("fixed", "interchangeable"):
+            with self.subTest(order_mode=mode):
+                genome = {item["id"]: evaluation.creativity_search.OMIT for item in material["dimensions"]}
+                genome.update(d1="v1", d4="v2", d8="v0")
+                if mode == "interchangeable":
+                    ids = list(genome)
+                    genome["__order__"] = evaluation.creativity_search.rank_order(ids, ids[::-1])
+                candidates, prompts = {"c-0": genome}, []
+
+                def physical(*args, **kwargs):
+                    prompts.append(args[1])
+                    return self.batch_result(*args, **kwargs)
+
+                accepted, _ = self.call(physical, search_material=material, candidates=candidates,
+                                        configuration=dict(self.configuration, order_mode=mode))
+                sent_material = prompts[0].split("IMMUTABLE SEARCH MATERIAL AND CRITERIA (JSON):\n")[1]
+                sent_candidates = prompts[0].split("CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n")[1]
+                self.assertEqual(json.loads(sent_material.splitlines()[0]), problem)
+                self.assertEqual(json.loads(sent_candidates.splitlines()[0]), [{
+                    "candidate_id": "c-0", "components": pairs if mode == "fixed" else pairs[::-1],
+                }])
+                self.assertEqual(accepted["genomes"], candidates)
+                self.assertEqual(material, original)
+
+    def test_sparse_evaluation_diagnostics(self):
+        self.reply["evaluations"][1].update(
+            score=0, proposal="Apply the actions sequentially to the same resource.",
+            reason="The actions undo each other, so the complete proposal is incoherent.",
+            assumptions=["The resource survives the first action."],
+        )
+        expected = [(self.candidates[item["candidate_id"]], item)
+                    for item in reversed(self.reply["evaluations"])]
+        for batch_size in (2, 1):
+            with self.subTest(batch_size=batch_size):
+                self.store.put("checkpoint", {"search_material": self.material})
+                handoff = self.wave(configuration=dict(
+                    self.configuration, evaluation_batch_size=batch_size, evaluation_concurrency=1,
+                ))
+                if batch_size == 1:
+                    handoff = self.wave()
+                self.assertTrue(handoff["comparison_ready"])
+                self.assertEqual(handoff["evaluated"], expected)
+                self.assertEqual(handoff["accepted_count"], 2)
+                batches = self.checkpoint()["evaluation"]["batches"]
+                if batch_size == 2:
+                    self.assertEqual(batches[0]["evaluations"], self.reply["evaluations"])
+                self.assertEqual({item["candidate_id"]: item for batch in batches for item in batch["evaluations"]},
+                                 {item["candidate_id"]: item for _, item in expected})
