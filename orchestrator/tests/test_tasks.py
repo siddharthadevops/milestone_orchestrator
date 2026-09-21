@@ -109,12 +109,20 @@ class TaskContractsTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, code)
 
     def test_creativity_automatic_budget_covers_requested_generations(self):
-        configuration = {"population_size": 8, "generation_limit": 10}
+        configuration = {
+            "population_size": 8,
+            "generation_limit": 10,
+            "evaluation_batch_size": 8,
+        }
         order = dict(task_order("creativity"), configuration=configuration)
         resolved = tasks.validate_order(order)["configuration"]
         self.assertEqual(resolved["max_evaluated_candidates"], 80)
         self.assertEqual(resolved["order_mode"], "interchangeable")
-        self.assertEqual(configuration, {"population_size": 8, "generation_limit": 10})
+        self.assertEqual(configuration, {
+            "population_size": 8,
+            "generation_limit": 10,
+            "evaluation_batch_size": 8,
+        })
         for budget in (8, 24, 100):
             with self.subTest(explicit_budget=budget):
                 manual = dict(configuration, max_evaluated_candidates=budget)
@@ -132,6 +140,18 @@ class TaskContractsTest(unittest.TestCase):
             for key, definition in schema.items()
             if "default" in definition
         }
+        self.assertEqual(
+            {key: defaults[key] for key in (
+                "population_size", "generation_limit",
+                "evaluation_batch_size", "evaluation_concurrency",
+            )},
+            {
+                "population_size": 10,
+                "generation_limit": 20,
+                "evaluation_batch_size": 10,
+                "evaluation_concurrency": 1,
+            },
+        )
         defaults["max_evaluated_candidates"] = defaults["population_size"] * defaults["generation_limit"]
         self.assertEqual(tasks.resolve_creativity_configuration({}), defaults)
         for key in defaults:

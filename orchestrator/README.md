@@ -466,14 +466,19 @@ standalone panel intentionally sends an empty request context, while the API
 continues to accept and preserve a non-empty `request.context`.
 
 The evaluation budget defaults to `population_size * generation_limit`, using
-the values resolved for the order. For example, eight new candidates over ten
-generations allows 80 accepted candidate evaluations. The advanced
-`max_evaluated_candidates` field may be left empty for this automatic budget,
-or set explicitly to another cap. Existing orders keep their recorded cap.
+the values resolved for the order. The advanced `max_evaluated_candidates`
+field may be left empty for this automatic budget, or set explicitly to
+another cap. Existing orders keep their recorded cap.
 The budget counts accepted evaluations, including any reassessment after an
 evaluator change; it is not a limit on tokens, money, or all physical calls.
 Stagnation and repertoire exhaustion may still end a search before its maximum
 generation count.
+
+New Creativity orders default to 10 candidate combinations over 20
+generations, with all 10 candidates from one generation evaluated in one
+batch. Evaluation concurrency remains 1: batch size controls how many
+candidates share one model call, while concurrency controls how many separate
+calls may overlap. The resulting automatic evaluation budget is 200.
 
 The generator, not the order form, decides the number of semantic genes.
 `population_size` is the number of candidate combinations per generation and

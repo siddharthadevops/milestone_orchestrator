@@ -416,7 +416,6 @@ _TASK_EXECUTORS += (
             "staffing": True, "prompt_set": True, "strategy_profile": False,
         },
         "configuration_schema": {
-            # Workload evidence: implementation/milestones/creativity/evidence.md.
             "order_mode": {
                 "type": "choice",
                 "choices": ["fixed", "interchangeable"],
@@ -425,9 +424,9 @@ _TASK_EXECUTORS += (
             **{name: {"type": "integer", "default": default,
                       "exclusive_minimum": 1 if name == "population_size" else 0}
                for name, default in {
-                   "population_size": 4, "generation_limit": 2,
+                   "population_size": 10, "generation_limit": 20,
                    "elite_count": 2,
-                   "diversity_count": 1, "evaluation_batch_size": 4,
+                   "diversity_count": 1, "evaluation_batch_size": 10,
                    "evaluation_concurrency": 1, "shortlist_size": 3,
                }.items()},
             "max_evaluated_candidates": {

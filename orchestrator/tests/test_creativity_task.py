@@ -350,7 +350,11 @@ class CreativityTaskTest(unittest.TestCase):
             ]
         order = self.order("creativity", request=self.material["objective"])
         order.update(staffing_session=self.session, configuration=legacy_creativity_configuration(
-            **tasks.resolve_creativity_configuration({"population_size": 8, "generation_limit": 10}),
+            **tasks.resolve_creativity_configuration({
+                "population_size": 8,
+                "generation_limit": 10,
+                "evaluation_batch_size": 8,
+            }),
             patience_generations=20,
         ))
         store = task_api.StandaloneTaskStore(self.home)

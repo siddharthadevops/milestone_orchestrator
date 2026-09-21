@@ -469,7 +469,11 @@ class TaskApiTest(unittest.TestCase):
         self.start_server(held)
         for submitted in (omitted, dict(order, configuration={}),
                           dict(order, configuration={"mutation_rate": 0.2}),
-                          dict(order, configuration={"population_size": 8, "generation_limit": 10}),
+                          dict(order, configuration={
+                              "population_size": 8,
+                              "generation_limit": 10,
+                              "evaluation_batch_size": 8,
+                          }),
                           dict(order, configuration={"rigor": {"evaluate_candidates": "high"}})):
             with self.subTest(configuration=submitted.get("configuration")):
                 code, response = self.request("POST", "/api/tasks", submitted)

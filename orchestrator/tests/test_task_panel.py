@@ -154,6 +154,8 @@ async function postJSON(path, payload) {
   assert.equal(closed, 1);
   control('population_size').value = '8';
   onTaskConfigurationChange(control('population_size'));
+  control('evaluation_batch_size').value = '8';
+  onTaskConfigurationChange(control('evaluation_batch_size'));
   control('generation_limit').value = '10';
   onTaskConfigurationChange(control('generation_limit'));
   assert.equal(control('max_evaluated_candidates').value, '');
@@ -164,7 +166,8 @@ async function postJSON(path, payload) {
   onTaskExecutorChange();
   assert.equal(fields.t_initial_genes_field.style.display, '');
   assert.equal(control('max_evaluated_candidates').value, '');
-  const automatic = {...defaults, population_size: 8, generation_limit: 10};
+  const automatic = {...defaults, population_size: 8, generation_limit: 10,
+    evaluation_batch_size: 8};
   assert.deepEqual(currentTaskConfiguration().configuration, automatic);
   await submitTaskForm();
   assert.deepEqual(posts[1].configuration, automatic);
