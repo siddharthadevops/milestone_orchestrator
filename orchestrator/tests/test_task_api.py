@@ -336,7 +336,7 @@ class TaskApiTest(unittest.TestCase):
         from orchestrator.tests.test_creativity_task import CreativityTaskTest
         from orchestrator.tests.test_staffing_sessions import session_body
         from orchestrator.tests.test_task_controls_api import HeldHost
-        from orchestrator.tests.test_tasks import creativity_configuration
+        from orchestrator.tests.test_tasks import creativity_configuration, legacy_creativity_configuration
 
         search = CreativityTaskTest()
         search.setUp()
@@ -360,6 +360,17 @@ class TaskApiTest(unittest.TestCase):
         search.write_prompt("PUBLIC CREATION PROMPT", "create_genes")
         project_order = dict(order, request=dict(order["request"], reference_documents=[],
                              work_area={"project": "orchestrators", "work_area": "main"}))
+        for controls in (
+            {"patience_generations": 1}, {"minimum_improvement": 0.05},
+            {"max_stagnation_expansions": 1}, {"rigor": {"expand_genes": "high"}},
+        ):
+            with self.subTest(obsolete_controls=controls):
+                code, response = self.request("POST", "/api/tasks", dict(
+                    order, configuration=dict(configuration, **controls),
+                ))
+                self.assertEqual((code, response["error"]), (400, tasks.INVALID_TASK_REQUEST))
+                self.assertEqual(held.store.records(), [])
+                self.assertEqual(held.started, [])
         for invalid, headers, expected in (
             (dict(order, initial_genes={"search_material": search.material}), None,
              (400, tasks.INVALID_TASK_REQUEST)),
@@ -402,16 +413,21 @@ class TaskApiTest(unittest.TestCase):
         self.assertTrue(refused["error"])
         self.assertEqual(held.started, [record["id"]])
 
-        # Full search is still a legacy regression; sparse acceptance ends at material admission.
+        # Resume a historical task paused before creation, retaining its obsolete controls.
         legacy = copy.deepcopy(record)
         legacy["order"].pop("creativity_semantics")
+        legacy["order"]["configuration"] = legacy_creativity_configuration(**legacy["order"]["configuration"])
+        legacy["order"]["configuration"]["rigor"]["expand_genes"] = "high"
         self._age_stored_record(held.store, legacy)
+        self.assertEqual(self.request("GET", path)[1]["task"], legacy)
+        self.assertEqual(search.calls, [])
         host = search.host()
         self.start_server(host)
         code, resumed = self.request("POST", path + "/resume", {"revision": paused["revision"]})
         self.assertEqual(code, 200, resumed)
         terminal = search._terminal(host, record["id"])
         self.assertEqual(terminal["result"]["status"], "success", terminal)
+        self.assertEqual(terminal["order"], legacy["order"])
         self.assertEqual(self.request("GET", path)[1]["task"], terminal)
         self.assertIn("PUBLIC CREATION PROMPT", search.calls[0]["prompt"])
         self.assertIn(order["request"]["request"], search.calls[0]["prompt"])
@@ -419,7 +435,7 @@ class TaskApiTest(unittest.TestCase):
         self.assertIn(json.dumps(search.references), search.calls[0]["prompt"])
         for job, role, rigor in (("create_genes", "plan", "high"),
                                  ("evaluate_candidates", "review", "medium"),
-                                 ("expand_genes", "brainstorm", "low")):
+                                 ("expand_genes", "brainstorm", "high")):
             expected = staffing.resolve(self.home, search.session, role=role, index=1, rigor=rigor).answer
             calls = [call for call in search.calls if call["job"] == job]
             self.assertTrue(calls, job)
@@ -446,6 +462,10 @@ class TaskApiTest(unittest.TestCase):
         defaults = {key: definition["default"] for key, definition in schema.items()
                     if "default" in definition}
         omitted = {key: value for key, value in order.items() if key != "configuration"}
+        search.material = dict(search.material, dimensions=[
+            {"id": dimension["id"], "meaning": dimension["meaning"]}
+            for dimension in search.material["dimensions"]
+        ], variants=[{"id": "a", "text": "Share"}, {"id": "b", "text": "Exchange"}])
         self.start_server(held)
         for submitted in (omitted, dict(order, configuration={}),
                           dict(order, configuration={"mutation_rate": 0.2}),
@@ -458,8 +478,7 @@ class TaskApiTest(unittest.TestCase):
                 expected = dict(defaults, **submitted.get("configuration", {}))
                 expected["max_evaluated_candidates"] = expected["population_size"] * expected["generation_limit"]
                 self.assertEqual(record["order"]["configuration"], expected)
-                self.assertEqual(record["order"].pop("creativity_semantics"), "sparse_v2")
-                self._age_stored_record(held.store, record)
+                self.assertEqual(record["order"]["creativity_semantics"], "sparse_v2")
                 host.start(record, search.config)
                 path = "/api/tasks/" + record["id"]
                 self.assertEqual(self.request("GET", path)[1]["task"]["order"]["configuration"], expected)
@@ -697,6 +716,8 @@ class TaskApiTest(unittest.TestCase):
             max_evaluated_candidates=4,
             evaluation_batch_size=1,
             evaluation_concurrency=1,
+            minimum_improvement=0.25, patience_generations=2, max_stagnation_expansions=3,
+            rigor={"default": "low", "expand_genes": "high"},
         )
         store = task_api.StandaloneTaskStore(self.home)
         legacy = copy.deepcopy(record)
@@ -725,11 +746,13 @@ class TaskApiTest(unittest.TestCase):
         ))
         view = task_api.creativity_view(self.home, store.record(record["id"]))
         self.assertFalse(view["initial_genes_supplied"])
+        self.assertEqual(store.record(record["id"])["order"], legacy["order"])
 
         resumed = search.host()
         resumed.resume(record["id"], search.config, paused["revision"])
         terminal = search._terminal(resumed, record["id"])
         self.assertEqual(terminal["result"]["status"], "success")
+        self.assertEqual(terminal["order"], legacy["order"])
         self.assertNotIn("order_mode", terminal["order"]["configuration"])
         checkpoint = search.checkpoint(record)
         self.assertTrue(all(

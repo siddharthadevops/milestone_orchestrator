@@ -389,14 +389,14 @@ _TASK_EXECUTORS += (
 )
 _CREATIVITY_COUNTS = (
     "population_size", "generation_limit", "max_evaluated_candidates",
-    "elite_count", "diversity_count", "patience_generations",
-    "max_stagnation_expansions", "evaluation_batch_size",
+    "elite_count", "diversity_count", "evaluation_batch_size",
     "evaluation_concurrency", "shortlist_size",
 )
-_CREATIVITY_RATES = ("mutation_rate", "minimum_improvement")
+_CREATIVITY_RATES = ("mutation_rate",)
 _CREATIVITY_JOB_STAFFING = {
     "create_genes": {"role": "plan", "index": 1},
     "evaluate_candidates": {"role": "review", "index": 1, "review_breadth": 1},
+    # Stored legacy tasks still resolve expansion staffing.
     "expand_genes": {"role": "brainstorm", "index": 1},
 }
 
@@ -409,7 +409,7 @@ _TASK_EXECUTORS += (
         "usage_examples": ["exploring a literary objective", "finding constrained business options"],
         "available_agent_configurations": (
             "Gene creation uses the first plan seat, evaluation the first review "
-            "seat, and expansion the first brainstorm seat. Optional per-job "
+            "seat. Optional per-job "
             "rigor overrides the task default, then the live staffing session."
         ),
         "execution_bindings": {
@@ -427,23 +427,23 @@ _TASK_EXECUTORS += (
                for name, default in {
                    "population_size": 4, "generation_limit": 2,
                    "elite_count": 2,
-                   "diversity_count": 1, "patience_generations": 1,
-                   "max_stagnation_expansions": 1, "evaluation_batch_size": 4,
+                   "diversity_count": 1, "evaluation_batch_size": 4,
                    "evaluation_concurrency": 1, "shortlist_size": 3,
                }.items()},
             "max_evaluated_candidates": {
                 "type": "integer", "optional": True, "exclusive_minimum": 0,
                 "placeholder": "Automatic: population × generations",
             },
-            **{name: {"type": "number", "exclusive_minimum": 0, "maximum": 1,
-                      "default": default}
-               for name, default in {"mutation_rate": 0.35, "minimum_improvement": 0.05}.items()},
+            "mutation_rate": {
+                "type": "number", "exclusive_minimum": 0, "maximum": 1,
+                "default": 0.35,
+            },
             "rigor": {
                 "type": "object", "optional": True,
                 "properties": {
                     name: {"type": "choice", "optional": True,
                            "choices": list(staffing.RIGORS)}
-                    for name in ("default",) + tuple(_CREATIVITY_JOB_STAFFING)
+                    for name in ("default", "create_genes", "evaluate_candidates")
                 },
             },
         },
@@ -1022,7 +1022,7 @@ def resolve_creativity_configuration(value):
             raise ContractError("configuration evaluation budget must cover population")
         if "rigor" in value:
             _exact_keys(
-                value["rigor"], (), ("default",) + tuple(_CREATIVITY_JOB_STAFFING),
+                value["rigor"], (), schema["rigor"]["properties"],
                 "configuration.rigor",
             )
             for name, choice in value["rigor"].items():

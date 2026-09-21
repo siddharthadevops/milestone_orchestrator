@@ -74,13 +74,19 @@ def creativity_configuration(**changes):
         "elite_count": 1,
         "diversity_count": 1,
         "mutation_rate": 1,
-        "minimum_improvement": 1,
-        "patience_generations": 1,
-        "max_stagnation_expansions": 1,
         "evaluation_batch_size": 2,
         "evaluation_concurrency": 1,
         "shortlist_size": 2,
     }
+    value.update(changes)
+    return value
+
+
+def legacy_creativity_configuration(**changes):
+    """Stored configuration for historical search, without new-order admission."""
+    value = creativity_configuration(
+        minimum_improvement=1, patience_generations=1, max_stagnation_expansions=1,
+    )
     value.update(changes)
     return value
 
@@ -137,11 +143,11 @@ class TaskContractsTest(unittest.TestCase):
         large = {key: 10 ** 6 for key in base}
         large.update(
             population_size=2 * 10 ** 6, max_evaluated_candidates=10 ** 100,
-            mutation_rate=0.125, minimum_improvement=0.0001,
+            mutation_rate=0.125,
         )
         for source in (base, large, dict(base, rigor={}), dict(base, rigor={
             "default": "medium", "create_genes": "low",
-            "evaluate_candidates": "high", "expand_genes": "medium",
+            "evaluate_candidates": "high",
         })):
             with self.subTest(configuration=source):
                 resolved = tasks.resolve_creativity_configuration(source)
@@ -159,7 +165,7 @@ class TaskContractsTest(unittest.TestCase):
                    {"elite_count": defaults["population_size"]}]
         for key in base:
             bad_values = (None, True, False, "1", [], {}, 0, -1, math.nan, math.inf)
-            bad_values += ((1.0,) if key not in ("mutation_rate", "minimum_improvement")
+            bad_values += ((1.0,) if key != "mutation_rate"
                            else (-math.inf, 1.01, 10 ** 400))
             invalid.extend(dict(base, **{key: value}) for value in bad_values)
         invalid.extend(dict(base, **change) for change in (
@@ -170,7 +176,7 @@ class TaskContractsTest(unittest.TestCase):
         invalid.extend(dict(base, rigor=value) for value in (
             None, [], "high", {"unknown": "low"}, {"model": "chosen"},
         ))
-        for job in ("default", "create_genes", "evaluate_candidates", "expand_genes"):
+        for job in ("default", "create_genes", "evaluate_candidates"):
             invalid.extend(dict(base, rigor={job: value}) for value in (
                 None, True, 1, [], {}, "", "HIGH", "maximum",
             ))
@@ -196,14 +202,16 @@ class TaskContractsTest(unittest.TestCase):
                     value,
                 )
 
-    def test_creativity_public_catalogue_and_configuration(self):
+    def test_sparse_catalogue_and_order_controls(self):
         entry = next(item for item in tasks.task_executor_catalogue() if item["id"] == "creativity")
         self.assertEqual(entry["execution_bindings"], {
             "staffing": True, "prompt_set": True, "strategy_profile": False,
         })
         schema = entry["configuration_schema"]
-        base = creativity_configuration(mutation_rate=0.25, minimum_improvement=0.02)
+        base = creativity_configuration(mutation_rate=0.25)
         self.assertEqual(set(schema), set(base) | {"order_mode", "rigor"})
+        self.assertNotIn("expansion", entry["available_agent_configurations"])
+        self.assertNotIn("brainstorm", entry["available_agent_configurations"])
         self.assertEqual(schema["order_mode"], {
             "type": "choice",
             "choices": ["fixed", "interchangeable"],
@@ -230,11 +238,23 @@ class TaskContractsTest(unittest.TestCase):
             expected["max_evaluated_candidates"] = expected["population_size"] * expected["generation_limit"]
             self.assertEqual(resolved["configuration"], expected)
         self.assertEqual(set(schema["rigor"]["properties"]), {
-            "default", "create_genes", "evaluate_candidates", "expand_genes",
+            "default", "create_genes", "evaluate_candidates",
         })
         for definition in schema["rigor"]["properties"].values():
             self.assertTrue(definition["optional"])
             self.assertEqual(definition["choices"], ["low", "medium", "high"])
+        for control in ("patience_generations", "minimum_improvement", "max_stagnation_expansions"):
+            self.assertNotIn(control, schema)
+            for value in (1, None):
+                self.assert_request_error(
+                    tasks.INVALID_TASK_REQUEST, tasks.validate_order,
+                    dict(task_order("creativity"), configuration=dict(base, **{control: value})),
+                )
+        for value in ("low", "medium", "high", None):
+            self.assert_request_error(
+                tasks.INVALID_TASK_REQUEST, tasks.validate_order,
+                dict(task_order("creativity"), configuration=dict(base, rigor={"expand_genes": value})),
+            )
         self.assertEqual([item["id"] for item in tasks.producer_task_executor_catalogue()], ["agent_call"])
         for configuration in (base, dict(base, rigor={}), dict(base, rigor={"create_genes": "high"})):
             order = dict(task_order("creativity"), configuration=configuration)
@@ -497,7 +517,8 @@ class TaskContractsTest(unittest.TestCase):
                         raw = creativity_configuration()
                         if choice is not None:
                             raw["rigor"] = choice
-                        config = tasks.resolve_creativity_configuration(raw)
+                        config = (legacy_creativity_configuration(**raw) if job == "expand_genes"
+                                  else tasks.resolve_creativity_configuration(raw))
                         request = tasks.creativity_job_staffing_request(job, config)
                         expected = dict(binding)
                         if choice:

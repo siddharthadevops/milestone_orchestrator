@@ -22,7 +22,7 @@ from orchestrator.tests import test_task_call_group as group_fixture
 from orchestrator.tests import test_task_cancel_recovery as cancel_fixture
 from orchestrator.tests import test_task_controls_api as controls_fixture
 from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
-from orchestrator.tests.test_tasks import creativity_configuration
+from orchestrator.tests.test_tasks import creativity_configuration, legacy_creativity_configuration
 from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
 
 
@@ -73,11 +73,13 @@ class CreativityTaskTest(unittest.TestCase):
 
     def admit(self, prompt_set="default", work_area=None, supplied=False, **configuration):
         configuration.setdefault("order_mode", "fixed")
+        fixture = (creativity_configuration if self.creativity_semantics == "sparse_v2"
+                   else legacy_creativity_configuration)
         order = self.order("creativity", work_area=work_area, request=search_fixture.OBJECTIVE,
                            reference_documents=self.references)
         order.update(
             staffing_session=self.session, prompt_set=prompt_set,
-            configuration=creativity_configuration(**configuration),
+            configuration=fixture(**configuration),
         )
         if supplied:
             order["initial_genes"] = {"search_material": self.material}
@@ -87,11 +89,13 @@ class CreativityTaskTest(unittest.TestCase):
 
     def legacy_order(self, order):
         """Persist historical unmarked orders for the full-search regressions."""
-        source = dict(order)
+        source = copy.deepcopy(order)
         initial = source.pop("initial_genes", None)
+        configuration = source.pop("configuration")
         store = task_api.StandaloneTaskStore(self.home)
         record = store.admit(source, {}, self.primary)
         record["order"].pop("creativity_semantics")
+        record["order"]["configuration"] = configuration
         if initial is not None:
             record["order"]["initial_genes"] = copy.deepcopy(initial)
         api_fixture.TaskApiTest._age_stored_record(store, record)
@@ -109,7 +113,8 @@ class CreativityTaskTest(unittest.TestCase):
                     if semantics:
                         expected["variants"] = [{"id": "a", "text": "Share"}, {"id": "b", "text": "Exchange"}]
                     order = self.order("creativity", request=self.material["objective"])
-                    order.update(staffing_session=self.session, configuration=creativity_configuration())
+                    fixture = creativity_configuration if semantics else legacy_creativity_configuration
+                    order.update(staffing_session=self.session, configuration=fixture())
                     if supplied:
                         order["initial_genes"] = source
                     store = task_api.StandaloneTaskStore(self.home)
@@ -178,7 +183,7 @@ class CreativityTaskTest(unittest.TestCase):
                 order.update(
                     staffing_session=self.session,
                     initial_genes=supplied,
-                    configuration=creativity_configuration(
+                    configuration=legacy_creativity_configuration(
                         order_mode=order_mode,
                         generation_limit=1,
                         max_evaluated_candidates=2,
@@ -344,10 +349,10 @@ class CreativityTaskTest(unittest.TestCase):
                 for index in range(10)
             ]
         order = self.order("creativity", request=self.material["objective"])
-        order.update(staffing_session=self.session, configuration={
-            "population_size": 8, "generation_limit": 10,
-            "patience_generations": 20,
-        })
+        order.update(staffing_session=self.session, configuration=legacy_creativity_configuration(
+            **tasks.resolve_creativity_configuration({"population_size": 8, "generation_limit": 10}),
+            patience_generations=20,
+        ))
         store = task_api.StandaloneTaskStore(self.home)
         record = self.legacy_order(order)
         self.assertEqual(record["order"]["configuration"]["max_evaluated_candidates"], 80)
@@ -373,7 +378,7 @@ class CreativityTaskTest(unittest.TestCase):
         order = self.order("creativity", request=request, reference_documents=self.references)
         order.update(
             staffing_session=self.session,
-            configuration=creativity_configuration(generation_limit=3, max_evaluated_candidates=6),
+            configuration=legacy_creativity_configuration(generation_limit=3, max_evaluated_candidates=6),
         )
         store = task_api.StandaloneTaskStore(self.home)
         record = self.legacy_order(order)
@@ -526,14 +531,7 @@ class CreativityTaskTest(unittest.TestCase):
                     self.assertIn("creativity", [item["id"] for item in catalogue["task_executors"]])
                     order = self.order("creativity", **problem)
                     order.update(configuration=configuration, staffing_session=self.session)
-                    with mock.patch.object(service, "_direct_task_config", return_value=self.config()), \
-                         mock.patch.object(host, "start"):
-                        code, response = self.request("POST", "/api/tasks", order)
-                    self.assertEqual(code, 201, response)
-                    # Continue this full-search fixture as a historical task.
-                    record = response["task"]
-                    self.assertEqual(record["order"].pop("creativity_semantics"), "sparse_v2")
-                    api_fixture.TaskApiTest._age_stored_record(host.store, record)
+                    record = self.legacy_order(order)
                     host.start(record, self.config)
                     record = self._terminal(host, record["id"])
                     code, public = self.request("GET", "/api/tasks/" + record["id"])
@@ -1492,9 +1490,14 @@ class SparseCreativityTaskTest(unittest.TestCase):
                         self.calls.clear()
                         record = self.admit(
                             supplied=True, order_mode=mode, population_size=3, generation_limit=generations,
-                            max_evaluated_candidates=budget, patience_generations=patience,
-                            minimum_improvement=improvement, max_stagnation_expansions=expansions,
+                            max_evaluated_candidates=budget,
                         )
+                        # Sparse tasks saved before catalogue cleanup retain these inert controls.
+                        record["order"]["configuration"].update(
+                            patience_generations=patience, minimum_improvement=improvement,
+                            max_stagnation_expansions=expansions,
+                        )
+                        api_fixture.TaskApiTest._age_stored_record(task_api.StandaloneTaskStore(self.home), record)
                         host = self.host()
                         host.start(record, self.config)
                         terminal = self._terminal(host, record["id"])

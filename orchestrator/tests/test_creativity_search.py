@@ -10,7 +10,7 @@ from unittest import mock
 
 from orchestrator import creativity_search as search
 from orchestrator import prompt_contracts, prompt_router, prompt_sets, tasks
-from orchestrator.tests.test_tasks import creativity_configuration
+from orchestrator.tests.test_tasks import creativity_configuration, legacy_creativity_configuration
 
 
 OBJECTIVE = "Find a way to reach readers."
@@ -864,11 +864,11 @@ class CreativitySearchTest(unittest.TestCase):
             )
 
     def test_cumulative_best_valid_progress(self):
-        configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+        configuration = legacy_creativity_configuration(
             generation_limit=12, max_evaluated_candidates=24,
             minimum_improvement=0.125, patience_generations=3,
             order_mode="fixed",
-        ))
+        )
         genomes = [{"format": f, "channel": c}
                    for f in ("a", "b") for c in ("a", "b", "c")]
 
@@ -924,7 +924,7 @@ class CreativitySearchTest(unittest.TestCase):
         self.assertEqual(empty["consecutive_expansions"], 0)
 
     def test_full_windows_bound_expansion(self):
-        configuration = creativity_configuration(
+        configuration = legacy_creativity_configuration(
             generation_limit=20, max_evaluated_candidates=40,
             minimum_improvement=0.125, patience_generations=2,
         )
@@ -970,7 +970,7 @@ class CreativitySearchTest(unittest.TestCase):
     def test_expansion_preserves_material_and_archive(self):
         material = self.accepted_material()
         original = copy.deepcopy(material)
-        configuration = creativity_configuration(generation_limit=10, max_evaluated_candidates=20)
+        configuration = legacy_creativity_configuration(generation_limit=10, max_evaluated_candidates=20)
         progress = search.new_progress()
         population = search.make_population(material["dimensions"], 2, configuration)
         self.observe_generation(progress, self.evaluated(population, [0.5, 0.25]), configuration)
@@ -1006,7 +1006,7 @@ class CreativitySearchTest(unittest.TestCase):
         all_keys = {search.genome_key(genome) for genome in choices}
         for explored in (set(), {search.genome_key(choices[0])}, all_keys):
             with self.subTest(explored=explored):
-                configuration = creativity_configuration(generation_limit=10, max_evaluated_candidates=20)
+                configuration = legacy_creativity_configuration(generation_limit=10, max_evaluated_candidates=20)
                 progress = search.new_progress()
                 pairs = self.evaluated(choices[:len(explored)], [1] * len(explored), invalid=(0, 1))
                 self.observe_generation(progress, pairs, configuration)
@@ -1024,7 +1024,7 @@ class CreativitySearchTest(unittest.TestCase):
                 self.assertEqual(progress["expansion_interventions"], 1)
         for reason, limits in (("generation_limit", {"generation_limit": 1}),
                                ("evaluation_budget", {"max_evaluated_candidates": 2})):
-            configuration = creativity_configuration(generation_limit=10, max_evaluated_candidates=20)
+            configuration = legacy_creativity_configuration(generation_limit=10, max_evaluated_candidates=20)
             configuration.update(limits)
             progress = search.new_progress()
             self.observe_generation(progress, self.evaluated(choices, [1, 1], invalid=(0, 1)), configuration)

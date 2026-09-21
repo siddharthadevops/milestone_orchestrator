@@ -12,13 +12,13 @@ from types import SimpleNamespace
 from unittest import mock
 
 from orchestrator import creativity_evaluation as evaluation
-from orchestrator import kvstore, pricing, prompt_sets, runners, staffing, task_api, tasks
+from orchestrator import kvstore, pricing, prompt_sets, runners, staffing, task_api
 from orchestrator.task_execution import ExecutionBusy
 from orchestrator.tests import test_creativity_search as search_fixture
 from orchestrator.tests import test_prompt_router as router_fixture
 from orchestrator.tests import test_task_call_group as group_fixture
 from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
-from orchestrator.tests.test_tasks import creativity_configuration
+from orchestrator.tests.test_tasks import creativity_configuration, legacy_creativity_configuration
 from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
 
 
@@ -46,9 +46,9 @@ class CreativityEvaluationFixture(unittest.TestCase):
         self.reply = {"evaluations": [pair[1] for pair in source.evaluated(
             genomes, [0.4, 1.0], invalid=(1,), prefix="c",
         )][::-1]}
-        self.configuration = tasks.resolve_creativity_configuration(
-            creativity_configuration(order_mode="fixed")
-        )
+        fixture = (creativity_configuration if self.creativity_semantics == "sparse_v2"
+                   else legacy_creativity_configuration)
+        self.configuration = fixture(order_mode="fixed")
         self.document = resolver_doc()
         for slot in ("2", "3"):
             for rigor, cell in (("low", [1, 1]), ("medium", [2, 2]), ("high", [3, 4])):
@@ -833,11 +833,11 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             (0.42000000000000004, True),
         ):
             with self.subTest(final_score=final_score):
-                self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+                self.configuration = legacy_creativity_configuration(
                     generation_limit=8, max_evaluated_candidates=20,
                     minimum_improvement=0.02, patience_generations=2,
                     order_mode="fixed",
-                ))
+                )
                 self.store.put("checkpoint", {"search_material": self.material})
                 progress = search.new_progress()
                 for generation, (score, genome) in enumerate(zip((0.40, 0.41, final_score), genomes)):
@@ -867,11 +867,11 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
 
     def test_rebaseline_without_progress_credit(self):
         search = evaluation.creativity_search
-        self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+        self.configuration = legacy_creativity_configuration(
             generation_limit=10, max_evaluated_candidates=20, minimum_improvement=0.125,
             patience_generations=3, evaluation_batch_size=1, evaluation_concurrency=2,
             order_mode="fixed",
-        ))
+        )
         progress = search.new_progress()
         assessments = {"c-0": (0.25, True), "c-1": (0.125, True),
                        "c-2": (0.5, True), "c-3": (0.8125, True)}
@@ -933,11 +933,11 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
 
     def test_progress_rebaseline_ignores_late_old_regime_completion(self):
         search = evaluation.creativity_search
-        self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+        self.configuration = legacy_creativity_configuration(
             generation_limit=10, max_evaluated_candidates=20, minimum_improvement=0.125,
             patience_generations=3, evaluation_batch_size=1, evaluation_concurrency=2,
             order_mode="fixed",
-        ))
+        )
         progress = search.new_progress()
         search.begin_generation(progress, self.candidates, self.configuration)
         self.progress_wave(progress)
@@ -992,9 +992,9 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
 
     def test_progress_limits_and_interrupted_reassessment(self):
         search = evaluation.creativity_search
-        self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+        self.configuration = legacy_creativity_configuration(
             generation_limit=1, max_evaluated_candidates=20, order_mode="fixed",
-        ))
+        )
         progress = search.new_progress()
         search.begin_generation(progress, self.candidates, self.configuration)
         self.progress_wave(progress)
@@ -1033,11 +1033,11 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
 
     def test_progress_budget_stops_incomplete_rebaseline(self):
         search = evaluation.creativity_search
-        self.configuration = tasks.resolve_creativity_configuration(creativity_configuration(
+        self.configuration = legacy_creativity_configuration(
             generation_limit=10, max_evaluated_candidates=4,
             evaluation_batch_size=1, evaluation_concurrency=2,
             order_mode="fixed",
-        ))
+        )
         for item in self.reply["evaluations"]:
             item.update(score=0.25, constraint_valid=True, constraint_violations=[])
         progress = search.new_progress()

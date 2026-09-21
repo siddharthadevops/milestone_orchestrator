@@ -41,7 +41,7 @@ class TaskPanelTests(unittest.TestCase):
         binding = {"project": "mine", "work_area": "main"}
         session = staffing.create_session(server.home, session_body(work_area=binding))["id"]
         configuration = creativity_configuration(
-            max_evaluated_candidates=12, mutation_rate=0.25, minimum_improvement=0.02,
+            max_evaluated_candidates=12, mutation_rate=0.25,
         )
         names = (
             "esc", "taskExecutorEntry", "taskConfigurationApplicable", "taskConfigurationValue",
@@ -132,6 +132,10 @@ async function postJSON(path, payload) {
   const defaults = Object.fromEntries(Object.entries(schema).filter(([, definition]) => definition.default !== undefined)
     .map(([key, definition]) => [key, definition.default]));
   renderTaskExecutorEditor();
+  for (const key of ['patience_generations', 'minimum_improvement', 'max_stagnation_expansions',
+                     'rigor.expand_genes']) assert.equal(control(key), undefined);
+  assert.deepEqual(controls.filter(c => c.dataset.taskConfig.startsWith('rigor.'))
+    .map(c => c.dataset.taskConfig).sort(), ['rigor.create_genes', 'rigor.default', 'rigor.evaluate_candidates']);
   assert.match(fields.task_configuration.innerHTML, /Candidates per generation/);
   assert.equal(control('order_mode').value, 'interchangeable');
   for (const [key, value] of Object.entries(defaults)) assert.equal(control(key).value, String(value));
