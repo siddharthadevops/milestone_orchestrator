@@ -53,6 +53,9 @@
         "variables": []
       },
       {
+        "ref": "canonical_slice_plan_format"
+      },
+      {
         "ref": "producer_planning"
       },
       {

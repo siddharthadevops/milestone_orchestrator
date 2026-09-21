@@ -50,6 +50,7 @@ PreparedSessionCall = collections.namedtuple(
 )
 
 QUESTIONER_READINESS_SECTION_ID = "questioner_readiness"
+_CANONICAL_SLICE_PLAN_FORMAT_HEADING = "CANONICAL SLICE PLAN FORMAT"
 
 
 def questioner_readiness_instruction():
@@ -63,6 +64,23 @@ def questioner_readiness_instruction():
             "  only when no material anti-drift question or objection remains;",
             "  otherwise return ready: false. This judgment is a binding vote",
             "  and the session cannot close without it.",
+        ],
+        "variables": [],
+    }
+
+
+def canonical_slice_plan_format_instruction():
+    """The skeleton grammar shared by its author and milestone editors."""
+    return {
+        "text": [
+            _CANONICAL_SLICE_PLAN_FORMAT_HEADING,
+            "If this turn creates or edits the milestone skeleton, keep exactly one",
+            "`## Canonical slice plan` heading followed directly, or after one empty line,",
+            "by one fenced `json` object rooted `{\"slices\":[...]}`. Array order is",
+            "delivery. Each slice has exactly a unique integer `id`, non-empty `title`,",
+            "`intent`, and `producer_task_executor` with exactly `draft_slice_note`",
+            "and `implement`. Configuration is not part of the plan, and no duplicate",
+            "plan is returned in the reply.",
         ],
         "variables": [],
     }
@@ -254,6 +272,11 @@ def charge_from_state(state):
     return None if charge is None else read_charge(charge)
 
 
+def _milestone_skeleton_charge(charge):
+    repository = charge.get("repository") if isinstance(charge, dict) else None
+    return isinstance(repository, dict) and "skeleton_path" in repository
+
+
 def prepare_turn(
     home, state, participant, round_number, target_revision,
     correction=None, staffing_session=None,
@@ -416,6 +439,9 @@ def prepare_turn(
             role == "common_sense" and binding_agreement
         ),
         binding_agreement=binding_agreement,
+        milestone_skeleton=(
+            repository_backed and _milestone_skeleton_charge(charge)
+        ),
     )
     attempt = session_repository.begin_attempt(state, charge, role)
     return prepared._replace(
@@ -472,6 +498,7 @@ def prepare(
     correction=None,
     require_questioner_readiness=False,
     binding_agreement=False,
+    milestone_skeleton=False,
 ):
     """Resolve and bind one physical Brainstorming turn attempt."""
     if job not in ROUTED_SESSION_JOBS:
@@ -494,6 +521,14 @@ def prepare(
     if type(binding_agreement) is not bool:
         raise prompt_router.PromptRouterError(
             "binding_agreement must be a boolean"
+        )
+    if type(milestone_skeleton) is not bool:
+        raise prompt_router.PromptRouterError(
+            "milestone_skeleton must be a boolean"
+        )
+    if milestone_skeleton and job not in SESSION_JOBS:
+        raise prompt_router.PromptRouterError(
+            "milestone skeleton law requires a milestone session job"
         )
     if require_questioner_readiness and role != "common_sense":
         raise prompt_router.PromptRouterError(
@@ -553,7 +588,7 @@ def prepare(
             )
         charge_values["contract_correction"] = correction
 
-    consumer_instructions = (
+    base_consumer_instructions = (
         (questioner_readiness_instruction(),)
         if require_questioner_readiness else ()
     )
@@ -562,12 +597,24 @@ def prepare(
         if require_questioner_readiness else ()
     )
 
+    def consumer_instructions(prompt):
+        instructions = list(base_consumer_instructions)
+        skeleton_format = canonical_slice_plan_format_instruction()
+        has_skeleton_format = skeleton_format in prompt["instructions"]
+        if (
+            milestone_skeleton
+            and role == "initial_position"
+            and not has_skeleton_format
+        ):
+            instructions.append(skeleton_format)
+        return tuple(instructions)
+
     def validate_selected(prompt, _defaulted_variables):
         try:
             bound = prompt_contracts.bind(
                 prompt,
                 consumer_sections=consumer_sections,
-                consumer_instructions=consumer_instructions,
+                consumer_instructions=consumer_instructions(prompt),
             )
         except contracts.ContractError as exc:
             raise prompt_sets.PromptSetError(
@@ -642,7 +689,7 @@ def prepare(
     bound = prompt_contracts.bind(
         resolution.prompt,
         consumer_sections=consumer_sections,
-        consumer_instructions=consumer_instructions,
+        consumer_instructions=consumer_instructions(resolution.prompt),
     )
     reserved = prompt_contracts.reserved_output_fields(bound)
     for extension in extensions:

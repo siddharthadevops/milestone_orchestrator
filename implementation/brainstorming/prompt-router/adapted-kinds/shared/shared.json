@@ -42,16 +42,23 @@
         }
       ]
     },
-    "producer_planning": {
+    "canonical_slice_plan_format": {
       "text": [
-        "SLICE PRODUCER PLANNING",
-        "Write exactly one `## Canonical slice plan` heading followed directly, or after one empty line,",
+        "CANONICAL SLICE PLAN FORMAT",
+        "If this turn creates or edits the milestone skeleton, keep exactly one",
+        "`## Canonical slice plan` heading followed directly, or after one empty line,",
         "by one fenced `json` object rooted `{\"slices\":[...]}`. Array order is",
         "delivery. Each slice has exactly a unique integer `id`, non-empty `title`,",
         "`intent`, and `producer_task_executor` with exactly `draft_slice_note`",
-        "and `implement`.",
-        "Choose both executor ids from the catalogue below. Configuration is not",
-        "part of the plan, and no duplicate plan is returned in the reply.",
+        "and `implement`. Configuration is not part of the plan, and no duplicate",
+        "plan is returned in the reply."
+      ],
+      "variables": []
+    },
+    "producer_planning": {
+      "text": [
+        "SLICE PRODUCER PLANNING",
+        "Choose both executor ids from the catalogue below.",
         "TASK EXECUTOR CATALOGUE:",
         "{{task_executor_catalogue}}"
       ],

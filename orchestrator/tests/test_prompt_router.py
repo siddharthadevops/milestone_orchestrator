@@ -7,7 +7,13 @@ import subprocess
 import tempfile
 import unittest
 
-from orchestrator import prompt_contracts, prompt_router, prompt_sets, staffing
+from orchestrator import (
+    prompt_contracts,
+    prompt_router,
+    prompt_sets,
+    session_calls,
+    staffing,
+)
 
 
 CORPUS = (
@@ -167,15 +173,22 @@ class PromptRouterTest(unittest.TestCase):
             },
         )
         planning_refs = []
+        format_refs = []
         for member, document in reviewed.items():
             if member == "shared/shared.json":
                 continue
             for part in document["instructions"]["parts"]:
                 if part.get("ref") == "producer_planning":
                     planning_refs.append(member)
+                if part.get("ref") == "canonical_slice_plan_format":
+                    format_refs.append((member, part.get("mount")))
             contracts = json.dumps(document["output_contract"])
             self.assertNotIn('"slices"', contracts)
         self.assertEqual(planning_refs, ["milestone/draft_skeleton.json"])
+        self.assertEqual(
+            format_refs,
+            [("milestone/draft_skeleton.json", None)],
+        )
 
         actual_goldens = {
             path.relative_to(CORPUS).as_posix()
@@ -329,6 +342,24 @@ class PromptRouterTest(unittest.TestCase):
                               else "contrary_position"),
                         lead=numeric_lead,
                     )
+
+    def test_canonical_slice_plan_format_is_shared_without_the_catalogue(self):
+        marker = "CANONICAL SLICE PLAN FORMAT"
+        shared = self.prompt_set.documents["shared/shared.json"]["units"]
+        self.assertEqual(
+            shared["canonical_slice_plan_format"],
+            session_calls.canonical_slice_plan_format_instruction(),
+        )
+        draft = prompt_router.assemble(
+            self.prompt_set,
+            job="draft_skeleton@skeleton",
+            executor="agent_call",
+            material="document",
+            values=self.values("draft_skeleton@skeleton"),
+        )
+        draft_text = self.text(draft)
+        self.assertEqual(draft_text.count(marker), 1)
+        self.assertIn("TASK EXECUTOR CATALOGUE:", draft_text)
 
     def test_standalone_brainstorming_has_its_own_closed_route(self):
         expected_questions = {

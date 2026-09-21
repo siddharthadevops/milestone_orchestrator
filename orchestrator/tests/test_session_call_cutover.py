@@ -198,6 +198,79 @@ class SessionCallCutoverTest(unittest.TestCase):
                 "review_round@slice_impl", "initial_position", True
             )
 
+    def test_only_milestone_editors_receive_conditional_skeleton_format(self):
+        marker = "CANONICAL SLICE PLAN FORMAT"
+        conditional = (
+            "If this turn creates or edits the milestone skeleton"
+        )
+        for job, artifact_type in (
+            ("draft_slice_note@slice_doc", None),
+            ("implement@slice_impl", None),
+            ("rethink", "document"),
+            ("rethink", "implementation"),
+        ):
+            with self.subTest(milestone_job=job, artifact_type=artifact_type):
+                prepared = self.prepare(
+                    job,
+                    "initial_position",
+                    True,
+                    artifact_type=artifact_type,
+                    milestone_skeleton=True,
+                )
+                self.assertEqual(prepared.prompt.count(marker), 1)
+                self.assertIn(conditional, prepared.prompt)
+                self.assertNotIn("TASK EXECUTOR CATALOGUE:", prepared.prompt)
+
+        rethink = self.prepare(
+            "rethink",
+            "initial_position",
+            True,
+            artifact_type="document",
+            milestone_skeleton=True,
+        )
+        self.assertEqual(
+            list(rethink.bound.question_ids),
+            ["turn_environment_fit", "turn_human_scale"],
+        )
+        self.assertNotIn("DUE DILIGENCE", rethink.prompt)
+
+        for role, lead in (
+            ("contrary_position", False),
+            ("common_sense", False),
+        ):
+            with self.subTest(non_editing_role=role):
+                prepared = self.prepare(
+                    "rethink",
+                    role,
+                    lead,
+                    artifact_type="document",
+                    milestone_skeleton=True,
+                )
+                self.assertNotIn(marker, prepared.prompt)
+
+        for job in (
+            prompt_router.STANDALONE_SESSION_JOB,
+            prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
+        ):
+            with self.subTest(standalone_job=job):
+                prepared = self.prepare(
+                    job, "initial_position", True
+                )
+                self.assertNotIn(marker, prepared.prompt)
+
+        milestone_repository = repository_context(self.workspace)
+        reviewed_repository = {
+            "state_path": os.path.join(self.workspace, "state.json"),
+            "pre_session_commit": "0" * 40,
+            "mode": "standalone_reviewed",
+        }
+        self.assertTrue(session_calls._milestone_skeleton_charge(
+            {"repository": milestone_repository}
+        ))
+        self.assertFalse(session_calls._milestone_skeleton_charge(
+            {"repository": reviewed_repository}
+        ))
+
     def test_standalone_repository_charge_is_small_and_closed(self):
         charge = {
             "job": prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
@@ -300,6 +373,7 @@ class SessionCallCutoverTest(unittest.TestCase):
         self.assertIn("current checkout", prepared.prompt)
         self.assertNotIn("docs/decision.md", prepared.prompt)
         self.assertIn("the repo you execute in", prepared.prompt)
+        self.assertNotIn("CANONICAL SLICE PLAN FORMAT", prepared.prompt)
         self.assertEqual(
             routed.call_args.kwargs["job"],
             prompt_router.STANDALONE_REPOSITORY_SESSION_JOB,
@@ -964,6 +1038,16 @@ class SessionCallCutoverTest(unittest.TestCase):
         self.assertEqual(
             [call.kwargs["material"] for call in routed.call_args_list[-2:]],
             ["lawyer", "code"],
+        )
+        self.assertEqual(
+            first.prompt.count("CANONICAL SLICE PLAN FORMAT"), 1
+        )
+        self.assertEqual(
+            second.prompt.count("CANONICAL SLICE PLAN FORMAT"), 1
+        )
+        self.assertEqual(
+            list(second.bound.question_ids),
+            ["turn_environment_fit", "turn_human_scale"],
         )
         self.assertNotEqual(first.prompt, second.prompt)
         expected_values = {
