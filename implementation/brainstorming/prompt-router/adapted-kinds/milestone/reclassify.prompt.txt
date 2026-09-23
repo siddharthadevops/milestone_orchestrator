@@ -50,7 +50,7 @@ A deferred finding remains recorded as tracked debt and available
 for operator review after milestone completion. Deferral neither
 discards it nor blocks milestone completion.
 
-WHO BUILDS ON IT: slice docs drafted by codex (gpt-5.6-sol, max effort); implementation built by codex (gpt-5.6-sol, max effort) — weigh the reading an agent at
+WHO BUILDS ON IT: slice docs drafted by codex (gpt-6-sol, max effort); implementation built by codex (gpt-6-sol, max effort) — weigh the reading an agent at
 that strength actually makes, not a hypothetical junior's.
 
 If the finding touches correctness, behaviour, or test coverage

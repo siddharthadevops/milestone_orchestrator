@@ -255,14 +255,12 @@ def select_survivors(evaluated, configuration, *, dimensions=None, creativity_se
     """Keep scored elites and structural diversity under the saved semantics.
 
     Input and output are (genome, accepted evaluation) pairs. The caller can
-    combine retained and newly evaluated pairs here. Legacy selection prefers
-    valid candidates, falling back to provisional invalid parents. Sparse_v2
-    uses all returned scores, with effective identity and structural distance.
-    Duplicate identities keep their highest eligible score. Genome mappings
-    are copied; evaluations remain unchanged.
+    combine retained and newly evaluated pairs here. Valid candidates are
+    preferred; rejected candidates remain provisional parents only until a
+    valid candidate exists. Duplicate identities keep their highest eligible
+    score. Genome mappings are copied; evaluations remain unchanged.
     """
-    eligible = (list(evaluated) if creativity_semantics == "sparse_v2" else
-                [pair for pair in evaluated if pair[1]["constraint_valid"]])
+    eligible = [pair for pair in evaluated if pair[1]["constraint_valid"]]
     if not eligible:
         eligible = list(evaluated)
     ranked = sorted(eligible, key=lambda pair: pair[1]["score"], reverse=True)

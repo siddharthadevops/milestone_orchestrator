@@ -539,17 +539,28 @@ class TaskApiTest(unittest.TestCase):
 
         def physical(*args, **kwargs):
             result = search.physical(*args, **kwargs)
-            if search.calls[-1]["job"] == "create_genes":
+            job = search.calls[-1]["job"]
+            if job == "create_genes":
                 return runners.RunnerResult(result.text, 0, 1.0)  # No provider usage/price.
             reply = json.loads(result.text)
+            if job == "compose_candidates":
+                for item in reply["compositions"]:
+                    item["proposal"] = (
+                        '<img src=x onerror="alert(1)"> A useful proposal.\nA second line.'
+                    )
+                    search.compositions[item["candidate_id"]] = item["proposal"]
+                return search.result(reply)
             for item in reply.get("evaluations", []):
                 if sparse:
-                    valid = not all_zero and len(assessed) == 1
-                    item.update(score=0 if all_zero else (0.9 if not assessed else 0.4),
-                                constraint_valid=valid, constraint_violations=[] if valid else ["budget"])
+                    valid = not all_zero and not assessed
+                    item.update(score=0.9 if valid else 0,
+                                constraint_valid=valid,
+                                constraint_violations=(
+                                    [] if valid else ["__insufficient_detail__"]
+                                ))
                     assessed.append(item["candidate_id"])
-                item.update(proposal='<img src=x onerror="alert(1)"> A useful proposal.\nA second line.',
-                            reason="Fits the objective & constraints.", assumptions=["Readers have time.", "Budget holds."])
+                item.update(reason="Fits the objective & constraints.",
+                            assumptions=["Readers have time.", "Budget holds."])
             return search.result(reply)
 
         host = search.host(physical)
@@ -608,7 +619,10 @@ class TaskApiTest(unittest.TestCase):
                     self.assertIsNone(pages["no_progress"]["creativity"])
                     self.assertIsNone(pages["genes"]["creativity"]["stop_reason"])
                     self.assertEqual(pages["batch"]["creativity"]["evaluated_candidates"], 1)
-                    self.assertEqual(len(pages["batch"]["creativity"]["best_candidates"]), 1)
+                    self.assertEqual(
+                        len(pages["batch"]["creativity"]["best_candidates"]),
+                        0 if all_zero else 1,
+                    )
                     self.assertEqual(pages["paused"]["lifecycle"]["status"], "paused")
                     self.assertIsNone(pages["prepared"]["task"]["result"])
                     for stage, page in pages.items():
@@ -632,26 +646,40 @@ class TaskApiTest(unittest.TestCase):
                             self.assertEqual(projected["active_count"], len(projected["components"]))
                             self.assertEqual(projected["active_count"] + projected["omitted_count"], 10)
                         best = view["best_candidates"]
-                        ranked = sorted((item for _, item in saved), key=lambda item: item["score"], reverse=True)[:2]
+                        ranked = sorted(
+                            (item for _, item in saved if item["constraint_valid"]),
+                            key=lambda item: item["score"], reverse=True,
+                        )[:2]
                         self.assertEqual([{key: item[key] for key in ranked[0]} for item in best], ranked)
                         self.assertEqual(view["best_score"], ranked[0]["score"] if ranked else None)
                         self.assertEqual(view["best_candidate_valid"], ranked[0]["constraint_valid"] if ranked else None)
                     view = pages["terminal"]["creativity"]
+                    material = view["search_material"]
+                    selected_variant = material["variants"][-1]
                     first_generation = sorted(view["candidate_evaluations"][:2], key=lambda item: item["active_count"])
                     for item, active in zip(first_generation, (3, 10)):
-                        ids = list(range(active))
+                        dimensions = material["dimensions"][:active]
                         if mode == "interchangeable":
-                            ids.reverse()
+                            dimensions.reverse()
                         self.assertEqual(item["components"], [
-                            {"dimension_id": "d%s" % i, "dimension": "<Focus & %s>" % i,
-                             "variant_id": "v0", "variant": "<Action & 0>"} for i in ids
+                            {
+                                "dimension_id": dimension["id"],
+                                "dimension": dimension["meaning"],
+                                "variant_id": selected_variant["id"],
+                                "variant": selected_variant["text"],
+                            }
+                            for dimension in dimensions
                         ])
                     self.assertFalse(view["candidate_evaluations"][0]["current_regime"])
                     self.assertTrue(view["candidate_evaluations"][-1]["current_regime"])
-                    self.assertFalse(view["best_candidates"][0]["constraint_valid"])
                     if all_zero:
+                        self.assertEqual(view["best_candidates"], [])
                         self.assertTrue(all(item["score"] == 0 and not item["constraint_valid"]
                                             for item in view["candidate_evaluations"]))
+                    else:
+                        self.assertTrue(all(
+                            item["constraint_valid"] for item in view["best_candidates"]
+                        ))
                     self.assertEqual(view["stop_reason"], "generation_limit")
                     self.assertEqual(view["best_candidates"], pages["terminal"]["task"]["result"]["native_result"]["proposals"])
 

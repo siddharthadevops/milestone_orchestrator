@@ -1,18 +1,12 @@
 {
   "kind": "create_genes",
   "process": "milestone",
-  "description": "Extract a small literal vocabulary for sparse creativity, or legacy search material for an old order.",
+  "description": "Extract a small literal literary vocabulary for sparse creativity, or legacy search material for an old order.",
   "instructions": {
     "parts": [
-      {
-        "ref": "header"
-      },
-      {
-        "ref": "project_context"
-      },
-      {
-        "ref": "creativity_exploration"
-      },
+      {"ref": "header"},
+      {"ref": "project_context"},
+      {"ref": "creativity_exploration"},
       {
         "text": [
           "TASK: extract the vocabulary used by the creativity driver from the operator's problem.",
@@ -39,45 +33,30 @@
           "difference where relevant; novelty never replaces faithfulness or feasibility."
         ],
         "variables": [
-          {
-            "name": "creativity_semantics",
-            "required": false,
-            "default": "legacy",
-            "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."
-          },
-          {
-            "name": "creativity_contract",
-            "required": false,
-            "default": "separated_gene_pool_v1",
-            "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."
-          }
+          {"name": "creativity_semantics", "required": false, "default": "legacy", "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."},
+          {"name": "creativity_contract", "required": false, "default": "separated_gene_pool_v1", "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."}
         ]
       },
       {
         "text": [
-          "OPERATOR REQUEST:",
-          "{{objective}}",
-          "CONTEXT:",
-          "{{context}}",
-          "ORDERED REFERENCE PATHS (JSON array; may be empty):",
-          "{{references}}"
+          "LITERATURE REFINEMENT: for sparse_v2, extract only the ten subjects, ten verbs and",
+          "ten adjectives requested above. Prefer words evidenced by the assignment and restrained",
+          "adjacent vocabulary. Do not write the story, invent lore or scenes, interpret motives,",
+          "critique the manuscript, or decide what a character should do. For legacy, derive movable",
+          "narrative units only where they serve the objective, and preserve supplied continuity,",
+          "voice and stylistic constraints without turning judgment lenses into abstract dimensions."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "OPERATOR REQUEST:", "{{objective}}", "CONTEXT:", "{{context}}",
+          "ORDERED REFERENCE PATHS (JSON array; may be empty):", "{{references}}"
         ],
         "variables": [
-          {
-            "name": "objective",
-            "required": true,
-            "description": "Complete original operator request."
-          },
-          {
-            "name": "context",
-            "required": true,
-            "description": "Admitted context; may be empty."
-          },
-          {
-            "name": "references",
-            "required": true,
-            "description": "JSON array of admitted reference paths in operator order."
-          }
+          {"name": "objective", "required": true, "description": "Complete original operator request."},
+          {"name": "context", "required": true, "description": "Admitted context; may be empty."},
+          {"name": "references", "required": true, "description": "JSON array of admitted reference paths in operator order."}
         ]
       }
     ]
@@ -87,18 +66,12 @@
       "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)"
     ],
     "items": [
-      {
-        "id": "machinery_trust",
-        "text": "Did this search vocabulary turn something already established by a trusted producer or source into a workaround or defensive gene? In software this includes a field our own producer must emit; in narrative work it includes settled canon. State what you checked and any case found."
-      },
-      {
-        "id": "environment_fit",
-        "text": "What standard does the surrounding work actually use—engineering, audience, genre, form, or stage—and does this search vocabulary assume a higher or different standard the request did not demand? State the evidence and any excess found."
-      },
-      {
-        "id": "human_scale",
-        "text": "Put the search vocabulary next to the request: are its units at the grain and size the human meant, or has it exploded literal details until the search is larger than the problem? State what you checked."
-      }
+      {"id": "environment_fit", "text": "Does the extracted vocabulary match the declared audience, genre, form, and editorial stage while preserving deliberate voice, ambiguity, rhythm, and unconventional form? State the evidence and any excess found."},
+      {"id": "human_scale", "text": "Put the vocabulary next to the brief: is it the smallest useful repertoire at the grain and size requested, with no unrelated polish or exhaustive literary taxonomy? State what you checked."},
+      {"id": "character_idiolect", "text": "If the supplied material contains character voice, did the extracted vocabulary preserve only evidenced markers of each character's idiolect—lexicon, syntax, rhythm, register, and habitual omissions—without rewriting the character or judging what they should do? If no character voice is supplied, answer not applicable."},
+      {"id": "reader_emotion", "text": "What concrete emotion would a result built from this vocabulary most likely produce in a reader, and which words would drive that response?"},
+      {"id": "reader_legibility", "text": "Would an ordinary reader be able to understand the eventual result using only the supplied context? Name any missing context, but do not fill it in or turn it into a new requirement."},
+      {"id": "meaningful_surprise", "text": "Using the creative freedom available in the assignment, would a result built from this vocabulary surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Identify the words that create that potential."}
     ]
   },
   "output_contract": {
@@ -124,9 +97,7 @@
         ],
         "variables": []
       },
-      {
-        "ref": "questions_output"
-      }
+      {"ref": "questions_output"}
     ]
   }
 }

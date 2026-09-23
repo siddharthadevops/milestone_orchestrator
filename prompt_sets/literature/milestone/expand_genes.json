@@ -1,0 +1,97 @@
+{
+  "kind": "expand_genes",
+  "process": "milestone",
+  "description": "Offer new variants within existing search dimensions after stagnation.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "creativity_exploration"
+      },
+      {
+        "text": [
+          "TASK: expand the repertoire after exploration has stalled, using the formulated search objective.",
+          "Read the complete search material, promising evaluated candidates and compact explored",
+          "account. Identify useful alternatives that the existing repertoire leaves unexplored.",
+          "Suggest new variants only within existing dimensions, keeping their position-independent",
+          "unit meanings intact wherever they move on the declared order axis.",
+          "Do not add, rename or remove dimensions, edit existing variants, or change the objective,",
+          "facts, constraints, assumptions, unknowns, order semantics, composition guidance or evaluation criteria.",
+          "Make each addition concrete and compatible with combining one variant per dimension.",
+          "Explain why it may open a useful direction toward the objective while respecting hard",
+          "constraints. Distinguish evidence from assumptions in that reason; do not invent facts.",
+          "Use promising candidates as context, including their validity, violations and scores;",
+          "an invalid candidate is evidence about a combination, not proof that its individual",
+          "genes are useless. Use the explored account to avoid merely relabeling",
+          "existing choices. Seek meaningful alternatives, not novelty for its own sake.",
+          "Return an empty additions list when no useful new variant is apparent. The driver owns",
+          "applying additions, selection and stopping. New IDs do not prove semantic novelty;",
+          "usefulness, feasibility and meaningful difference remain model judgments."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "SEARCH OBJECTIVE:",
+          "{{objective}}",
+          "COMPLETE SEARCH MATERIAL (JSON):",
+          "{{search_material}}",
+          "PROMISING EVALUATED CANDIDATES (JSON):",
+          "{{promising_candidates}}",
+          "COMPACT EXPLORED ACCOUNT:",
+          "{{explored_account}}"
+        ],
+        "variables": [
+          {
+            "name": "objective",
+            "required": true,
+            "description": "Formulated objective from the accepted search material."
+          },
+          {
+            "name": "search_material",
+            "required": true,
+            "description": "Complete current search material as JSON, including all existing dimensions and variants."
+          },
+          {
+            "name": "promising_candidates",
+            "required": true,
+            "description": "Promising evaluated candidates as JSON, including validity evidence and scores; may be empty."
+          },
+          {
+            "name": "explored_account",
+            "required": true,
+            "description": "Compact account of combinations and directions already explored."
+          }
+        ]
+      }
+    ]
+  },
+  "questions": {
+    "intro": [],
+    "items": []
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "expand_genes_result",
+        "text": [
+          "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+          "The only top-level key is additions. No status, kind or questions envelope.",
+          "additions is a possibly empty list of exactly {\"dimension_id\":\"...\",",
+          "\"variants\":[{\"id\":\"...\",\"text\":\"...\",\"reason\":\"...\"}]} entries.",
+          "All objects are closed. Every dimension_id, id, text and reason is a non-blank string.",
+          "Each entry names an existing dimension once and contains at least one variant.",
+          "Variant IDs must be new within that dimension and unique in the reply for it; IDs",
+          "may be reused across different dimensions. No changed dimensions, existing variants",
+          "or extra fields are allowed. Empty additions is an honest exhausted repertoire."
+        ],
+        "variables": []
+      }
+    ]
+  }
+}

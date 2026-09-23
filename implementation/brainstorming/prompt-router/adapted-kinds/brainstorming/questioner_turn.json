@@ -148,6 +148,10 @@
       {
         "id": "request_focus",
         "text": "Is the discussion still centered on the initial request, or has it drifted to a different problem? Answer, backed by a brief description of where the discussion stands relative to the initial request."
+      },
+      {
+        "id": "turn_machinery_trust",
+        "text": "Did your spoken questions test whether either position introduces a workaround or defensive mechanism around behavior, facts, or an artifact already established by a trusted producer or source instead of using that authority directly? Answer briefly, without proposing the alternative."
       }
     ]
   },

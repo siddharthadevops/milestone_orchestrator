@@ -457,13 +457,16 @@ ordered semantic components to evaluation; the synthetic value is never a
 prompt component. Stored orders from before this field existed retain fixed
 ordering.
 
-An order may provide `initial_genes` as the complete current `create_genes`
-reply envelope. Admission applies the same closed structural validator used
-for a model reply, then starts at generation one without making or accounting
-for a creation call. The panel accepts pasted JSON or reads one local `.json`
-file into the same editor; direct API clients send the object itself. The
-standalone panel intentionally sends an empty request context, while the API
-continues to accept and preserve a non-empty `request.context`.
+An order may provide `initial_genes` as the canonical `search_material`
+envelope. Admission applies its closed structural validator, then starts at
+generation one without making or accounting for a vocabulary-extraction call.
+For generated sparse work, that extractor returns only ten subjects, ten verbs
+and ten adjectives; the service maps subjects to dimensions and the verb ×
+adjective product to the existing shared variants ABI. The panel accepts
+pasted JSON or reads one local `.json` file into the same editor; direct API
+clients send the object itself. The standalone panel intentionally sends an
+empty request context, while the API continues to accept and preserve a
+non-empty `request.context`.
 
 The evaluation budget defaults to `population_size * generation_limit`, using
 the values resolved for the order. The advanced `max_evaluated_candidates`
@@ -475,19 +478,23 @@ Stagnation and repertoire exhaustion may still end a search before its maximum
 generation count.
 
 New Creativity orders default to 10 candidate combinations over 20
-generations, with all 10 candidates from one generation evaluated in one
-batch. Evaluation concurrency remains 1: batch size controls how many
-candidates share one model call, while concurrency controls how many separate
-calls may overlap. The resulting automatic evaluation budget is 200.
+generations, with all 10 candidates from one generation handled in one batch.
+Each batch first receives one composition call and then a separate evaluation
+call over that immutable composition. Evaluation concurrency remains 1: batch
+size controls how many candidates share each call, while concurrency controls
+how many two-call batch pipelines may overlap. The resulting automatic
+evaluation budget is 200 evaluated candidates; composition calls do not spend
+additional candidate-budget places.
 
-The generator, not the order form, decides the number of semantic genes.
-`population_size` is the number of candidate combinations per generation and
-the panel labels it accordingly. The task view exposes the accepted search
-material and every scored candidate evaluation, including invalid combinations
-and their violation reasons. Invalid candidates never enter the final proposal
-shortlist. If no valid candidate exists yet, the strongest invalid candidates
-remain provisional parents so crossover and mutation can reuse useful genes
-instead of restarting from an unrelated random population.
+Sparse vocabulary extraction has a fixed ten subjects, ten verbs and ten
+adjectives; there is no order-form gene-count control. `population_size` is the
+number of candidate combinations per generation and the panel labels it
+accordingly. The task view exposes the accepted search material and every
+scored candidate evaluation, including rejected combinations and their reasons.
+Rejected candidates never enter the final proposal shortlist. If no valid
+candidate exists yet, rejected candidates remain provisional parents so
+crossover and mutation can continue exploring instead of restarting from an
+unrelated random population.
 
 ### Standalone task Pause, Resume and Cancel
 
@@ -639,7 +646,7 @@ episodes keep their real delta reviews. The threshold is configurable with
 Per-act family policy (config "acts"): fixer is a fixed family name, "self",
 or "opposite" (relative to the act's origin). The
 `skeletoner` act drives all skeleton content work — its draft, re-drafts, and
-fixes — with one operator-chosen model (default claude-fable-5/max); only
+fixes — with one operator-chosen model (default claude-opus-5-5/max); only
 skeleton reviews stay on the review families. Delta review has no independent
 policy: it always uses the latest fixer's family and the selected Review
 profile for that family. Whole-artifact review rounds keep their family

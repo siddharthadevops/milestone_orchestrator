@@ -142,6 +142,22 @@
       {
         "id": "request_focus",
         "text": "Is the discussion still centered on the original literary request and target text, or has it drifted to a different problem or an exhaustive audit? Answer briefly."
+      },
+      {
+        "id": "turn_character_idiolect",
+        "text": "If character voice or dialogue is at issue, did your spoken questions test whether the proposed intervention preserves the character's evidenced idiolect—lexicon, syntax, rhythm, register, and habitual omissions—without suggesting replacement wording or judging what the character should do? Identify the passage at issue; if no character voice is affected, answer not applicable."
+      },
+      {
+        "id": "turn_reader_emotion",
+        "text": "Which spoken question required the participants to predict the concrete emotion a reader will most likely experience when the intervention's consequences arrive and identify its textual cause? State the question's focus without choosing the emotion yourself."
+      },
+      {
+        "id": "turn_reader_legibility",
+        "text": "Did your spoken questions test whether an ordinary reader can understand what happens and why it matters from the supplied text alone, while leaving any unsupported gap unfilled? Answer briefly; if legibility cannot change the decision, answer not applicable."
+      },
+      {
+        "id": "turn_meaningful_surprise",
+        "text": "Which spoken question tested whether the proposal uses the creative freedom available to surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? State the setup or turn it examined without proposing one yourself."
       }
     ]
   },

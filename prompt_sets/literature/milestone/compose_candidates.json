@@ -1,0 +1,88 @@
+{
+  "kind": "compose_candidates",
+  "process": "milestone",
+  "description": "Turn exact literary candidate seeds into immutable proposals for a separate evaluator.",
+  "instructions": {
+    "parts": [
+      {"ref": "header"},
+      {"ref": "project_context"},
+      {"ref": "creativity_exploration"},
+      {
+        "text": [
+          "TASK: compose one concrete proposal from every supplied candidate seed.",
+          "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}.",
+          "CREATIVITY CONTRACT: {{creativity_contract}}",
+          "Composition and evaluation are separate. Build the proposal here; do not score, rank,",
+          "accept, reject or repair the seed, predict an evaluator's verdict, or add evaluation fields.",
+          "Preserve every selected element and its supplied order exactly. Do not substitute a better",
+          "combination, omit an awkward element, change its meaning or make any selected element",
+          "incidental. Use only the operator request, admitted context, references, immutable search",
+          "material and exact seed. You may connect those supplied elements into a coherent proposal,",
+          "but never invent a fact, capability, requirement, event or technical or narrative detail",
+          "needed to make it work. When the supplied material does not support a needed detail, expose",
+          "the gap plainly in the proposal instead of filling it. Still return a proposal for every ID.",
+          "For sparse_v2, the seed is the exact ordered set of active subject and verb-adjective",
+          "combinations. For legacy, interpret its exact selected variants under the immutable",
+          "order_semantics and composition_guidance. The resulting proposal becomes immutable input",
+          "to a different worker, so make the supplied composition explicit enough to judge as written."
+        ],
+        "variables": [
+          {"name": "creativity_semantics", "required": false, "default": "legacy", "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."},
+          {"name": "creativity_contract", "required": false, "default": "separated_gene_pool_v1", "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."}
+        ]
+      },
+      {
+        "text": [
+          "LITERATURE REFINEMENT: compose only what the exact seed and supplied text support.",
+          "Preserve established facts, continuity, character agency and any evidenced idiolect;",
+          "do not take over the novel, decide what a character ought to do, smooth deliberate",
+          "strangeness, or invent lore, anatomy, capabilities, scenes or motives to rescue a seed.",
+          "Make action and consequence legible enough for separate judgment. If a necessary",
+          "bridge is absent, expose that absence in the proposal instead of writing it into canon."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "IMMUTABLE SEARCH MATERIAL (JSON):", "{{search_material}}",
+          "EXACT CANDIDATE SEEDS (JSON; IDs identify candidates, not rank):", "{{candidates}}"
+        ],
+        "variables": [
+          {"name": "search_material", "required": true, "description": "Immutable task material, composition meaning and explicit constraints as JSON."},
+          {"name": "candidates", "required": true, "description": "Candidate IDs and exact ordered chosen components as JSON."}
+        ]
+      }
+    ]
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)"
+    ],
+    "items": [
+      {"id": "environment_fit", "text": "For each composition, does it match the declared audience, genre, form, and editorial stage while preserving deliberate voice, ambiguity, rhythm, and unconventional form? Identify candidate IDs and evidence; do not improve it."},
+      {"id": "human_scale", "text": "Put each composition next to the brief: is it the smallest coherent realization of the supplied seed and intended reader effect, with no unrelated polish or exhaustive lens audit? Identify candidate IDs and evidence."},
+      {"id": "character_idiolect", "text": "For each composition containing character voice or dialogue, does it preserve that character's evidenced idiolect—lexicon, syntax, rhythm, register, and habitual omissions? Cite the candidate ID and supplied evidence; if no voice appears, answer not applicable."},
+      {"id": "reader_emotion", "text": "For each composition, what concrete emotion will a reader most likely experience when its consequences arrive, and which choices in the proposal cause that response?"},
+      {"id": "reader_legibility", "text": "For each composition, can an ordinary reader understand what happens and why it matters from the supplied material alone? Name any unsupported gap without filling it in."},
+      {"id": "meaningful_surprise", "text": "Using the creative freedom available in the assignment, does each composition surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Identify the setup and turn already present in the proposal."}
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "compose_candidates_result",
+        "text": [
+          "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+          "The only top-level keys are compositions and questions.",
+          "compositions is a list with exactly one record per supplied candidate ID, with no",
+          "duplicates, omissions or extras. Reply order is immaterial. Each record is exactly",
+          "{\"candidate_id\":\"...\",\"proposal\":\"...\"}.",
+          "All objects are closed. candidate_id and proposal are non-blank strings.",
+          "Return no evaluation, score, validity, violations, assumptions or replacement seed."
+        ],
+        "variables": []
+      },
+      {"ref": "questions_output"}
+    ]
+  }
+}

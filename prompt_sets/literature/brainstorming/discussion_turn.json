@@ -205,6 +205,22 @@
       {
         "id": "turn_human_scale",
         "text": "Put the intervention next to the request and manuscript: is it the smallest coherent change for the intended reader effect, or has it drifted into unrelated polish, invention, or an exhaustive lens audit? Answer with a brief comparison."
+      },
+      {
+        "id": "turn_character_idiolect",
+        "text": "If the intervention affects character voice or dialogue, does it preserve that character's evidenced idiolect—lexicon, syntax, rhythm, register, and habitual omissions—without rewriting the character or judging what they should do? Cite the passages checked; if no character voice is affected, answer not applicable."
+      },
+      {
+        "id": "turn_reader_emotion",
+        "text": "What concrete emotion will a reader most likely experience when the consequences of your intervention arrive, and what in the target text and intervention causes that response?"
+      },
+      {
+        "id": "turn_reader_legibility",
+        "text": "Could an ordinary reader understand what happens and why it matters after this intervention using the supplied text and context alone? Name any unsupported gap without filling it in or turning it into a new requirement."
+      },
+      {
+        "id": "turn_meaningful_surprise",
+        "text": "Using the creative freedom available in the assignment, does your intervention surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Identify the setup and turn in the text and intervention."
       }
     ]
   },

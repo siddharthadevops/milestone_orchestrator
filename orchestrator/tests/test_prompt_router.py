@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from orchestrator import (
+    contracts,
     prompt_contracts,
     prompt_router,
     prompt_sets,
@@ -19,6 +20,9 @@ from orchestrator import (
 CORPUS = (
     Path(__file__).resolve().parents[2]
     / "implementation/brainstorming/prompt-router/adapted-kinds"
+)
+LITERATURE_CORPUS = (
+    Path(__file__).resolve().parents[2] / "prompt_sets/literature"
 )
 EXPECTED_GOLDENS = frozenset((
     "brainstorming/discussion_turn.contrary.prompt.txt",
@@ -242,7 +246,7 @@ class PromptRouterTest(unittest.TestCase):
         self.assertTrue(prompt_router.render(prompt, values))
 
     def test_canonical_charge_matrix_and_session_target_mounts(self):
-        self.assertEqual(len(prompt_router.DIRECT_ROUTES), 18)
+        self.assertEqual(len(prompt_router.DIRECT_ROUTES), 19)
         for job, (kind, unused_target) in prompt_router.DIRECT_ROUTES.items():
             del unused_target
             with self.subTest(job=job):
@@ -365,13 +369,16 @@ class PromptRouterTest(unittest.TestCase):
         expected_questions = {
             "initial_position": [
                 "turn_environment_fit", "turn_human_scale",
+                "turn_machinery_trust",
             ],
             "contrary_position": [
                 "turn_environment_fit", "turn_human_scale",
+                "turn_machinery_trust",
                 "turn_better_alternative",
             ],
             "common_sense": [
                 "turn_environment_fit", "turn_human_scale", "request_focus",
+                "turn_machinery_trust",
             ],
         }
         for (role, lead), kind in prompt_router.SEATS.items():
@@ -416,13 +423,16 @@ class PromptRouterTest(unittest.TestCase):
         expected_questions = {
             "initial_position": [
                 "turn_environment_fit", "turn_human_scale",
+                "turn_machinery_trust",
             ],
             "contrary_position": [
                 "turn_environment_fit", "turn_human_scale",
+                "turn_machinery_trust",
                 "turn_better_alternative",
             ],
             "common_sense": [
                 "turn_environment_fit", "turn_human_scale", "request_focus",
+                "turn_machinery_trust",
             ],
         }
         route = prompt_router._route(
@@ -477,6 +487,117 @@ class PromptRouterTest(unittest.TestCase):
             )
             self.assertIsNone(resolution.prompt_set_fallback)
             self.assert_prompt_marked(resolution.prompt, marker)
+
+    def test_literature_brainstorming_keeps_existing_questions_and_adds_missing_perspectives(self):
+        documents = {
+            member: json.loads(
+                (LITERATURE_CORPUS / member).read_text(encoding="utf-8")
+            )
+            for member in prompt_sets.CANONICAL_MEMBERS
+        }
+        with tempfile.TemporaryDirectory() as home:
+            self.write_set(home, "literature", documents)
+            literature = prompt_sets.load(home, "literature")
+
+        shared = [
+            "turn_environment_fit", "turn_human_scale",
+            "turn_character_idiolect",
+            "turn_reader_emotion", "turn_reader_legibility",
+            "turn_meaningful_surprise",
+        ]
+        expected = {
+            "initial_position": shared,
+            "contrary_position": shared + ["turn_better_alternative"],
+            "common_sense": [
+                "turn_environment_fit", "turn_human_scale", "request_focus",
+                "turn_character_idiolect",
+                "turn_reader_emotion", "turn_reader_legibility",
+                "turn_meaningful_surprise",
+            ],
+        }
+        job = prompt_router.STANDALONE_SESSION_JOB
+        for (role, lead), kind in prompt_router.SEATS.items():
+            with self.subTest(role=role):
+                prompt = prompt_router.assemble(
+                    literature,
+                    job=job,
+                    executor="brainstorming",
+                    material="default",
+                    values=self.values(job),
+                    role=role,
+                    lead=lead,
+                )
+                bound = prompt_contracts.bind(prompt)
+                self.assertEqual(list(bound.question_ids), expected[role])
+                self.assertEqual(
+                    len(bound.question_ids), len(set(bound.question_ids))
+                )
+                questions = {
+                    item["id"]: item["text"]
+                    for item in prompt["questions"]["items"]
+                }
+                self.assertNotIn("turn_machinery_trust", questions)
+                self.assertNotIn(
+                    "not applicable", questions["turn_reader_emotion"]
+                )
+                self.assertIn(
+                    "creative freedom", questions["turn_meaningful_surprise"]
+                )
+                self.assertNotIn(
+                    "not applicable", questions["turn_meaningful_surprise"]
+                )
+                reply = {
+                    "kind": kind,
+                    "markdown": "Focused literary turn.",
+                    "questions": [
+                        {"id": question_id, "answer": "Checked."}
+                        for question_id in bound.question_ids
+                    ],
+                }
+                self.assertEqual(prompt_contracts.validate(bound, reply), reply)
+                reply["questions"].pop()
+                with self.assertRaises(contracts.ContractError):
+                    prompt_contracts.validate(bound, reply)
+
+    def test_literature_creativity_requires_emotion_and_tests_available_surprise(self):
+        documents = {
+            member: json.loads(
+                (LITERATURE_CORPUS / member).read_text(encoding="utf-8")
+            )
+            for member in prompt_sets.CANONICAL_MEMBERS
+        }
+        with tempfile.TemporaryDirectory() as home:
+            self.write_set(home, "literature", documents)
+            literature = prompt_sets.load(home, "literature")
+
+        expected = [
+            "environment_fit", "human_scale", "character_idiolect",
+            "reader_emotion", "reader_legibility", "meaningful_surprise",
+        ]
+        for kind in (
+            "create_genes", "compose_candidates", "evaluate_candidates",
+        ):
+            job = kind + "@creativity"
+            with self.subTest(kind=kind):
+                prompt = prompt_router.assemble(
+                    literature,
+                    job=job,
+                    executor="agent_call",
+                    material="default",
+                    values=self.values(job),
+                )
+                questions = {
+                    item["id"]: item["text"]
+                    for item in prompt["questions"]["items"]
+                }
+                self.assertEqual(list(questions), expected)
+                self.assertNotIn("machinery_trust", questions)
+                self.assertNotIn("not applicable", questions["reader_emotion"])
+                self.assertNotIn("does not establish", questions["reader_emotion"])
+                self.assertIn("creative freedom", questions["meaningful_surprise"])
+                self.assertNotIn("requires surprise", questions["meaningful_surprise"])
+                self.assertNotIn("calls for surprise", questions["meaningful_surprise"])
+                self.assertNotIn("not applicable", questions["meaningful_surprise"])
 
     def test_repository_editing_seats_leave_commits_to_the_driver(self):
         for job in (
@@ -1096,15 +1217,29 @@ class PromptRouterTest(unittest.TestCase):
         }
         candidates = [{"candidate_id": "c2", "components": {"approach": "v2"}},
                       {"candidate_id": "c1", "components": {"approach": "v1"}}]
+        compositions = [
+            {
+                "candidate_id": "c2", "components": candidates[0]["components"],
+                "proposal": "Exchange time in the room.",
+            },
+            {
+                "candidate_id": "c1", "components": candidates[1]["components"],
+                "proposal": "Share the room.",
+            },
+        ]
         jobs = {
             "create_genes": ("search_material", {
                 "objective": search_material["objective"],
                 "context": search_material["context_summary"],
                 "references": json.dumps(["notes/z-last.md", "notes/a-first.md"]),
             }),
-            "evaluate_candidates": ("evaluations", {
+            "compose_candidates": ("compositions", {
                 "search_material": json.dumps(search_material),
                 "candidates": json.dumps(candidates),
+            }),
+            "evaluate_candidates": ("evaluations", {
+                "search_material": json.dumps(search_material),
+                "compositions": json.dumps(compositions),
             }),
             "expand_genes": ("additions", {
                 "objective": search_material["objective"],
@@ -1133,22 +1268,60 @@ class PromptRouterTest(unittest.TestCase):
                         if kind == "create_genes":
                             self.assertLess(rendered.index("z-last.md"), rendered.index("a-first.md"))
                         self.assertIn("Do not edit files or execute proposals", rendered)
-                        self.assertIn("one variant per dimension", rendered)
                         if kind == "create_genes":
-                            self.assertIn("logical, position-independent composition units", rendered)
-                            self.assertIn("do not enumerate orders", rendered)
+                            self.assertIn("return only ten subjects, ten verbs and ten adjectives", rendered)
+                            self.assertIn("do not compose a proposal", rendered)
+                            self.assertIn("position-independent semantic", rendered)
                             self.assertIn("order_semantics", rendered)
-                            if material in ("literature", "business"):
-                                self.assertIn("position-independent", rendered)
+                        elif kind == "compose_candidates":
+                            self.assertIn("Composition and evaluation are separate", rendered)
+                            self.assertIn("expose\nthe gap plainly", rendered)
                         elif kind == "evaluate_candidates":
-                            self.assertIn("Preserve the supplied component order exactly", rendered)
-                        self.assertIn("The only top-level key is " + reply_key, rendered)
-                        self.assertIn("No status, kind or questions envelope", rendered)
-                        self.assertEqual(selected.prompt["questions"]["items"], [])
-                        self.assertEqual([part["id"] for part in selected.prompt["output_contract"]],
-                                         [kind + "_result"])
-                        self.assertEqual(prompt_contracts.bind(selected.prompt).registered_section_ids,
-                                         (kind + "_result",))
+                            self.assertIn("Composition has already happened in a separate call", rendered)
+                            self.assertIn("__insufficient_detail__", rendered)
+                            self.assertIn("Every invalid evaluation scores 0", rendered)
+                        if kind == "expand_genes":
+                            self.assertIn("The only top-level key is " + reply_key, rendered)
+                            self.assertIn("No status, kind or questions envelope", rendered)
+                            self.assertEqual(selected.prompt["questions"]["items"], [])
+                            expected_sections = [kind + "_result"]
+                        else:
+                            if kind == "create_genes":
+                                self.assertIn(
+                                    "For sparse_v2 its only top-level keys are gene_pool and questions",
+                                    rendered,
+                                )
+                                self.assertIn(
+                                    "For legacy its only top-level keys are search_material and questions",
+                                    rendered,
+                                )
+                            else:
+                                self.assertIn(
+                                    "The only top-level keys are %s and questions" % reply_key,
+                                    rendered,
+                                )
+                            question_ids = tuple(
+                                item["id"] for item in selected.prompt["questions"]["items"]
+                            )
+                            expected_ids = (
+                                "machinery_trust", "environment_fit", "human_scale",
+                            )
+                            if material == "literature":
+                                expected_ids += (
+                                    "character_idiolect", "reader_emotion",
+                                    "reader_legibility", "meaningful_surprise",
+                                )
+                            self.assertEqual(question_ids, expected_ids)
+                            self.assertIn("one entry per QUESTIONS id", rendered)
+                            expected_sections = [kind + "_result", "questions_output"]
+                        self.assertEqual(
+                            [part["id"] for part in selected.prompt["output_contract"]],
+                            expected_sections,
+                        )
+                        self.assertEqual(
+                            prompt_contracts.bind(selected.prompt).registered_section_ids,
+                            tuple(expected_sections),
+                        )
                         resolved[material] = selected.prompt
                 self.assertEqual(resolved["default"], resolved["unknown"])
                 for material in ("literature", "business"):
@@ -1165,36 +1338,80 @@ class PromptRouterTest(unittest.TestCase):
             for semantics in (None, "sparse_v2"):
                 for material in ("default", "literature", "business"):
                     with self.subTest(semantics=semantics, material=material):
-                        values = dict(workspace="/workspace", search_material="{}", candidates="[]")
+                        values = dict(
+                            workspace="/workspace", search_material="{}",
+                            compositions="[]",
+                        )
                         if semantics is not None:
                             values["creativity_semantics"] = semantics
                         selected = prompt_router.resolve(home, job="evaluate_candidates@creativity",
                                                          executor="agent_call", material=material, values=values)
                         rendered = prompt_router.render(selected.prompt, values)
                         self.assertIn("SAVED MATERIAL SEMANTICS: " + (semantics or "legacy"), rendered)
-                        legacy, sparse = rendered.split("For legacy only:")[1].split("For sparse_v2 only:")
-                        self.assertIn("one variant per dimension", legacy)
-                        self.assertIn("consistently within\nthis batch", legacy)
                         for instruction in (
-                            "exact ordered seed of active pairs", "strongest complete proposal",
-                            "every active pair's meaning, order and causal importance",
-                            "no pair may be incidental", "Supporting inventions must be clearly proposed",
-                            "never treated as established facts", "Do not substitute another combination",
-                            "credit isolated genes or offer evolutionary advice",
-                            "Incoherence is an ordinary evaluation",
-                            "Score the whole proposal independently against the immutable task standard",
-                            "Never rank or calibrate against batch mates or other candidates, or normalize across calls",
+                            "Composition has already happened in a separate call",
+                            "Judge only the supplied proposal",
+                            "Do not compose, rewrite, improve, complete, reinterpret, reorder",
+                            "If detail needed to judge\nor use the proposal is absent, reject it",
+                            "__objective__", "__insufficient_detail__", "__seed__",
+                            "Every invalid evaluation scores 0",
+                            "Never rank or calibrate against batch mates",
+                            "Do not return proposal",
                         ):
-                            self.assertIn(instruction, sparse)
-                        self.assertNotIn("consistently within", sparse)
-                        self.assertIn("Preserve the supplied component order exactly", rendered)
+                            self.assertIn(instruction, rendered)
+                        if semantics == "sparse_v2":
+                            self.assertIn(
+                                "Every active subject and verb-adjective value must retain its meaning",
+                                rendered,
+                            )
+                        else:
+                            self.assertIn("For legacy, assess the proposal", rendered)
                         if material != "default":
                             self.assertIn(material.upper() + " REFINEMENT", rendered)
+                        expected_questions = 7 if material == "literature" else 3
+                        self.assertEqual(
+                            len(selected.prompt["questions"]["items"]), expected_questions,
+                        )
                         self.assertEqual(prompt_contracts.bind(selected.prompt).registered_section_ids,
-                                         ("evaluate_candidates_result",))
+                                         ("evaluate_candidates_result", "questions_output"))
+
+    def test_sparse_composition_prompt_contract(self):
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            for material in ("default", "literature", "business"):
+                with self.subTest(material=material):
+                    values = {
+                        "workspace": "/workspace", "search_material": "{}",
+                        "candidates": "[]", "creativity_semantics": "sparse_v2",
+                    }
+                    selected = prompt_router.resolve(
+                        home, job="compose_candidates@creativity",
+                        executor="agent_call", material=material, values=values,
+                    )
+                    rendered = prompt_router.render(selected.prompt, values)
+                    for instruction in (
+                        "Composition and evaluation are separate",
+                        "Preserve every selected element and its supplied order exactly",
+                        "never invent a fact, capability, requirement, event",
+                        "expose\nthe gap plainly",
+                        "Still return a proposal for every ID",
+                        "exact ordered set of active subject and verb-adjective",
+                        "Return no evaluation, score, validity, violations, assumptions",
+                    ):
+                        self.assertIn(instruction, rendered)
+                    expected_questions = 7 if material == "literature" else 3
+                    self.assertEqual(
+                        len(selected.prompt["questions"]["items"]), expected_questions,
+                    )
+                    self.assertEqual(
+                        prompt_contracts.bind(selected.prompt).registered_section_ids,
+                        ("compose_candidates_result", "questions_output"),
+                    )
 
     def test_creation_prompt_semantics(self):
-        from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
+        from orchestrator.tests.test_prompt_contracts import (
+            question_answers, sparse_creation_reply, sparse_gene_pool_reply,
+        )
 
         with tempfile.TemporaryDirectory() as home:
             prompt_sets.ensure_default(home)
@@ -1207,18 +1424,32 @@ class PromptRouterTest(unittest.TestCase):
                                                          executor="agent_call", material=material, values=values)
                         rendered = prompt_router.render(selected.prompt, values)
                         self.assertIn("SAVED MATERIAL SEMANTICS: " + semantics, rendered)
-                        self.assertIn("Every value is available to every focus", rendered)
-                        self.assertIn("it need not use every focus", rendered)
-                        reply = sparse_creation_reply()
+                        bound = prompt_contracts.bind(selected.prompt)
+                        self.assertEqual(
+                            bound.registered_section_ids,
+                            ("create_genes_result", "questions_output"),
+                        )
+                        expected_questions = 7 if material == "literature" else 3
+                        self.assertEqual(len(bound.question_ids), expected_questions)
                         if semantics == "legacy":
+                            self.assertIn("For legacy, formulate a concise objective", rendered)
+                            reply = sparse_creation_reply()
                             variants = reply["search_material"].pop("variants")
                             for dimension in reply["search_material"]["dimensions"]:
                                 dimension["variants"] = variants
-                        prompt_contracts.validate(prompt_contracts.bind(selected.prompt), reply,
-                                                  creativity_semantics=semantics)
+                            reply["questions"] = question_answers(bound.question_ids)
+                        else:
+                            self.assertIn(
+                                "return only ten subjects, ten verbs and ten adjectives", rendered,
+                            )
+                            self.assertIn("do not compose a proposal", rendered)
+                            reply = sparse_gene_pool_reply(bound.question_ids)
+                        prompt_contracts.validate(
+                            bound, reply, creativity_semantics=semantics,
+                        )
 
     def test_creativity_live_whole_set_resolution(self):
-        kinds = ("create_genes", "evaluate_candidates", "expand_genes")
+        kinds = ("create_genes", "compose_candidates", "evaluate_candidates", "expand_genes")
         routes = tuple(kind + "@creativity" for kind in kinds) + ("implement@slice_impl",)
         values = self.values(routes[0])
         with tempfile.TemporaryDirectory() as home:

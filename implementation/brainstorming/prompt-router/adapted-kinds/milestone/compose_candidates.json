@@ -1,0 +1,111 @@
+{
+  "kind": "compose_candidates",
+  "process": "milestone",
+  "description": "Turn exact candidate seeds into immutable proposals for a separate evaluator.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "creativity_exploration"
+      },
+      {
+        "text": [
+          "TASK: compose one concrete proposal from every supplied candidate seed.",
+          "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}.",
+          "CREATIVITY CONTRACT: {{creativity_contract}}",
+          "Composition and evaluation are separate. Build the proposal here; do not score, rank,",
+          "accept, reject or repair the seed, predict an evaluator's verdict, or add evaluation fields.",
+          "Preserve every selected element and its supplied order exactly. Do not substitute a better",
+          "combination, omit an awkward element, change its meaning or make any selected element",
+          "incidental. Use only the operator request, admitted context, references, immutable search",
+          "material and exact seed. You may connect those supplied elements into a coherent proposal,",
+          "but never invent a fact, capability, requirement, event or technical or narrative detail",
+          "needed to make it work. When the supplied material does not support a needed detail, expose",
+          "the gap plainly in the proposal instead of filling it. Still return a proposal for every ID.",
+          "For sparse_v2, the seed is the exact ordered set of active subject and verb-adjective",
+          "combinations. For legacy, interpret its exact selected variants under the immutable",
+          "order_semantics and composition_guidance. The resulting proposal becomes immutable input",
+          "to a different worker, so make the supplied composition explicit enough to judge as written."
+        ],
+        "variables": [
+          {
+            "name": "creativity_semantics",
+            "required": false,
+            "default": "legacy",
+            "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."
+          },
+          {
+            "name": "creativity_contract",
+            "required": false,
+            "default": "separated_gene_pool_v1",
+            "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."
+          }
+        ]
+      },
+      {
+        "text": [
+          "IMMUTABLE SEARCH MATERIAL (JSON):",
+          "{{search_material}}",
+          "EXACT CANDIDATE SEEDS (JSON; IDs identify candidates, not rank):",
+          "{{candidates}}"
+        ],
+        "variables": [
+          {
+            "name": "search_material",
+            "required": true,
+            "description": "Immutable task material, composition meaning and explicit constraints as JSON."
+          },
+          {
+            "name": "candidates",
+            "required": true,
+            "description": "Candidate IDs and exact ordered chosen components as JSON."
+          }
+        ]
+      }
+    ]
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)"
+    ],
+    "items": [
+      {
+        "id": "machinery_trust",
+        "text": "For each composition, did you add a workaround around behavior or facts already established by a trusted producer or source instead of using them? Identify candidate IDs, what you checked and any case found; do not repair them."
+      },
+      {
+        "id": "environment_fit",
+        "text": "What standard does the surrounding work actually use—engineering, audience, genre, form, or stage—and does any composition assume a higher or different standard the request did not demand? Identify candidate IDs, evidence and any excess found."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put each composition next to the request: would the human recognize the grain and size they meant, or has literalism made it larger or narrower than the problem? Identify candidate IDs and evidence."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "compose_candidates_result",
+        "text": [
+          "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+          "The only top-level keys are compositions and questions.",
+          "compositions is a list with exactly one record per supplied candidate ID, with no",
+          "duplicates, omissions or extras. Reply order is immaterial. Each record is exactly",
+          "{\"candidate_id\":\"...\",\"proposal\":\"...\"}.",
+          "All objects are closed. candidate_id and proposal are non-blank strings.",
+          "Return no evaluation, score, validity, violations, assumptions or replacement seed."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

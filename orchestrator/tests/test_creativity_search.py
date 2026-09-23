@@ -1,15 +1,13 @@
 """Categorical representation and evolution over accepted creativity replies."""
 
 import copy
-import json
 import math
 import random
-import tempfile
 import unittest
 from unittest import mock
 
 from orchestrator import creativity_search as search
-from orchestrator import prompt_contracts, prompt_router, prompt_sets, tasks
+from orchestrator import prompt_contracts, tasks
 from orchestrator.tests.test_tasks import creativity_configuration, legacy_creativity_configuration
 
 
@@ -17,27 +15,6 @@ OBJECTIVE = "Find a way to reach readers."
 
 
 class CreativitySearchTest(unittest.TestCase):
-    def setUp(self):
-        home = tempfile.TemporaryDirectory()
-        self.addCleanup(home.cleanup)
-        prompt_sets.ensure_default(home.name)
-        served = prompt_router.resolve(
-            home.name, job="create_genes@creativity", executor="agent_call",
-            material="default", values={
-                "workspace": "/workspace", "objective": OBJECTIVE,
-                "context": "Use existing resources.", "references": "[]",
-            },
-        ).prompt
-        self.bound = prompt_contracts.bind(served)
-        self.evaluation_bound = prompt_contracts.bind(prompt_router.resolve(
-            home.name, job="evaluate_candidates@creativity", executor="agent_call",
-            material="default", values={
-                "workspace": "/workspace",
-                "search_material": json.dumps(self.accepted_material()),
-                "candidates": "[]",
-            },
-        ).prompt)
-
     def accepted_material(self, dimensions=None):
         if dimensions is None:
             dimensions = [
@@ -63,9 +40,7 @@ class CreativitySearchTest(unittest.TestCase):
             "criteria": [{"id": "reach", "text": "Reach interested readers."}],
             "order_semantics": "sequence in which the selected components are applied",
         }}
-        return prompt_contracts.validate(
-            self.bound, reply,
-        )["search_material"]
+        return prompt_contracts.validate_create_genes_reply(reply)["search_material"]
 
     def evaluated(self, genomes, scores, invalid=(), prefix="candidate"):
         evaluations = [{
@@ -76,12 +51,7 @@ class CreativitySearchTest(unittest.TestCase):
             "reason": "Assessment against the supplied objective and constraints.",
             "assumptions": [], "score": score,
         } for index, score in enumerate(scores)]
-        reply = prompt_contracts.validate(
-            self.evaluation_bound, {"evaluations": evaluations},
-            candidate_ids=[item["candidate_id"] for item in evaluations],
-            constraint_ids=["budget"],
-        )
-        return list(zip(genomes, reply["evaluations"]))
+        return list(zip(genomes, evaluations))
 
     def assert_population(self, dimensions, population, bound, explored=()):
         keys = {search.genome_key(genome) for genome in population}
@@ -376,7 +346,7 @@ class CreativitySearchTest(unittest.TestCase):
                             dimensions, parents, 10, configuration, explored=expected, rng=rng, **context,
                         ), [])
 
-    def test_sparse_score_selection_and_rediscovery(self):
+    def test_sparse_valid_selection_and_provisional_rejected_parents(self):
         material = self.sparse_material()
         original_material = copy.deepcopy(material)
         context = dict(dimensions=material["dimensions"], creativity_semantics="sparse_v2")
@@ -397,9 +367,9 @@ class CreativitySearchTest(unittest.TestCase):
                 original_pairs = copy.deepcopy(pairs)
                 progress = search.new_progress()
                 self.observe_generation(progress, pairs, configuration, **context)
-                self.assertEqual([g for g, _ in progress["archive"]], [elite, harmful])
-                self.assertEqual(progress["best_score"], 0.9)
-                self.assertFalse(progress["archive"][0][1]["constraint_valid"])
+                self.assertEqual([g for g, _ in progress["archive"]], [near])
+                self.assertEqual(progress["best_score"], 0.8)
+                self.assertTrue(progress["archive"][0][1]["constraint_valid"])
 
                 changed_validity = copy.deepcopy(pairs)
                 for _, item in changed_validity:
@@ -409,26 +379,17 @@ class CreativitySearchTest(unittest.TestCase):
                     changed_validity, configuration, **context,
                 )], [elite, harmful])
 
-                # Retained diversity supplies the failed pairing; ordinary
-                # mutation omits only its harmful companion.
-                rng = random.Random(7)
-                draws = ([0.75] if mode == "interchangeable" else []) + [0.75, 0.75, 0.25, 0.25]
-                with mock.patch.object(rng, "random", side_effect=draws), \
-                     mock.patch.object(rng, "choice", side_effect=lambda choices: choices[0]):
-                    children = search.reproduce(
-                        material["dimensions"], progress["archive"][1:], 1, configuration,
-                        explored={self.sparse_key(material, g, mode) for g, _ in pairs},
-                        rng=rng, variants=material["variants"], creativity_semantics="sparse_v2",
-                    )
-                self.assertEqual([self.sparse_key(material, g, mode) for g in children], [(("d1", "v1"),)])
-                self.assertEqual(progress["best_score"], 0.9)
-                fresh = self.evaluated(children, [1], prefix="rediscovered")
-                self.observe_generation(progress, fresh, configuration, **context)
-                self.assertEqual([g for g, _ in progress["archive"]], children + [elite])
-                self.assertIs(progress["archive"][0][1], fresh[0][1])
-                self.assertIs(progress["archive"][1][1], pairs[0][1])
-                self.assertEqual(progress["best_score"], 1)
-                self.assertEqual(progress["evaluated_candidates"], 4)
+                all_rejected = copy.deepcopy(pairs)
+                for _, item in all_rejected:
+                    item["constraint_valid"] = False
+                    item["constraint_violations"] = ["budget"]
+                provisional = search.select_survivors(
+                    all_rejected, configuration, **context,
+                )
+                self.assertTrue(provisional)
+                self.assertTrue(all(
+                    not item["constraint_valid"] for _, item in provisional
+                ))
                 self.assertEqual(pairs, original_pairs)
                 self.assertEqual(material, original_material)
 

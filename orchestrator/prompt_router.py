@@ -42,6 +42,7 @@ DIRECT_ROUTES = {
     "suite_checkpoint@workspace": ("suite_checkpoint", None),
     "merge_repair@workspace": ("merge_repair", None),
     "create_genes@creativity": ("create_genes", None),
+    "compose_candidates@creativity": ("compose_candidates", None),
     "evaluate_candidates@creativity": ("evaluate_candidates", None),
     "expand_genes@creativity": ("expand_genes", None),
 }

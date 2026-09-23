@@ -230,7 +230,10 @@ class SessionCallCutoverTest(unittest.TestCase):
         )
         self.assertEqual(
             list(rethink.bound.question_ids),
-            ["turn_environment_fit", "turn_human_scale"],
+            [
+                "turn_environment_fit", "turn_human_scale",
+                "turn_machinery_trust",
+            ],
         )
         self.assertNotIn("DUE DILIGENCE", rethink.prompt)
 
@@ -1047,7 +1050,10 @@ class SessionCallCutoverTest(unittest.TestCase):
         )
         self.assertEqual(
             list(second.bound.question_ids),
-            ["turn_environment_fit", "turn_human_scale"],
+            [
+                "turn_environment_fit", "turn_human_scale",
+                "turn_machinery_trust",
+            ],
         )
         self.assertNotEqual(first.prompt, second.prompt)
         expected_values = {
@@ -1089,12 +1095,16 @@ class SessionCallCutoverTest(unittest.TestCase):
         expected = {
             "initial_position": (
                 "discussion_turn",
-                ["turn_environment_fit", "turn_human_scale"],
+                [
+                    "turn_environment_fit", "turn_human_scale",
+                    "turn_machinery_trust",
+                ],
             ),
             "contrary_position": (
                 "discussion_turn",
                 [
                     "turn_environment_fit", "turn_human_scale",
+                    "turn_machinery_trust",
                     "turn_better_alternative",
                 ],
             ),
@@ -1103,6 +1113,7 @@ class SessionCallCutoverTest(unittest.TestCase):
                 [
                     "turn_environment_fit", "turn_human_scale",
                     "request_focus",
+                    "turn_machinery_trust",
                 ],
             ),
         }

@@ -72,6 +72,8 @@ class CodexAdapterTest(unittest.TestCase):
         standard_out = {"input_tokens": 0, "output_tokens": 100_000}
         for model, expect_in, expect_out in (
             ("gpt-6-astra", 10.00, 50.00),
+            ("gpt-6-sol", 2.00, 10.00),
+            ("gpt-6-luna", 0.10, 0.50),
             ("gpt-5.6-sol", 5.00, 30.00),
             ("gpt-5.6-terra", 2.00, 12.00),
             ("gpt-5.6-luna", 0.20, 1.20),
@@ -84,6 +86,65 @@ class CodexAdapterTest(unittest.TestCase):
                 self.assertAlmostEqual(
                     pricing.codex_api_cost(model, standard_out),
                     expect_out / 10,
+                )
+
+    def test_gpt_6_standard_rates_cover_every_band(self):
+        payload = {
+            "input_tokens": 1000,
+            "cached_input_tokens": 200,
+            "cache_write_input_tokens": 300,
+            "output_tokens": 100,
+        }
+        for model, input_rate, cached_rate, write_rate, output_rate in (
+            ("gpt-6-sol", 2.00, 0.20, 2.50, 10.00),
+            ("gpt-6-luna", 0.10, 0.01, 0.125, 0.50),
+        ):
+            with self.subTest(model=model):
+                expected = (
+                    500 * input_rate + 200 * cached_rate
+                    + 300 * write_rate + 100 * output_rate
+                ) / 1_000_000.0
+                self.assertAlmostEqual(
+                    pricing.codex_api_cost(model, payload), expected, places=12
+                )
+
+    def test_gpt_6_long_context_starts_strictly_above_272k(self):
+        at_boundary = {"input_tokens": 272_000, "output_tokens": 1000}
+        above_boundary = {
+            "input_tokens": 300_000,
+            "cached_input_tokens": 100_000,
+            "cache_write_input_tokens": 50_000,
+            "output_tokens": 10_000,
+        }
+        for model, input_rate, cached_rate, write_rate, output_rate in (
+            ("gpt-6-sol", 2.00, 0.20, 2.50, 10.00),
+            ("gpt-6-luna", 0.10, 0.01, 0.125, 0.50),
+        ):
+            with self.subTest(model=model):
+                self.assertAlmostEqual(
+                    pricing.codex_api_cost(model, at_boundary),
+                    (272_000 * input_rate + 1000 * output_rate)
+                    / 1_000_000.0,
+                    places=12,
+                )
+                self.assertAlmostEqual(
+                    pricing.codex_api_cost(model, above_boundary),
+                    (
+                        150_000 * input_rate * 2
+                        + 100_000 * cached_rate * 2
+                        + 50_000 * write_rate * 2
+                        + 10_000 * output_rate * 1.5
+                    ) / 1_000_000.0,
+                    places=12,
+                )
+
+    def test_gpt_6_needs_total_input_to_choose_its_price_tier(self):
+        for model in ("gpt-6-sol", "gpt-6-luna"):
+            with self.subTest(model=model):
+                self.assertIsNone(
+                    pricing.codex_api_cost(
+                        model, {"cached_input_tokens": 1000}
+                    )
                 )
 
     def test_astra_standard_rates_cover_every_band(self):

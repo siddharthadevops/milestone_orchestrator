@@ -26,9 +26,17 @@ from orchestrator.tests.test_tasks import creativity_configuration, legacy_creat
 from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
 
 
+DEFAULT_DILIGENCE_IDS = ("machinery_trust", "environment_fit", "human_scale")
+LITERATURE_DILIGENCE_IDS = DEFAULT_DILIGENCE_IDS + (
+    "character_idiolect", "reader_emotion", "reader_legibility", "meaningful_surprise",
+)
+
+
 class CreativityTaskTest(unittest.TestCase):
     creativity_semantics = None
-    semantic_jobs = ("create_genes", "evaluate_candidates", "expand_genes")
+    semantic_jobs = (
+        "create_genes", "compose_candidates", "evaluate_candidates", "expand_genes",
+    )
     order = api_fixture.TaskApiTest.order
     _wait = recovery_fixture.TaskRecoveryTest._wait
     _paused = recovery_fixture.TaskRecoveryTest._paused
@@ -58,8 +66,14 @@ class CreativityTaskTest(unittest.TestCase):
         self.material = (source.sparse_material() if self.creativity_semantics == "sparse_v2"
                          else source.accepted_material())
         self.calls = []
+        self.compositions = {}
         self.valid = True
         self.score = 0.4
+        self.gene_pool = {
+            "subjects": ["Subject %02d" % index for index in range(1, 11)],
+            "verbs": ["Verb %02d" % index for index in range(1, 11)],
+            "adjectives": ["Adjective %02d" % index for index in range(1, 11)],
+        }
         self.additions = [{"dimension_id": "format", "variants": [
             {"id": "new", "text": "Serial", "reason": "Another reading format."},
         ]}]
@@ -111,7 +125,15 @@ class CreativityTaskTest(unittest.TestCase):
                     self.material = copy.deepcopy(source["search_material"])
                     expected = copy.deepcopy(self.material)
                     if semantics:
-                        expected["variants"] = [{"id": "a", "text": "Share"}, {"id": "b", "text": "Exchange"}]
+                        if supplied:
+                            expected["variants"] = [
+                                {"id": "a", "text": "Share"},
+                                {"id": "b", "text": "Exchange"},
+                            ]
+                        else:
+                            expected = self.extracted_material(
+                                objective=self.material["objective"], references=[],
+                            )
                     order = self.order("creativity", request=self.material["objective"])
                     fixture = creativity_configuration if semantics else legacy_creativity_configuration
                     order.update(staffing_session=self.session, configuration=fixture())
@@ -204,7 +226,8 @@ class CreativityTaskTest(unittest.TestCase):
                 self.assertNotIn("create_genes", [call["job"] for call in self.calls])
                 self.assertTrue(self.calls)
                 self.assertEqual(
-                    {call["job"] for call in self.calls}, {"evaluate_candidates"}
+                    {call["job"] for call in self.calls},
+                    {"compose_candidates", "evaluate_candidates"},
                 )
                 checkpoint = self.checkpoint(record)
                 self.assertEqual(checkpoint["search_material"], expected["search_material"])
@@ -257,7 +280,7 @@ class CreativityTaskTest(unittest.TestCase):
             for evaluation in view["candidate_evaluations"]
         ))
         self.assertFalse(view["best_candidate_valid"])
-        self.assertEqual(view["best_score"], 0.4)
+        self.assertEqual(view["best_score"], 0)
         self.assertEqual(view["best_candidates"], [])
 
     def host(self, physical=None):
@@ -269,31 +292,98 @@ class CreativityTaskTest(unittest.TestCase):
     def checkpoint(self, record):
         return task_api.creativity_checkpoint_store(self.home, record["id"]).get("checkpoint")
 
+    @staticmethod
+    def question_answers(prompt):
+        marker = "QUESTIONS (mandatory perspective checks"
+        if marker not in prompt:
+            return []
+        block = prompt.split(marker, 1)[1].split("\n\n", 1)[0]
+        return [
+            {"id": line[2:].split(":", 1)[0], "answer": "Checked against the supplied material."}
+            for line in block.splitlines() if line.startswith("- ")
+        ]
+
+    def extracted_material(self, objective=search_fixture.OBJECTIVE, context=None, references=None):
+        context = {"source": "test"} if context is None else context
+        references = self.references if references is None else references
+        return {
+            "objective": objective,
+            "context_summary": json.dumps({
+                "context": context, "reference_documents": references,
+            }, ensure_ascii=False),
+            "facts": [], "constraints": [], "assumptions": [], "unknowns": [],
+            "dimensions": [
+                {"id": "subject_%02d" % index, "meaning": subject}
+                for index, subject in enumerate(self.gene_pool["subjects"], 1)
+            ],
+            "variants": [{
+                "id": "verb_%02d__adjective_%02d" % (verb_index, adjective_index),
+                "text": 'verb "%s"; adjective "%s"' % (verb, adjective),
+            } for verb_index, verb in enumerate(self.gene_pool["verbs"], 1)
+              for adjective_index, adjective in enumerate(self.gene_pool["adjectives"], 1)],
+            "composition_guidance": (
+                "Use every active subject and its exact verb-adjective pair without "
+                "adding substantive facts, actors, capabilities, interfaces, or mechanisms."
+            ),
+            "criteria": [
+                {"id": "objective_fit", "text": "Meets the operator's stated objective."},
+                {"id": "feasibility", "text": "Is supported by the supplied material."},
+                {"id": "seed_fidelity", "text": "Uses every selected seed faithfully."},
+            ],
+            "order_semantics": (
+                "The active seeds shape the proposal in their supplied order; that order "
+                "does not authorize missing causal or factual detail."
+            ),
+        }
+
     def physical(self, family, prompt, workspace, execution_context=None, **_kwargs):
-        job = next(job for job in ("create_genes", "evaluate_candidates", "expand_genes")
+        job = next(job for job in (
+            "create_genes", "compose_candidates", "evaluate_candidates", "expand_genes",
+        )
                    if "KIND: " + job in prompt)
         call = {"job": job, "prompt": prompt, "family": family, "execution_context": execution_context}
         call.update(model=_kwargs.get("model"), effort=_kwargs.get("effort"))
         self.calls.append(call)
         self.assertEqual(workspace, self.primary)
+        questions = self.question_answers(prompt)
         if job == "create_genes":
-            reply = {"search_material": self.material}
+            reply = (
+                {"gene_pool": self.gene_pool, "questions": questions}
+                if "SAVED MATERIAL SEMANTICS: sparse_v2" in prompt
+                else {"search_material": self.material, "questions": questions}
+            )
         elif job == "expand_genes":
             reply = {"additions": self.additions}
-        else:
+        elif job == "compose_candidates":
             batch = json.loads(prompt.split(
-                "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
+                "EXACT CANDIDATE SEEDS (JSON; IDs identify candidates, not rank):\n",
             )[1].splitlines()[0])
             call["ids"] = [item["candidate_id"] for item in batch]
             call["candidates"] = batch
-            fixed = json.loads(prompt.split("IMMUTABLE SEARCH MATERIAL AND CRITERIA (JSON):\n")[1].splitlines()[0])
-            for key in self.material.keys() - {"dimensions", "variants"}:
-                self.assertEqual(fixed[key], self.material[key])
+            compositions = []
+            for item in batch:
+                proposal = "Proposal for %s using %s" % (
+                    item["candidate_id"], json.dumps(item["components"], sort_keys=True),
+                )
+                self.compositions[item["candidate_id"]] = proposal
+                compositions.append({
+                    "candidate_id": item["candidate_id"], "proposal": proposal,
+                })
+            reply = {"compositions": compositions, "questions": questions}
+        else:
+            batch = json.loads(prompt.split(
+                "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):\n",
+            )[1].splitlines()[0])
+            call["ids"] = [item["candidate_id"] for item in batch]
+            call["compositions"] = batch
+            for item in batch:
+                self.assertEqual(item["proposal"], self.compositions[item["candidate_id"]])
             reply = {"evaluations": [{
-                "candidate_id": item["candidate_id"], "proposal": "Use this combination.",
+                "candidate_id": item["candidate_id"],
                 "constraint_valid": self.valid, "constraint_violations": [] if self.valid else ["budget"],
-                "reason": "Assessment against the stated objective.", "assumptions": [], "score": self.score,
-            } for item in batch]}
+                "reason": "Assessment against the stated objective.", "assumptions": [],
+                "score": self.score if self.valid else 0,
+            } for item in batch], "questions": questions}
         return self.result(reply)
 
     def test_creativity_composes_search_and_results(self):
@@ -403,7 +493,7 @@ class CreativityTaskTest(unittest.TestCase):
         self.assertEqual(len(evaluations), 3)
         for call in evaluations:
             material = json.loads(call["prompt"].split(
-                "IMMUTABLE SEARCH MATERIAL AND CRITERIA (JSON):\n",
+                "IMMUTABLE SEARCH MATERIAL (JSON):\n",
             )[1].splitlines()[0])
             self.assertEqual(material["objective"], objective)
         expansions = [call for call in self.calls if call["job"] == "expand_genes"]
@@ -462,6 +552,7 @@ class CreativityTaskTest(unittest.TestCase):
         }
         expected_staffing = {
             "create_genes": ("claude", "claude-fable-5", "max"),
+            "compose_candidates": ("claude", "claude-sonnet-5", "low"),
             "evaluate_candidates": ("codex", "gpt-5.6-luna", "low"),
             "expand_genes": ("claude", "claude-opus-5", "medium"),
         }
@@ -516,7 +607,7 @@ class CreativityTaskTest(unittest.TestCase):
                                     evaluated_ids.append(identity)
                                     if not invalid_ids:
                                         invalid_ids.append(identity)
-                                        item.update(constraint_valid=False, score=1.0,
+                                        item.update(constraint_valid=False, score=0,
                                                     constraint_violations=[self.material["constraints"][0]["id"]])
                                     elif not best_ids:
                                         best_ids.append(identity)
@@ -615,10 +706,10 @@ class CreativityTaskTest(unittest.TestCase):
                             self.assertEqual(json.loads(prompt.split("\nCONTEXT:\n")[1].splitlines()[0]),
                                              problem["context"])
                             self.assertIn("ORDERED REFERENCE PATHS (JSON array; may be empty):\n[]", prompt)
-                        elif job == "evaluate_candidates":
+                        elif job == "compose_candidates":
                             self.assertLessEqual(len(call["ids"]), configuration["evaluation_batch_size"])
                             batch = json.loads(prompt.split(
-                                "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
+                                "EXACT CANDIDATE SEEDS (JSON; IDs identify candidates, not rank):\n",
                             )[1].splitlines()[0])
                             self.assertTrue(all(
                                 "__order__" not in {
@@ -627,11 +718,19 @@ class CreativityTaskTest(unittest.TestCase):
                                 for candidate in batch
                             ))
                             supplied_material = json.loads(prompt.split(
-                                "IMMUTABLE SEARCH MATERIAL AND CRITERIA (JSON):\n",
+                                "IMMUTABLE SEARCH MATERIAL (JSON):\n",
                             )[1].splitlines()[0])
                             self.assertEqual(
                                 supplied_material["order_semantics"],
                                 problem["context"]["order_semantics"],
+                            )
+                        elif job == "evaluate_candidates":
+                            compositions = json.loads(prompt.split(
+                                "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):\n",
+                            )[1].splitlines()[0])
+                            self.assertEqual(
+                                {item["candidate_id"]: item["proposal"] for item in compositions},
+                                {identity: self.compositions[identity] for identity in call["ids"]},
                             )
                         else:
                             self.assertEqual(json.loads(prompt.split(
@@ -652,9 +751,14 @@ class CreativityTaskTest(unittest.TestCase):
                     receipts = [event for event in public["lifecycle"]["history"] if "physical_dispatch" in event]
                     self.assertEqual(len(receipts), len(self.calls))
                     self.assertEqual(len({event["call_id"] for event in receipts}), len(receipts))
-                    self.assertEqual(len(receipts), 10)  # Genes, eight batches, one expansion.
+                    self.assertEqual(len(receipts), 18)  # Genes, two calls per batch, one expansion.
                     batches = {batch["call_id"]: batch for batch in checkpoint["evaluation"]["batches"]}
+                    composition_batches = {
+                        batch["call_id"]: batch
+                        for batch in checkpoint["evaluation"]["composition_batches"]
+                    }
                     self.assertEqual(len(batches), 8)
+                    self.assertEqual(len(composition_batches), 8)
                     self.assertEqual({call["job"] for call in self.calls}, set(expected_staffing))
                     for event in receipts:
                         dispatch = event["physical_dispatch"]
@@ -669,6 +773,27 @@ class CreativityTaskTest(unittest.TestCase):
                                              (context["batch"], context["generation"]))
                             self.assertCountEqual(batch["genomes"], [item["candidate_id"]
                                                                     for item in batch["evaluations"]])
+                        elif context["job"] == "compose_candidates":
+                            batch = composition_batches[event["call_id"]]
+                            self.assertEqual((batch["batch"], batch["generation"]),
+                                             (context["batch"], context["generation"]))
+                            self.assertCountEqual(batch["genomes"], [item["candidate_id"]
+                                                                    for item in batch["compositions"]])
+                    view = task_api.creativity_view(self.home, record)
+                    expected_questions = (
+                        LITERATURE_DILIGENCE_IDS if material == "literature"
+                        else DEFAULT_DILIGENCE_IDS
+                    )
+                    self.assertEqual(
+                        [item["id"] for item in view["diligence"]["create_genes"]],
+                        list(expected_questions),
+                    )
+                    for job in ("compose_candidates", "evaluate_candidates"):
+                        self.assertEqual(len(view["diligence"][job]), 8)
+                        self.assertTrue(all(
+                            [item["id"] for item in batch["questions"]] == list(expected_questions)
+                            for batch in view["diligence"][job]
+                        ))
                     attempts = [event["attempt"] for event in receipts]
                     self.assertAlmostEqual(result["duration_s"], sum(item["duration_s"] for item in attempts))
                     for key in ("input_tokens", "output_tokens"):
@@ -682,7 +807,11 @@ class CreativityTaskTest(unittest.TestCase):
     def test_creativity_default_runner_composes_with_execution_context(self):
         replies = os.path.join(self.primary, "replies.json")
         with open(replies, "w", encoding="utf-8") as handle:
-            json.dump({"create_genes": {"search_material": self.material},
+            questions = [
+                {"id": identity, "answer": "Checked against the supplied material."}
+                for identity in DEFAULT_DILIGENCE_IDS
+            ]
+            json.dump({"create_genes": {"search_material": self.material, "questions": questions},
                        "expand_genes": {"additions": self.additions}}, handle)
         worker = os.path.join(self.primary, "fake-creativity-cli.py")
         with open(worker, "w", encoding="utf-8") as handle:
@@ -692,19 +821,31 @@ class CreativityTaskTest(unittest.TestCase):
                 live = "--input-format" in sys.argv
                 prompt = (json.loads(sys.stdin.readline())["message"]["content"][0]["text"]
                           if live else sys.stdin.read())
-                job = next(job for job in ("create_genes", "evaluate_candidates", "expand_genes")
+                job = next(job for job in (
+                    "create_genes", "compose_candidates", "evaluate_candidates", "expand_genes"
+                )
                            if "KIND: " + job in prompt)
                 with open(sys.argv[1], encoding="utf-8") as handle:
                     replies = json.load(handle)
-                if job == "evaluate_candidates":
+                questions = [{"id": identity, "answer": "Checked supplied material."}
+                             for identity in ("machinery_trust", "environment_fit", "human_scale")]
+                if job == "compose_candidates":
                     batch = json.loads(prompt.split(
-                        "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n"
+                        "EXACT CANDIDATE SEEDS (JSON; IDs identify candidates, not rank):\n"
+                    )[1].splitlines()[0])
+                    reply = {"compositions": [{
+                        "candidate_id": item["candidate_id"],
+                        "proposal": "Use the exact supplied combination for " + item["candidate_id"],
+                    } for item in batch], "questions": questions}
+                elif job == "evaluate_candidates":
+                    batch = json.loads(prompt.split(
+                        "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):\n"
                     )[1].splitlines()[0])
                     reply = {"evaluations": [{
-                        "candidate_id": item["candidate_id"], "proposal": "Use this combination.",
+                        "candidate_id": item["candidate_id"],
                         "constraint_valid": True, "constraint_violations": [],
                         "reason": "Assessment against the objective.", "assumptions": [], "score": 0.4,
-                    } for item in batch]}
+                    } for item in batch], "questions": questions}
                 else:
                     reply = replies[job]
                 answer = json.dumps(reply)
@@ -731,7 +872,7 @@ class CreativityTaskTest(unittest.TestCase):
                 self.assertEqual(native["expansion_interventions"], 1)
                 self.assertTrue(native["proposals"])
                 self.assertEqual(self.checkpoint(record)["native_result"], native)
-                self.assertEqual(spawn.call_count, 5)
+                self.assertEqual(spawn.call_count, 8)
                 for call in spawn.call_args_list:
                     context, argv, kwargs = call.args
                     self.assertEqual(context, {
@@ -824,8 +965,17 @@ class CreativityTaskTest(unittest.TestCase):
                 self.assertEqual(after["progress"]["expansion_interventions"], 0 if sparse else 1)
                 self.assertEqual(after["progress"]["evaluated_candidates"], 6)
                 self.assertEqual({key: after["candidates"][key] for key in before["candidates"]}, before["candidates"])
-                ids = [identity for call in self.calls for identity in call.get("ids", [])]
-                self.assertEqual(len(ids), len(set(ids)))
+                ids_by_job = {
+                    job: [identity for call in self.calls if call["job"] == job
+                          for identity in call.get("ids", [])]
+                    for job in ("compose_candidates", "evaluate_candidates")
+                }
+                for ids in ids_by_job.values():
+                    self.assertEqual(len(ids), len(set(ids)))
+                self.assertEqual(
+                    set(ids_by_job["compose_candidates"]),
+                    set(ids_by_job["evaluate_candidates"]),
+                )
                 self.assertEqual([call["job"] for call in self.calls].count("create_genes"), 1)
                 self.assertEqual([call["job"] for call in self.calls].count("expand_genes"), 0 if sparse else 1)
                 if sparse:
@@ -833,13 +983,22 @@ class CreativityTaskTest(unittest.TestCase):
                     batches = before.get("evaluation", {}).get("batches", [])
                     self.assertEqual(after["evaluation"]["batches"][:len(batches)], batches)
                     seeds = [task_api.creativity_search.genome_key(
-                        genome, self.material["dimensions"], "interchangeable", creativity_semantics="sparse_v2",
+                        genome, after["search_material"]["dimensions"], "interchangeable",
+                        creativity_semantics="sparse_v2",
                     ) for genome in after["candidates"].values()]
                     self.assertEqual(len(set(seeds)), 6)
                     resumed = self.calls[len(previous_calls):]
                     for call in resumed:
-                        self.assertIn("AFTER RESUME", call["prompt"])
-                        self.assertEqual((call["model"], call["effort"]), ("claude-fable-5", "max"))
+                        if call["job"] == "evaluate_candidates":
+                            self.assertIn("AFTER RESUME", call["prompt"])
+                            self.assertEqual(
+                                (call["model"], call["effort"]), ("claude-fable-5", "max"),
+                            )
+                        elif call["job"] == "compose_candidates":
+                            self.assertNotIn("AFTER RESUME", call["prompt"])
+                            self.assertEqual(
+                                (call["model"], call["effort"]), ("gpt-5.6-luna", "low"),
+                            )
                     self.assertEqual(after["native_result"]["stop_reason"], "generation_limit")
                 if boundary == "result":
                     self.assertEqual(self.calls, previous_calls)
@@ -876,7 +1035,7 @@ class CreativityTaskTest(unittest.TestCase):
                     if "physical_dispatch" in event]
         self.assertEqual([item["call_context"]["material"] for item in receipts[:2]], ["default", "business"])
         self.assertEqual(result["native_result"]["evaluated_candidates"], 2)
-        self.assertEqual(result["token_usage"]["input_tokens"], 30)
+        self.assertEqual(result["token_usage"]["input_tokens"], 40)
 
     def test_creativity_resume_reads_live_authorities_and_accounts_once(self):
         for regime_change, cancel in ((False, False), (True, False), (True, True)):
@@ -1046,8 +1205,9 @@ class CreativityTaskTest(unittest.TestCase):
                         result = self.physical(*args, **kwargs)
                         if "KIND: " + job not in args[1]:
                             return result
-                        if job == "evaluate_candidates":
-                            identity = json.loads(result.text)["evaluations"][0]["candidate_id"]
+                        if job in ("compose_candidates", "evaluate_candidates"):
+                            key = "compositions" if job == "compose_candidates" else "evaluations"
+                            identity = json.loads(result.text)[key][0]["candidate_id"]
                             with lock:
                                 if not failed_ids:
                                     failed_ids.append(identity)
@@ -1064,15 +1224,21 @@ class CreativityTaskTest(unittest.TestCase):
                     paused = self._paused(host, record["id"])
                     self.assertEqual(paused["source"], "error")
                     before = self.checkpoint(record)
-                    self.assertEqual(before["job"], job)
+                    self.assertEqual(
+                        before["job"],
+                        "evaluate_candidates" if job == "compose_candidates" else job,
+                    )
                     self.assertIsNone(before["native_result"])
                     self.assertEqual(before["search_material"] is None, job == "create_genes")
                     accepted = before.get("evaluation", {}).get("batches", [])
                     accepted_ids = {item["candidate_id"] for batch in accepted for item in batch["evaluations"]}
-                    self.assertEqual(len(accepted_ids), {"create_genes": 0, "evaluate_candidates": 1,
-                                                        "expand_genes": 4}[job])
+                    self.assertEqual(len(accepted_ids), {
+                        "create_genes": 0, "compose_candidates": 1,
+                        "evaluate_candidates": 1, "expand_genes": 4,
+                    }[job])
                     failed_calls = [call for call in self.calls if call["job"] == job
-                                    and (job != "evaluate_candidates" or call["ids"] == failed_ids)]
+                                    and (job not in ("compose_candidates", "evaluate_candidates")
+                                         or call["ids"] == failed_ids)]
                     self.assertEqual(len(failed_calls), 1 if fault == "provider" else 2)
                     previous_calls = copy.deepcopy(self.calls)
                     fresh = self.host()
@@ -1106,7 +1272,7 @@ class CreativityTaskTest(unittest.TestCase):
                 host.start(record, self.config)
                 paused = self._paused(host, record["id"])
                 self.assertIn(code, paused["reason"])
-                self.assertEqual(len(self.calls), 0 if code == "staffing_unavailable" else 3)
+                self.assertEqual(len(self.calls), 0 if code == "staffing_unavailable" else 1)
                 self.assertNotIn("expand_genes", [call["job"] for call in self.calls])
                 receipts = [event for event in host.store.lifecycle(record["id"])["history"]
                             if "physical_dispatch" in event]
@@ -1163,7 +1329,10 @@ class CreativityTaskTest(unittest.TestCase):
                     with mock.patch.object(runners, "_process_group_quiescent", side_effect=observe), \
                             mock.patch.object(runners, "_wait_for_process_group_quiescence", side_effect=observe):
                         thread = host.start(record, self.config)
-                        count = 2 if job == "evaluate_candidates" and not partial else 1
+                        count = (
+                            2 if job in ("compose_candidates", "evaluate_candidates") and not partial
+                            else 1
+                        )
                         try:
                             self._wait(lambda: len(held.calls) == count and all(os.path.exists(
                                 os.path.join(self.primary, name + ".started")) for name in held.calls),
@@ -1376,13 +1545,15 @@ class CreativityTaskTest(unittest.TestCase):
 
 class SparseCreativityTaskTest(unittest.TestCase):
     creativity_semantics = "sparse_v2"
-    semantic_jobs = ("create_genes", "evaluate_candidates")
+    semantic_jobs = ("create_genes", "compose_candidates", "evaluate_candidates")
     setUp = CreativityTaskTest.setUp
     order = CreativityTaskTest.order
     admit = CreativityTaskTest.admit
     host = CreativityTaskTest.host
     config = staticmethod(CreativityTaskTest.config)
     checkpoint = CreativityTaskTest.checkpoint
+    question_answers = staticmethod(CreativityTaskTest.question_answers)
+    extracted_material = CreativityTaskTest.extracted_material
     physical = CreativityTaskTest.physical
     result = CreativityTaskTest.result
     write_prompt = CreativityTaskTest.write_prompt
@@ -1405,7 +1576,7 @@ class SparseCreativityTaskTest(unittest.TestCase):
         CreativityTaskTest.test_creativity_cancel_wins_over_saved_success(self)
 
     def test_sparse_task_composes_search(self):
-        material = copy.deepcopy(self.material)
+        supplied_material = copy.deepcopy(self.material)
         for mode, supplied in itertools.product(("fixed", "interchangeable"), (False, True)):
             with self.subTest(mode=mode, supplied=supplied):
                 self.calls.clear()
@@ -1418,9 +1589,12 @@ class SparseCreativityTaskTest(unittest.TestCase):
                     terminal = self._terminal(host, record["id"])
                 self.assertEqual(terminal["result"]["status"], "success", terminal["result"])
                 checkpoint = self.checkpoint(record)
+                material = supplied_material if supplied else self.extracted_material()
                 self.assertEqual(checkpoint["search_material"], material)
-                self.assertEqual(self.material, material)
+                self.assertEqual(self.material, supplied_material)
                 self.assertEqual([call["job"] for call in self.calls].count("create_genes"), int(not supplied))
+                self.assertEqual([call["job"] for call in self.calls].count("compose_candidates"), 4)
+                self.assertEqual([call["job"] for call in self.calls].count("evaluate_candidates"), 4)
                 self.assertNotIn("expand_genes", [call["job"] for call in self.calls])
                 seeds = {key: task_api.creativity_search.genome_key(
                     genome, material["dimensions"], mode, creativity_semantics="sparse_v2",
@@ -1430,7 +1604,10 @@ class SparseCreativityTaskTest(unittest.TestCase):
                 self.assertNotIn(None, seeds.values())
                 view = task_api.creativity_view(self.home, terminal)
                 evaluated = {item["candidate_id"]: item for item in view["candidate_evaluations"]}
-                received = [item for call in self.calls for item in call.get("candidates", [])]
+                received = [
+                    item for call in self.calls if call["job"] == "compose_candidates"
+                    for item in call["candidates"]
+                ]
                 self.assertEqual(len(received), 6)
                 meanings = {d["id"]: d["meaning"] for d in material["dimensions"]}
                 values = {v["id"]: v["text"] for v in material["variants"]}
@@ -1440,7 +1617,20 @@ class SparseCreativityTaskTest(unittest.TestCase):
                                 for d, v in seeds[item["candidate_id"]]]
                     self.assertEqual(item["components"], expected)
                     self.assertEqual(evaluated[item["candidate_id"]]["components"], expected)
+                    self.assertEqual(
+                        evaluated[item["candidate_id"]]["proposal"],
+                        self.compositions[item["candidate_id"]],
+                    )
                 self.assertEqual(view["initial_genes_supplied"], supplied)
+                expected_diligence = {"compose_candidates", "evaluate_candidates"}
+                if not supplied:
+                    expected_diligence.add("create_genes")
+                self.assertEqual(set(view["diligence"]), expected_diligence)
+                if not supplied:
+                    self.assertEqual(
+                        [item["id"] for item in view["diligence"]["create_genes"]],
+                        list(DEFAULT_DILIGENCE_IDS),
+                    )
 
     def test_sparse_results_retain_all_scores(self):
         for budget, completed in ((4, 1), (5, 1)):
@@ -1453,9 +1643,10 @@ class SparseCreativityTaskTest(unittest.TestCase):
                     if self.calls[-1]["job"] == "evaluate_candidates":
                         reply = json.loads(result.text)
                         for item in reply["evaluations"]:
-                            score = (0, 0.9, 0.8, 0.1, 1)[len(assessments)]
+                            score = (0, 0, 0.8, 0, 0)[len(assessments)]
                             item.update(score=score, constraint_valid=score == 0.8,
-                                        constraint_violations=[] if score == 0.8 else ["budget"])
+                                        constraint_violations=([] if score == 0.8
+                                                               else ["__insufficient_detail__"]))
                             assessments.append(copy.deepcopy(item))
                         return self.result(reply)
                     return result
@@ -1468,18 +1659,25 @@ class SparseCreativityTaskTest(unittest.TestCase):
                 self.assertEqual(terminal["result"]["status"], "success", terminal["result"])
                 native = terminal["result"]["native_result"]
                 view = task_api.creativity_view(self.home, terminal)
-                expected = sorted(assessments, key=lambda item: item["score"], reverse=True)[:3]
+                expected = [item for item in assessments if item["constraint_valid"]]
                 self.assertEqual(native["stop_reason"], "evaluation_budget")
                 self.assertEqual(native["generations_completed"], completed)
                 self.assertEqual(native["evaluated_candidates"], budget)
                 self.assertEqual(native["outcome"], "proposals")
                 self.assertEqual(view["best_candidates"], native["proposals"])
                 self.assertEqual(view["best_score"], expected[0]["score"])
-                self.assertFalse(view["best_candidate_valid"])
-                self.assertEqual([{k: v for k, v in item.items() if k != "components"}
-                                  for item in native["proposals"]], expected)
+                self.assertTrue(view["best_candidate_valid"])
+                self.assertEqual(len(native["proposals"]), 1)
+                self.assertEqual(
+                    [{key: item[key] for key in expected[0]} for item in native["proposals"]],
+                    expected,
+                )
                 self.assertEqual([{k: item[k] for k in assessments[0]}
                                   for item in view["candidate_evaluations"]], assessments)
+                self.assertTrue(all(
+                    item["score"] == 0 for item in view["candidate_evaluations"]
+                    if not item["constraint_valid"]
+                ))
 
     def test_sparse_fixed_repertoire_and_stops(self):
         self.material["dimensions"] = self.material["dimensions"][:2]
@@ -1522,13 +1720,19 @@ class SparseCreativityTaskTest(unittest.TestCase):
                         self.assertEqual(native["generations_completed"], completed)
                         self.assertEqual(native["evaluated_candidates"], accepted)
                         self.assertEqual(native["expansion_interventions"], 0)
-                        self.assertEqual(native["outcome"], "proposals")
-                        self.assertTrue(all(p["score"] == 0 and not p["constraint_valid"] for p in native["proposals"]))
+                        self.assertEqual(native["outcome"], "no_valid_candidates")
+                        self.assertEqual(native["proposals"], [])
                         self.assertEqual(checkpoint["search_material"], material)
                         self.assertEqual(checkpoint["progress"]["stagnant_generations"], 0)
                         self.assertEqual(checkpoint["progress"]["expansions"], [])
-                        self.assertEqual({call["job"] for call in self.calls}, {"evaluate_candidates"})
-                        received = [item for call in self.calls for item in call["candidates"]]
+                        self.assertEqual(
+                            {call["job"] for call in self.calls},
+                            {"compose_candidates", "evaluate_candidates"},
+                        )
+                        received = [
+                            item for call in self.calls if call["job"] == "compose_candidates"
+                            for item in call["candidates"]
+                        ]
                         seeds = [tuple((c["dimension_id"], c["variant_id"]) for c in item["components"])
                                  for item in received]
                         self.assertEqual(len(set(seeds)), accepted)

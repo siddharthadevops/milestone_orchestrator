@@ -3,6 +3,7 @@
 import copy
 import json
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -19,7 +20,15 @@ from orchestrator.tests import test_prompt_router as router_fixture
 from orchestrator.tests import test_task_call_group as group_fixture
 from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
 from orchestrator.tests.test_tasks import creativity_configuration, legacy_creativity_configuration
-from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
+from orchestrator.tests.test_prompt_contracts import (
+    DEFAULT_CREATIVITY_QUESTION_IDS, sparse_gene_pool_reply,
+)
+
+
+DEFAULT_QUESTION_IDS = DEFAULT_CREATIVITY_QUESTION_IDS
+LITERATURE_QUESTION_IDS = DEFAULT_QUESTION_IDS + (
+    "character_idiolect", "reader_emotion", "reader_legibility", "meaningful_surprise",
+)
 
 
 class CreativityEvaluationFixture(unittest.TestCase):
@@ -43,9 +52,17 @@ class CreativityEvaluationFixture(unittest.TestCase):
         self.material = source.accepted_material()
         genomes = [{"format": "a", "channel": "b"}, {"format": "b", "channel": "a"}]
         self.candidates = dict(zip(("c-0", "c-1"), genomes))
-        self.reply = {"evaluations": [pair[1] for pair in source.evaluated(
-            genomes, [0.4, 1.0], invalid=(1,), prefix="c",
-        )][::-1]}
+        evaluated = [copy.deepcopy(pair[1]) for pair in source.evaluated(
+            genomes, [0.4, 0.0], invalid=(1,), prefix="c",
+        )]
+        self.proposals = {}
+        for item in evaluated:
+            proposal = item.pop(
+                "proposal", "Use the exact supplied combination for %s." % item["candidate_id"],
+            )
+            self.proposals[item["candidate_id"]] = proposal
+            item["proposal"] = proposal
+        self.reply = {"evaluations": evaluated[::-1]}
         fixture = (creativity_configuration if self.creativity_semantics == "sparse_v2"
                    else legacy_creativity_configuration)
         self.configuration = fixture(order_mode="fixed")
@@ -77,12 +94,75 @@ class CreativityEvaluationFixture(unittest.TestCase):
             self.group, SimpleNamespace(call=physical or self.batch_result), **options,
         )
 
+    @staticmethod
+    def question_answers(prompt):
+        return [
+            {"id": question_id, "answer": "Checked %s." % question_id}
+            for question_id in re.findall(r"^- ([A-Za-z0-9_-]+):", prompt, re.MULTILINE)
+        ]
+
+    def compositions(self, candidates=None):
+        candidates = self.candidates if candidates is None else candidates
+        return [
+            {
+                "candidate_id": candidate_id,
+                "proposal": self.proposals.get(
+                    candidate_id, "Use the exact supplied combination for %s." % candidate_id,
+                ),
+            }
+            for candidate_id in candidates
+        ]
+
+    @staticmethod
+    def prompt_records(prompt, *markers):
+        for marker in markers:
+            if marker in prompt:
+                return json.loads(prompt.split(marker, 1)[1].splitlines()[0])
+        raise AssertionError("prompt contains none of the expected JSON markers")
+
     def batch_result(self, _family, prompt, _workspace, **_kwargs):
-        text = prompt.split("CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n")[1]
-        ids = [item["candidate_id"] for item in json.loads(text.splitlines()[0])]
-        return self.result({"evaluations": [dict(
-            self.reply["evaluations"][0 if key == "c-1" else 1], candidate_id=key,
-        ) for key in reversed(ids)]})
+        questions = self.question_answers(prompt)
+        if "KIND: compose_candidates" in prompt:
+            seeds = self.prompt_records(
+                prompt,
+                "EXACT CANDIDATE SEEDS (JSON; IDs identify candidates, not rank):\n",
+                "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
+            )
+            return self.result({
+                "compositions": self.compositions({item["candidate_id"]: None for item in seeds}),
+                "questions": questions,
+            })
+        if "KIND: evaluate_candidates" not in prompt:
+            raise AssertionError("unexpected creativity job")
+        supplied = self.prompt_records(
+            prompt,
+            "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):\n",
+            "IMMUTABLE COMPOSITIONS TO EVALUATE (JSON):\n",
+            "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
+        )
+        ids = [item["candidate_id"] for item in supplied]
+        templates = {item["candidate_id"]: item for item in self.reply["evaluations"]}
+        valid = next(item for item in self.reply["evaluations"] if item["constraint_valid"])
+        evaluations = []
+        for candidate_id in reversed(ids):
+            item = dict(templates.get(candidate_id, valid), candidate_id=candidate_id)
+            item.pop("proposal", None)
+            evaluations.append(item)
+        return self.result({
+            "evaluations": evaluations,
+            "questions": questions,
+        })
+
+    def evaluation_result(self, prompt, evaluations):
+        cleaned = []
+        for evaluation_item in evaluations:
+            item = dict(evaluation_item)
+            item.pop("proposal", None)
+            cleaned.append(item)
+        return self.result({
+            "evaluations": cleaned,
+            "questions": self.question_answers(prompt),
+        })
 
     def progress_wave(self, progress, physical=None, **changes):
         options = dict(
@@ -106,6 +186,7 @@ class CreativityEvaluationFixture(unittest.TestCase):
             configuration=self.configuration, search_material=self.material,
             candidates=self.candidates, generation=2, batch="b1", execution_context=None,
             creativity_semantics=self.creativity_semantics,
+            compositions=self.compositions(changes.get("candidates", self.candidates)),
             prompt_values={"ecosystem_map": "ADDITIONAL ROOT /reference — READ-ONLY"},
         )
         options.update(changes)
@@ -156,7 +237,13 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
     def test_creation_uses_matching_semantics_for_prompt_and_reply(self):
         for semantics in (None, "sparse_v2"):
             with self.subTest(semantics=semantics):
-                source = (sparse_creation_reply() if semantics else {"search_material": self.material})
+                source = (sparse_gene_pool_reply() if semantics else {
+                    "search_material": self.material,
+                    "questions": [
+                        {"id": question_id, "answer": "Checked %s." % question_id}
+                        for question_id in DEFAULT_QUESTION_IDS
+                    ],
+                })
                 calls = []
 
                 def physical(_family, prompt, _workspace, **_kwargs):
@@ -172,16 +259,132 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
                 )
                 self.assertEqual(len(calls), 1)
                 self.assertIsInstance(result, runners.RunnerResult)
+                self.assertEqual(
+                    [item["id"] for item in result.diligence_questions],
+                    list(DEFAULT_QUESTION_IDS),
+                )
                 if semantics:
-                    expected = dict(source["search_material"], variants=[
-                        {"id": "a", "text": "Share"}, {"id": "b", "text": "Exchange"},
-                    ])
-                    self.assertEqual(material, expected)
+                    self.assertEqual(len(material["dimensions"]), 10)
+                    self.assertEqual(len(material["variants"]), 100)
+                    self.assertEqual(material["dimensions"][0], {
+                        "id": "subject_01", "meaning": "Subject 1",
+                    })
+                    self.assertEqual(material["variants"][0], {
+                        "id": "verb_01__adjective_01",
+                        "text": 'verb "Verb 1"; adjective "Adjective 1"',
+                    })
+                    self.assertEqual(material["objective"], search_fixture.OBJECTIVE)
                 else:
                     self.assertEqual(material, self.material)
 
+    def test_creation_answers_default_and_literature_perspective_checks(self):
+        for material_name, expected_ids in (
+            ("default", DEFAULT_QUESTION_IDS),
+            ("literature", LITERATURE_QUESTION_IDS),
+        ):
+            with self.subTest(material=material_name):
+                staffing.edit_session(self.home, self.session, {"material": material_name})
+
+                def physical(_family, prompt, _workspace, **_kwargs):
+                    return self.result(sparse_gene_pool_reply(
+                        item["id"] for item in self.question_answers(prompt)
+                    ))
+
+                _material, result = evaluation.create_genes(
+                    self.group, SimpleNamespace(call=physical),
+                    objective=search_fixture.OBJECTIVE, context="", references=[],
+                    home=self.home, session=self.session, workspace=self.workspace,
+                    configuration=self.configuration, execution_context=None,
+                    creativity_semantics="sparse_v2",
+                )
+                self.assertEqual(
+                    [item["id"] for item in result.diligence_questions], list(expected_ids),
+                )
+
+    def test_sparse_creation_falls_back_from_legacy_named_prompt(self):
+        documents = copy.deepcopy(prompt_sets.default_seed().documents)
+        creation = documents["milestone/create_genes.json"]
+        semantics = next(
+            part for part in creation["instructions"]["parts"]
+            if any(variable["name"] == "creativity_semantics"
+                   for variable in part.get("variables", []))
+        )
+        semantics["text"] = [
+            "STALE NAMED PROMPT",
+            "Code combines exactly one variant per dimension.",
+        ]
+        semantics["variables"] = []
+        creation["output_contract"]["sections"][0]["text"] = [
+            "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+            "The only top-level key is search_material.",
+            "search_material has exactly objective, context_summary, facts, constraints, assumptions, unknowns, dimensions, composition_guidance, criteria and order_semantics.",
+            "Each dimension contains id, meaning and nested variants.",
+        ]
+        router_fixture.PromptRouterTest.write_set(
+            self.home, "legacy-operator", documents,
+        )
+        source = sparse_gene_pool_reply()
+        prompts = []
+
+        def physical(_family, prompt, _workspace, **_kwargs):
+            prompts.append(prompt)
+            return self.result(source)
+
+        material, result = evaluation.create_genes(
+            self.group, SimpleNamespace(call=physical),
+            objective=search_fixture.OBJECTIVE, context="", references=[],
+            home=self.home, session=self.session, workspace=self.workspace,
+            configuration=self.configuration, execution_context=None,
+            creativity_semantics="sparse_v2", prompt_set="legacy-operator",
+        )
+
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("SAVED MATERIAL SEMANTICS: sparse_v2", prompts[0])
+        self.assertNotIn("STALE NAMED PROMPT", prompts[0])
+        self.assertEqual(result.prompt_set_fallback, "stored_default")
+        self.assertEqual(len(material["dimensions"]), 10)
+        self.assertEqual(len(material["variants"]), 100)
+
+    def test_sparse_creation_falls_back_from_wrong_contract_marker(self):
+        documents = copy.deepcopy(prompt_sets.default_seed().documents)
+        creation = documents["milestone/create_genes.json"]
+        instruction = next(
+            part for part in creation["instructions"]["parts"]
+            if any(variable["name"] == "creativity_contract"
+                   for variable in part.get("variables", []))
+        )
+        marker = next(
+            variable for variable in instruction["variables"]
+            if variable["name"] == "creativity_contract"
+        )
+        marker["default"] = "combined_creation_and_evaluation_v0"
+        instruction["text"].append("STALE CONTRACT MARKER")
+        router_fixture.PromptRouterTest.write_set(
+            self.home, "wrong-contract", documents,
+        )
+        prompts = []
+
+        def physical(_family, prompt, _workspace, **_kwargs):
+            prompts.append(prompt)
+            return self.result(sparse_gene_pool_reply())
+
+        material, result = evaluation.create_genes(
+            self.group, SimpleNamespace(call=physical),
+            objective=search_fixture.OBJECTIVE, context="", references=[],
+            home=self.home, session=self.session, workspace=self.workspace,
+            configuration=self.configuration, execution_context=None,
+            creativity_semantics="sparse_v2", prompt_set="wrong-contract",
+        )
+
+        self.assertEqual(len(prompts), 1)
+        self.assertNotIn("STALE CONTRACT MARKER", prompts[0])
+        self.assertIn(evaluation.CREATIVITY_CONTRACT, prompts[0])
+        self.assertEqual(result.prompt_set_fallback, "stored_default")
+        self.assertEqual(len(material["variants"]), 100)
+
     def test_expansion_uses_live_routed_contract(self):
         progress = self.stagnant_progress()
+        records_before = len(self.evidence()[0])
         self.write_prompt("FIRST PROMPT", "expand_genes")
         staffing.edit_session(self.home, self.session, {"material": "literature"})
         addition = {"additions": [{"dimension_id": "format", "variants": [
@@ -251,7 +454,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             })
             self.assertEqual(promising[0]["candidate_id"], "c-0")
         records, accounting = self.evidence()
-        expansions = records[1:]
+        expansions = records[records_before:]
         self.assertEqual(len(expansions), 4)
         self.assertEqual(len({record["call_id"] for record in expansions}), 4)
         self.assertEqual(expansions[0]["call_context"]["batch"], expansions[1]["call_context"]["batch"])
@@ -260,7 +463,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         self.assertEqual([r["call_context"]["material"] for r in expansions],
                          ["literature", "business", "unlayered", "unlayered"])
         self.assertTrue(all(r["call_context"]["job"] == "expand_genes" for r in expansions))
-        self.assertEqual(accounting["token_usage"]["input_tokens"], 50)
+        self.assertEqual(accounting["token_usage"]["input_tokens"], 10 * len(records))
         expected_cost = sum((pricing.codex_api_cost if r["family"] == "codex" else pricing.claude_api_cost)(
             r["model"], r["cost_payloads"][0],
         ) for r in records)
@@ -340,8 +543,8 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
                 staffing.save(self.home, self.document)
                 staffing.edit_session(self.home, self.session, {"material": "business", "rigor": "high"})
                 self.write_prompt("SECOND PROMPT")
-                return self.result({"evaluations": []})
-            return self.result()
+                return self.evaluation_result(prompt, [])
+            return self.batch_result(family, prompt, workspace, model=model, effort=effort)
 
         accepted, result = self.call(physical, prompt_set="operator")
         self.assertEqual(dispatched[0][:3], ("codex", "gpt-5.6-luna", "low"))
@@ -358,6 +561,9 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         self.assertEqual(accepted["call_id"], result.physical_dispatches[-1]["call_id"])
         self.assertNotEqual(accepted["call_id"], result.repair["call_id"])
         self.assertEqual(accepted["prompt_path"], result.call_context["prompt_path"])
+        self.assertEqual(
+            [item["id"] for item in accepted["questions"]], list(DEFAULT_QUESTION_IDS),
+        )
         records, _accounting = self.evidence()
         self.assertEqual([item["call_context"]["material"] for item in records], ["literature", "business"])
 
@@ -394,19 +600,24 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             self.assertIn("KIND: evaluate_candidates", prompt)
             self.assertIn("ADDITIONAL ROOT /reference — READ-ONLY", prompt)
             self.assertIn("Do not edit files or execute proposals", prompt)
-            material_text = prompt.split("IMMUTABLE SEARCH MATERIAL AND CRITERIA (JSON):\n")[1].splitlines()[0]
-            batch_text = prompt.split("CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n")[1].splitlines()[0]
-            problem = dict(self.material)
-            if self.creativity_semantics == "sparse_v2":
-                problem.pop("dimensions")
-                problem.pop("variants")
+            material_text = prompt.split("IMMUTABLE SEARCH MATERIAL (JSON):\n")[1].splitlines()[0]
+            inputs = self.prompt_records(
+                prompt,
+                "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):\n",
+                "IMMUTABLE COMPOSITIONS TO EVALUATE (JSON):\n",
+                "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
+            )
+            problem = {key: self.material[key] for key in (
+                "objective", "context_summary", "facts", "constraints", "assumptions",
+                "unknowns", "composition_guidance", "criteria", "order_semantics",
+            )}
             self.assertEqual(json.loads(material_text), problem)
-            inputs = json.loads(batch_text)
             self.assertEqual([item["candidate_id"] for item in inputs], list(self.candidates))
             for item in inputs:
-                self.assertEqual(set(item), {"candidate_id", "components"})
+                self.assertEqual(set(item), {"candidate_id", "components", "proposal"})
                 self.assertEqual({part["dimension_id"]: part["variant_id"] for part in item["components"]},
                                  self.candidates[item["candidate_id"]])
+                self.assertEqual(item["proposal"], self.proposals[item["candidate_id"]])
                 self.assertTrue(all(part["dimension"] and part["variant"] for part in item["components"]))
 
     def test_overlapping_batches_retain_their_dispatched_authorities(self):
@@ -421,7 +632,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             if old:
                 entered.set()
                 self.assertTrue(release.wait(5))
-            return self.result()
+            return self.batch_result(family, prompt, _workspace, model=model, effort=effort)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             old = pool.submit(self.call, physical, prompt_set="operator", batch="old")
@@ -451,15 +662,32 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             self.assertEqual(record["call_context"]["material"], batch["regime"]["material"])
         self.group.ensure_quiescent()
 
+    def test_evaluation_answers_default_and_literature_perspective_checks(self):
+        for material_name, expected_ids in (
+            ("default", DEFAULT_QUESTION_IDS),
+            ("literature", LITERATURE_QUESTION_IDS),
+        ):
+            with self.subTest(material=material_name):
+                staffing.edit_session(self.home, self.session, {"material": material_name})
+                accepted, _result = self.call(
+                    self.batch_result, batch="questions-" + material_name,
+                )
+                self.assertEqual(
+                    [item["id"] for item in accepted["questions"]], list(expected_ids),
+                )
+
     def test_batch_reply_coverage_and_association(self):
         original = copy.deepcopy(self.candidates)
-        accepted, _result = self.call(lambda *_args, **_kwargs: self.result())
+        accepted, _result = self.call(self.batch_result)
         self.assertEqual(accepted["genomes"], original)
         self.assertEqual(accepted["evaluations"], self.reply["evaluations"])
         self.assertEqual(accepted["generation"], 2)
         self.assertEqual(accepted["batch"], "b1")
         self.assertFalse(accepted["evaluations"][0]["constraint_valid"])
-        self.assertEqual(accepted["evaluations"][0]["score"], 1.0)
+        self.assertEqual(accepted["evaluations"][0]["score"], 0.0)
+        self.assertEqual(
+            [item["id"] for item in accepted["questions"]], list(DEFAULT_QUESTION_IDS),
+        )
         invalid, valid = self.reply["evaluations"]
         rejected = {
             "duplicate": [invalid, valid, valid],
@@ -467,14 +695,16 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             "foreign": [invalid, dict(valid, candidate_id="foreign")],
             "violations": [dict(invalid, constraint_violations=["foreign"]), valid],
             "score": [invalid, dict(valid, score=1.1)],
+            "rejected_score": [dict(invalid, score=0.1), valid],
         }
         for label, evaluations in rejected.items():
             with self.subTest(label=label):
                 calls = []
 
-                def physical(*_args, **_kwargs):
+                def physical(_family, prompt, _workspace, **_kwargs):
                     calls.append(True)
-                    return self.result({"evaluations": evaluations} if len(calls) == 1 else self.reply)
+                    reply = evaluations if len(calls) == 1 else self.reply["evaluations"]
+                    return self.evaluation_result(prompt, reply)
 
                 corrected, carrier = self.call(physical, batch=label)
                 self.assertEqual(len(calls), 2)
@@ -483,9 +713,9 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
                 self.assertEqual(len(carrier.physical_dispatches), 2)
         calls = []
 
-        def malformed(*_args, **_kwargs):
+        def malformed(_family, prompt, _workspace, **_kwargs):
             calls.append(True)
-            return self.result({"evaluations": []})
+            return self.evaluation_result(prompt, [])
 
         with self.assertRaises(runners.WorkerProtocolError):
             self.call(malformed, batch="exhausted")
@@ -503,15 +733,18 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
 
         def physical(_family, prompt, _workspace, **_kwargs):
             prompts.append(prompt)
-            return self.result()
+            return self.batch_result(_family, prompt, _workspace, **_kwargs)
 
         accepted, _result = self.call(
             physical, candidates=candidates,
             configuration=dict(self.configuration, order_mode="interchangeable"),
         )
-        supplied = json.loads(prompts[0].split(
+        supplied = self.prompt_records(
+            prompts[0],
+            "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):\n",
+            "IMMUTABLE COMPOSITIONS TO EVALUATE (JSON):\n",
             "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
-        )[1].splitlines()[0])
+        )
         by_id = {item["candidate_id"]: item["components"] for item in supplied}
         self.assertEqual(
             [component["dimension_id"] for component in by_id["c-0"]],
@@ -525,7 +758,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             component["dimension_id"] != evaluation.creativity_search.ORDER_GENE
             for components in by_id.values() for component in components
         ))
-        self.assertIn("Preserve the supplied component order exactly", prompts[0])
+        self.assertIn("exact order", prompts[0])
         self.assertEqual(accepted["genomes"], candidates)
         self.assertNotEqual(
             evaluation.creativity_search.genome_key(candidates["c-0"]),
@@ -558,10 +791,12 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         calls = []
 
         def corrected(*args, **kwargs):
+            if "KIND: compose_candidates" in args[1]:
+                return self.batch_result(*args, **kwargs)
             calls.append(True)
             if len(calls) == 1:
                 staffing.edit_session(self.home, self.session, {"rigor": "high"})
-                return self.result({"evaluations": []})
+                return self.evaluation_result(args[1], [])
             return self.batch_result(*args, **kwargs)
 
         handoff = self.wave(corrected)
@@ -586,20 +821,26 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         self.assertEqual(handoff["evaluated"], [])
         self.assertIs(handoff["interruption"], interrupted)
         records, accounting = self.evidence()
-        self.assertEqual(len(records), 5)
-        self.assertEqual(len({record["call_id"] for record in records}), 5)
+        self.assertEqual(len(records), 7)
+        self.assertEqual(len({record["call_id"] for record in records}), 7)
         self.assertEqual(len({record["call_context"]["batch"] for record in records}), 4)
-        self.assertEqual(records[1]["call_context"]["batch"], records[2]["call_context"]["batch"])
-        self.assertTrue(all(record["call_context"]["job"] == "evaluate_candidates" and
-                            record["call_context"]["generation"] == 2 for record in records))
+        self.assertEqual(records[0]["call_context"]["batch"], records[1]["call_context"]["batch"])
+        self.assertEqual(len({records[index]["call_context"]["batch"] for index in (2, 3, 4)}), 1)
+        self.assertEqual(
+            [record["call_context"]["job"] for record in records],
+            ["compose_candidates", "evaluate_candidates",
+             "compose_candidates", "evaluate_candidates", "evaluate_candidates",
+             "compose_candidates", "compose_candidates"],
+        )
+        self.assertTrue(all(record["call_context"]["generation"] == 2 for record in records))
         self.assertTrue(all(record["completed"] and record["duration_s"] >= 0 for record in records))
-        self.assertEqual(accepted["call_id"], records[2]["call_id"])
+        self.assertEqual(accepted["call_id"], records[4]["call_id"])
         self.assertEqual(accepted["regime"]["model"], "gpt-5.6-sol")
-        self.assertEqual(records[1]["model"], "gpt-5.6-luna")
-        self.assertEqual(accounting["token_usage"]["input_tokens"], 40)
-        self.assertEqual(accounting["token_usage"]["output_tokens"], 8)
+        self.assertEqual(records[3]["model"], "gpt-5.6-luna")
+        self.assertEqual(accounting["token_usage"]["input_tokens"], 60)
+        self.assertEqual(accounting["token_usage"]["output_tokens"], 12)
         expected_cost = sum(pricing.codex_api_cost(record["model"], record["cost_payloads"][0])
-                            for record in records[:4])
+                            for record in records[:6])
         self.assertAlmostEqual(accounting["cost"]["api_usd"], expected_cost)
         self.assertTrue(accounting["token_usage_partial"])
         self.assertTrue(accounting["cost_partial"])
@@ -652,6 +893,8 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
 
                 def physical(*args, **kwargs):
                     result = self.batch_result(*args, **kwargs)
+                    if "KIND: compose_candidates" in args[1]:
+                        return result
                     ids = [item["candidate_id"] for item in json.loads(result.text)["evaluations"]]
                     calls.append(ids)
                     barrier.wait(timeout=5)
@@ -724,7 +967,8 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
 
         self.store.put("checkpoint", {"search_material": self.material})
         def interrupted(*args, **kwargs):
-            if '"candidate_id": "c-0"' in args[1]:
+            if ("KIND: evaluate_candidates" in args[1]
+                    and '"candidate_id": "c-0"' in args[1]):
                 return runners.ControlledInterruptionResult("", 0, 0.1, "paused")
             return self.batch_result(*args, **kwargs)
 
@@ -733,6 +977,18 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         self.assertEqual(partial["interruption"].interrupt_reason, "paused")
         records = len(self.evidence()[0])
         accepted_before = self.checkpoint()["evaluation"]["batches"]
+        compositions_before = copy.deepcopy(
+            self.checkpoint()["evaluation"]["composition_batches"]
+        )
+        self.assertEqual(
+            {item["candidate_id"] for batch in compositions_before
+             for item in batch["compositions"]},
+            {"c-0", "c-1"},
+        )
+        self.assertTrue(all(
+            [item["id"] for item in batch["questions"]] == list(DEFAULT_QUESTION_IDS)
+            for batch in compositions_before
+        ))
         self.store = kvstore.LocalKVClient(self.store.directory)
         if self.creativity_semantics == "sparse_v2":
             staffing.edit_session(self.home, self.session, {"rigor": "high"})
@@ -741,6 +997,14 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         self.assertEqual(resumed["accepted_count"], 2)
         self.assertEqual(len(self.evidence()[0]), records + 1)
         self.assertEqual(self.checkpoint()["evaluation"]["batches"][:1], accepted_before)
+        self.assertEqual(
+            self.checkpoint()["evaluation"]["composition_batches"], compositions_before,
+        )
+        self.assertEqual(self.evidence()[0][-1]["call_context"]["job"], "evaluate_candidates")
+        self.assertEqual(
+            [item["id"] for item in self.checkpoint()["evaluation"]["batches"][-1]["questions"]],
+            list(DEFAULT_QUESTION_IDS),
+        )
         self.assertFalse(resumed["rebaseline_required"])
 
     def test_regime_changes_withhold_comparison(self):
@@ -777,7 +1041,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
                     return revision
 
                 def physical(*args, **kwargs):
-                    if not entered.is_set():
+                    if "KIND: evaluate_candidates" in args[1] and not entered.is_set():
                         change(True)
                         entered.set()
                         self.assertTrue(release.wait(5))
@@ -878,12 +1142,20 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         inputs = []
 
         def physical(*args, **kwargs):
-            batch = args[1].split("CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n")[1]
-            inputs.extend(json.loads(batch.splitlines()[0]))
+            if "KIND: compose_candidates" in args[1]:
+                return self.batch_result(*args, **kwargs)
+            inputs.extend(self.prompt_records(
+                args[1],
+                "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):\n",
+                "IMMUTABLE COMPOSITIONS TO EVALUATE (JSON):\n",
+                "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
+            ))
             reply = json.loads(self.batch_result(*args, **kwargs).text)
             for item in reply["evaluations"]:
                 item["score"], item["constraint_valid"] = assessments[item["candidate_id"]]
                 item["constraint_violations"] = [] if item["constraint_valid"] else ["budget"]
+                if not item["constraint_valid"]:
+                    item["score"] = 0
             return self.result(reply)
 
         search.begin_generation(progress, self.candidates, self.configuration)
@@ -929,7 +1201,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         self.assertEqual(progress["evaluated_candidates"], 6)
         self.assertEqual(progress["consecutive_expansions"], 1)
         for item in inputs:
-            self.assertEqual(set(item), {"candidate_id", "components"})
+            self.assertEqual(set(item), {"candidate_id", "components", "proposal"})
 
     def test_progress_rebaseline_ignores_late_old_regime_completion(self):
         search = evaluation.creativity_search
@@ -961,7 +1233,8 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             return revision
 
         def physical(*args, **kwargs):
-            if '"candidate_id": "c-2"' in args[1] and not entered.is_set():
+            if ("KIND: evaluate_candidates" in args[1]
+                    and '"candidate_id": "c-2"' in args[1] and not entered.is_set()):
                 staffing.edit_session(self.home, self.session, {"rigor": "high"})
                 entered.set()
                 self.assertTrue(release.wait(5))
@@ -988,7 +1261,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         self.assertEqual(progress["generations_completed"], 2)
         self.assertEqual(progress["evaluated_candidates"], 6)
         records, _ = self.evidence()
-        self.assertEqual([record["call_context"]["generation"] for record in records].count(2), 4)
+        self.assertEqual([record["call_context"]["generation"] for record in records].count(2), 6)
 
     def test_progress_limits_and_interrupted_reassessment(self):
         search = evaluation.creativity_search
@@ -1014,7 +1287,13 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         search.begin_generation(progress, {"c-2": {"format": "a", "channel": "a"}}, self.configuration)
         staffing.edit_session(self.home, self.session, {"rigor": "high"})
         interrupted = runners.ControlledInterruptionResult("", 0, 0.1, "paused")
-        wave = self.progress_wave(progress, lambda *_args, **_kwargs: interrupted)
+
+        def interrupt_evaluator(*args, **kwargs):
+            if "KIND: compose_candidates" in args[1]:
+                return self.batch_result(*args, **kwargs)
+            return interrupted
+
+        wave = self.progress_wave(progress, interrupt_evaluator)
         self.assertIs(wave["interruption"], interrupted)
         self.assertIsNone(progress["stop_reason"])
         self.assertEqual(progress["archive"], [])
@@ -1063,14 +1342,15 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
 
     def test_wave_faults_keep_accepted_siblings_and_checkpoint_failure_is_unfinished(self):
         def malformed(*args, **kwargs):
-            if '"candidate_id": "c-1"' in args[1]:
-                return self.result({"evaluations": []})
+            if ("KIND: evaluate_candidates" in args[1]
+                    and '"candidate_id": "c-1"' in args[1]):
+                return self.evaluation_result(args[1], [])
             return self.batch_result(*args, **kwargs)
 
         with self.assertRaises(runners.WorkerProtocolError):
             self.wave(malformed)
         self.assertEqual(self.checkpoint()["evaluation"]["accepted_count"], 1)
-        self.assertEqual(len(self.evidence()[0]), 3)
+        self.assertEqual(len(self.evidence()[0]), 5)
         before = self.checkpoint()
         put = self.store.put
 
@@ -1083,13 +1363,13 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             with self.assertRaisesRegex(OSError, "checkpoint write failed"):
                 self.wave()
         self.assertEqual(self.checkpoint(), before)
-        self.assertEqual(len(self.evidence()[0]), 4)
+        self.assertEqual(len(self.evidence()[0]), 6)
         session = staffing.create_session(self.home, session_body(document="matrix", families=[]))["id"]
         with self.assertRaises(staffing.StaffingConditionError) as caught:
             self.wave(session=session)
         self.assertEqual(caught.exception.code, "staffing_unavailable")
         self.assertEqual(self.checkpoint(), before)
-        self.assertEqual(len(self.evidence()[0]), 4)
+        self.assertEqual(len(self.evidence()[0]), 6)
         self.assertEqual(self.wave()["accepted_count"], 2)
 
     def test_wave_uses_task_controls_and_surfaces_faults(self):
@@ -1104,6 +1384,8 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
                 calls = []
 
                 def physical(_family, prompt, _workspace, active_control=None, **_kwargs):
+                    if "KIND: compose_candidates" in prompt:
+                        return self.batch_result(_family, prompt, _workspace, **_kwargs)
                     calls.append(prompt)
                     active_control._bind(lambda _text: False, lambda _reason: release.set() or True)
                     try:
@@ -1142,6 +1424,37 @@ class SparseCreativityEvaluationTest(CreativityEvaluationFixture):
             {"id": item["id"], "meaning": item["meaning"]} for item in self.material["dimensions"]
         ], variants=[{"id": key, "text": "Action " + key} for key in ("a", "b", "c")])
         self.store.put("checkpoint", {"search_material": self.material, "generation": 2})
+
+    def test_sparse_evaluation_falls_back_from_legacy_named_prompt(self):
+        documents = copy.deepcopy(prompt_sets.default_seed().documents)
+        evaluator = documents["milestone/evaluate_candidates.json"]
+        semantics = next(
+            part for part in evaluator["instructions"]["parts"]
+            if any(variable["name"] == "creativity_semantics"
+                   for variable in part.get("variables", []))
+        )
+        semantics["text"] = [
+            "STALE EVALUATOR PROMPT",
+            "Each candidate combines one variant per dimension.",
+        ]
+        semantics["variables"] = []
+        router_fixture.PromptRouterTest.write_set(
+            self.home, "legacy-operator", documents,
+        )
+        prompts = []
+
+        def physical(*args, **kwargs):
+            prompts.append(args[1])
+            return self.batch_result(*args, **kwargs)
+
+        _accepted, result = self.call(
+            physical, prompt_set="legacy-operator",
+        )
+
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("SAVED MATERIAL SEMANTICS: sparse_v2", prompts[0])
+        self.assertNotIn("STALE EVALUATOR PROMPT", prompts[0])
+        self.assertEqual(result.prompt_set_fallback, "stored_default")
 
     # Explicit entry points distinguish sparse fixtures in the suite inventory
     # while reusing the same host, router, correction and checkpoint scenarios.
@@ -1183,8 +1496,14 @@ class SparseCreativityEvaluationTest(CreativityEvaluationFixture):
         calls, interrupt = [], True
 
         def physical(*args, **kwargs):
-            batch = args[1].split("CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n")[1]
-            sent = json.loads(batch.splitlines()[0])
+            if "KIND: compose_candidates" in args[1]:
+                return self.batch_result(*args, **kwargs)
+            sent = self.prompt_records(
+                args[1],
+                "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):\n",
+                "IMMUTABLE COMPOSITIONS TO EVALUATE (JSON):\n",
+                "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
+            )
             calls.extend(sent)
             if interrupt and sent[0]["candidate_id"] == "c-0":
                 return runners.ControlledInterruptionResult("", 0, 0.1, "paused")
@@ -1216,10 +1535,10 @@ class SparseCreativityEvaluationTest(CreativityEvaluationFixture):
         self.assertTrue(resumed["comparison_ready"])
         self.assertEqual(progress["evaluated_candidates"], 2)
         self.assertEqual(progress["generations_completed"], 1)
-        self.assertEqual(progress["best_score"], 1)
-        self.assertFalse(progress["archive"][0][1]["constraint_valid"])
+        self.assertEqual(progress["best_score"], 0.4)
+        self.assertTrue(progress["archive"][0][1]["constraint_valid"])
         self.assertEqual([g for g, _ in progress["archive"]],
-                         [self.candidates["c-1"], self.candidates["c-0"]])
+                         [self.candidates["c-0"]])
         self.assertEqual(self.checkpoint()["evaluation"]["batches"][:1], accepted)
         batches = self.checkpoint()["evaluation"]["batches"]
         self.assertNotEqual(batches[0]["regime"], batches[1]["regime"])
@@ -1237,12 +1556,17 @@ class SparseCreativityEvaluationTest(CreativityEvaluationFixture):
         search.begin_generation(progress, fresh, self.configuration, creativity_semantics="sparse_v2")
         self.candidates.update(fresh)
         progress = reopen()
-        self.assertIn("c-1", search.progress_evaluation_request(progress)["comparison_ids"])
+        self.assertIn("c-0", search.progress_evaluation_request(progress)["comparison_ids"])
         self.progress_wave(progress, physical, prompt_set="operator")
         self.assertEqual(progress["stop_reason"], "generation_limit")
         self.assertEqual(progress["generations_completed"], 2)
         self.assertEqual(progress["evaluated_candidates"], 3)
-        self.assertEqual(progress["archive"][0][1], accepted[0]["evaluations"][0])
+        accepted_by_id = {
+            item["candidate_id"]: item
+            for batch in self.checkpoint()["evaluation"]["batches"]
+            for item in batch["evaluations"]
+        }
+        self.assertEqual(progress["archive"][0][1], accepted_by_id["c-0"])
         self.assertEqual(sorted(item["candidate_id"] for item in calls), ["c-0", "c-0", "c-1", "c-2"])
         expected_seeds = {
             "c-0": [("format", "a")], "c-1": [("channel", "a"), ("format", "b")],
@@ -1312,18 +1636,25 @@ class SparseCreativityEvaluationTest(CreativityEvaluationFixture):
 
                 accepted, _ = self.call(physical, search_material=material, candidates=candidates,
                                         configuration=dict(self.configuration, order_mode=mode))
-                sent_material = prompts[0].split("IMMUTABLE SEARCH MATERIAL AND CRITERIA (JSON):\n")[1]
-                sent_candidates = prompts[0].split("CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n")[1]
+                sent_material = prompts[0].split("IMMUTABLE SEARCH MATERIAL (JSON):\n")[1]
+                sent_candidates = self.prompt_records(
+                    prompts[0],
+                    "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):\n",
+                    "IMMUTABLE COMPOSITIONS TO EVALUATE (JSON):\n",
+                    "CANDIDATE BATCH (JSON; IDs identify candidates, not rank):\n",
+                )
                 self.assertEqual(json.loads(sent_material.splitlines()[0]), problem)
-                self.assertEqual(json.loads(sent_candidates.splitlines()[0]), [{
+                self.assertEqual(sent_candidates, [{
                     "candidate_id": "c-0", "components": pairs if mode == "fixed" else pairs[::-1],
+                    "proposal": self.proposals["c-0"],
                 }])
                 self.assertEqual(accepted["genomes"], candidates)
                 self.assertEqual(material, original)
 
     def test_sparse_evaluation_diagnostics(self):
+        self.proposals["c-0"] = "Apply the actions sequentially to the same resource."
         self.reply["evaluations"][1].update(
-            score=0, proposal="Apply the actions sequentially to the same resource.",
+            score=0, proposal=self.proposals["c-0"],
             reason="The actions undo each other, so the complete proposal is incoherent.",
             assumptions=["The resource survives the first action."],
         )

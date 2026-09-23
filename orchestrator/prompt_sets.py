@@ -35,6 +35,7 @@ MILESTONE_KINDS = (
     "suite_checkpoint",
     "merge_repair",
     "create_genes",
+    "compose_candidates",
     "evaluate_candidates",
     "expand_genes",
 )

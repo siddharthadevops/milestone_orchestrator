@@ -205,6 +205,10 @@
       {
         "id": "turn_human_scale",
         "text": "Put your intervention next to the request: would the human who asked see the grain and size they meant — or literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every \"right away\" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked."
+      },
+      {
+        "id": "turn_machinery_trust",
+        "text": "Did your intervention introduce a workaround or defensive mechanism around behavior, facts, or an artifact already established by a trusted producer or source, instead of using that authority directly? Answer with the source checked and any such case found."
       }
     ]
   },

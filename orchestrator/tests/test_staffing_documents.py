@@ -395,10 +395,10 @@ def stored_default_shaped(name="stored-default"):
         "examples": ["any ordinary work"],
         "configurations": {
             "low": {
-                "skeletoner": {"agent": "codex", "model": "gpt-5.6-terra",
+                "skeletoner": {"agent": "codex", "model": "gpt-6-sol",
                                "effort": "high"},
                 "drafter": {"agent": "codex", "effort": "medium"},
-                "implementer": {"agent": "codex", "model": "gpt-5.6-terra",
+                "implementer": {"agent": "codex", "model": "gpt-6-sol",
                                 "effort": "high"},
                 "fixer": {"agent": "codex", "effort": "medium"},
                 "review_codex": {"effort": "medium"},
@@ -409,23 +409,23 @@ def stored_default_shaped(name="stored-default"):
                 "reclassifier": {"agent": "codex", "effort": "medium"},
             },
             "medium": {
-                "skeletoner": {"agent": "codex", "model": "gpt-5.6-sol",
+                "skeletoner": {"agent": "codex", "model": "gpt-6-sol",
                                "effort": "max"},
                 "drafter": {"agent": "codex", "effort": "xhigh"},
-                "implementer": {"agent": "codex", "model": "gpt-5.6-sol",
+                "implementer": {"agent": "codex", "model": "gpt-6-sol",
                                 "effort": "max"},
                 "fixer": "codex",
                 # The counterpart model — pinned here and nowhere else.
-                "brainstorming_counterpart": {"model": "claude-fable-5",
+                "brainstorming_counterpart": {"model": "claude-opus-5-5",
                                               "effort": "max"},
                 "consultation": "opposite",
                 "reclassifier": {"agent": "codex", "effort": "xhigh"},
             },
             "high": {
-                "skeletoner": {"agent": "codex", "model": "gpt-5.6-sol",
+                "skeletoner": {"agent": "codex", "model": "gpt-6-sol",
                                "effort": "max"},
                 "drafter": {"agent": "codex", "effort": "max"},
-                "implementer": {"agent": "codex", "model": "gpt-5.6-sol",
+                "implementer": {"agent": "codex", "model": "gpt-6-sol",
                                 "effort": "max"},
                 "fixer": {"agent": "codex", "effort": "max"},
                 "review_codex": {"effort": "max"},
@@ -463,20 +463,20 @@ def claude_lead_shaped(name="claude-lead"):
                 "reclassifier": {"agent": "codex", "effort": "medium"},
             },
             "medium": {
-                "skeletoner": {"agent": "claude", "model": "claude-fable-5",
+                "skeletoner": {"agent": "claude", "model": "claude-opus-5-5",
                                "effort": "max"},
                 "drafter": {"agent": "claude", "effort": "xhigh"},
-                "implementer": {"agent": "claude", "model": "claude-fable-5",
+                "implementer": {"agent": "claude", "model": "claude-opus-5-5",
                                 "effort": "max"},
                 "fixer": {"agent": "claude", "effort": "xhigh"},
                 "consultation": "opposite",
                 "reclassifier": {"agent": "codex", "effort": "xhigh"},
             },
             "high": {
-                "skeletoner": {"agent": "claude", "model": "claude-fable-5",
+                "skeletoner": {"agent": "claude", "model": "claude-opus-5-5",
                                "effort": "max"},
                 "drafter": {"agent": "claude", "effort": "max"},
-                "implementer": {"agent": "claude", "model": "claude-fable-5",
+                "implementer": {"agent": "claude", "model": "claude-opus-5-5",
                                 "effort": "max"},
                 "fixer": {"agent": "claude", "effort": "max"},
                 "review_codex": {"effort": "max"},
@@ -668,8 +668,8 @@ class StaffingConversionTest(unittest.TestCase):
         with: the ladders below are the converted document's own.
         """
         expected_models = {
-            "codex": ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"],
-            "claude": ["claude-sonnet-5", "claude-opus-5", "claude-fable-5"],
+            "codex": ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra"],
+            "claude": ["claude-sonnet-5", "claude-opus-5-5"],
         }
         expected_efforts = ["low", "medium", "high", "xhigh", "max"]
 
@@ -712,8 +712,7 @@ class StaffingConversionTest(unittest.TestCase):
                     if f["name"] == "claude")
         self.assertEqual(
             document["families"][slot]["models"],
-            ["claude-sonnet-5", "claude-opus-5", "claude-fable-5",
-             "claude-nova-9"])
+            ["claude-sonnet-5", "claude-opus-5-5", "claude-nova-9"])
         self.assertEqual(
             document["families"][slot]["efforts"],
             ["low", "medium", "high", "xhigh", "max", "extreme"])

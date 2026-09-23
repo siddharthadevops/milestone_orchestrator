@@ -1,18 +1,12 @@
 {
   "kind": "evaluate_candidates",
   "process": "milestone",
-  "description": "Judge immutable candidate compositions without composing, repairing or rewriting them.",
+  "description": "Judge immutable literary compositions without composing, repairing or rewriting them.",
   "instructions": {
     "parts": [
-      {
-        "ref": "header"
-      },
-      {
-        "ref": "project_context"
-      },
-      {
-        "ref": "creativity_exploration"
-      },
+      {"ref": "header"},
+      {"ref": "project_context"},
+      {"ref": "creativity_exploration"},
       {
         "text": [
           "TASK: evaluate every supplied immutable composition against the operator's objective.",
@@ -40,38 +34,29 @@
           "evolutionary advice. A score is not a probability or promise of success."
         ],
         "variables": [
-          {
-            "name": "creativity_semantics",
-            "required": false,
-            "default": "legacy",
-            "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."
-          },
-          {
-            "name": "creativity_contract",
-            "required": false,
-            "default": "separated_gene_pool_v1",
-            "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."
-          }
+          {"name": "creativity_semantics", "required": false, "default": "legacy", "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."},
+          {"name": "creativity_contract", "required": false, "default": "separated_gene_pool_v1", "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."}
         ]
       },
       {
         "text": [
-          "IMMUTABLE SEARCH MATERIAL (JSON):",
-          "{{search_material}}",
-          "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):",
-          "{{compositions}}"
+          "LITERATURE REFINEMENT: judge the immutable composition exactly as written, including",
+          "its effect on imagery, voice, rhythm, tension, agency and reader experience where",
+          "these serve the objective. Do not normalize, complete or rewrite it into a better",
+          "story. Preserve continuity and stylistic constraints rather than smoothing away the",
+          "work's character. Reject unsupported anatomy, capabilities, lore, motives or causal",
+          "bridges instead of inventing them. Distinguish textual evidence from interpretation."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "IMMUTABLE SEARCH MATERIAL (JSON):", "{{search_material}}",
+          "IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):", "{{compositions}}"
         ],
         "variables": [
-          {
-            "name": "search_material",
-            "required": true,
-            "description": "Immutable task material and explicit constraints as JSON."
-          },
-          {
-            "name": "compositions",
-            "required": true,
-            "description": "Immutable candidate_id, exact components and proposal records produced by the separate composition stage."
-          }
+          {"name": "search_material", "required": true, "description": "Immutable task material and explicit constraints as JSON."},
+          {"name": "compositions", "required": true, "description": "Immutable candidate_id, exact components and proposal records produced by the separate composition stage."}
         ]
       }
     ]
@@ -81,18 +66,12 @@
       "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)"
     ],
     "items": [
-      {
-        "id": "machinery_trust",
-        "text": "For each composition, does it add a workaround around behavior or facts already established by a trusted producer or source instead of using them? Identify candidate IDs and evidence; do not repair them."
-      },
-      {
-        "id": "environment_fit",
-        "text": "For each composition, what standard does the surrounding work use—engineering, audience, genre, form, or stage—and does it exceed or change that standard where the request did not order it? Identify candidate IDs and evidence; do not improve them."
-      },
-      {
-        "id": "human_scale",
-        "text": "Put each composition next to the request: would the human recognize the grain and size they meant, or has literalism made the answer larger or narrower than the problem? Identify candidate IDs and evidence."
-      }
+      {"id": "environment_fit", "text": "For each composition, does it match the declared audience, genre, form, and editorial stage while preserving deliberate voice, ambiguity, rhythm, and unconventional form? Identify candidate IDs and evidence; do not improve it."},
+      {"id": "human_scale", "text": "Put each composition next to the brief: is it the smallest coherent realization of the supplied seed and intended reader effect, with no unrelated polish or exhaustive lens audit? Identify candidate IDs and evidence."},
+      {"id": "character_idiolect", "text": "For each candidate containing character voice or dialogue, does it preserve that character's evidenced idiolect—lexicon, syntax, rhythm, register, and habitual omissions? Cite the candidate ID and supplied evidence; if no voice appears, answer not applicable. Do not rewrite it."},
+      {"id": "reader_emotion", "text": "For each candidate, what concrete emotion will a reader most likely experience when its consequences arrive, and which choices in the immutable composition cause that response?"},
+      {"id": "reader_legibility", "text": "For each candidate, can an ordinary reader understand what happens and why it matters from the supplied material alone? Name the unsupported gap; do not fill it in."},
+      {"id": "meaningful_surprise", "text": "Given the creative freedom available in the assignment, does each candidate surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Cite the setup and turn in the immutable composition."}
     ]
   },
   "output_contract": {
@@ -116,9 +95,7 @@
         ],
         "variables": []
       },
-      {
-        "ref": "questions_output"
-      }
+      {"ref": "questions_output"}
     ]
   }
 }

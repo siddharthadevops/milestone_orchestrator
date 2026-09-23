@@ -73,7 +73,10 @@ def _creativity_proposals(checkpoint, limit, order_mode=None, *, creativity_sema
         return [{key: item[key] for key in (
             "candidate_id", "components", "proposal", "constraint_valid",
             "constraint_violations", "reason", "assumptions", "score",
-        )} for item in sorted(accepted, key=lambda item: item["score"], reverse=True)[:limit]]
+        )} for item in sorted(
+            (item for item in accepted if item["constraint_valid"]),
+            key=lambda item: item["score"], reverse=True,
+        )[:limit]]
     return [dict(
         **{key: item[key] for key in (
             "candidate_id", "proposal", "reason", "assumptions", "score",
@@ -156,6 +159,24 @@ def creativity_view(home, record):
         ),
         initial_genes_supplied="initial_genes" in record["order"],
     )
+    evaluation = checkpoint.get("evaluation") or {}
+    diligence = copy.deepcopy(checkpoint.get("diligence") or {})
+    composition_questions = [
+        {key: copy.deepcopy(batch[key]) for key in ("generation", "batch", "questions")}
+        for batch in evaluation.get("composition_batches", [])
+        if batch.get("questions")
+    ]
+    evaluation_questions = [
+        {key: copy.deepcopy(batch[key]) for key in ("generation", "batch", "questions")}
+        for batch in evaluation.get("batches", [])
+        if batch.get("questions")
+    ]
+    if composition_questions:
+        diligence["compose_candidates"] = composition_questions
+    if evaluation_questions:
+        diligence["evaluate_candidates"] = evaluation_questions
+    if diligence:
+        view["diligence"] = diligence
     if semantics == "sparse_v2":
         view["stop_reason"] = progress["stop_reason"]
         view["best_score"] = proposals[0]["score"] if proposals else None
@@ -2756,6 +2777,9 @@ class DirectTaskHost:
                 if isinstance(result, runners.ControlledInterruptionResult):
                     interruption = result
                 else:
+                    checkpoint.setdefault("diligence", {})["create_genes"] = copy.deepcopy(
+                        getattr(result, "diligence_questions", [])
+                    )
                     checkpoint.update(search_material=material, job="evolve", generation=1)
             elif progress["pending"] is not None:
                 wave = creativity_evaluation.evaluate_progress_wave(

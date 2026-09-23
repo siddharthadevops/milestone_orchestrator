@@ -53,14 +53,14 @@ from orchestrator.tests.test_driver_mock import (
 # What the converted `default` document staffs, so a test says WHY it expects
 # a family rather than repeating a literal.
 
-PLAN = ("claude", "claude-fable-5", "max")
-DRAFT = ("codex", "gpt-5.6-sol", "xhigh")
-IMPLEMENT = ("claude", "claude-fable-5", "max")
-FIX = ("codex", "gpt-5.6-sol", "xhigh")
-CLASSIFY = ("codex", "gpt-5.6-sol", "xhigh")
+PLAN = ("claude", "claude-opus-5-5", "max")
+DRAFT = ("codex", "gpt-6-sol", "xhigh")
+IMPLEMENT = ("claude", "claude-opus-5-5", "max")
+FIX = ("codex", "gpt-6-sol", "xhigh")
+CLASSIFY = ("codex", "gpt-6-sol", "xhigh")
 # The two `review` seats the converted `default` assigns, in index order.
-REVIEW_1 = ("codex", "gpt-5.6-sol", "xhigh")
-REVIEW_2 = ("claude", "claude-opus-5", "xhigh")
+REVIEW_1 = ("codex", "gpt-6-sol", "xhigh")
+REVIEW_2 = ("claude", "claude-opus-5-5", "xhigh")
 
 SLICE_PLAN = {
     "slices": [{

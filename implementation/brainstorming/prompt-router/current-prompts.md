@@ -2026,7 +2026,7 @@ that will build the next units on top of this artifact?
   xhigh  misstates pinned contract/behaviour facts; building on
          it as written would likely produce wrong work
 
-WHO BUILDS ON IT: slice docs drafted by codex (gpt-5.6-sol, max effort); implementation built by codex (gpt-5.6-sol, max effort) — not a hypothetical junior; weigh the
+WHO BUILDS ON IT: slice docs drafted by codex (gpt-6-sol, max effort); implementation built by codex (gpt-6-sol, max effort) — not a hypothetical junior; weigh the
 reading a capable agent at that strength actually makes.
 
 THE BUILDER'S RETURN PATH (weigh it): this run gives every

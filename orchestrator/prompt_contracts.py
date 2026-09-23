@@ -611,27 +611,83 @@ def validate_create_genes_reply(
     return obj
 
 
+GENE_POOL_SIZE = 10
+CREATIVITY_REJECTION_IDS = frozenset((
+    "__objective__", "__insufficient_detail__", "__seed__",
+))
+
+
+def _creativity_result_keys(bound, primary):
+    return (primary, "questions") if bound.question_ids else (primary,)
+
+
+def _gene_pool(obj, ctx):
+    pool = _require(obj, "gene_pool", dict, ctx)
+    _exact_keys(pool, ("subjects", "verbs", "adjectives"), ctx + ".gene_pool")
+    for key in ("subjects", "verbs", "adjectives"):
+        values = _require(pool, key, list, ctx + ".gene_pool")
+        if len(values) != GENE_POOL_SIZE:
+            raise contracts.ContractError(
+                "%s.gene_pool.%s must contain exactly %d entries"
+                % (ctx, key, GENE_POOL_SIZE)
+            )
+        normalized = []
+        for index, value in enumerate(values):
+            if not isinstance(value, str) or not value.strip():
+                raise contracts.ContractError(
+                    "%s.gene_pool.%s[%d] must be a non-blank string"
+                    % (ctx, key, index)
+                )
+            normalized.append(value.strip().casefold())
+        if len(set(normalized)) != len(normalized):
+            raise contracts.ContractError(
+                "%s.gene_pool.%s entries must be distinct" % (ctx, key)
+            )
+    return pool
+
+
 def _create_genes(obj, bound, options, ctx):
     _kind(bound, ("create_genes",))
-    obj.update(validate_create_genes_reply(
-        obj, context=ctx, creativity_semantics=options["creativity_semantics"],
-    ))
+    if options["creativity_semantics"] == "sparse_v2":
+        _exact_keys(obj, _creativity_result_keys(bound, "gene_pool"), ctx)
+        _gene_pool(obj, ctx)
+        return
+    _exact_keys(obj, _creativity_result_keys(bound, "search_material"), ctx)
+    admitted = validate_create_genes_reply(
+        {"search_material": obj["search_material"]}, context=ctx,
+        creativity_semantics=options["creativity_semantics"],
+    )
+    obj["search_material"] = admitted["search_material"]
+
+
+def _compose_candidates(obj, bound, options, ctx):
+    _kind(bound, ("compose_candidates",))
+    _exact_keys(obj, _creativity_result_keys(bound, "compositions"), ctx)
+    compositions = _id_records(
+        obj, "compositions", ("candidate_id", "proposal"), ctx,
+        id_key="candidate_id",
+    )
+    if {item["candidate_id"] for item in compositions} != set(options["candidate_ids"]):
+        raise contracts.ContractError(
+            "%s.compositions must cover exactly the supplied candidates" % ctx
+        )
+    for item in compositions:
+        _text(item, "proposal", "%s.compositions[%s]" % (ctx, item["candidate_id"]))
 
 
 def _evaluate_candidates(obj, bound, options, ctx):
     _kind(bound, ("evaluate_candidates",))
-    _exact_keys(obj, ("evaluations",), ctx)
+    _exact_keys(obj, _creativity_result_keys(bound, "evaluations"), ctx)
     evaluations = _id_records(obj, "evaluations", (
-        "candidate_id", "proposal", "constraint_valid", "constraint_violations",
+        "candidate_id", "constraint_valid", "constraint_violations",
         "reason", "assumptions", "score",
     ), ctx, id_key="candidate_id")
     if {item["candidate_id"] for item in evaluations} != set(options["candidate_ids"]):
         raise contracts.ContractError("%s.evaluations must cover exactly the supplied candidates" % ctx)
-    constraint_ids = set(options["constraint_ids"])
+    constraint_ids = set(options["constraint_ids"]) | CREATIVITY_REJECTION_IDS
     for item in evaluations:
         ectx = "%s.evaluations[%s]" % (ctx, item["candidate_id"])
-        for key in ("proposal", "reason"):
-            _text(item, key, ectx)
+        _text(item, "reason", ectx)
         valid = _require(item, "constraint_valid", bool, ectx)
         violations = _paths(item["constraint_violations"], ectx + ".constraint_violations")
         if len(violations) != len(set(violations)) or not set(violations) <= constraint_ids:
@@ -642,6 +698,8 @@ def _evaluate_candidates(obj, bound, options, ctx):
         score = _require(item, "score", (int, float), ectx)
         if isinstance(score, bool) or not 0 <= score <= 1:
             raise contracts.ContractError("%s.score must be a finite number in [0, 1]" % ectx)
+        if not valid and score != 0:
+            raise contracts.ContractError("%s.score must be 0 when the candidate is rejected" % ectx)
 
 
 def _expand_genes(obj, bound, options, ctx):
@@ -688,6 +746,7 @@ REGISTERED_SECTIONS = {
     "reclassify_result": _reclassify,
     "suite_checkpoint_result": _suite_checkpoint,
     "create_genes_result": _create_genes,
+    "compose_candidates_result": _compose_candidates,
     "evaluate_candidates_result": _evaluate_candidates,
     "expand_genes_result": _expand_genes,
 }

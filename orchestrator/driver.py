@@ -87,20 +87,16 @@ DEFAULT_CONFIG = {
     # {model}/{effort} placeholders in the command template are filled per
     # call; templates without placeholders (codex: its model lives in its
     # own CLI config) ignore overrides.
-    # Verified against the installed CLIs (2026-07-09, claude ids
-    # re-verified 2026-07-26): claude accepts explicit ids
-    # (claude-fable-5 / claude-opus-5 / claude-sonnet-5)
-    # and efforts low|medium|high|xhigh|max; codex models come from its
-    # live catalog (gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna) with
-    # reasoning efforts low|medium|high|xhigh|max set via
+    # Claude accepts explicit model ids and efforts low|medium|high|xhigh|max.
+    # Codex reasoning efforts low|medium|high|xhigh|max are set via
     # `-c model_reasoning_effort=...` (bare value: failed TOML parse
     # falls back to the literal string, per codex --help).
     # claude workers run with background workflows force-disabled
     # (runners.WORKFLOW_DISABLED_ENV): the async workflow model is
     # incompatible with the one-shot call contract.
     "model_defaults": {
-        "claude": {"model": "claude-opus-5", "effort": "xhigh"},
-        "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+        "claude": {"model": "claude-opus-5-5", "effort": "xhigh"},
+        "codex": {"model": "gpt-6-sol", "effort": "xhigh"},
     },
     # How each family is PAID FOR, which is what separates the two costs the
     # panel shows. "subscription": the call spends a seat, so its real cost is
@@ -176,7 +172,7 @@ DEFAULT_CONFIG = {
         # avoids silently dropping from max effort to the family default.
         "implementer": {
             "agent": "claude",
-            "model": "claude-fable-5",
+            "model": "claude-opus-5-5",
             "effort": "max",
         },
         # The second voice answers the Initial Position, so it is ALWAYS
@@ -189,11 +185,11 @@ DEFAULT_CONFIG = {
         "brainstorming_counterpart": "opposite",
         # The skeleton is drafted, re-drafted, and fixed by one chosen
         # model — skeleton work is high-leverage planning, so it defaults
-        # to claude-fable-5 at max effort. Reviews of the skeleton are
+        # to claude-opus-5-5 at max effort. Reviews of the skeleton are
         # unaffected (they use review_codex/review_claude).
         "skeletoner": {
             "agent": "claude",
-            "model": "claude-fable-5",
+            "model": "claude-opus-5-5",
             "effort": "max",
         },
         # Who RATES findings for debt deferral: a fixed family (operator
@@ -7040,7 +7036,7 @@ class Driver(object):
     def _builders_desc(self):
         """One line naming the run's REAL downstream builders for the
         drift-risk rater: 'who builds on this artifact' is a fact of the
-        run, not a hypothetical junior — a fable-5-at-max implementer reads
+        run, not a hypothetical junior — an opus-5-5-at-max implementer reads
         an ambiguity very differently than the rater's imagined worst case.
 
         Homed, those builders are the session's `draft` and `implement`
@@ -11697,7 +11693,7 @@ class Driver(object):
         skeleton's OWN defaults re-asserted.
 
         The skeleton's declared defaults live in
-        DEFAULT_CONFIG["acts"]["skeletoner"] (claude / claude-fable-5 / max),
+        DEFAULT_CONFIG["acts"]["skeletoner"] (claude / claude-opus-5-5 / max),
         but merge_config replaces a whole act entry on a partial override —
         so a panel that customizes only the model drops the agent and
         effort. Left to the generic fallback, a model-only override would

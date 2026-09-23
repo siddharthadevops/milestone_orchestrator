@@ -9,7 +9,7 @@ other metadata)::
 
     {"name": "default",
      "families": {"1": {"name": "codex",
-                        "models":  ["gpt-5.6-luna", ...],   # weakest first
+                        "models":  ["gpt-6-luna", ...],   # weakest first
                         "efforts": ["low", "medium", ...]}},
      "roles": {"plan": {}, ..., "review": {"distinct_families": true}},
      "materials": {"prose": {"examples": ["contracts", ...]}},
@@ -793,8 +793,8 @@ def save(home, doc):
 # test_ladders_are_whole_vocabulary_in_operator_order guards this copy against
 # the panel's until the panel slice retires that one.
 FAMILY_MODELS = {
-    "codex": ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"),
-    "claude": ("claude-sonnet-5", "claude-opus-5", "claude-fable-5"),
+    "codex": ("gpt-6-luna", "gpt-6-sol", "gpt-6-astra"),
+    "claude": ("claude-sonnet-5", "claude-opus-5-5"),
 }
 FAMILY_EFFORTS = {
     "codex": ("low", "medium", "high", "xhigh", "max"),

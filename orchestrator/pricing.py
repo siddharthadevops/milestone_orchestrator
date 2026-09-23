@@ -128,6 +128,24 @@ CODEX_RATES = {
             "output_multiplier": 1.5,
         },
     },
+    "gpt-6-sol": {
+        "input": 2.00, "cached_input": 0.20, "cache_write": 2.50,
+        "output": 10.00,
+        "long_context": {
+            "input_tokens_over": 272_000,
+            "input_multiplier": 2.0,
+            "output_multiplier": 1.5,
+        },
+    },
+    "gpt-6-luna": {
+        "input": 0.10, "cached_input": 0.01, "cache_write": 0.125,
+        "output": 0.50,
+        "long_context": {
+            "input_tokens_over": 272_000,
+            "input_multiplier": 2.0,
+            "output_multiplier": 1.5,
+        },
+    },
     "gpt-5.6-sol": {
         "input": 5.00, "cached_input": 0.50, "cache_write": 6.25,
         "output": 30.00,

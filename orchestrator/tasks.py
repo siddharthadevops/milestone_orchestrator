@@ -395,6 +395,7 @@ _CREATIVITY_COUNTS = (
 _CREATIVITY_RATES = ("mutation_rate",)
 _CREATIVITY_JOB_STAFFING = {
     "create_genes": {"role": "plan", "index": 1},
+    "compose_candidates": {"role": "brainstorm", "index": 1},
     "evaluate_candidates": {"role": "review", "index": 1, "review_breadth": 1},
     # Stored legacy tasks still resolve expansion staffing.
     "expand_genes": {"role": "brainstorm", "index": 1},
@@ -408,8 +409,8 @@ _TASK_EXECUTORS += (
         "operating_mode": "Bounded evolutionary search with model evaluations.",
         "usage_examples": ["exploring a literary objective", "finding constrained business options"],
         "available_agent_configurations": (
-            "Gene creation uses the first plan seat, evaluation the first review "
-            "seat. Optional per-job "
+            "Gene creation uses the first plan seat, candidate composition the "
+            "first brainstorm seat, and evaluation the first review seat. Optional per-job "
             "rigor overrides the task default, then the live staffing session."
         ),
         "execution_bindings": {
@@ -1039,7 +1040,11 @@ def creativity_job_staffing_request(job, configuration):
     """Bind a creativity job using admitted configuration and existing roles."""
     request = dict(_CREATIVITY_JOB_STAFFING[job])
     rigor = configuration.get("rigor", {})
-    choice = rigor.get(job, rigor.get("default"))
+    # Composition is the first half of evaluation and deliberately adds no
+    # public tuning knob.  Reuse the evaluation override while keeping a
+    # distinct brainstorm seat and physical call.
+    rigor_key = "evaluate_candidates" if job == "compose_candidates" else job
+    choice = rigor.get(rigor_key, rigor.get("default"))
     if choice is not None:
         request["rigor"] = choice
     return request

@@ -231,7 +231,10 @@ class TaskContractsTest(unittest.TestCase):
         base = creativity_configuration(mutation_rate=0.25)
         self.assertEqual(set(schema), set(base) | {"order_mode", "rigor"})
         self.assertNotIn("expansion", entry["available_agent_configurations"])
-        self.assertNotIn("brainstorm", entry["available_agent_configurations"])
+        self.assertIn(
+            "candidate composition the first brainstorm seat",
+            entry["available_agent_configurations"],
+        )
         self.assertEqual(schema["order_mode"], {
             "type": "choice",
             "choices": ["fixed", "interchangeable"],
@@ -521,6 +524,7 @@ class TaskContractsTest(unittest.TestCase):
                 }
         bindings = {
             "create_genes": {"role": "plan", "index": 1},
+            "compose_candidates": {"role": "brainstorm", "index": 1},
             "evaluate_candidates": {"role": "review", "index": 1, "review_breadth": 1},
             "expand_genes": {"role": "brainstorm", "index": 1},
         }
@@ -528,10 +532,11 @@ class TaskContractsTest(unittest.TestCase):
             staffing.save(home, doc)
             session = staffing.create_session(home, session_body(document="matrix"))["id"]
             for job, binding in bindings.items():
+                rigor_key = "evaluate_candidates" if job == "compose_candidates" else job
                 for choice, expected_rigor in (
                     (None, "medium"), ({}, "medium"), ({"default": "low"}, "low"),
-                    ({job: "high"}, "high"),
-                    ({"default": "low", job: "high"}, "high"),
+                    ({rigor_key: "high"}, "high"),
+                    ({"default": "low", rigor_key: "high"}, "high"),
                 ):
                     with self.subTest(job=job, rigor=choice):
                         raw = creativity_configuration()

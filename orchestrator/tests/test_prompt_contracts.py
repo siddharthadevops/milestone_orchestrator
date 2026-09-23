@@ -99,6 +99,29 @@ def sparse_creation_reply():
     }}
 
 
+DEFAULT_CREATIVITY_QUESTION_IDS = (
+    "machinery_trust", "environment_fit", "human_scale",
+)
+
+
+def question_answers(question_ids):
+    return [
+        {"id": question_id, "answer": "Checked %s against the supplied material." % question_id}
+        for question_id in question_ids
+    ]
+
+
+def sparse_gene_pool_reply(question_ids=DEFAULT_CREATIVITY_QUESTION_IDS):
+    return {
+        "gene_pool": {
+            "subjects": ["Subject %d" % index for index in range(1, 11)],
+            "verbs": ["Verb %d" % index for index in range(1, 11)],
+            "adjectives": ["Adjective %d" % index for index in range(1, 11)],
+        },
+        "questions": question_answers(question_ids),
+    }
+
+
 class PromptContractsTest(unittest.TestCase):
     def assert_creativity_replies(self, kind, accepted, rejected, **context):
         values = validation_values(prompt_sets.default_seed())
@@ -112,26 +135,37 @@ class PromptContractsTest(unittest.TestCase):
                 ).prompt
                 prompt_router.render(served, values)
                 bound = prompt_contracts.bind(served)
-                self.assertEqual(bound.registered_section_ids, (kind + "_result",))
+                expected_sections = (kind + "_result",)
+                if bound.question_ids:
+                    expected_sections += ("questions_output",)
+                self.assertEqual(bound.registered_section_ids, expected_sections)
                 for case, reply in accepted.items():
                     with self.subTest(material=material, accepted=case):
-                        self.assertIs(prompt_contracts.validate(bound, reply, **context), reply)
+                        prepared = copy.deepcopy(reply)
+                        if bound.question_ids and isinstance(prepared, dict):
+                            prepared.setdefault("questions", question_answers(bound.question_ids))
+                        self.assertIs(
+                            prompt_contracts.validate(bound, prepared, **context), prepared,
+                        )
                 for case, reply in rejected.items():
                     with self.subTest(material=material, rejected=case):
+                        prepared = copy.deepcopy(reply)
+                        if bound.question_ids and isinstance(prepared, dict):
+                            prepared.setdefault("questions", question_answers(bound.question_ids))
                         with self.assertRaises(contracts.ContractError):
-                            prompt_contracts.validate(bound, reply, **context)
+                            prompt_contracts.validate(bound, prepared, **context)
 
     def test_evaluate_candidates_contextual_contract(self):
         valid = {
-            "candidate_id": "c1", "proposal": "Share existing space.",
+            "candidate_id": "c1",
             "constraint_valid": True, "constraint_violations": [],
             "reason": "Uses available capacity without spending.", "assumptions": [], "score": 0,
         }
         invalid = {
-            "candidate_id": "c2", "proposal": "Rent a larger room.",
+            "candidate_id": "c2",
             "constraint_valid": False, "constraint_violations": ["budget", "capacity"],
             "reason": "Useful but exceeds the budget and available capacity.",
-            "assumptions": ["A larger room is available"], "score": 1,
+            "assumptions": ["A larger room is available"], "score": 0,
         }
         reply = {"evaluations": [invalid, valid]}
         rejected = closed_object_defects(reply)
@@ -144,6 +178,11 @@ class PromptContractsTest(unittest.TestCase):
         records = closed_object_defects(valid)
         records["invalid_without_violations"] = dict(valid, constraint_valid=False)
         records["valid_with_violations"] = dict(valid, constraint_violations=["budget"])
+        records["proposal_contaminates_review"] = dict(valid, proposal="A rewritten proposal")
+        records["rejected_nonzero_score"] = dict(
+            valid, constraint_valid=False,
+            constraint_violations=["__insufficient_detail__"], score=0.5,
+        )
         for label, violations in (
             ("unknown", ["unknown"]), ("duplicate", ["budget", "budget"]),
             ("blank", [" "]), ("non_string", [42]), ("not_list", "budget"),
@@ -160,12 +199,44 @@ class PromptContractsTest(unittest.TestCase):
         for case, record in records.items():
             rejected["record_" + case] = {"evaluations": [invalid, record]}
         self.assert_creativity_replies("evaluate_candidates", {
-            "reordered_with_high_scoring_invalid": reply,
+            "reordered_with_rejection": reply,
             "fractional_score": {"evaluations": [dict(valid, score=0.5), invalid]},
         }, rejected, candidate_ids=["c1", "c2"], constraint_ids=["budget", "capacity"])
         self.assert_creativity_replies("evaluate_candidates", {
             "no_constraints": {"evaluations": [valid]},
         }, {}, candidate_ids=["c1"], constraint_ids=[])
+        for rejection_id in prompt_contracts.CREATIVITY_REJECTION_IDS:
+            service_rejection = dict(
+                valid, constraint_valid=False,
+                constraint_violations=[rejection_id], score=0,
+            )
+            self.assert_creativity_replies("evaluate_candidates", {
+                rejection_id: {"evaluations": [service_rejection]},
+            }, {}, candidate_ids=["c1"], constraint_ids=[])
+
+    def test_compose_candidates_contextual_contract(self):
+        first = {"candidate_id": "c1", "proposal": "Share the existing room."}
+        second = {"candidate_id": "c2", "proposal": "Expose the missing access agreement."}
+        reply = {"compositions": [second, first]}
+        rejected = closed_object_defects(reply)
+        rejected.update({
+            "empty_coverage": {"compositions": []},
+            "missing_candidate": {"compositions": [first]},
+            "duplicate_candidate": {"compositions": [first, first]},
+            "extra_candidate": {
+                "compositions": [first, second, dict(first, candidate_id="c3")],
+            },
+            "evaluation_contamination": {
+                "compositions": [dict(first, score=1), second],
+            },
+            "missing_questions": {"compositions": [first, second], "questions": []},
+        })
+        for case, record in closed_object_defects(first).items():
+            rejected["record_" + case] = {"compositions": [record, second]}
+        self.assert_creativity_replies(
+            "compose_candidates", {"reordered": reply}, rejected,
+            candidate_ids=["c1", "c2"],
+        )
 
     def test_expand_genes_contextual_contract(self):
         dimensions = [
@@ -277,21 +348,35 @@ class PromptContractsTest(unittest.TestCase):
                     material=material_name, values=values,
                 ).prompt
                 bound = prompt_contracts.bind(served)
-                self.assertEqual(bound.registered_section_ids, ("create_genes_result",))
+                self.assertEqual(
+                    bound.registered_section_ids,
+                    ("create_genes_result", "questions_output"),
+                )
                 for reply in (minimal, populated, echoed):
+                    reply = dict(
+                        reply, questions=question_answers(bound.question_ids),
+                    )
                     self.assertIs(prompt_contracts.validate(
                         bound, reply,
                     ), reply)
                 for index, reply in enumerate(invalid):
                     with self.subTest(material=material_name, invalid=index):
+                        reply = copy.deepcopy(reply)
+                        if isinstance(reply, dict):
+                            reply.setdefault(
+                                "questions", question_answers(bound.question_ids),
+                            )
                         with self.assertRaises(contracts.ContractError):
                             prompt_contracts.validate(bound, reply)
                 served["kind"] = "evaluate_candidates"
                 with self.assertRaisesRegex(contracts.ContractError, "prompt kind"):
                     prompt_contracts.validate(
-                        prompt_contracts.bind(served), minimal,
+                        prompt_contracts.bind(served), dict(
+                            minimal, questions=question_answers(bound.question_ids),
+                        ),
                     )
-                served["output_contract"][0]["id"] = "operator_data_only"
+                served["output_contract"] = [section("operator_data_only")]
+                served["questions"]["items"] = []
                 self.assertEqual(prompt_contracts.validate(
                     prompt_contracts.bind(served), {"operator": "reply"},
                 ), {"operator": "reply"})
@@ -350,7 +435,43 @@ class PromptContractsTest(unittest.TestCase):
                 prompt_contracts.validate_create_genes_reply(value, creativity_semantics="sparse_v2")
         with self.assertRaises(contracts.ContractError):
             prompt_contracts.validate_create_genes_reply(reply)
-        self.assert_creativity_replies("create_genes", accepted, invalid, creativity_semantics="sparse_v2")
+
+    def test_sparse_gene_pool_contextual_contract(self):
+        valid = sparse_gene_pool_reply()
+        valid.pop("questions")
+        invalid = closed_object_defects(valid)
+
+        def replace(path, value):
+            changed = copy.deepcopy(valid)
+            target = changed
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            return changed
+
+        for category in ("subjects", "verbs", "adjectives"):
+            values = valid["gene_pool"][category]
+            invalid[category + "_nine"] = replace(("gene_pool", category), values[:-1])
+            invalid[category + "_eleven"] = replace(
+                ("gene_pool", category), values + ["Extra"],
+            )
+            invalid[category + "_blank"] = replace(
+                ("gene_pool", category, 0), " ",
+            )
+            invalid[category + "_non_string"] = replace(
+                ("gene_pool", category, 0), 42,
+            )
+            duplicate = list(values)
+            duplicate[-1] = values[0].swapcase()
+            invalid[category + "_duplicate_casefolded"] = replace(
+                ("gene_pool", category), duplicate,
+            )
+        invalid["missing_questions"] = dict(valid, questions=[])
+        invalid["legacy_shape"] = sparse_creation_reply()
+        self.assert_creativity_replies(
+            "create_genes", {"exact_ten_each": valid}, invalid,
+            creativity_semantics="sparse_v2",
+        )
 
     def test_sparse_material_normalization(self):
         from itertools import permutations
@@ -364,7 +485,6 @@ class PromptContractsTest(unittest.TestCase):
         expected["search_material"]["variants"] = sorted(
             expected["search_material"]["variants"][1:], key=lambda item: item["id"],
         )
-        bound = prompt_contracts.bind(prompt("create_genes", ["create_genes_result"]))
         for variants in permutations(source["search_material"]["variants"]):
             value = copy.deepcopy(source)
             value["search_material"]["variants"] = list(variants)
@@ -372,9 +492,6 @@ class PromptContractsTest(unittest.TestCase):
             admitted = prompt_contracts.validate_create_genes_reply(value, creativity_semantics="sparse_v2")
             self.assertEqual(value, before)
             self.assertEqual(admitted, expected)
-            self.assertEqual(prompt_contracts.validate(
-                bound, value, creativity_semantics="sparse_v2",
-            ), expected)
 
     def test_shipped_contract_section_registry_is_complete(self):
         documents = prompt_sets.default_seed().documents

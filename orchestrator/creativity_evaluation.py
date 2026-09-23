@@ -11,9 +11,101 @@ import json
 import os
 import threading
 import uuid
+from itertools import product
 from types import SimpleNamespace
 
-from . import creativity_search, prompt_contracts, prompt_router, runners, staffing, tasks
+from . import (
+    creativity_search, prompt_contracts, prompt_router, prompt_sets, runners,
+    staffing, tasks,
+)
+
+
+CREATIVITY_CONTRACT = "separated_gene_pool_v1"
+
+
+def _validate_sparse_prompt(prompt, defaulted_variables):
+    """Reject a stored creativity prompt that predates sparse semantics.
+
+    Named prompt sets are operator-owned and may legitimately retain the legacy
+    contract.  They cannot, however, serve a sparse task unless the mounted
+    route declares the service-owned semantics coordinate.  Let the ordinary
+    prompt-set resolver fall back before a provider call instead of asking a
+    worker to satisfy a contract different from the validator's.
+    """
+    declarations = [
+        variable
+        for unit in prompt["instructions"] + prompt["output_contract"]
+        for variable in unit["variables"]
+    ]
+    semantics = [
+        variable for variable in declarations
+        if variable.get("name") == "creativity_semantics"
+    ]
+    contracts = [
+        variable for variable in declarations
+        if variable.get("name") == "creativity_contract"
+    ]
+    if (
+        len(semantics) != 1
+        or len(contracts) != 1
+        or contracts[0].get("default") != CREATIVITY_CONTRACT
+        or "creativity_contract" not in defaulted_variables
+    ):
+        raise prompt_sets.PromptSetError(
+            "sparse creativity prompt must declare the current semantics and contract"
+        )
+
+
+def _search_material_from_gene_pool(pool, *, objective, context, references):
+    """Turn the extractor's three literal lists into the existing sparse ABI."""
+    dimensions = [
+        {"id": "subject_%02d" % index, "meaning": subject}
+        for index, subject in enumerate(pool["subjects"], 1)
+    ]
+    variants = [
+        {
+            "id": "verb_%02d__adjective_%02d" % (verb_index, adjective_index),
+            "text": 'verb "%s"; adjective "%s"' % (verb, adjective),
+        }
+        for (verb_index, verb), (adjective_index, adjective) in product(
+            enumerate(pool["verbs"], 1), enumerate(pool["adjectives"], 1),
+        )
+    ]
+    material = {
+        "objective": objective,
+        "context_summary": json.dumps({
+            "context": context, "reference_documents": references,
+        }, ensure_ascii=False),
+        "facts": [],
+        "constraints": [],
+        "assumptions": [],
+        "unknowns": [],
+        "dimensions": dimensions,
+        "variants": variants,
+        "composition_guidance": (
+            "Use every active subject and its exact verb-adjective pair without "
+            "adding substantive facts, actors, capabilities, interfaces, or mechanisms."
+        ),
+        "criteria": [
+            {"id": "objective_fit", "text": "Meets the operator's stated objective."},
+            {"id": "feasibility", "text": "Is supported by the supplied material."},
+            {"id": "seed_fidelity", "text": "Uses every selected seed faithfully."},
+        ],
+        "order_semantics": (
+            "The active seeds shape the proposal in their supplied order; that order "
+            "does not authorize missing causal or factual detail."
+        ),
+    }
+    return prompt_contracts.validate_create_genes_reply(
+        {"search_material": material}, creativity_semantics="sparse_v2",
+    )["search_material"]
+
+
+def _problem_material(search_material):
+    return {key: search_material[key] for key in (
+        "objective", "context_summary", "facts", "constraints", "assumptions",
+        "unknowns", "composition_guidance", "criteria", "order_semantics",
+    )}
 
 
 def create_genes(
@@ -38,14 +130,77 @@ def create_genes(
         )
     finally:
         group.ensure_quiescent()
-    return (None if isinstance(result, runners.ControlledInterruptionResult)
-            else reply["search_material"]), result
+    if isinstance(result, runners.ControlledInterruptionResult):
+        return None, result
+    result.diligence_questions = reply.get("questions", [])
+    material = (
+        _search_material_from_gene_pool(
+            reply["gene_pool"], objective=objective, context=context,
+            references=references,
+        )
+        if creativity_semantics == "sparse_v2"
+        else reply["search_material"]
+    )
+    return material, result
+
+
+def call_composition_batch(
+    group, runner, *, home, session, workspace, configuration, search_material,
+    candidates, generation, batch, execution_context, prompt_set="default",
+    prompt_values=None, creativity_semantics=None,
+):
+    """Materialize candidate text once, before any reviewer sees it."""
+    genomes = {candidate_id: dict(genome) for candidate_id, genome in candidates.items()}
+    sparse = creativity_semantics == "sparse_v2"
+    values = dict(prompt_values or {})
+    values.update(
+        workspace=workspace,
+        creativity_semantics=creativity_semantics or "legacy",
+        search_material=json.dumps(_problem_material(search_material), ensure_ascii=False),
+        candidates=json.dumps([
+            {
+                "candidate_id": candidate_id,
+                "components": creativity_search.genome_components(
+                    search_material["dimensions"], genome,
+                    configuration.get("order_mode"),
+                    variants=search_material["variants"] if sparse else None,
+                    creativity_semantics=creativity_semantics,
+                ),
+            }
+            for candidate_id, genome in genomes.items()
+        ], ensure_ascii=False),
+    )
+    context = {"job": "compose_candidates", "generation": generation, "batch": batch}
+    reply, result = _call_semantic_job(
+        group, runner, job="compose_candidates", home=home, session=session,
+        workspace=workspace, configuration=configuration, values=values,
+        validation_context={"candidate_ids": list(genomes)}, context=context,
+        execution_context=execution_context, prompt_set=prompt_set,
+    )
+    if isinstance(result, runners.ControlledInterruptionResult):
+        return None, result
+    return {
+        "generation": generation,
+        "batch": batch,
+        "call_id": result.call_id,
+        "prompt_path": result.call_context["prompt_path"],
+        "regime": {
+            "material": result.call_context["material"],
+            "agent": result.resolved_family,
+            "model": result.resolved_model,
+            "effort": result.resolved_effort,
+        },
+        "genomes": genomes,
+        "compositions": reply["compositions"],
+        "questions": reply.get("questions", []),
+    }, result
 
 
 def call_evaluation_batch(
     group, runner, *, home, session, workspace, configuration, search_material,
     candidates, generation, batch, execution_context, prompt_set="default",
     prompt_values=None, record_dispatch=None, creativity_semantics=None,
+    compositions=None,
 ):
     """Evaluate one owner-admitted batch, including the runner's one correction.
 
@@ -59,21 +214,27 @@ def call_evaluation_batch(
     """
     genomes = {candidate_id: dict(genome) for candidate_id, genome in candidates.items()}
     sparse = creativity_semantics == "sparse_v2"
-    problem = {key: search_material[key] for key in (
-        "objective", "context_summary", "facts", "constraints", "assumptions",
-        "unknowns", "composition_guidance", "criteria", "order_semantics",
-    )} if sparse else search_material
+    problem = _problem_material(search_material)
+    compositions = list(compositions or [])
+    by_candidate = {item["candidate_id"]: item for item in compositions}
+    if set(by_candidate) != set(genomes):
+        raise ValueError("compositions must cover exactly the evaluation candidates")
     values = dict(prompt_values or {})
     values.update(
         workspace=workspace,
         creativity_semantics=creativity_semantics or "legacy",
         search_material=json.dumps(problem, ensure_ascii=False),
-        candidates=json.dumps([
-            {"candidate_id": candidate_id, "components": creativity_search.genome_components(
-                search_material["dimensions"], genome, configuration.get("order_mode"),
-                variants=search_material["variants"] if sparse else None,
-                creativity_semantics=creativity_semantics,
-            )}
+        compositions=json.dumps([
+            {
+                "candidate_id": candidate_id,
+                "components": creativity_search.genome_components(
+                    search_material["dimensions"], genome,
+                    configuration.get("order_mode"),
+                    variants=search_material["variants"] if sparse else None,
+                    creativity_semantics=creativity_semantics,
+                ),
+                "proposal": by_candidate[candidate_id]["proposal"],
+            }
             for candidate_id, genome in genomes.items()
         ], ensure_ascii=False),
     )
@@ -100,7 +261,10 @@ def call_evaluation_batch(
             "effort": result.resolved_effort,
         },
         "genomes": genomes,
-        "evaluations": reply["evaluations"],
+        "evaluations": [dict(
+            item, proposal=by_candidate[item["candidate_id"]]["proposal"],
+        ) for item in reply["evaluations"]],
+        "questions": reply.get("questions", []),
     }, result
 
 
@@ -117,6 +281,12 @@ def _call_semantic_job(
         selected = prompt_router.resolve(
             home, job=job + "@creativity", executor="agent_call",
             material=context["material"], values=values, prompt_set=prompt_set,
+            prompt_validator=(
+                _validate_sparse_prompt
+                if values.get("creativity_semantics") == "sparse_v2"
+                and job in ("create_genes", "compose_candidates", "evaluate_candidates")
+                else None
+            ),
         )
         bound = prompt_contracts.bind(selected.prompt)
         prompt = prompt_router.render(bound.prompt, values)
@@ -139,7 +309,7 @@ def _call_semantic_job(
         return answer["agent"], answer["model"], answer["effort"]
 
     def before_dispatch(agent, model, effort, _fallback):
-        if job == "evaluate_candidates":
+        if job in ("compose_candidates", "evaluate_candidates"):
             context["prompt_path"] = runners.save_prompt_trace(
                 os.path.join(group.lease.task_dir, "prompts"), agent,
                 prepared_prompt, label=context["batch"],
@@ -217,6 +387,14 @@ def _current_evaluations(state, creativity_semantics=None):
     }
 
 
+def _current_compositions(state):
+    return {
+        item["candidate_id"]: item
+        for batch in state.get("composition_batches", [])
+        for item in batch["compositions"]
+    }
+
+
 def evaluate_wave(
     group, runner, *, store, checkpoint_key, candidates, comparison_ids,
     reference_revision=None, creativity_semantics=None, **call_options,
@@ -246,10 +424,14 @@ def evaluate_wave(
     checkpoint = store.get(checkpoint_key)
     if "evaluation" not in checkpoint:
         checkpoint["evaluation"] = {
-            "accepted_count": 0, "regime": None, "regime_revision": 0, "batches": [],
+            "accepted_count": 0, "regime": None, "regime_revision": 0,
+            "composition_batches": [], "batches": [],
         }
         store.put(checkpoint_key, checkpoint)
     state = checkpoint["evaluation"]
+    if "composition_batches" not in state:
+        state["composition_batches"] = []
+        store.put(checkpoint_key, checkpoint)
     current = _current_evaluations(state, creativity_semantics)
     configuration = call_options["configuration"]
     capacity = configuration["max_evaluated_candidates"] - state["accepted_count"]
@@ -274,9 +456,33 @@ def evaluate_wave(
             return state["regime_revision"]
 
     def run_batch(ids, batch_id):
+        with lock:
+            state = store.get(checkpoint_key)["evaluation"]
+            composed = _current_compositions(state)
+        missing = [candidate_id for candidate_id in ids if candidate_id not in composed]
+        if missing:
+            composition, result = call_composition_batch(
+                group, runner,
+                candidates={key: candidates[key] for key in missing},
+                batch=batch_id, creativity_semantics=creativity_semantics,
+                **call_options,
+            )
+            if composition is None:
+                return result
+            with lock:
+                checkpoint = store.get(checkpoint_key)
+                checkpoint["evaluation"].setdefault(
+                    "composition_batches", []
+                ).append(composition)
+                store.put(checkpoint_key, checkpoint)
+        with lock:
+            composed = _current_compositions(
+                store.get(checkpoint_key)["evaluation"]
+            )
         accepted, result = call_evaluation_batch(
             group, runner, candidates={key: candidates[key] for key in ids},
-            batch=batch_id, record_dispatch=record_dispatch,
+            compositions=[composed[key] for key in ids], batch=batch_id,
+            record_dispatch=record_dispatch,
             creativity_semantics=creativity_semantics, **call_options,
         )
         if accepted is not None:

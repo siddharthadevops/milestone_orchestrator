@@ -277,6 +277,9 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             question_id for question_id in (
                 "turn_environment_fit", "turn_human_scale",
                 "turn_better_alternative", "request_focus",
+                "turn_machinery_trust", "turn_character_idiolect",
+                "turn_reader_emotion", "turn_reader_legibility",
+                "turn_meaningful_surprise",
             )
             if "- %s:" % question_id in prompt
         ]
