@@ -3220,6 +3220,9 @@ def run_story(home, run_id, item, state_path=None):
                         "verification_recorded": (
                             "verification_event_seq" in s_
                         ),
+                        "verification_status": st.seal_verification_status(
+                            state, s_
+                        ),
                         # Historical records may still carry LLM halves;
                         # deterministic seals cite ordinary reviews instead.
                         "halves": halves,
@@ -3265,6 +3268,14 @@ def run_story(home, run_id, item, state_path=None):
                     "cadence": event.get("cadence"),
                     "ok": event.get("ok"),
                     "stable": event.get("stable"),
+                    "status": st.verification_status(event),
+                    "deferred_failures": copy.deepcopy(
+                        event.get("deferred_failures") or []
+                    ),
+                    "results": copy.deepcopy(event.get("results") or []),
+                    "checkpoint_result": copy.deepcopy(
+                        event.get("checkpoint_result")
+                    ),
                     "reused": bool(event.get("reused")),
                     "vacuous": bool(event.get("vacuous")),
                     "fixer_certified": bool(

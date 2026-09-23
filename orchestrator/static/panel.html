@@ -3025,6 +3025,23 @@ function roundChip(r, taskId = null) {
     : r.findings === 0 ? "clean" : sevClass(r.severity);
   return `<span class="chip ${cls}${click}"${linked ? ` title="${esc(linked)}"` : ""}>${actor}${esc(kind)} · F${r.findings}${fmtDur(r.duration_s)}</span>`;
 }
+function sealVerificationText(s) {
+  const descriptions = {
+    legacy_passed: "Full verification passed under the legacy flow.",
+    passed: "The scheduled full verification passed.",
+    not_due: "Full verification was not due at this boundary.",
+    not_verified: "Scheduled full verification: NOT VERIFIED. Authorized failures remain assigned to pending slices.",
+    failed: "The scheduled full verification failed.",
+    changed_bytes: "The scheduled full verification changed candidate bytes.",
+    legacy_stability_unrecorded: "The scheduled full verification passed; legacy stability was not recorded.",
+    unavailable: "The scheduled full verification result is unavailable.",
+  };
+  return descriptions[s.verification_status] || (
+    s.verification_recorded === false ? descriptions.legacy_passed
+      : s.verification_event_seq == null ? descriptions.not_due
+      : descriptions.unavailable
+  );
+}
 function sealChip(s, unitKey, taskId = null) {
   const dur = fmtDur(s.duration_s);
   const click = ` clicky" onclick="showStory('seal:${esc(unitKey)}:${
@@ -3033,13 +3050,7 @@ function sealChip(s, unitKey, taskId = null) {
     // Wave provenance: the anchor's documentation wave requalified this unit.
     return `<span class="chip pass${click}" title="re-documentation wave ${esc(s.wave)}">Seal &#10003; wave${dur}</span>`;
   if (s.passed)
-    return `<span class="chip pass${click}" title="${
-      s.verification_recorded === false
-        ? "legacy seal; full verification passed under the prior flow"
-        : s.verification_event_seq != null
-        ? "same-byte reviews and scheduled verification satisfied"
-        : "same-byte reviews satisfied; full verification was not due"
-      }">Seal &#10003;${dur}</span>`;
+    return `<span class="chip ${s.verification_status === "not_verified" ? "sev23" : "pass"}${click}" title="${esc(sealVerificationText(s))}">Seal &#10003;${s.verification_status === "not_verified" ? " · NOT VERIFIED" : ""}${dur}</span>`;
   if (s.invalidated)
     return `<span class="chip fail${click}" title="${esc(s.invalidated)}">historical seal invalid${dur}</span>`;
   const findings = Object.values(s.findings || {})
@@ -3084,10 +3095,12 @@ function reclassifyHistoryChips(events, unitKey, taskId = null) {
     .filter(Boolean);
 }
 function verificationChip(ev, taskId = null) {
+  const notVerified = ev.status === "not_verified";
   const stableUnknown = ev.ok && ev.stable == null;
   const passed = ev.ok && ev.stable === true;
-  const cls = passed ? "pass" : stableUnknown ? "work" : "fail";
-  const status = ev.reused ? "reused fixer proof"
+  const cls = notVerified ? "sev23" : passed ? "pass" : stableUnknown ? "work" : "fail";
+  const status = notVerified ? "NOT VERIFIED"
+    : ev.reused ? "reused fixer proof"
     : ev.fixer_certified ? "fixer certified"
     : ev.vacuous ? "no suite configured"
     : passed ? "passed"
@@ -4318,13 +4331,7 @@ async function showStory(item, taskId = null) {
     if (d.wave)
       body += `<div class="story-note">Requalified by the anchor's documentation wave (${esc(d.wave)}): the wave certified the whole documentation set, so this unit did not evaluate its own predicate.</div>`;
     else if (!historical && d.passed)
-      body += `<div class="story-note">Deterministic result: every configured family was clean or debt-clean on the same current bytes. ${
-        d.verification_recorded === false
-          ? "Full verification passed under the legacy flow."
-          : d.verification_event_seq != null
-          ? "The scheduled full verification passed."
-          : "Full verification was not due at this boundary."
-        } No seal reviewer was called.</div>`;
+      body += `<div class="story-note">Deterministic result: every configured family was clean or debt-clean on the same current bytes. ${esc(sealVerificationText(d))} No seal reviewer was called.</div>`;
     if (d.verification_event_seq != null)
       body += `<div class="story-note">Scheduled verification event: ${esc(d.verification_event_seq)}</div>`;
     if (d.invalidated)
@@ -4354,15 +4361,22 @@ async function showStory(item, taskId = null) {
       : d.cadence === "four_slice_checkpoint" ? "4-slice checkpoint"
       : d.boundary || "suite";
     title = `${d.unit} — verify (${boundary})`;
-    const status = d.reused ? "reused fixer proof"
+    const status = d.status === "not_verified" ? "NOT VERIFIED"
+      : d.reused ? "reused fixer proof"
       : d.fixer_certified ? "fixer certified"
       : d.vacuous ? "no suite configured"
       : d.ok && d.stable ? "passed"
       : d.ok && d.stable == null ? "passed · legacy stability unrecorded"
       : d.ok ? "changed candidate bytes" : "failed";
     body += `<div class="story-note"><b>${esc(status)}</b></div>`;
+    if (d.status === "not_verified")
+      body += `<div class="story-note">Periodic checkpoint completed with authorized failures assigned to pending slices. The full suite must pass at milestone closure.</div>`;
+    for (const failure of d.deferred_failures || [])
+      body += `<div class="story-finding"><b>Slice ${esc(failure.owner_slice_id)} · ${esc(failure.command)}</b><div class="story-disp">Authorization: ${esc(failure.authorization)}<br>Evidence: ${esc(failure.evidence)}</div></div>`;
     if ((d.commands || []).length)
       body += `<div class="story-note">commands:\n${esc(d.commands.join("\n"))}</div>`;
+    for (const result of d.results || [])
+      body += `<div class="story-note">${esc(result.command)} · exit ${esc(result.exit_code)}\n${esc(result.evidence)}</div>`;
     if (d.output_tail)
       body += `<pre class="log mono" style="max-height:40vh;overflow:auto">${esc(d.output_tail)}</pre>`;
   } else if (d.story === "repair") {

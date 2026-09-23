@@ -2724,6 +2724,32 @@ _BRAINSTORMING_OUTCOMES = {
 }
 
 
+def verification_status(event):
+    """Display the recorded suite outcome without treating completion as green."""
+    if event.get("status") == "not_verified":
+        return "not_verified"
+    if event.get("ok") is True:
+        if event.get("stable") is True:
+            return "passed"
+        if event.get("stable") is None:
+            return "legacy_stability_unrecorded"
+        return "changed_bytes"
+    return "failed"
+
+
+def seal_verification_status(state, seal):
+    """Resolve a seal's cited evidence for presentation only."""
+    if "verification_event_seq" not in seal:
+        return "legacy_passed"
+    seq = seal.get("verification_event_seq")
+    if seq is None:
+        return "not_due"
+    event = next((item for item in state.get("events", [])
+                  if item.get("type") == "verification"
+                  and item.get("seq") == seq), None)
+    return verification_status(event) if event else "unavailable"
+
+
 def summary(state, acts_overlay=None, current_review_model=None):
     """The run's read-only projection.
 
@@ -2907,6 +2933,10 @@ def summary(state, acts_overlay=None, current_review_model=None):
                     "cadence": e.get("cadence"),
                     "ok": e.get("ok"),
                     "stable": e.get("stable"),
+                    "status": verification_status(e),
+                    "deferred_failures": copy.deepcopy(
+                        e.get("deferred_failures") or []
+                    ),
                     "vacuous": bool(e.get("vacuous")),
                     "duration_s": e.get("duration_s"),
                 }
@@ -3083,6 +3113,9 @@ def summary(state, acts_overlay=None, current_review_model=None):
                         ),
                         "verification_recorded": (
                             "verification_event_seq" in s
+                        ),
+                        "verification_status": seal_verification_status(
+                            state, s
                         ),
                         "findings": {
                             fam: (

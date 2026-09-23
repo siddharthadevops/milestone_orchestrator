@@ -1211,6 +1211,57 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(body["commands"], ["python3 -m unittest"])
         self.assertEqual(body["output_tail"], "OK")
 
+    def test_periodic_not_verified_is_preserved_in_summary_and_stories(self):
+        ws = self.workspace("ws-periodic-not-verified")
+        rid = self._seed(ws)
+        entry = registry.get(registry.load(self.home), rid)
+        state = st.load(entry["state_path"])
+        deferred = [{
+            "command": "python3 -m unittest",
+            "owner_slice_id": 8,
+            "authorization": "A1 permits the pending storage migration",
+            "evidence": "The same known storage assertion remains in test_store",
+        }]
+        results = [{"command": "python3 -m unittest", "exit_code": 1,
+                    "evidence": "test_store still uses the prior schema"}]
+        checkpoint = {"status": "not_verified", "deferred_failures": deferred,
+                      "results": results}
+        event = st.append_event(
+            state, "verification", unit="skeleton", boundary="periodic",
+            status="not_verified", ok=False, stable=True,
+            deferred_failures=deferred, results=results,
+            checkpoint_result=checkpoint,
+        )
+        state["units"][0]["seals"].append({
+            "attempt": 2, "passed": True, "invalidated": None,
+            "at": event["at"], "halves": {}, "reviews": [],
+            "verification_event_seq": event["seq"],
+        })
+        st.save(entry["state_path"], state)
+
+        _, detail = self.request_json("GET", "/api/runs/%s" % rid)
+        unit = detail["summary"]["units"][0]
+        projected = unit["verifications"][0]
+        self.assertEqual(projected["status"], "not_verified")
+        self.assertFalse(projected["ok"])
+        self.assertEqual(projected["deferred_failures"], deferred)
+        self.assertEqual(unit["seals"][-1]["verification_status"], "not_verified")
+
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=verify:%s" % (rid, event["seq"]),
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["status"], "not_verified")
+        self.assertEqual(body["deferred_failures"], deferred)
+        self.assertEqual(body["results"], results)
+        self.assertEqual(body["checkpoint_result"], checkpoint)
+
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=seal:skeleton:2" % rid,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["verification_status"], "not_verified")
+
     def test_fatal_malformed_story_carries_both_attempts(self):
         ws = self.workspace("ws-fatal")
         rid = self._seed(ws)

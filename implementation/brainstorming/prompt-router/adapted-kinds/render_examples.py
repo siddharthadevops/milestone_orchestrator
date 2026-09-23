@@ -110,7 +110,8 @@ RUNS = {
         'values': {'kind': 'suite_checkpoint', 'workspace': WS,
                    'ecosystem_map': ECOSYSTEM,
                    'operator_amendments': AMENDMENTS_A,
-                   'checkpoint_reason': 'four_slice_checkpoint',
+                   'checkpoint_reason': 'five_slice_checkpoint',
+                   'periodic_checkpoint': json.dumps({'completed_slice_ids': [1, 2, 3, 4, 5], 'pending_slice_ids': [6, 7, 8], 'skeleton_path': SKELETON}, indent=2),
                    'verification_commands': '["python3 -m unittest discover -s orchestrator/tests -t ."]'},
     },
     'draft_skeleton': {

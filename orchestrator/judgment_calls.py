@@ -214,6 +214,7 @@ def prepare(
     fixer_recovery_state=None,
     design_correction=None,
     configured_suite_commands=None,
+    periodic_checkpoint=None,
     suite_repair=None,
 ):
     """Freshly resolve, render, bind, and pair one direct technical charge."""
@@ -226,7 +227,7 @@ def prepare(
     if set(values).intersection((
         "operator_amendments", "ecosystem_map", "queued_findings",
         "contract_correction", "fixer_recovery_state",
-        "verification_commands", "suite_repair",
+        "verification_commands", "periodic_checkpoint", "suite_repair",
     )):
         raise prompt_router.PromptRouterError(
             "judgment-owned values are adapter-owned"
@@ -253,6 +254,18 @@ def prepare(
         raise prompt_router.PromptRouterError(
             "only suite_checkpoint accepts configured suite commands"
         )
+    frozen_periodic_checkpoint = None
+    if periodic_checkpoint is not None:
+        if kind != "suite_checkpoint":
+            raise prompt_router.PromptRouterError(
+                "only suite_checkpoint accepts periodic checkpoint scope"
+            )
+        try:
+            frozen_periodic_checkpoint = copy.deepcopy(
+                prompt_contracts.periodic_checkpoint_context(periodic_checkpoint)
+            )
+        except contracts.ContractError as exc:
+            raise prompt_router.PromptRouterError(str(exc)) from exc
     if kind == "fix_findings":
         if not isinstance(queued_findings, list):
             raise prompt_router.PromptRouterError(
@@ -288,6 +301,12 @@ def prepare(
                 "suite repair requires commands and cadence"
             )
         frozen_suite_repair = copy.deepcopy(suite_repair)
+        try:
+            prompt_contracts.periodic_checkpoint_context(
+                frozen_suite_repair.get("periodic_checkpoint")
+            )
+        except contracts.ContractError as exc:
+            raise prompt_router.PromptRouterError(str(exc)) from exc
 
     if design_correction is None:
         design_correction_sections = ()
@@ -375,10 +394,15 @@ def prepare(
             ensure_ascii=False,
             separators=(",", ":"),
         )
+    if frozen_periodic_checkpoint is not None:
+        charge_values["periodic_checkpoint"] = json.dumps(
+            frozen_periodic_checkpoint, ensure_ascii=False, sort_keys=True, indent=2
+        )
     if frozen_suite_repair is not None:
         charge_values["suite_repair"] = prompts.suite_repair_block(
             frozen_suite_repair["commands"],
             frozen_suite_repair["cadence"],
+            periodic_checkpoint=frozen_suite_repair.get("periodic_checkpoint"),
         ).rstrip("\n")
 
     frozen_extensions = ()
@@ -433,6 +457,7 @@ def prepare(
             "contract_correction": correction is not None,
             "fixer_recovery_state": fixer_recovery_state is not None,
             "verification_commands": frozen_suite_commands is not None,
+            "periodic_checkpoint": frozen_periodic_checkpoint is not None,
             "suite_repair": frozen_suite_repair is not None,
         }
         for variable, supplied in dynamic_payloads.items():
@@ -535,6 +560,7 @@ def prepare(
                 candidate,
                 queued_findings=frozen_queued_findings,
                 configured_suite_commands=frozen_suite_commands,
+                periodic_checkpoint=frozen_periodic_checkpoint,
                 workspace=validation_workspace,
                 extension_fields=extension_fields,
             ),

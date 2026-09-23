@@ -998,7 +998,7 @@ KIND_OUTPUT_KEYS = {
     # validator, but project safeguards still need the same collision source.
     KIND_MERGE_REPAIR: frozenset({"files_changed"}),
     KIND_SUITE_CHECKPOINT: frozenset(
-        {"commands", "authority", "results", "failure_account"}
+        {"commands", "authority", "results", "failure_account", "deferred_failures"}
     ),
 }
 

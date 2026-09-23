@@ -20,7 +20,7 @@ those rules is enforced here structurally.
 | History is never rewritten | `state.save()` refuses non-append-only diffs (`HistoryRewriteError`) |
 | Phase gates (docs: draft -> rounds -> seal; implementation: implement -> rounds -> scheduled verify when due -> seal) | `state.transition_unit()` raises `IllegalTransition` |
 | Family order; changed candidate bytes restart review at the first family | review-cycle freshness is reset whenever an accepted fix changes the candidate |
-| Seal is a deterministic result, not another review | every family must be clean or debt-clean on the same current bytes; scheduled verification must also pass when due |
+| Seal is a deterministic result, not another review | every family must be clean or debt-clean on the same current bytes; scheduled verification must pass or record an authorized periodic `NOT VERIFIED`; final verification must pass |
 | Whoever detects never fixes: ALL reviews are report-only | `contracts.REPORT_KINDS` forbid dispositions and file changes; the report-only contract is carried by prompt and envelope, not re-verified by snapshot (see Review/fix separation) |
 | A rejected finding requires a concrete fixer validity account, never another LLM call | `contracts.validate_fix_finding()` plus the routed fixer prompt |
 | Eligible delta-review findings receive the same driver-owned classification as full-review findings | `_partition_defer_candidates()` partitions debt from fixer work before either review kind queues findings |
@@ -155,18 +155,31 @@ administrative). "New milestone" preselects that project and takes a goal
 text **or a work-description doc path** (its content
 becomes the goal, snapshotted at launch), an optional verification command,
 and an optional advanced config JSON merged over defaults. Verification
-is zero-config by default. At every fourth completed logical implementation
-slice and at milestone completion, the driver dispatches one routed
-`suite_checkpoint` LLM call. Explicit config `verification` supplies the exact
+is zero-config by default. After every five completed logical implementation
+slices and at milestone completion, current runs admit a sibling
+`complete_verification` task that dispatches a routed `suite_checkpoint` LLM
+call. Legacy runs retain their every-four-slice cadence and strict passing
+requirement. Explicit config `verification` supplies the exact
 ordered commands; otherwise the checkpoint agent inspects repository authority
 for the complete suite and may report `no_suite`. The driver executes no shell
 suite and implementers report no suite command. The checkpoint runs each command
 at most once and accepts normal suite changes, including formatting, dependency
 locks, generated sources, and test snapshots in tracked files. The worker does
-not make ad hoc repairs, stage, or commit. A failed checkpoint assigns
-its complete command plan to a dedicated fixer. That fixer's `status: ok`
-certifies the final workspace bytes; the driver reuses the certification on
-those exact bytes instead of executing another checkpoint.
+not make ad hoc repairs, stage, or commit. A failed checkpoint assigns its
+preserved failure account to a dedicated fixer. At a final or legacy strict
+checkpoint, that fixer's `status: ok` certifies the final workspace bytes; the
+driver reuses the certification on those exact bytes. At a current periodic
+checkpoint, the fixer repairs only actionable, nonpermitted defects using
+focused checks, then the usual reviews and a fresh checkpoint establish the
+suite outcome.
+At a current periodic checkpoint only, `not_verified` may record existing
+failures explicitly authorized by the governing skeleton or a current amendment
+and owned by a pending downstream slice. Each failed command retains its
+authorization, owner slice, and evidence; uncovered failures still block. This
+outcome permits progress on
+unchanged bytes but does not certify a passing suite. The panel and generated
+ledgers retain **NOT VERIFIED**, and milestone closure still requires a passing
+full suite. The final checkpoint cannot defer failures.
 Resuming a milestone with a failed checkpoint creates a fresh verification
 attempt and retains the previous attempt's result in its history.
 Documentation does not run the full suite, and split implementation parts
@@ -553,12 +566,15 @@ Implementation runs:
     implement (focused checks while working) -> wip commit
       -> codex review rounds (REPORT-ONLY) until a clean round
       -> claude review rounds (REPORT-ONLY) until a clean round
-      -> run the full suite after every fourth completed logical slice and at
-         milestone completion; split implementation parts count once
-      -> deterministic seal: the ledger proves that every configured family
-         is clean or debt-clean on these same bytes and, when due, scheduled
-         verification passed; no worker is called, and the wip commit becomes
-         the GATE COMMIT.
+      -> deterministic seal: every configured family is clean or debt-clean
+         on these same bytes; the wip commit becomes the GATE COMMIT
+      -> after every five logical slices and at milestone completion, admit
+         a sibling complete_verification task; split parts count once
+      -> that task requires a passing suite or an authorized periodic
+         NOT VERIFIED; final verification must pass.
+
+Legacy runs retain their every-four-slice checkpoint inside the implementation
+unit before its seal. Those checkpoints remain strict: verification must pass.
 
 If an accepted fix changes candidate bytes, all earlier whole-artifact
 approvals become stale and review restarts at the first family. Implementers,
@@ -622,16 +638,18 @@ debt versus fixing. Deferred findings remain in the run's append-only debt
 history and unresolved debt stays available for operator review after closure;
 it does not block milestone completion.
 
-A failing scheduled suite opens the fixer's dedicated full-suite mode through
-the preserved synthetic P1. The fixer receives the goal, reviewed design, project
-context, amendments, proportionality rules, and the checkpoint command plan; it
-receives the checkpoint's exact preserved failure account, never a parsed or
-truncated substitute. It runs the complete suite,
-repairs only justified failures, and returns `ok` only after the final workspace
-bytes are green (`blocked` stops the run). That success is bound to the exact
-bytes and commands. Changed bytes still take the normal delta and full-review
-path, but unchanged review calls do not rerun the suite; any later edit or
-command change invalidates the success automatically.
+A failing scheduled suite opens a dedicated fixer episode through the preserved
+synthetic P1. The fixer receives the goal, reviewed design, project context,
+amendments, proportionality rules, command plan, and exact preserved failure
+account. For a current periodic checkpoint it fixes only actionable,
+nonpermitted defects, uses focused checks, and leaves explicitly authorized
+downstream failures to their pending slices. Its `ok` does not certify the suite:
+after the usual reviews, a fresh checkpoint establishes `passed` or
+`not_verified`. Final and legacy strict checkpoints retain full-suite fixer
+mode: `ok` requires green final workspace bytes, and `blocked` stops the run.
+That success is bound to the exact bytes and commands. Changed bytes still take
+the normal delta and full-review path, but unchanged review calls do not rerun
+the suite; any later edit or command change invalidates the success automatically.
 
 For a fix episode born from a review round, the pending diff is checkpointed
 after the fifth fix instead of launching another delta review. No synthetic
@@ -784,9 +802,11 @@ Tiers:
   always done for its own ignored regions: content inside an already-ignored
   region is not covered, and such files can never reach a diff, a commit or a
   seal. Reviewers are told NOT to run the full
-  suite — it runs mechanically after every fourth logical implementation slice
-  and at milestone completion; after a checkpoint failure, the dedicated fixer owns
-  full-suite convergence. Add tool-specific cache
+  suite — current runs schedule a sibling verification task after every five
+  logical implementation slices and at milestone completion. Legacy runs retain
+  their strict every-four-slice cadence. After a periodic failure the fixer
+  repairs actionable defects before a fresh checkpoint; final and legacy strict
+  fixers own full-suite convergence. Add tool-specific cache
   directory names (or fnmatch patterns) via the `snapshot_exclude_dirs`
   config list. Cache FILES written at the workspace root (e.g. coverage's
   `.coverage`) are not excludable; point such tools elsewhere (e.g.

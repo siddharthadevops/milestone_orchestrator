@@ -2635,7 +2635,8 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(
             set(seal.keys()),
             {"attempt", "passed", "invalidated", "wave", "reviews",
-             "verification_event_seq", "verification_recorded", "findings",
+             "verification_event_seq", "verification_recorded",
+             "verification_status", "findings",
              "duration_s",
              "severity", "at"},
         )
@@ -2646,6 +2647,7 @@ class TestSummary(TempWorkspaceCase):
         self.assertIsNone(seal["wave"])
         self.assertIsNone(seal["verification_event_seq"])
         self.assertTrue(seal["verification_recorded"])
+        self.assertEqual(seal["verification_status"], "not_due")
         self.assertEqual(
             seal["reviews"],
             ["skeleton-codex-r1", "skeleton-claude-r1"],
@@ -2829,7 +2831,8 @@ class TestSummary(TempWorkspaceCase):
             set(verifications[0]),
             {
                 "seq", "at", "stage", "boundary", "cadence", "ok",
-                "stable", "vacuous", "duration_s",
+                "stable", "vacuous", "duration_s", "status",
+                "deferred_failures",
             },
         )
         self.assertEqual(verifications[0]["cadence"], "milestone_final")

@@ -6,8 +6,10 @@ import subprocess
 import tempfile
 import unittest
 
+from orchestrator import canonical_plan, contracts, gitops
 from orchestrator import driver as drv, state as st, tasks
 from orchestrator.tests import test_driver_mock as base
+from orchestrator.tests.test_suite_checkpoint_call import _document
 
 
 class MilestoneVerificationCadenceTest(unittest.TestCase):
@@ -154,6 +156,205 @@ class MilestoneVerificationCadenceTest(unittest.TestCase):
 
     def _verification_records(self, subject):
         return subject._milestone_verification_records()
+
+    def _live_checkpoint(self, total=6, completed=5):
+        document = _document(range(1, total + 1)) + (
+            "\nIntermediate verification may leave unchanged consumers owned by "
+            "pending slices NOT VERIFIED. New or unmapped failures block.\n"
+        )
+        for path, content in (
+            ("skeleton.md", document),
+            ("slice.md", "# Slice\n"),
+            (".gitignore", "\n".join(gitops.ignore_lines()) + "\n"),
+        ):
+            base.write_file(path, content)(self.workspace)
+        self._git("add", "-A")
+        self._git("commit", "-qm", "verification authority")
+        subject = self._fixture(total=total, completed=completed)
+        subject.state["milestone"]["slices"] = canonical_plan.validate_canonical_plan(
+            document
+        )["projection"]
+        subject._prepare_milestone_verification()
+        unit = subject._milestone_verification_unit(
+            self._verification_records(subject)[-1]
+        )
+        subject._prepare_complete_verification(unit)
+        return subject, unit
+
+    @staticmethod
+    def _checkpoint_reply(status="not_verified", owner=6):
+        output = {
+            "kind": "suite_checkpoint", "status": status,
+            "commands": [base.VERIFY_CMD],
+            "authority": {"source": "operator_config", "evidence": []},
+            "results": [{
+                "command": base.VERIFY_CMD,
+                "exit_code": 0 if status == "passed" else 1,
+                "evidence": "Unchanged old consumer needs the pending migration.",
+            }],
+        }
+        if status == "not_verified":
+            output["deferred_failures"] = [{
+                "command": base.VERIFY_CMD, "owner_slice_id": owner,
+                "authorization": "skeleton.md: intermediate verification exception",
+                "evidence": "The unchanged consumer is owned by slice %d; all "
+                            "failures come from this removed API." % owner,
+            }]
+        elif status == "failed":
+            output["failure_account"] = {
+                "command": base.VERIFY_CMD, "exit_code": 1,
+                "diagnostics": "A new current-slice defect remains in app.txt, "
+                               "in addition to an authorized future consumer failure.",
+                "affected_tests": ["current_slice_regression"],
+            }
+        return output
+
+    def _run_checkpoint(self, subject, unit, output, side_effect=None):
+        subject.runner = base.runners.MockRunner([
+            base.step("suite_checkpoint", output, side_effect=side_effect),
+        ])
+        return subject.reviewed_work.execute(subject.reviewed_work.next_action(unit))
+
+    def test_periodic_not_verified_completes_and_resumes_without_green_proof(self):
+        subject, unit = self._live_checkpoint()
+        reply = self._checkpoint_reply()
+        _note, sealed, _context, result = self._run_checkpoint(
+            subject, unit, reply,
+            side_effect=base.write_file("snapshot.txt", "normal suite output\n"),
+        )
+        self.assertIs(sealed, unit)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["native_result"]["production_result"], reply)
+        self.assertIsNotNone(subject._current_checkpoint_completion_event(unit))
+        self.assertIsNone(subject._current_complete_verification_event(unit))
+        event = subject._current_checkpoint_completion_event(unit)
+        self.assertFalse(event["ok"])
+        self.assertEqual(event["deferred_failures"], reply["deferred_failures"])
+        self.assertEqual(unit["fix_queue"], [])
+        self.assertEqual(self._git("show", "HEAD:snapshot.txt"), "normal suite output")
+        self.assertEqual(self._git("status", "--porcelain"), "")
+        # Simulate a crash after the Git gate, before consuming the task result.
+        subject._save()
+        subject = drv.Driver(self.path, runner=base.runners.MockRunner([]))
+        self.assertTrue(subject._prepare_milestone_verification())
+        self.assertFalse(subject._prepare_milestone_verification())
+        self.assertEqual(len(self._verification_records(subject)), 1)
+        self.assertFalse(subject._milestone_final_verification_current())
+        self.assertIsNone(subject.state["failure"])
+
+        # The final slice requires its own green proof even after this exception.
+        self._complete_deep(
+            subject.state, 6, st._new_unit(st.UNIT_SLICE_IMPL, 6),
+            persist_admission=subject._save,
+        )
+        subject._save()
+        self.assertTrue(subject._prepare_milestone_verification())
+        final_unit = subject._milestone_verification_unit(
+            self._verification_records(subject)[-1]
+        )
+        self.assertIsNone(subject._periodic_checkpoint_context(final_unit))
+        self.assertFalse(subject._milestone_final_verification_current())
+        subject._prepare_complete_verification(final_unit)
+        _note, sealed, _context, result = self._run_checkpoint(
+            subject, final_unit, self._checkpoint_reply("passed")
+        )
+        self.assertIs(sealed, final_unit)
+        subject._consume_milestone_verification_result(final_unit, result)
+        self.assertTrue(subject._milestone_final_verification_current())
+
+    def test_periodic_gate_rejects_bytes_changed_after_not_verified(self):
+        subject, unit = self._live_checkpoint()
+        subject.runner = base.runners.MockRunner([
+            base.step("suite_checkpoint", self._checkpoint_reply()),
+        ])
+        subject._do_verify(unit)
+        self.assertEqual(unit["status"], st.U_SEALED)
+        base.write_file("app.txt", "changed after checkpoint\n")(self.workspace)
+        subject._gate_commit(unit)
+        self.assertEqual(unit["status"], st.U_PRE_SEAL_VERIFY)
+        self.assertIsNone(subject.reviewed_work.result(unit))
+        self.assertFalse(unit.get("gate_commit"))
+
+    def test_final_at_multiple_of_five_cannot_defer_failed_suite(self):
+        subject, unit = self._live_checkpoint(total=5)
+        context = subject._milestone_verification_context(
+            self._verification_records(subject)[-1]
+        )
+        self.assertTrue(context["periodic"])
+        self.assertTrue(context["final"])
+        self.assertIsNone(subject._periodic_checkpoint_context(unit))
+        prepared = subject._routed_suite_checkpoint_prepare_call(
+            unit, tasks.REVIEWED_COMPLETE_VERIFICATION, [base.VERIFY_CMD]
+        )(None)
+        with self.assertRaises(contracts.ContractError):
+            prepared.validate(self._checkpoint_reply())
+        self._run_checkpoint(subject, unit, self._checkpoint_reply("failed"))
+        self.assertEqual(unit["status"], st.U_FIXING)
+        self.assertFalse(subject._milestone_final_verification_current())
+
+    def test_periodic_mixed_failure_repair_requires_fresh_checkpoint(self):
+        subject, unit = self._live_checkpoint()
+        self._run_checkpoint(subject, unit, self._checkpoint_reply("failed"))
+        queued = unit["fix_queue"][0]
+        subject.runner.script.extend([
+            base.step("fix_findings", base.fix_ok([
+                base.triaged(queued["id"], "fixed", queued["summary"], severity="P1")
+            ], files_changed=["app.txt"]),
+                side_effect=base.write_file("app.txt", "current defect repaired\n")),
+            base.step("delta_review", base.report("delta_review")),
+            base.step("review_round", base.report("review_round")),
+            base.step("review_round", base.report("review_round")),
+            base.step("suite_checkpoint", self._checkpoint_reply()),
+        ])
+        result = None
+        for _ in range(12):
+            _note, _sealed, _context, result = subject.reviewed_work.execute(
+                subject.reviewed_work.next_action(unit)
+            )
+            if result is not None:
+                break
+        self.assertIsNotNone(result)
+        self.assertEqual(result["native_result"]["production_result"]["status"],
+                         "not_verified")
+        events = [e for e in subject.state["events"] if e["type"] == "verification"]
+        self.assertEqual([e["status"] for e in events], ["failed", "not_verified"])
+        self.assertFalse(any(e.get("fixer_certified") for e in events))
+        self.assertEqual(sum(kind == "suite_checkpoint" for _, kind, _ in
+                             subject.runner.calls), 2)
+        fixer_prompt = next(prompt for _, kind, prompt in subject.runner.calls
+                            if kind == "fix_findings")
+        self.assertNotIn("Return top-level `blocked` if you cannot leave the suite green",
+                         fixer_prompt)
+        self.assertEqual(len(unit["seals"][-1]["reviews"]), 2)
+        subject._consume_milestone_verification_result(unit, result)
+        self.assertFalse(subject._prepare_milestone_verification())
+
+    def test_periodic_rejected_failure_cannot_repeat_past_existing_repair_cap(self):
+        subject, unit = self._live_checkpoint()
+        unit["reviewed_policy"]["max_fix_loops"] = 1
+        self._run_checkpoint(subject, unit, self._checkpoint_reply("failed"))
+        queued = unit["fix_queue"][0]
+        subject.runner.script.extend([
+            base.step("fix_findings", base.fix_ok([
+                base.triaged(queued["id"], "rejected", queued["summary"], severity="P1")
+            ])),
+            base.step("delta_review", base.report("delta_review")),
+            base.step("review_round", base.report("review_round")),
+            base.step("review_round", base.report("review_round")),
+            base.step("suite_checkpoint", self._checkpoint_reply("failed")),
+        ])
+        # Recording a rejection can itself update the adjudication artifact.
+        for _ in range(8):
+            subject.reviewed_work.execute(subject.reviewed_work.next_action(unit))
+            if unit["status"] == st.U_PRE_SEAL_VERIFY:
+                break
+        self.assertEqual(unit["status"], st.U_PRE_SEAL_VERIFY)
+        self.assertEqual(unit["verify_fix_attempts"]["pre_seal"], 1)
+        with self.assertRaisesRegex(drv.StopStep, "periodic suite repair cap"):
+            subject.reviewed_work.execute(subject.reviewed_work.next_action(unit))
+        self.assertIsNotNone(subject.state["failure"])
+        self.assertIsNone(subject.reviewed_work.result(unit))
+        self.assertFalse(any(e.get("fixer_certified") for e in subject.state["events"]))
 
     def _mark_verification_success(self, subject):
         record = self._verification_records(subject)[-1]

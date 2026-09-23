@@ -682,10 +682,9 @@ class ReviewedWorkLifecycle(object):
             )
             if (
                 verification_event is None
-                or verification_event.get("status") != "passed"
-                and verification_event.get("status") != "no_suite"
-                or verification_event.get("ok") is not True
-                or verification_event.get("stable") is not True
+                or not self.host._verification_completes_checkpoint(
+                    unit, verification_event
+                )
             ):
                 return None
             production_result = self._verification_production_result(
@@ -1825,7 +1824,26 @@ class Driver(object):
         return None
 
     def _current_complete_verification_event(self, unit, event_seq=None):
-        """Return the latest accepted complete-verification proof for now."""
+        """Return a current green proof, including at milestone closure."""
+        return self._current_verification_event(unit, event_seq, require_green=True)
+
+    def _current_checkpoint_completion_event(self, unit, event_seq=None):
+        """A periodic checkpoint may complete without certifying a green suite."""
+        return self._current_verification_event(unit, event_seq, require_green=False)
+
+    def _verification_completes_checkpoint(self, unit, event):
+        if event.get("stable") is not True:
+            return False
+        if event.get("status") in ("passed", "no_suite"):
+            return event.get("ok") is True
+        return bool(
+            event.get("status") == "not_verified"
+            and event.get("ok") is False
+            and event.get("deferred_failures")
+            and self._periodic_checkpoint_context(unit) is not None
+        )
+
+    def _current_verification_event(self, unit, event_seq, require_green):
         if not self.reviewed_work._is_complete_verification(unit):
             return None
         fingerprint = self._verification_candidate_fingerprint()
@@ -1837,9 +1855,8 @@ class Driver(object):
                 and (event_seq is None or event.get("seq") == event_seq)
                 and event.get("cadence")
                 == tasks.REVIEWED_COMPLETE_VERIFICATION
-                and event.get("status") in ("passed", "no_suite")
-                and event.get("ok") is True
-                and event.get("stable") is True
+                and self._verification_completes_checkpoint(unit, event)
+                and (not require_green or event.get("ok") is True)
                 and event.get("candidate_after") == fingerprint
                 and (
                     configured is None
@@ -3472,6 +3489,7 @@ class Driver(object):
                 workspace=self.workspace,
                 correction=repair_error,
                 configured_suite_commands=configured_commands,
+                periodic_checkpoint=self._periodic_checkpoint_context(unit),
             )
 
         return prepare
@@ -4456,6 +4474,31 @@ class Driver(object):
             if unit.get("kind") == st.UNIT_MILESTONE_VERIFICATION
             and unit.get("reviewed_task_id") == record["id"]
         )
+
+    def _periodic_checkpoint_context(self, unit):
+        """Scope exceptions to the current nonfinal milestone checkpoint only."""
+        if (
+            not self._milestone_verification_cadence_active()
+            or unit.get("kind") != st.UNIT_MILESTONE_VERIFICATION
+        ):
+            return None
+        record = tasks.task_record(self.state, unit["reviewed_task_id"])
+        context = self._milestone_verification_context(record)
+        if not context or not context.get("periodic") or context.get("final"):
+            return None
+        completed = self._active_completed_milestone_deep_tasks()
+        if context["completed_deep_task_ids"] != [
+            task["id"] for _slice_id, task in completed
+        ]:
+            return None
+        slices = self.state["milestone"]["slices"]
+        if len(completed) >= len(slices):
+            return None
+        return {
+            "completed_slice_ids": [slice_id for slice_id, _task in completed],
+            "pending_slice_ids": [item["id"] for item in slices[len(completed):]],
+            "skeleton_path": self._skeleton_artifact(),
+        }
 
     def _milestone_verification_succeeded(self, record, current=False):
         if (record.get("result") or {}).get("status") != "success":
@@ -11981,6 +12024,9 @@ class Driver(object):
             and isinstance(source.get("suite_repair"), dict)
             else None
         )
+        periodic_checkpoint = self._periodic_checkpoint_context(unit)
+        if suite_repair and periodic_checkpoint is not None:
+            suite_repair = dict(suite_repair, periodic_checkpoint=periodic_checkpoint)
         max_loops = self._reviewed_limit(unit, "max_fix_loops")
         cap_agreement = (source.get("brainstorming_agreement") or {})
         mandatory_application_retry = bool(
@@ -12147,6 +12193,9 @@ class Driver(object):
             ),
             suite_repair_cadence=(
                 suite_repair.get("cadence") if suite_repair else None
+            ),
+            suite_repair_periodic_checkpoint=(
+                periodic_checkpoint if suite_repair else None
             ),
             )
             application_handoff = self._brainstorming_application_handoff(
@@ -12666,12 +12715,24 @@ class Driver(object):
                 candidate_changed=bool(fix_workspace_changed),
             )
             return "Brainstorming result applied; deferred fixer restored"
-        if suite_repair:
-            if (
-                fix_workspace_changed
-                and self.reviewed_work._is_complete_verification(unit)
-            ):
-                unit["complete_verification_review_required"] = True
+        if (
+            suite_repair and fix_workspace_changed
+            and self.reviewed_work._is_complete_verification(unit)
+        ):
+            unit["complete_verification_review_required"] = True
+        if suite_repair and periodic_checkpoint is not None:
+            # A periodic fixer owns the actionable defect, not future slices.
+            # Only the next checkpoint classifies the resulting complete suite.
+            if not fix_workspace_changed and source.get("type") == "suite_checkpoint":
+                unit["fix_queue"] = []
+                unit["fix_source"] = None
+                unit.pop("phantom_retried", None)
+                st.transition_unit(
+                    self.state, unit, st.U_PRE_SEAL_VERIFY,
+                    reason="periodic failure triaged; fresh checkpoint required",
+                )
+                return "periodic failure triaged; fresh checkpoint required"
+        elif suite_repair:
             certified_fingerprint = self._verification_candidate_fingerprint(
                 post_guard_snapshot
             )
@@ -13354,7 +13415,8 @@ class Driver(object):
             st.transition_unit(
                 self.state, unit, st.U_SEALING,
                 reason=(
-                    "verification passed; review predicate satisfied"
+                    "verification %s; review predicate satisfied"
+                    % verification_event["status"]
                     if verification_event is not None
                     else "review predicate satisfied; full verification "
                     "not due"
@@ -13606,6 +13668,10 @@ class Driver(object):
             event_fields["failure_account"] = copy.deepcopy(
                 output["failure_account"]
             )
+        if accepted and returned_status == "not_verified":
+            event_fields["deferred_failures"] = copy.deepcopy(
+                output["deferred_failures"]
+            )
         if accepted and returned_status == "blocked":
             event_fields["blocked_reason"] = output["blocked_reason"]
         if not accepted:
@@ -13635,6 +13701,20 @@ class Driver(object):
             raise StopStep("suite checkpoint blocked")
         if returned_status == "failed":
             failure_account = copy.deepcopy(output["failure_account"])
+            periodic_checkpoint = self._periodic_checkpoint_context(unit)
+            if periodic_checkpoint is not None:
+                # Re-entering a checkpoint must not reset the existing repair cap.
+                attempts = unit["verify_fix_attempts"]["pre_seal"]
+                cap = self._reviewed_limit(unit, "max_fix_loops")
+                if attempts >= cap:
+                    st.fail_run(
+                        self.state,
+                        "periodic suite did not converge after %d repair attempts" % cap,
+                        unit=unit, type_=self._reviewed_convergence_failure_type(unit),
+                    )
+                    self._save()
+                    raise StopStep("periodic suite repair cap")
+                unit["verify_fix_attempts"]["pre_seal"] = attempts + 1
             finding = {
                 "id": "suite-checkpoint-%d" % verification_event["seq"],
                 "severity": "P1",
@@ -13668,6 +13748,27 @@ class Driver(object):
                 # reply contract only echoes the finding identity/severity.
                 "failure_account": failure_account,
             }
+            if periodic_checkpoint is not None:
+                finding["validity"].update({
+                    "permitted_baseline": (
+                        "Only explicitly authorized failures from unchanged "
+                        "code owned by pending slices may remain NOT VERIFIED."
+                    ),
+                    "actual_outcome": (
+                        "The checkpoint reported a failure outside those exceptions."
+                    ),
+                    "incremental_harm": (
+                        "An unpermitted failure prevents this periodic checkpoint "
+                        "from completing."
+                    ),
+                })
+                finding["plain"] = (
+                    "Repair the failure outside the authorized periodic exceptions."
+                )
+                finding["example"] = (
+                    "Repair the current defect without pulling future work forward; "
+                    "a fresh checkpoint classifies the full suite after review."
+                )
             st.enter_fix_episode(
                 self.state,
                 unit,
@@ -14356,7 +14457,7 @@ class Driver(object):
         """Close a recovered sealing state without launching seal reviewers."""
         unit = unit if unit is not None else st.current_unit(self.state)
         if self.reviewed_work._is_complete_verification(unit):
-            verification_event = self._current_complete_verification_event(
+            verification_event = self._current_checkpoint_completion_event(
                 unit
             )
             if verification_event is not None:
@@ -14543,7 +14644,7 @@ class Driver(object):
                 verification_seq = seals[-1].get("verification_event_seq")
             if (
                 not isinstance(verification_seq, int)
-                or self._current_complete_verification_event(
+                or self._current_checkpoint_completion_event(
                     unit, event_seq=verification_seq
                 ) is None
             ):
@@ -14591,7 +14692,7 @@ class Driver(object):
             raise StopStep(str(exc))
         if (
             verification_seq is not None
-            and self._current_complete_verification_event(
+            and self._current_checkpoint_completion_event(
                 unit, event_seq=verification_seq
             ) is None
         ):

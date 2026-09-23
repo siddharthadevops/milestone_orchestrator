@@ -775,6 +775,55 @@ async function postJSON(path, payload) {
             self.assertIn("function %s" % existing, self.panel)
         self.assertNotIn('addLine("Tasks", "", taskChips)', self.panel)
 
+    def test_periodic_not_verified_has_distinct_chip_and_evidence(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for executable panel checks")
+        names = ("esc", "sealVerificationText", "sealChip", "verificationChip", "showStory")
+        sources = [re.search(
+            r"(?:async )?function " + name + r"\([^\n]*\) \{.*?\n\}",
+            self.panel, re.S,
+        ).group(0) for name in names]
+        checks = r"""
+const assert = require('node:assert/strict');
+const fmtDur = () => '', evidenceTaskArg = () => '';
+const fmtTokenUsage = () => '', costHtml = () => '', tokenUsageHtml = () => '';
+const selected = 'run', lastBilling = null;
+const event = {story: 'verify', unit: 'slice_impl-04', seq: 7,
+  status: 'not_verified', ok: false, stable: true, boundary: 'periodic',
+  deferred_failures: [{command: 'run tests', owner_slice_id: 8,
+    authorization: 'A1 <explicit>', evidence: 'unchanged test_store failure'}],
+  results: [{command: 'run tests', exit_code: 1, evidence: 'old schema'}]};
+const chip = verificationChip(event);
+assert.match(chip, /chip sev23/);
+assert.match(chip, /NOT VERIFIED/);
+assert.doesNotMatch(chip, /chip pass|chip fail/);
+assert.match(verificationChip({seq: 8, ok: true, stable: true}), /suite · passed/);
+assert.match(verificationChip({seq: 9, ok: false, stable: true}), /suite · failed/);
+const seal = {passed: true, verification_status: 'not_verified', verification_event_seq: 7};
+assert.match(sealChip(seal, 'slice_impl-04'), /NOT VERIFIED/);
+assert.doesNotMatch(sealVerificationText(seal), /verification passed/);
+assert.match(sealVerificationText({verification_event_seq: 99}), /unavailable/);
+const elements = {storyTitle: {}, storyBody: {}, story: {showModal() {}}};
+global.document = {getElementById: id => elements[id]};
+const api = async () => event;
+(async () => {
+  await showStory('verify:7');
+  const body = elements.storyBody.innerHTML;
+  assert.match(body, /NOT VERIFIED/);
+  assert.match(body, /Slice 8 · run tests/);
+  assert.match(body, /A1 &lt;explicit&gt;/);
+  assert.match(body, /unchanged test_store failure/);
+  assert.match(body, /exit 1/);
+  assert.match(body, /full suite must pass at milestone closure/);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        completed = subprocess.run(
+            [node, "-e", "\n".join(sources) + checks],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

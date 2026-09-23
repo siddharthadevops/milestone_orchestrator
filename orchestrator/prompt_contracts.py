@@ -371,7 +371,7 @@ def _commands(value, ctx):
     return _paths(value, ctx)
 
 
-def _results(value, commands, ctx):
+def _results(value, commands, ctx, *, periodic=False):
     if not isinstance(value, list) or len(value) > len(commands):
         raise contracts.ContractError("%s must be a command prefix" % ctx)
     checked = []
@@ -387,7 +387,7 @@ def _results(value, commands, ctx):
             raise contracts.ContractError("%s: exit_code must be an integer" % rctx)
         _text(result, "evidence", rctx)
         checked.append(code)
-    if any(checked[:-1]):
+    if not periodic and any(checked[:-1]):
         raise contracts.ContractError(
             "%s must stop at the first non-zero exit" % ctx
         )
@@ -435,10 +435,72 @@ def _authority(obj, configured, workspace, ctx):
             )
 
 
+def periodic_checkpoint_context(value):
+    """Validate the caller-owned scope that permits periodic deferrals."""
+    if value is None:
+        return None
+    ctx = "periodic_checkpoint"
+    if not isinstance(value, dict):
+        raise contracts.ContractError("%s must be an object" % ctx)
+    _exact_keys(
+        value, ("completed_slice_ids", "pending_slice_ids", "skeleton_path"), ctx
+    )
+    for key in ("completed_slice_ids", "pending_slice_ids"):
+        ids = _require(value, key, list, ctx)
+        if not ids or any(type(item) is not int or item <= 0 for item in ids):
+            raise contracts.ContractError(
+                "%s.%s must be a non-empty list of positive slice ids"
+                % (ctx, key)
+            )
+        if len(set(ids)) != len(ids):
+            raise contracts.ContractError("%s.%s has duplicate ids" % (ctx, key))
+    if set(value["completed_slice_ids"]) & set(value["pending_slice_ids"]):
+        raise contracts.ContractError("%s slice scopes must be disjoint" % ctx)
+    _relative_path(value["skeleton_path"], "%s.skeleton_path" % ctx)
+    return value
+
+
+def _deferred_failures(obj, commands, codes, periodic, ctx):
+    accounts = _require(obj, "deferred_failures", list, ctx)
+    if not accounts:
+        raise contracts.ContractError("%s.deferred_failures must be non-empty" % ctx)
+    failed = {command for command, code in zip(commands, codes) if code != 0}
+    covered = set()
+    for index, account in enumerate(accounts):
+        actx = "%s.deferred_failures[%d]" % (ctx, index)
+        if not isinstance(account, dict):
+            raise contracts.ContractError("%s must be an object" % actx)
+        _exact_keys(
+            account, ("command", "owner_slice_id", "authorization", "evidence"),
+            actx,
+        )
+        command = _text(account, "command", actx)
+        if command not in failed:
+            raise contracts.ContractError(
+                "%s.command must identify an executed non-zero command" % actx
+            )
+        owner = _require(account, "owner_slice_id", int, actx)
+        if isinstance(owner, bool) or owner not in periodic["pending_slice_ids"]:
+            raise contracts.ContractError(
+                "%s.owner_slice_id must identify a pending slice" % actx
+            )
+        _text(account, "authorization", actx)
+        _text(account, "evidence", actx)
+        covered.add(command)
+    if covered != failed:
+        raise contracts.ContractError(
+            "%s: deferred_failures must cover every non-zero command" % ctx
+        )
+
+
 def _suite_checkpoint(obj, bound, options, ctx):
     _kind(bound, ("suite_checkpoint",))
     status = _require(obj, "status", str, ctx)
-    if status not in ("passed", "failed", "no_suite", "blocked"):
+    periodic = periodic_checkpoint_context(options["periodic_checkpoint"])
+    allowed_statuses = ("passed", "failed", "no_suite", "blocked")
+    if periodic is not None:
+        allowed_statuses += ("not_verified",)
+    if status not in allowed_statuses:
         raise contracts.ContractError("%s: invalid checkpoint status" % ctx)
     if _require(obj, "kind", str, ctx) != "suite_checkpoint":
         raise contracts.ContractError("%s: kind does not match prompt" % ctx)
@@ -457,13 +519,16 @@ def _suite_checkpoint(obj, bound, options, ctx):
                 "%s: configured suite cannot report no_suite" % ctx
             )
     codes = _results(
-        _require(obj, "results", list, ctx), commands, "%s.results" % ctx
+        _require(obj, "results", list, ctx), commands, "%s.results" % ctx,
+        periodic=periodic is not None,
     )
     if status == "blocked":
         _text(obj, "blocked_reason", ctx)
-        if any(codes) or (commands and len(codes) == len(commands)):
+        if (periodic is None and any(codes)) or (
+            commands and len(codes) == len(commands)
+        ):
             raise contracts.ContractError(
-                "%s: blocked requires a successful proper prefix or no results"
+                "%s: blocked requires a proper prefix (successful unless periodic) or no results"
                 % ctx
             )
         return
@@ -478,10 +543,19 @@ def _suite_checkpoint(obj, bound, options, ctx):
             raise contracts.ContractError(
                 "%s: passed requires one zero result per command" % ctx
             )
-    else:
-        if not commands or not codes or any(codes[:-1]) or codes[-1] == 0:
+    elif status == "not_verified":
+        if not commands or len(codes) != len(commands) or not any(codes):
             raise contracts.ContractError(
-                "%s: failed requires a zero prefix and final non-zero result"
+                "%s: not_verified requires all commands and at least one non-zero result"
+                % ctx
+            )
+        _deferred_failures(obj, commands, codes, periodic, ctx)
+    else:
+        if not commands or not codes or codes[-1] == 0 or (
+            periodic is None and any(codes[:-1])
+        ):
+            raise contracts.ContractError(
+                "%s: failed requires a final non-zero result and a zero prefix unless periodic"
                 % ctx
             )
         failure = _require(obj, "failure_account", dict, ctx)
@@ -757,7 +831,7 @@ _PROTOCOL_FIELDS = frozenset({
     "findings", "retry_reason", "questions", "markdown", "ready",
     "tests_modified", "tests_changed",
     "drift_risk", "drift_damage", "reason", "commands", "authority",
-    "results", "failure_account", "suite_command",
+    "results", "failure_account", "deferred_failures", "suite_command",
     "suite_command_finding_id", "slices", "battery", "gaps", "request",
     "result_mode", "max_rounds", "failure_gap", "design_update",
     "design_correction", "brainstorming_application",
@@ -833,10 +907,12 @@ def _allowed_fields(bound, obj):
             ))
         elif section_id == "suite_checkpoint_result":
             allowed.update(("status", "kind", "commands", "results"))
-            if status in ("passed", "failed", "no_suite"):
+            if status in ("passed", "failed", "no_suite", "not_verified"):
                 allowed.add("authority")
             if status == "failed":
                 allowed.add("failure_account")
+            if status == "not_verified":
+                allowed.add("deferred_failures")
             if status == "blocked":
                 allowed.add("blocked_reason")
         elif section_id == "merge_repair_result":
@@ -990,7 +1066,7 @@ def bind(prompt, consumer_sections=(), consumer_instructions=()):
 
 
 def validate(bound, obj, *, queued_findings=None,
-             configured_suite_commands=None, workspace=None,
+             configured_suite_commands=None, periodic_checkpoint=None, workspace=None,
              expected_artifact=None, extension_fields=(),
              candidate_ids=None, constraint_ids=None,
              dimensions=None, creativity_semantics=None):
@@ -1002,6 +1078,7 @@ def validate(bound, obj, *, queued_findings=None,
     options = {
         "queued_findings": queued_findings,
         "configured_suite_commands": configured_suite_commands,
+        "periodic_checkpoint": periodic_checkpoint,
         "workspace": workspace,
         "expected_artifact": expected_artifact,
         "candidate_ids": candidate_ids,

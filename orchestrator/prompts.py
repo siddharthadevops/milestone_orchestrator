@@ -590,8 +590,32 @@ FIX_SELF_CHECK_BLOCK = (
 )
 
 
-def suite_repair_block(commands, cadence):
+def suite_repair_block(commands, cadence, periodic_checkpoint=None):
     """Render the driver-owned exception for a failed scheduled suite."""
+    if periodic_checkpoint is not None:
+        return (
+            "PERIODIC CHECKPOINT REPAIR\n"
+            "- This fix episode owns the actionable, nonpermitted failures of\n"
+            "  the %s checkpoint. Validate every queued claim against the\n"
+            "  governing skeleton and current amendments before repairing it.\n"
+            "- Preserve explicitly authorized transitional failures assigned\n"
+            "  to pending slices. Do not pull future work forward. Periodicity\n"
+            "  alone is never authorization to defer a failure; current-slice\n"
+            "  regressions and unexplained failures remain actionable.\n"
+            "- Repair only the confirmed nonpermitted failures and run relevant\n"
+            "  focused checks. Do not run the complete suite in this fix call.\n"
+            "  Here `status: \"ok\"` reports the finding dispositions; it does\n"
+            "  not certify a passing suite. After any required delta review and\n"
+            "  full review, the driver executes a fresh scheduled checkpoint\n"
+            "  to distinguish passed, authorized not_verified, and failed.\n"
+            "- Driver-owned scope:\n%s\n"
+            "- Complete-suite plan for diagnosis only:\n%s\n\n"
+            % (
+                cadence,
+                json.dumps(periodic_checkpoint, ensure_ascii=False, indent=2),
+                json.dumps(list(commands), ensure_ascii=False, indent=2),
+            )
+        )
     return (
         "FULL-SUITE REPAIR\n"
         "- This fix episode owns the failed %s checkpoint. Run every command\n"
@@ -2345,6 +2369,7 @@ def build_fix_findings(
     producer_planning=False,
     suite_repair_commands=None,
     suite_repair_cadence=None,
+    suite_repair_periodic_checkpoint=None,
 ):
     # `gap_enabled` answers only whether THIS fixer may emit a new gap.  A
     # legacy repair fixer deliberately cannot open a nested gap, but it still
@@ -2576,7 +2601,8 @@ def build_fix_findings(
         if not suite_repair_cadence:
             raise ValueError("suite repair cadence is required")
         suite_repair = suite_repair_block(
-            suite_repair_commands, suite_repair_cadence
+            suite_repair_commands, suite_repair_cadence,
+            periodic_checkpoint=suite_repair_periodic_checkpoint,
         )
     task_line = "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
     work_block = (

@@ -4450,42 +4450,48 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                 'required': True}]}}}},
  'milestone/suite_checkpoint.json': {'kind': 'suite_checkpoint',
                                      'process': 'milestone',
-                                     'description': 'Bare technical agent call: '
-                                                    'discovers when necessary and runs '
-                                                    'the official complete suite at a '
-                                                    'scheduled checkpoint. No craft '
+                                     'description': 'Bare technical agent call: discovers when '
+                                                    'necessary and runs the official complete '
+                                                    'suite at a scheduled checkpoint. No craft '
                                                     'law, no battery.',
                                      'instructions': {'parts': [{'ref': 'header'},
                                                                 {'ref': 'contract_correction'},
-                                                                {'text': ['TASK: execute and report the scheduled full-suite checkpoint on the CURRENT WORK TREE.',
-                                                                          "This is one fresh execution-and-report call. Determine the repository's official",
-                                                                          'complete '
-                                                                          'suite when '
-                                                                          'the '
-                                                                          'operator '
-                                                                          'has not '
-                                                                          'supplied '
-                                                                          'it, then '
-                                                                          'run the',
-                                                                          'ordered '
-                                                                          'commands at '
-                                                                          'most once '
-                                                                          'each, '
-                                                                          'stopping at '
-                                                                          'the first '
-                                                                          'failure,',
-                                                                          'and report '
-                                                                          'what '
-                                                                          'actually '
-                                                                          'happened.',
-                                                                          '- '
-                                                                          'checkpoint: '
+                                                                {'text': ['TASK: execute and '
+                                                                          'report the scheduled '
+                                                                          'full-suite checkpoint '
+                                                                          'on the CURRENT WORK '
+                                                                          'TREE.',
+                                                                          'This is one fresh '
+                                                                          'execution-and-report '
+                                                                          'call. Determine the '
+                                                                          "repository's official",
+                                                                          'complete suite when the '
+                                                                          'operator has not '
+                                                                          'supplied it, then run '
+                                                                          'the',
+                                                                          'ordered commands at '
+                                                                          'most once each, '
+                                                                          'stopping at the first '
+                                                                          'failure unless',
+                                                                          'the explicit periodic '
+                                                                          'scope below permits '
+                                                                          'that failure to be '
+                                                                          'deferred,',
+                                                                          'and report what '
+                                                                          'actually happened.',
+                                                                          '- checkpoint: '
                                                                           '{{checkpoint_reason}}'],
                                                                  'variables': [{'name': 'checkpoint_reason',
                                                                                 'required': True,
-                                                                                'description': 'four_slice_checkpoint '
+                                                                                'description': 'Periodic '
+                                                                                               'checkpoint '
                                                                                                'or '
-                                                                                               'milestone_final'}]},
+                                                                                               'milestone_final, '
+                                                                                               'as '
+                                                                                               'scheduled '
+                                                                                               'by '
+                                                                                               'the '
+                                                                                               'driver.'}]},
                                                                 {'ref': 'project_context'},
                                                                 {'ref': 'operator_amendments_author'},
                                                                 {'text': ['OPERATOR-CONFIGURED '
@@ -4523,195 +4529,258 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                'in '
                                                                                                'that '
                                                                                                'order.'}]},
-                                                                {'text': ['CHECKPOINT LAW',
-                                                                          '- Run the suite as defined, including its normal repository changes.',
-                                                                          '  Formatting, dependency lock updates, generated sources, and test snapshots',
-                                                                          '  produced by the suite are allowed, even when those files are tracked.',
-                                                                          '  Do not block, undo, or repeat the suite because it changes repository files.',
-                                                                          '  Do not make ad hoc repairs to code, tests, configuration, or docs outside',
-                                                                          '  the suite commands, and do not stage or commit.',
-                                                                          '- When '
-                                                                          'operator '
-                                                                          'commands '
-                                                                          'are '
-                                                                          'present, '
-                                                                          'they DEFINE '
-                                                                          "this run's "
-                                                                          'complete '
-                                                                          'gate:',
-                                                                          '  run '
-                                                                          'exactly '
-                                                                          'that list '
-                                                                          'in order as '
-                                                                          'separate '
-                                                                          'invocations; '
-                                                                          'do not '
-                                                                          'narrow,',
-                                                                          '  replace, '
-                                                                          'or '
-                                                                          'supplement '
-                                                                          'it. '
-                                                                          'Otherwise '
-                                                                          'inspect '
-                                                                          'repository-owned',
-                                                                          '  authority '
-                                                                          '— CI '
-                                                                          'configuration, '
-                                                                          'build/test '
-                                                                          'manifests, '
-                                                                          'and project '
-                                                                          'docs —',
-                                                                          '  and '
-                                                                          'select the '
-                                                                          'official '
-                                                                          'COMPLETE '
-                                                                          'suite, '
-                                                                          'never a '
-                                                                          'focused '
-                                                                          'substitute.',
-                                                                          '  Report '
-                                                                          'that '
-                                                                          'authority '
+                                                                {'text': ['PERIODIC CHECKPOINT '
+                                                                          'SCOPE (driver-owned; '
+                                                                          'absent for strict/final '
+                                                                          'checkpoints)',
+                                                                          '{{periodic_checkpoint}}',
+                                                                          '- This is a nonfinal '
+                                                                          'checkpoint. Read the '
+                                                                          'governing skeleton at '
+                                                                          'skeleton_path',
+                                                                          '  and the current '
+                                                                          'amendments before '
+                                                                          'deciding whether a '
+                                                                          'failure is permitted.',
+                                                                          '- Being periodic is '
+                                                                          'never an implicit '
+                                                                          'waiver. A failure can '
+                                                                          'be deferred only',
+                                                                          '  if an explicit '
+                                                                          'skeleton rule or '
+                                                                          'current amendment '
+                                                                          'permits this exact',
+                                                                          '  transitional failure '
+                                                                          'in unchanged '
+                                                                          'incompatible code and '
+                                                                          'assigns its fix',
+                                                                          '  to an owner in '
+                                                                          'pending_slice_ids. Cite '
+                                                                          'that authorization and '
+                                                                          'concrete',
+                                                                          '  code, diagnostics, '
+                                                                          'and test evidence. Do '
+                                                                          'not pull future slice '
+                                                                          'work forward.',
+                                                                          '- Never defer failures '
                                                                           'in '
-                                                                          '`authority`: '
-                                                                          'configured '
-                                                                          'calls name',
-                                                                          '  '
-                                                                          '`operator_config`; '
-                                                                          'discovery/no-suite '
-                                                                          'calls cite '
-                                                                          'existing '
-                                                                          'workspace-relative',
-                                                                          '  '
-                                                                          'repository '
-                                                                          'paths and '
-                                                                          'what each '
-                                                                          'establishes.',
-                                                                          '- Run from '
-                                                                          'the '
-                                                                          'workspace '
-                                                                          'root, '
-                                                                          'non-interactively, '
-                                                                          'with CI=1. '
-                                                                          'Each '
-                                                                          'command',
-                                                                          '  runs at '
-                                                                          'most once '
-                                                                          'in this '
-                                                                          'attempt; '
-                                                                          'never use '
-                                                                          'watch mode, '
-                                                                          'retry a '
-                                                                          'failure,',
-                                                                          '  or turn a '
-                                                                          'no-op into '
-                                                                          'a passing '
-                                                                          'suite.',
-                                                                          '- If an '
-                                                                          'operator '
-                                                                          'command is '
-                                                                          'interactive, '
-                                                                          'watch-mode, '
-                                                                          'or a no-op, '
-                                                                          'return',
-                                                                          '  `blocked` '
-                                                                          'without '
-                                                                          'running it; '
-                                                                          'configured '
-                                                                          'authority '
-                                                                          'does not '
-                                                                          'waive these',
-                                                                          '  '
-                                                                          'execution-safety '
-                                                                          'requirements.',
-                                                                          '- Stop after the first failure and report it. Do not make ad hoc repairs. A later',
-                                                                          '  dedicated '
-                                                                          'full-suite '
-                                                                          'fixer '
-                                                                          'receives '
-                                                                          'this '
-                                                                          'command '
-                                                                          'plan and '
-                                                                          'the '
-                                                                          'complete',
-                                                                          '  '
-                                                                          'actionable '
-                                                                          'diagnostics '
-                                                                          'in '
-                                                                          '`failure_account`. '
-                                                                          'Its '
-                                                                          '`status: '
-                                                                          'ok` '
-                                                                          'certifies',
-                                                                          '  that the '
-                                                                          'plan passed '
-                                                                          'on its '
-                                                                          'final '
-                                                                          'bytes; '
-                                                                          'unchanged '
-                                                                          'bytes reuse '
-                                                                          'that proof',
-                                                                          '  instead '
-                                                                          'of '
-                                                                          'executing '
-                                                                          'another '
-                                                                          'checkpoint.',
-                                                                          '- '
-                                                                          '`no_suite` '
-                                                                          'is valid '
-                                                                          'only after '
-                                                                          'inspecting '
-                                                                          'the '
-                                                                          'repository '
-                                                                          'authorities '
+                                                                          'focused/current-slice '
+                                                                          'checks, regressions '
+                                                                          'introduced',
+                                                                          '  by completed work, or '
+                                                                          'new, unexpected, '
+                                                                          'unmapped, or '
+                                                                          'unexplained failures.',
+                                                                          '- Account for ALL '
+                                                                          'failure causes and '
+                                                                          'affected tests within '
+                                                                          'EACH failing',
+                                                                          '  command. One command '
+                                                                          'match or a broad '
+                                                                          'compile-error '
+                                                                          'explanation does not',
+                                                                          '  establish that every '
+                                                                          'test failure is '
+                                                                          'authorized. Use '
+                                                                          'multiple accounts',
+                                                                          '  for a command when '
+                                                                          'its distinct causes '
+                                                                          'have different evidence '
+                                                                          'or owners.',
+                                                                          '- Continue after an '
+                                                                          'explicitly permitted '
+                                                                          'failure to execute '
+                                                                          'every remaining',
+                                                                          '  command once. Report '
+                                                                          'not_verified only after '
+                                                                          'the complete plan ran '
                                                                           'and',
-                                                                          '  finding '
-                                                                          'that no '
-                                                                          'complete '
-                                                                          'suite '
-                                                                          'exists, and '
-                                                                          'only when '
-                                                                          'no operator '
-                                                                          'commands',
-                                                                          '  were '
-                                                                          'supplied; '
-                                                                          'cite that '
-                                                                          'evidence '
+                                                                          '  every non-zero result '
+                                                                          'is fully explained by '
+                                                                          'authorized '
+                                                                          'deferred_failures.',
+                                                                          '  NOT VERIFIED is not a '
+                                                                          'pass and cannot satisfy '
+                                                                          'final milestone '
+                                                                          'closure.',
+                                                                          '- At the first '
+                                                                          'unpermitted failure, '
+                                                                          'stop and return failed '
+                                                                          'with failure_account',
+                                                                          '  matching that last '
+                                                                          'attempted non-zero '
+                                                                          'command, even if '
+                                                                          'earlier commands',
+                                                                          '  had permitted '
+                                                                          'failures. If a later '
+                                                                          'command cannot execute, '
+                                                                          'return blocked',
+                                                                          '  with the attempted '
+                                                                          'prefix. Neither failed '
+                                                                          'nor blocked permits '
+                                                                          'continuation.'],
+                                                                 'variables': [{'name': 'periodic_checkpoint',
+                                                                                'required': False,
+                                                                                'drop_unit_if_absent': True,
+                                                                                'description': 'Driver-owned '
+                                                                                               'nonfinal '
+                                                                                               'checkpoint '
+                                                                                               'scope '
+                                                                                               'with '
+                                                                                               'completed '
+                                                                                               'and '
+                                                                                               'pending '
+                                                                                               'slice '
+                                                                                               'ids '
+                                                                                               'plus '
+                                                                                               'the '
+                                                                                               'governing '
+                                                                                               'skeleton '
+                                                                                               'path. '
+                                                                                               'Never '
+                                                                                               'supplied '
+                                                                                               'by '
+                                                                                               'worker '
+                                                                                               'output.'}]},
+                                                                {'text': ['CHECKPOINT LAW',
+                                                                          '- Run the suite as '
+                                                                          'defined, including its '
+                                                                          'normal repository '
+                                                                          'changes.',
+                                                                          '  Formatting, '
+                                                                          'dependency lock '
+                                                                          'updates, generated '
+                                                                          'sources, and test '
+                                                                          'snapshots',
+                                                                          '  produced by the suite '
+                                                                          'are allowed, even when '
+                                                                          'those files are '
+                                                                          'tracked.',
+                                                                          '  Do not block, undo, '
+                                                                          'or repeat the suite '
+                                                                          'because it changes '
+                                                                          'repository files.',
+                                                                          '  Do not make ad hoc '
+                                                                          'repairs to code, tests, '
+                                                                          'configuration, or docs '
+                                                                          'outside',
+                                                                          '  the suite commands, '
+                                                                          'and do not stage or '
+                                                                          'commit.',
+                                                                          '- When operator '
+                                                                          'commands are present, '
+                                                                          "they DEFINE this run's "
+                                                                          'complete gate:',
+                                                                          '  run exactly that list '
+                                                                          'in order as separate '
+                                                                          'invocations; do not '
+                                                                          'narrow,',
+                                                                          '  replace, or '
+                                                                          'supplement it. '
+                                                                          'Otherwise inspect '
+                                                                          'repository-owned',
+                                                                          '  authority — CI '
+                                                                          'configuration, '
+                                                                          'build/test manifests, '
+                                                                          'and project docs —',
+                                                                          '  and select the '
+                                                                          'official COMPLETE '
+                                                                          'suite, never a focused '
+                                                                          'substitute.',
+                                                                          '  Report that authority '
+                                                                          'in `authority`: '
+                                                                          'configured calls name',
+                                                                          '  `operator_config`; '
+                                                                          'discovery/no-suite '
+                                                                          'calls cite existing '
+                                                                          'workspace-relative',
+                                                                          '  repository paths and '
+                                                                          'what each establishes.',
+                                                                          '- Run from the '
+                                                                          'workspace root, '
+                                                                          'non-interactively, with '
+                                                                          'CI=1. Each command',
+                                                                          '  runs at most once in '
+                                                                          'this attempt; never use '
+                                                                          'watch mode, retry a '
+                                                                          'failure,',
+                                                                          '  or turn a no-op into '
+                                                                          'a passing suite.',
+                                                                          '- If an operator '
+                                                                          'command is interactive, '
+                                                                          'watch-mode, or a no-op, '
+                                                                          'return',
+                                                                          '  `blocked` without '
+                                                                          'running it; configured '
+                                                                          'authority does not '
+                                                                          'waive these',
+                                                                          '  execution-safety '
+                                                                          'requirements.',
+                                                                          '- Without PERIODIC '
+                                                                          'CHECKPOINT SCOPE, stop '
+                                                                          'at the first failure '
+                                                                          'and report it;',
+                                                                          '  not_verified is '
+                                                                          'forbidden. With that '
+                                                                          'scope, follow its '
+                                                                          'explicit deferral law.',
+                                                                          '  Do not make ad hoc '
+                                                                          'repairs. Report all '
+                                                                          'actionable diagnostics '
+                                                                          'in failure_account.',
+                                                                          '  For a strict '
+                                                                          'checkpoint, the '
+                                                                          'dedicated full-suite '
+                                                                          'fixer must leave the '
+                                                                          'plan',
+                                                                          '  green; its status: ok '
+                                                                          'certifies that the plan '
+                                                                          'passed on its final '
+                                                                          'bytes,',
+                                                                          '  and unchanged bytes '
+                                                                          'reuse that proof '
+                                                                          'instead of another '
+                                                                          'checkpoint.',
+                                                                          '  For a periodic '
+                                                                          'checkpoint, the fixer '
+                                                                          'repairs only '
+                                                                          'nonpermitted failures',
+                                                                          '  with focused checks, '
+                                                                          'preserving authorized '
+                                                                          'future ownership. A '
+                                                                          'fresh',
+                                                                          '  scheduled checkpoint '
+                                                                          'follows the repair and '
+                                                                          'any required reviews.',
+                                                                          '- `no_suite` is valid '
+                                                                          'only after inspecting '
+                                                                          'the repository '
+                                                                          'authorities and',
+                                                                          '  finding that no '
+                                                                          'complete suite exists, '
+                                                                          'and only when no '
+                                                                          'operator commands',
+                                                                          '  were supplied; cite '
+                                                                          'that evidence '
                                                                           'explicitly.',
-                                                                          '- If the '
-                                                                          'official '
-                                                                          'suite is '
-                                                                          'genuinely '
-                                                                          'ambiguous '
-                                                                          'or cannot '
-                                                                          'be '
-                                                                          'executed,',
-                                                                          '  return '
-                                                                          '`blocked`; '
-                                                                          'never guess '
-                                                                          'and never '
-                                                                          'report an '
-                                                                          'unrun '
-                                                                          'command as '
-                                                                          'passed.'],
+                                                                          '- If the official suite '
+                                                                          'is genuinely ambiguous '
+                                                                          'or cannot be executed,',
+                                                                          '  return `blocked`; '
+                                                                          'never guess and never '
+                                                                          'report an unrun command '
+                                                                          'as passed.'],
                                                                  'variables': []},
                                                                 {'ref': 'process_authority'}]},
-                                     'questions': {'status': 'bare technical kind — no '
-                                                             'battery by design',
+                                     'questions': {'status': 'bare technical kind — no battery by '
+                                                             'design',
                                                    'items': []},
                                      'output_contract': {'sections': [{'id': 'suite_checkpoint_result',
-                                                                       'text': ['OUTPUT '
-                                                                                'CONTRACT',
-                                                                                'Return '
-                                                                                'exactly '
-                                                                                'one '
-                                                                                'JSON '
-                                                                                'object, '
-                                                                                'nothing '
-                                                                                'else.',
-                                                                                'Passed '
-                                                                                'or '
-                                                                                'failed '
+                                                                       'text': ['OUTPUT CONTRACT',
+                                                                                'Return exactly '
+                                                                                'one JSON object, '
+                                                                                'nothing else.',
+                                                                                'Passed or failed '
                                                                                 'execution:',
                                                                                 '{"status":"passed"|"failed","kind":"suite_checkpoint",',
                                                                                 ' '
@@ -4724,8 +4793,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                 '"evidence":[{"path":"<workspace-relative '
                                                                                 'path>",',
                                                                                 '                            '
-                                                                                '"basis":"<what '
-                                                                                'it '
+                                                                                '"basis":"<what it '
                                                                                 'establishes>"},...]},',
                                                                                 ' '
                                                                                 '"results":[{"command":"<attempted '
@@ -4743,120 +4811,147 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                 '                     '
                                                                                 '"diagnostics":"<complete '
                                                                                 'actionable '
-                                                                                'failure '
-                                                                                'output>",',
+                                                                                'failure output>",',
                                                                                 '                     '
                                                                                 '"affected_tests":["<test '
-                                                                                'id, '
-                                                                                'if '
+                                                                                'id, if '
                                                                                 'known>",...]}}',
-                                                                                '`commands` '
-                                                                                'is '
-                                                                                'the '
-                                                                                'complete '
-                                                                                'ordered '
-                                                                                'plan; '
-                                                                                '`results` '
-                                                                                'contains '
-                                                                                'exactly '
+                                                                                '`commands` is the '
+                                                                                'complete ordered '
+                                                                                'plan; `results` '
+                                                                                'contains exactly '
                                                                                 'the',
-                                                                                'commands '
-                                                                                'actually '
-                                                                                'attempted, '
-                                                                                'stopping '
-                                                                                'at '
-                                                                                'the '
-                                                                                'first '
-                                                                                'non-zero '
-                                                                                'exit.',
-                                                                                'For '
-                                                                                '`passed`, '
-                                                                                'commands '
-                                                                                'is '
-                                                                                'non-empty, '
-                                                                                'every '
-                                                                                'command '
-                                                                                'has '
-                                                                                'one '
-                                                                                'zero-exit '
-                                                                                'result,',
-                                                                                'and '
-                                                                                'the '
-                                                                                'arrays '
-                                                                                'have '
-                                                                                'equal '
-                                                                                'length. '
-                                                                                'For '
+                                                                                'commands actually '
+                                                                                'attempted in '
+                                                                                'order, stopping '
+                                                                                'at the first '
+                                                                                'unpermitted '
+                                                                                'failure.',
+                                                                                'For `passed`, '
+                                                                                'commands is '
+                                                                                'non-empty, every '
+                                                                                'command has one '
+                                                                                'zero-exit result,',
+                                                                                'and the arrays '
+                                                                                'have equal '
+                                                                                'length. For '
                                                                                 '`failed`, '
-                                                                                'commands '
-                                                                                'and '
-                                                                                'results '
-                                                                                'are',
+                                                                                'commands and '
+                                                                                'results are',
                                                                                 'non-empty, '
-                                                                                'results '
-                                                                                'is '
-                                                                                'the '
-                                                                                'exact '
-                                                                                'attempted '
-                                                                                'prefix '
-                                                                                'of '
-                                                                                'commands, '
-                                                                                'and '
-                                                                                'its '
+                                                                                'results is the '
+                                                                                'exact attempted '
+                                                                                'prefix of '
+                                                                                'commands, and its '
                                                                                 'last',
-                                                                                'result '
-                                                                                'has a '
-                                                                                'non-zero '
-                                                                                'exit; '
+                                                                                'result has a '
+                                                                                'non-zero exit; '
                                                                                 '`failure_account` '
-                                                                                'is '
-                                                                                'then '
-                                                                                'required '
-                                                                                'and '
-                                                                                'must '
-                                                                                'match',
-                                                                                'that '
-                                                                                'last '
-                                                                                'result. '
+                                                                                'is then required '
+                                                                                'and must match',
+                                                                                'that last result. '
+                                                                                'Without PERIODIC '
+                                                                                'CHECKPOINT SCOPE, '
+                                                                                'all earlier '
+                                                                                'results must',
+                                                                                'have zero exits. '
+                                                                                'With that scope, '
+                                                                                'earlier '
+                                                                                'authorized '
+                                                                                'failures are '
+                                                                                'allowed.',
                                                                                 'Omit '
                                                                                 '`failure_account` '
-                                                                                'for '
-                                                                                '`passed`.',
-                                                                                'With '
-                                                                                'operator '
+                                                                                'for every status '
+                                                                                'except `failed`.',
+                                                                                'With operator '
                                                                                 'commands, '
-                                                                                '`commands` '
-                                                                                'equals '
-                                                                                'that '
-                                                                                'list '
+                                                                                '`commands` equals '
+                                                                                'that list '
                                                                                 'exactly, '
                                                                                 '`authority.source`',
                                                                                 'is '
                                                                                 '`operator_config`, '
                                                                                 '`authority.evidence` '
-                                                                                'is '
-                                                                                'empty, '
-                                                                                'and '
-                                                                                '`no_suite` '
-                                                                                'is '
+                                                                                'is empty, and '
+                                                                                '`no_suite` is '
                                                                                 'invalid.',
-                                                                                'Without '
-                                                                                'them, '
-                                                                                'source '
-                                                                                'is '
+                                                                                'Without them, '
+                                                                                'source is '
                                                                                 '`repository`, '
-                                                                                'evidence '
-                                                                                'is '
-                                                                                'non-empty, '
-                                                                                'and '
+                                                                                'evidence is '
+                                                                                'non-empty, and '
                                                                                 'every',
-                                                                                'cited '
-                                                                                'path '
-                                                                                'must '
+                                                                                'cited path must '
                                                                                 'exist.',
-                                                                                'No '
-                                                                                'suite '
-                                                                                'exists:',
+                                                                                'Authorized '
+                                                                                'incomplete '
+                                                                                'verification '
+                                                                                '(ONLY with '
+                                                                                'PERIODIC '
+                                                                                'CHECKPOINT '
+                                                                                'SCOPE):',
+                                                                                '{"status":"not_verified","kind":"suite_checkpoint",',
+                                                                                ' '
+                                                                                '"commands":["<every '
+                                                                                'ordered '
+                                                                                'complete-suite '
+                                                                                'command>",...],',
+                                                                                ' '
+                                                                                '"authority":<same '
+                                                                                'authority object '
+                                                                                'and requirements '
+                                                                                'as above>,',
+                                                                                ' "results":[<one '
+                                                                                'actual result for '
+                                                                                'every command, in '
+                                                                                'order>],',
+                                                                                ' '
+                                                                                '"deferred_failures":[{"command":"<executed '
+                                                                                'non-zero '
+                                                                                'command>",',
+                                                                                '                       '
+                                                                                '"owner_slice_id":<integer '
+                                                                                'from '
+                                                                                'pending_slice_ids>,',
+                                                                                '                       '
+                                                                                '"authorization":"<exact '
+                                                                                'governing '
+                                                                                'skeleton/amendment '
+                                                                                'permission>",',
+                                                                                '                       '
+                                                                                '"evidence":"<all '
+                                                                                'applicable '
+                                                                                'causes/tests and '
+                                                                                'unchanged-code '
+                                                                                'evidence>"},...]}',
+                                                                                'not_verified '
+                                                                                'requires a '
+                                                                                'non-empty '
+                                                                                'complete plan, at '
+                                                                                'least one '
+                                                                                'non-zero exit,',
+                                                                                'and non-empty '
+                                                                                'deferred_failures '
+                                                                                'accounting for '
+                                                                                'every failure '
+                                                                                'cause/test in',
+                                                                                'every non-zero '
+                                                                                'command. Each '
+                                                                                'account has '
+                                                                                'exactly the four '
+                                                                                'fields above;',
+                                                                                'authorization and '
+                                                                                'evidence are '
+                                                                                'non-empty. '
+                                                                                'Multiple accounts '
+                                                                                'per command are',
+                                                                                'allowed. Omit '
+                                                                                'deferred_failures '
+                                                                                'for all other '
+                                                                                'statuses. It is '
+                                                                                'never a pass.',
+                                                                                'No suite exists:',
                                                                                 '{"status":"no_suite","kind":"suite_checkpoint",',
                                                                                 ' '
                                                                                 '"commands":[],"results":[],',
@@ -4866,31 +4961,41 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                 '"evidence":[{"path":"<workspace-relative '
                                                                                 'path>",',
                                                                                 '                            '
-                                                                                '"basis":"<why '
-                                                                                'it '
-                                                                                'proves '
-                                                                                'no '
-                                                                                'suite '
+                                                                                '"basis":"<why it '
+                                                                                'proves no suite '
                                                                                 'exists>"},...]}}',
                                                                                 'Impossible '
                                                                                 'checkpoint:',
                                                                                 '{"status":"blocked","kind":"suite_checkpoint",',
                                                                                 ' '
                                                                                 '"commands":["<resolved '
-                                                                                'command, '
-                                                                                'if '
+                                                                                'command, if '
                                                                                 'any>",...],',
                                                                                 ' '
                                                                                 '"results":[<attempted '
-                                                                                'results, '
-                                                                                'if '
+                                                                                'results, if '
                                                                                 'any>],',
                                                                                 ' '
                                                                                 '"blocked_reason":"<what '
-                                                                                'prevented '
-                                                                                'a '
+                                                                                'prevented a '
                                                                                 'trustworthy '
-                                                                                'execution>"}'],
+                                                                                'execution>"}',
+                                                                                'For blocked, '
+                                                                                'results is a '
+                                                                                'proper prefix or '
+                                                                                'empty. A non-zero '
+                                                                                'result in that',
+                                                                                'prefix is allowed '
+                                                                                'only with '
+                                                                                'PERIODIC '
+                                                                                'CHECKPOINT SCOPE '
+                                                                                'after an '
+                                                                                'authorized',
+                                                                                'failure; explain '
+                                                                                'why subsequent '
+                                                                                'execution is '
+                                                                                'impossible. Do '
+                                                                                'not continue.'],
                                                                        'variables': []}]}},
  'milestone/merge_repair.json': {'kind': 'merge_repair',
                                  'process': 'milestone',

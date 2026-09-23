@@ -52,6 +52,10 @@ def make_state():
             "slices": [{"id": 1, "title": "Calculator core"}],
         },
         "failure": None,
+        "events": [{
+            "type": "verification", "seq": 99,
+            "ok": True, "stable": True,
+        }],
         "units": [
             {
                 "kind": "skeleton",
@@ -417,7 +421,7 @@ class TestRenderReviewLog(unittest.TestCase):
         )
         self.assertIn(
             "- deterministic result: every configured family was clean or "
-            "debt-clean on the same current bytes; the scheduled full "
+            "debt-clean on the same current bytes; scheduled full "
             "verification passed; no extra reviewer was called",
             self.text,
         )
@@ -661,6 +665,27 @@ class TestRenderClosure(unittest.TestCase):
             "at this boundary)",
             text,
         )
+
+    def test_periodic_not_verified_never_claims_suite_passed(self):
+        self.state["events"][0].update(status="not_verified", ok=False)
+
+        closure = ledgers.render_closure(self.state, self.impl)
+        review_log = ledgers.render_review_log(self.state)
+
+        for text in (closure, review_log):
+            self.assertIn("scheduled full verification: NOT VERIFIED", text)
+            self.assertIn("authorized failures deferred to pending slices", text)
+            self.assertNotIn("scheduled full verification passed", text)
+
+    def test_cited_event_is_required_to_claim_suite_passed(self):
+        self.state["events"] = []
+
+        for text in (
+            ledgers.render_closure(self.state, self.impl),
+            ledgers.render_review_log(self.state),
+        ):
+            self.assertIn("scheduled full verification result unavailable", text)
+            self.assertNotIn("scheduled full verification passed", text)
 
     def test_gate_commit_placeholder_when_committed_with_closure(self):
         # The closure ledger is generated BEFORE its own gate commit, so a

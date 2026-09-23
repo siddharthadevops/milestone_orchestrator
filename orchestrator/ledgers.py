@@ -292,12 +292,7 @@ def render_review_log(state):
                     "unit did not run a separate completion check" % seal["wave"]
                 )
             elif deterministic:
-                if "verification_event_seq" not in seal:
-                    verification = "legacy full verification passed"
-                elif seal.get("verification_event_seq") is not None:
-                    verification = "the scheduled full verification passed"
-                else:
-                    verification = "full verification was not due at this boundary"
+                verification = _seal_verification_text(state, seal)
                 lines.append(
                     "- deterministic result: every configured family was "
                     "clean or debt-clean on the same current bytes; %s; no "
@@ -384,18 +379,31 @@ def render_adjudications(state):
     return "\n".join(lines) + "\n"
 
 
+def _seal_verification_text(state, seal):
+    return {
+        "legacy_passed": "legacy full verification passed",
+        "passed": "scheduled full verification passed",
+        "not_due": "full verification was not due at this boundary",
+        "not_verified": (
+            "scheduled full verification: NOT VERIFIED "
+            "(authorized failures deferred to pending slices)"
+        ),
+        "failed": "scheduled full verification failed",
+        "changed_bytes": "scheduled full verification changed candidate bytes",
+        "legacy_stability_unrecorded": (
+            "scheduled full verification passed; legacy stability unrecorded"
+        ),
+        "unavailable": "scheduled full verification result unavailable",
+    }[st.seal_verification_status(state, seal)]
+
+
 def render_closure(state, unit):
     closed = unit.get("closed_record") or {}
     seal = next(
         (item for item in reversed(unit.get("seals") or []) if item["passed"]),
         {},
     )
-    if "verification_event_seq" not in seal:
-        verification = "legacy full verification passed"
-    elif seal.get("verification_event_seq") is not None:
-        verification = "scheduled full verification passed"
-    else:
-        verification = "full verification was not due at this boundary"
+    verification = _seal_verification_text(state, seal)
     return (
         _GENERATED
         + "# Closure — slice %s (%s)\n\n"
