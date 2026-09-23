@@ -10,8 +10,8 @@ Two implementations of the same tiny interface:
 On top of the raw call, `call_worker()` extracts the JSON object, validates
 it against orchestrator.contracts, and performs exactly one repair retry
 when the output is not valid JSON / not contract-conformant. After that the
-caller receives WorkerProtocolError and the driver fails the run with the
-explanation in the log — no prose parsing, ever.
+caller receives WorkerOutputError and the driver records a deferred recovery.
+Single-attempt violations remain WorkerProtocolError — no prose parsing, ever.
 """
 
 import fnmatch
@@ -440,6 +440,10 @@ class WorkerProtocolError(RuntimeError):
         self.token_usage = normalize_token_usage(token_usage)
         self.token_usage_partial = bool(token_usage_partial)
         self.cost_payloads = list(cost_payloads or [])
+
+
+class WorkerOutputError(WorkerProtocolError):
+    """Both completed worker replies failed their output contract."""
 
 
 _CODEX_DELTA_BANDS = (
@@ -3677,7 +3681,7 @@ def call_worker(runner, family, prompt, kind, workspace,
         token_usage = add_token_usage(result.token_usage, result2.token_usage)
         first_family = getattr(result, "resolved_family", family)
         second_family = getattr(result2, "resolved_family", family)
-        error = WorkerProtocolError(
+        error = WorkerOutputError(
             "worker produced contract-violating output twice for kind %s: "
             "first error (dispatch family %s): %s; "
             "second error (dispatch family %s): %s"

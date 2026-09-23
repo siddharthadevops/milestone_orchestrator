@@ -6295,6 +6295,12 @@ class Driver(object):
                     etype, resume_at, evidence = self._classify_failure(
                         actual_family, exc, raw_name=raw_name, unit=call_unit
                     )
+                elif isinstance(exc, runners.WorkerOutputError):
+                    # Only exhausted output correction is deferred. Other
+                    # protocol and repository-boundary failures stay manual.
+                    etype = "worker_output"
+                    resume_at = errclass.parse_resume_at("in 15 minutes")
+                    evidence = None
                 else:
                     etype = (
                         "worker_protocol"

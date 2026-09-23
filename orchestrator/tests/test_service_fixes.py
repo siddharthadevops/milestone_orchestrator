@@ -123,7 +123,7 @@ class ServiceFixesTestCase(unittest.TestCase):
 
 class TestAutoResumeGuard(ServiceFixesTestCase):
     """The service-side guard: typed recoverable failures are auto-resumed
-    when due, capped per type, and never touched for login/unknown."""
+    when due; unknown and malformed output use the fixed emergency interval."""
 
     def _failed_run(self, name, ftype, resume_at=None):
         ws = self.workspace(name)
@@ -236,6 +236,94 @@ class TestAutoResumeGuard(ServiceFixesTestCase):
         calls = self._patched_resume()
         actions = service.guard_scan(self.home)
         self.assertIn((entry["id"], "emergency-spaced"), actions)
+        self.assertEqual(calls, [])
+
+    def test_worker_output_waits_fifteen_minutes_with_or_without_due_time(self):
+        failed_at = "2026-09-23T00:00:00+0000"
+        now = st._epoch(failed_at)
+        calls = self._patched_resume()
+        for index, resume_at in enumerate((None, "2026-09-23T00:15:00+0000")):
+            with self.subTest(resume_at=resume_at):
+                entry = self._failed_run("ws-output-%s" % index, "worker_output", resume_at)
+                self._backdate_failure(entry, failed_at)
+                with mock.patch.object(service.time, "time", return_value=now + 899):
+                    actions = service.guard_scan(self.home)
+                self.assertIn((entry["id"], "emergency-spaced"), actions)
+                self.assertNotIn(entry["id"], calls)
+                with mock.patch.object(service.time, "time", return_value=now + 900):
+                    actions = service.guard_scan(self.home)
+                self.assertIn((entry["id"], "emergency-resume"), actions)
+                self.assertEqual(calls.count(entry["id"]), 1)
+                self.assertEqual(self._entry(entry["id"])["last_emergency_resume_at"], now + 900)
+                self.assertFalse(self._entry(entry["id"]).get("auto_resumes"))
+                with open(registry.log_path(self.home, entry["id"]), encoding="utf-8") as log:
+                    self.assertIn("two malformed worker outputs", log.read())
+
+    def test_worker_output_honors_future_resume_at(self):
+        entry = self._failed_run(
+            "ws-output-future", "worker_output", "2099-01-01T00:00:00+0000"
+        )
+        self._backdate_failure(entry)
+        calls = self._patched_resume()
+        service.guard_scan(self.home)
+        self.assertEqual(calls, [])
+
+    def test_repeated_worker_output_waits_fifteen_minutes_after_new_failure(self):
+        failed_at = "2026-09-23T00:00:00+0000"
+        now = st._epoch(failed_at)
+        entry = self._failed_run("ws-output-repeat", "worker_output")
+        self._backdate_failure(entry, failed_at)
+        calls = self._patched_resume()
+        with mock.patch.object(service.time, "time", return_value=now + 900):
+            service.guard_scan(self.home)
+        self.assertEqual(calls, [entry["id"]])
+        state = st.load(entry["state_path"])
+        st.fail_run(state, "malformed again", type_="worker_output",
+                    resume_at="2026-09-23T00:30:05+0000")
+        state["failure"]["at"] = "2026-09-23T00:15:05+0000"
+        st.save(entry["state_path"], state)
+        with mock.patch.object(service.time, "time", return_value=now + 1800):
+            actions = service.guard_scan(self.home)
+        self.assertIn((entry["id"], "emergency-spaced"), actions)
+        self.assertEqual(calls, [entry["id"]])
+        with mock.patch.object(service.time, "time", return_value=now + 1805):
+            actions = service.guard_scan(self.home)
+        self.assertIn((entry["id"], "emergency-resume"), actions)
+        self.assertEqual(calls, [entry["id"], entry["id"]])
+
+    def test_worker_output_does_not_resume_a_live_driver(self):
+        entry = self._failed_run("ws-output-live", "worker_output")
+        self._backdate_failure(entry)
+        calls = self._patched_resume()
+        with mock.patch.object(service, "driver_alive", return_value=True):
+            service.guard_scan(self.home)
+        self.assertEqual(calls, [])
+
+    def test_worker_output_keeps_failure_when_workspace_is_occupied(self):
+        entry = self._failed_run("ws-output-busy", "worker_output")
+        self._backdate_failure(entry)
+        before = st.load(entry["state_path"])
+
+        class BusyTaskHost:
+            @staticmethod
+            def owns_workspace(_workspace):
+                return True
+
+        with mock.patch.object(service, "_spawn_run_locked") as spawn:
+            actions = service.guard_scan(self.home, task_host=BusyTaskHost())
+        spawn.assert_not_called()
+        self.assertEqual(actions, [(entry["id"], "error:%s" % service.WORK_AREA_BUSY)])
+        self.assertEqual(st.load(entry["state_path"]), before)
+        self.assertFalse(self._entry(entry["id"]).get("last_emergency_resume_at"))
+
+    def test_worker_protocol_stays_manual_even_if_reason_mentions_twice(self):
+        entry = self._failed_run("ws-protocol-manual", "worker_protocol")
+        state = st.load(entry["state_path"])
+        state["failure"]["at"] = "2020-01-01T00:00:00+0000"
+        state["failure"]["reason"] = "worker produced an invalid result twice"
+        st.save(entry["state_path"], state)
+        calls = self._patched_resume()
+        self.assertEqual(service.guard_scan(self.home), [])
         self.assertEqual(calls, [])
 
     def test_worker_blocked_failure_is_never_auto_resumed(self):

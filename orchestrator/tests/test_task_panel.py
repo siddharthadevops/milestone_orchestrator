@@ -824,6 +824,33 @@ const api = async () => event;
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_worker_output_banner_shows_scheduled_recovery(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for executable panel checks")
+        esc = re.search(r"function esc\([^\n]*\) \{.*?\n\}", self.panel, re.S).group(0)
+        banner = self.panel.split('    if (runView !== "edit" && s.failure_reason) {', 1)[1]
+        banner = banner.split('    if (runView !== "edit")', 1)[0]
+        source = esc + "\nfunction renderFailure(failure) {\n" + (
+            "const sum = {failure}, s = {failure_reason: 'invalid contract'};\n"
+            "let html = '';\n{\n" + banner + "\nreturn html;\n}\n"
+        )
+        checks = r"""
+const assert = require('node:assert/strict');
+const output = renderFailure({type: 'worker_output', resume_at: '2026-09-23T00:15:00+0000'});
+assert.match(output, /worker_output/);
+assert.match(output, /auto-resume at 00:15/);
+assert.match(output, /chip sev23/);
+assert.match(renderFailure({type: 'worker_output'}), /auto-resume pending/);
+const protocol = renderFailure({type: 'worker_protocol', resume_at: '2026-09-23T00:15:00+0000'});
+assert.doesNotMatch(protocol, /auto-resume/);
+assert.match(protocol, /chip fail/);
+"""
+        completed = subprocess.run(
+            [node, "-e", source + checks], capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

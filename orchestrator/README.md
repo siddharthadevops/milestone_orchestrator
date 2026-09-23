@@ -681,6 +681,15 @@ frozen CLI); it is typed as a recoverable timeout and auto-resumed. There is no
 hard wall-clock timeout, so a legitimate long-running test suite is never
 touched. Set the window to zero to disable it.
 
+When a worker returns two malformed contract outputs (the original response
+and the existing single correction), the milestone stops as `worker_output`.
+While the service is running, its existing guard resumes this failure after
+15 minutes; another malformed pair waits another 15 minutes. The panel shows
+the scheduled resume time. Ordinary `worker_protocol` integrity failures,
+explicit worker stops, and operator stops still require manual action. This
+does not add another correction inside a worker call or change the existing
+recovery policy for unclassified failures.
+
 ### Adjudicated rejections (no infinite finding loops)
 
 A fixer rejects directly from its concrete validity account; it never invokes

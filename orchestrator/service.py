@@ -6641,9 +6641,9 @@ GUARD_INTERVAL_S = 60
 # strand a run at 4 probes / ~100 minutes. Progress still resets the
 # counter, so the cap only ever bites consecutive no-progress failures.
 AUTO_RESUME_CAPS = {"quota": 12, "network": 12, "busy": 12, "timeout": 12}
-# Emergency resume of an UNCLASSIFIED failure ("unknown"): the classifier
-# could not type it (a novel banner, or a correlated outage that took the
-# classifier down too). Retried forever, this far apart. No cap by
+# Emergency resume of an unclassified failure ("unknown"), or two malformed
+# contract outputs despite the existing correction ("worker_output").
+# Retried forever, this far apart. No cap by
 # deliberate operator choice: a stuck run should keep probing rather than
 # sit dead — a transient clears, an irrecoverable one costs only a cheap
 # periodic re-check, and the operator can always Stop it.
@@ -6713,9 +6713,9 @@ def guard_scan(home, task_host=None):
             if not failure:
                 continue
             ftype = failure.get("type") or "unknown"
-            if ftype == "unknown":
-                # Emergency resume: a failure we could not classify is retried
-                # FOREVER, EMERGENCY_RESUME_MIN apart, no cap. The run re-fails
+            if ftype in ("unknown", "worker_output"):
+                # Emergency resume: these failures are retried FOREVER,
+                # EMERGENCY_RESUME_MIN apart, no cap. The run re-fails
                 # with a fresh timestamp, so the cadence holds regardless of
                 # the driver's replay events; the first probe waits a full
                 # interval after the failure so we never retry straight into
@@ -6726,13 +6726,21 @@ def guard_scan(home, task_host=None):
                 if now - last < EMERGENCY_RESUME_S:
                     actions.append((run_id, "emergency-spaced"))
                     continue
+                if ftype == "worker_output":
+                    due_at = st._epoch(failure.get("resume_at"))
+                    if due_at is not None and due_at > now:
+                        continue
                 resume_run(home, run_id, task_host=task_host)
                 registry.update(home, run_id, last_emergency_resume_at=now)
+                description = (
+                    "an unclassified failure" if ftype == "unknown"
+                    else "two malformed worker outputs"
+                )
                 append_log(
                     home, run_id,
-                    "[guard] emergency resume of an unclassified failure; "
+                    "[guard] emergency resume of %s; "
                     "retrying every %d min until it clears or you Stop it\n"
-                    % EMERGENCY_RESUME_MIN,
+                    % (description, EMERGENCY_RESUME_MIN),
                 )
                 actions.append((run_id, "emergency-resume"))
                 continue

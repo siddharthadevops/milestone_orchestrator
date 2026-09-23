@@ -458,7 +458,7 @@ class ReviewedCallRoutingTest(unittest.TestCase):
             self.assertNotIn("task_id", incident)
             self.assertTrue(incident["raw_path"])
             self.assertTrue(incident["raw_path2"])
-            self.assertEqual(persisted["failure"]["type"], "worker_protocol")
+            self.assertEqual(persisted["failure"]["type"], "worker_output")
             self._assert_physical_accounting(
                 persisted, runner, "skeleton"
             )

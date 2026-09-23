@@ -1893,6 +1893,7 @@ class TestCallWorker(unittest.TestCase):
             )
 
         error = caught.exception
+        self.assertNotIsInstance(error, runners.WorkerOutputError)
         self.assertIn("single-attempt", str(error))
         self.assertEqual(len(runner.calls), 1)
         self.assertEqual(error.raw_texts, ["one malformed reply"])
@@ -1975,6 +1976,7 @@ class TestCallWorker(unittest.TestCase):
                 self.workspace,
             )
         msg = str(cm.exception)
+        self.assertIsInstance(cm.exception, runners.WorkerOutputError)
         self.assertIn("twice", msg)
         self.assertIn("first error", msg)
         self.assertIn("second error", msg)

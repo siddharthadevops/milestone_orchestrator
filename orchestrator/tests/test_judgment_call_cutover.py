@@ -1620,12 +1620,17 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
             event["type"] == "reclassify_recorded"
             for event in self.subject.state["events"]
         ))
-        self.assertEqual(self.subject.state["failure"]["type"], "worker_protocol")
+        self.assertEqual(self.subject.state["failure"]["type"], "worker_output")
+        self.assertIsNotNone(self.subject.state["failure"]["resume_at"])
 
     def test_protocol_reply_prose_cannot_enter_infrastructure_classification(self):
         self.subject.runner = runners.MockRunner([
-            {"expect_kind": "review_round", "response": {"invalid": 1}},
-            {"expect_kind": "review_round", "response": {"invalid": 2}},
+            {"expect_kind": "review_round", "response": {
+                "status": "ok", "kind": "review_round", "findings": [],
+            }},
+            {"expect_kind": "review_round", "response": {
+                "status": "ok", "kind": "review_round", "findings": [],
+            }},
         ])
         unit = state.current_unit(self.subject.state)
 
@@ -1645,9 +1650,13 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
 
         self.assertEqual(len(self.subject.runner.calls), 2)
         self.assertEqual(
-            self.subject.state["failure"]["type"], "worker_protocol"
+            self.subject.state["failure"]["type"], "worker_output"
         )
-        self.assertIsNone(self.subject.state["failure"]["resume_at"])
+        failure = self.subject.state["failure"]
+        self.assertIn("missing required key 'questions'", failure["reason"])
+        delay = state._epoch(failure["resume_at"]) - state._epoch(failure["at"])
+        self.assertGreaterEqual(delay, 899)
+        self.assertLessEqual(delay, 901)
 
     def test_fixer_protocol_failure_is_terminal_without_classification(self):
         self.subject.runner = runners.MockRunner([
@@ -1676,8 +1685,43 @@ class JudgmentDriverBoundaryTest(unittest.TestCase):
 
         self.assertEqual(len(self.subject.runner.calls), 2)
         self.assertEqual(
-            self.subject.state["failure"]["type"], "worker_protocol"
+            self.subject.state["failure"]["type"], "worker_output"
         )
+        self.assertIsNotNone(self.subject.state["failure"]["resume_at"])
+
+    def test_other_protocol_errors_remain_manual_regardless_of_error_text(self):
+        self.subject.runner = RaisingRunner(runners.WorkerProtocolError(
+            "worker produced contract-violating output twice: an integrity failure"
+        ))
+        unit = state.current_unit(self.subject.state)
+        with self.assertRaises(driver.StopStep):
+            self.subject._call(
+                "claude", "legacy", "review_round", "integrity-error",
+                prepare_call=self.subject._judgment_prepare_call(
+                    unit, "review_round", "integrity-error"
+                ),
+                episode_unit=unit,
+            )
+        self.assertEqual(self.subject.runner.calls, 1)
+        self.assertEqual(self.subject.state["failure"]["type"], "worker_protocol")
+        self.assertIsNone(self.subject.state["failure"]["resume_at"])
+
+    def test_single_attempt_output_failure_remains_manual(self):
+        self.subject.pause_on_call_failure = True
+        self.subject.runner = runners.MockRunner([
+            {"expect_kind": "review_round", "response": {"invalid": True}},
+        ])
+        unit = state.current_unit(self.subject.state)
+        with self.assertRaises(driver.StopStep):
+            self.subject._call(
+                "claude", "legacy", "review_round", "single-attempt",
+                prepare_call=self.subject._judgment_prepare_call(
+                    unit, "review_round", "single-attempt"
+                ),
+                episode_unit=unit,
+            )
+        self.assertEqual(len(self.subject.runner.calls), 1)
+        self.assertEqual(self.subject.state["failure"]["type"], "worker_protocol")
         self.assertIsNone(self.subject.state["failure"]["resume_at"])
 
     def test_provider_started_rating_transport_failure_is_recoverable(self):

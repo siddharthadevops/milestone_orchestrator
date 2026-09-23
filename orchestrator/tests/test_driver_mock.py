@@ -1519,7 +1519,7 @@ class TestFixerProtocolFailures(DriverTestCase):
 
             state = st.load(path)
             unit = state["units"][0]
-            self.assertEqual(state["failure"]["type"], "worker_protocol")
+            self.assertEqual(state["failure"]["type"], "worker_output")
             self.assertIn("status 'retry' not in",
                           state["failure"]["reason"])
             self.assertEqual(unit["status"], st.U_FAILED)

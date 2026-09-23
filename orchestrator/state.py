@@ -1337,11 +1337,11 @@ def fail_run(state, reason, unit=None, type_="unknown", resume_at=None,
     deliberate operator action (resume_run) or, for auto-resumable typed
     failures (quota/network/busy/timeout), by the service guard at
     resume_at. type_ and resume_at come from errclass for CLI failures;
-    "login" is never auto-resumed, and "unknown" gets the guard's spaced
-    EMERGENCY probing (every 15 min, forever) — so a failure that stops
-    to ask the OPERATOR a question must carry an explicit operator-gated
+    "login" is never auto-resumed. "unknown" and exhausted two-reply
+    "worker_output" failures get the guard's spaced probing (every 15 min).
+    A failure that stops to ask the OPERATOR a question must carry an explicit operator-gated
     type (goal_gap, gap_stall, gap_route, worker_blocked): typed failures
-    outside errclass.AUTO_RESUMABLE are never touched by the guard.
+    outside these recoverable categories are never touched by the guard.
     evidence is the classifier's distilled verdict ("pattern match" /
     "classifier returned ..." / "classifier unavailable: ...") — recorded
     so an "unknown" is auditable."""
