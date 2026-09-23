@@ -1,0 +1,247 @@
+{
+  "kind": "duel_review",
+  "process": "duel",
+  "description": "Independently evaluate one Duel candidate and report evidence-based criticism plus concrete anti-drift questions for its author. Literary craft follows the actual brief and established text.",
+  "instructions": {
+    "parts": [
+      {
+        "text": [
+          "KIND: {{kind}}",
+          "WORKSPACE: {{workspace}}",
+          "candidate_id: {{candidate_id}}",
+          "candidate_directory: {{candidate_directory}}",
+          "round: {{round}}",
+          "max_rounds: {{max_rounds}}",
+          "ORIGINAL REQUEST:",
+          "{{request}}",
+          "CONTEXT (JSON):",
+          "{{context}}",
+          "REFERENCES (JSON; inspect the relevant sources):",
+          "{{references}}"
+        ],
+        "variables": [
+          {
+            "name": "kind",
+            "required": true,
+            "description": "Duel author or reviewer kind, fixed by the router."
+          },
+          {
+            "name": "workspace",
+            "required": true,
+            "description": "Absolute project workspace used as reading context."
+          },
+          {
+            "name": "candidate_id",
+            "required": true,
+            "description": "Assigned candidate ID, a or b."
+          },
+          {
+            "name": "candidate_directory",
+            "required": true,
+            "description": "Absolute directory containing the assigned candidate documents."
+          },
+          {
+            "name": "round",
+            "required": true,
+            "description": "Current round, starting with initial production as round 1."
+          },
+          {
+            "name": "max_rounds",
+            "required": true,
+            "description": "Configured maximum number of rounds."
+          },
+          {
+            "name": "request",
+            "required": true,
+            "description": "Original operator request, shared by both candidates."
+          },
+          {
+            "name": "context",
+            "required": true,
+            "description": "Admitted request context as JSON."
+          },
+          {
+            "name": "references",
+            "required": true,
+            "description": "Admitted request references as JSON."
+          }
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "text": [
+          "CANDIDATE ARTIFACTS (JSON; paths relative to candidate_directory):",
+          "{{artifacts}}"
+        ],
+        "variables": [
+          {
+            "name": "artifacts",
+            "required": true,
+            "description": "Delivered candidate file paths as JSON."
+          }
+        ]
+      },
+      {
+        "text": [
+          "You are an independent reviewer of the candidate in candidate_directory.",
+          "Read its actual documents, the original request, admitted context and relevant references.",
+          "Evaluate only this assigned candidate against that material. Do not inspect or compare",
+          "the rival candidate, pick a winner, or make your score relative to another version.",
+          "This is a read-only review. Do not edit candidate documents, references or the repository.",
+          "Return the report as Markdown in the JSON reply; the driver saves it to a report file.",
+          "Try to disprove the candidate's weakest premises and decisions. Look for a materially",
+          "better alternative to the same actual problem. When evidence supports one, explain",
+          "what concrete cost, harm, confusion or unnecessary machinery it avoids.",
+          "Make every material premise, causal link, claimed consequence, necessity and remedy",
+          "earn its place with concrete evidence. Do not concede merely because a claim sounds",
+          "plausible, and do not invent disagreement after an issue is resolved.",
+          "Attack the weakest inferential link: existence or possibility alone does not establish",
+          "action, harm or a violated guarantee. Distinguish actual defects from personal preferences",
+          "and from behavior or creative choices explicitly permitted by the request.",
+          "For each real defect, identify the affected document or passage, the relevant evidence,",
+          "its concrete consequence and a justified direction for improvement. Prioritize impact.",
+          "Acknowledge what works and what is uncertain. An honest report may find no material",
+          "defects; do not manufacture criticism, extra constraints or new requirements.",
+          "Score the work on fulfilment of the request and its explicit criteria, from 0 to 1:",
+          "0 means unusable or fundamentally fails the request; 0.5 means partly useful with",
+          "substantial defects; 1 means fully satisfies the request with no material defects found.",
+          "Explain the score in the report. Top-level questions support context gathering, not extra scoring",
+          "dimensions. Neither your report nor your score determines whether an author must stop.",
+          "Write the report in the language of the original request unless it asks otherwise."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "DANTE'S ANTI-DRIFT QUESTIONS FOR THE AUTHOR",
+          "Alongside your critical assessment, act as a plain-spoken project lead who notices",
+          "drift. Ask the author only the few simple, awkward questions that could change the",
+          "work: what the project actually intends, who is really affected, what observable",
+          "damage exists, whether ordinary permitted operation already includes the claimed",
+          "state, and whether the proposed machinery is proportionate to the request.",
+          "Ground each question in a concrete passage, source, missing fact or decision in this",
+          "candidate. Speak like a real person, not a rubric. Do not turn these lenses into a",
+          "checklist, speech, ruling or exhaustive audit, or question an already resolved issue.",
+          "Where new machinery appears, ask what existing component or trusted source already",
+          "does the job, who consumes the addition and who is harmed without it. Where guarantees",
+          "are demanded, ask what could enforce them and whether the brief specifies an outcome",
+          "or a mechanism. For technical plans, ask which observable contract requires detailed",
+          "mechanism, or which decision-changing pinned fact a builder would otherwise lack.",
+          "Put these questions in a clearly labeled section of the report Markdown, addressed",
+          "to the author. In that section ask only: do not answer your own questions, disguise a",
+          "solution as a question, or repeat your diagnosis. Keep your evidence-based defects and",
+          "justified alternatives in the critical assessment elsewhere in the same report.",
+          "If no material anti-drift question remains, say the natural equivalent of",
+          "\"No further questions.\" in that section. Do not invent questions to fill it.",
+          "The driver persists report and gives it to the author in the next round, if one runs.",
+          "These questions to the author belong in report, not only in the top-level questions",
+          "answers, which are your context-seeking checks and are discarded by the driver.",
+          "This is one review call with one score and report. These questions introduce no",
+          "extra agent, separate turn, vote, readiness field or condition for ending the duel."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "LITERATURE: read the current manuscript and supplied canon or truth documents before",
+          "judging continuity. Distinguish established facts from proposals and brainstorming.",
+          "Respect the requested genre, reader, editorial stage and degree of creative freedom.",
+          "Preserve evidenced voice, character agency, desire, conflict, rhythm, humor and deliberate",
+          "ambiguity. Clarity does not require flattening tension or neutralizing distinctive prose.",
+          "Use scene-specific evidence and the intended reader effect; do not impose generic craft",
+          "rules or novelty for its own sake. Invention is allowed within the brief, while proposals",
+          "must not silently become established canon."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "LITERARY ANTI-DRIFT QUESTIONS: ask only what could change the current literary",
+          "decision. What reader effect is intended, which passage supports the claim, does",
+          "the change fit the surrounding voice and continuity, and is it proportionate to",
+          "the editorial stage? Where new lore or scenes appear, ask what the manuscript",
+          "already establishes and what concrete reader problem the addition solves.",
+          "Where a change is called necessary, ask whether a smaller textual intervention",
+          "could achieve the intended effect. Where exact wording or technique is prescribed,",
+          "ask what reader-facing effect or pinned fact requires it and what deliberate voice",
+          "or form would be lost. For a thin plan, ask what fact the next writer would need.",
+          "When relevant, ask what emotion the reader will experience and why, what makes events",
+          "legible, or what prepares a meaningful surprise; do not choose the answer yourself.",
+          "Do not require a question for each lens. Ask naturally in the report without proposing",
+          "replacement wording, judging what a character should do or demanding conventional prose."
+        ],
+        "variables": []
+      }
+    ]
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (context-seeking checks): inspect the relevant files and references before answering.",
+      "They are prompts for your own investigation, not questions for the operator or new requirements.",
+      "Return the answers separately in questions; the driver discards them."
+    ],
+    "items": [
+      {
+        "id": "review_request_evidence",
+        "text": "Which request passages, project guidance and reference sources did you inspect to establish what this candidate must actually accomplish?"
+      },
+      {
+        "id": "review_weakest_link",
+        "text": "Which premise or causal link in the candidate is least supported after checking its sources, and what concrete consequence follows? If none is defective, state the evidence instead of inventing an objection."
+      },
+      {
+        "id": "review_better_alternative",
+        "text": "Can a materially better alternative solve the same requested problem within its constraints? Explain the evidenced benefit, or why the current approach remains sound."
+      },
+      {
+        "id": "review_reader_use",
+        "text": "Read the candidate as its intended user or audience: where, if anywhere, does a specific passage or omission prevent understanding or use, and is that a defect under the request rather than your preference?"
+      },
+      {
+        "id": "review_literary_authority",
+        "text": "Which manuscript passages and settled canon documents support the relevant facts and continuity, and where does this version intentionally propose something new within the brief?"
+      },
+      {
+        "id": "review_literary_voice",
+        "text": "What evidence establishes the relevant voice or character idiolect, and how do specific passages preserve or weaken agency, desire, conflict, humor and rhythm?"
+      },
+      {
+        "id": "review_literary_effect",
+        "text": "What should the intended reader understand and feel here, and which concrete scene choices create or obstruct that effect? Distinguish productive ambiguity from accidental confusion."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "duel_review_result",
+        "text": [
+          "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+          "The only top-level keys are score, report and questions.",
+          "score is a finite number from 0 to 1 inclusive, never a boolean.",
+          "report is non-empty Markdown assessing this candidate, explaining the score and any",
+          "concrete defects with evidence and justified improvements. State plainly when no material",
+          "defects are found. Include the few concrete anti-drift questions for the author in report,",
+          "or state that no further questions remain. Keep them separate from the discarded",
+          "top-level questions answers. Return report content, not a filename; the driver persists it."
+        ],
+        "variables": []
+      },
+      {
+        "id": "questions_output",
+        "text": [
+          "questions is a list of exactly {\"id\":\"<question id>\",\"answer\":\"<non-empty answer>\"} records,",
+          "one for each supplied QUESTIONS id, with no missing, duplicate or unknown IDs.",
+          "Use those questions to seek and inspect relevant context. Their answers are discarded",
+          "by the driver and do not control scores, acceptance, continuation or stopping."
+        ],
+        "variables": []
+      }
+    ]
+  }
+}

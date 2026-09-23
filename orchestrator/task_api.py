@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 from orchestrator import brainstorming, brainstorming_tasks, contracts, driver, gitsync
 from orchestrator import brainstorming_coordination as coordination
-from orchestrator import creativity_evaluation, creativity_search
+from orchestrator import creativity_evaluation, creativity_search, duel
 from orchestrator import kvstore, pricing, profiles, prompt_sets, prompts
 from orchestrator import registry, runners, session_repository, staffing, tasks
 from orchestrator import state as st
@@ -27,7 +27,7 @@ TASKS_DIRNAME = "tasks"
 REVIEWED_DIRNAME = "reviewed"
 _TASK_KEY_PREFIX = "tasks/task:"
 _DOCUMENT_SCHEMA_VERSION = 1
-RECOVERABLE_EXECUTORS = frozenset(("agent_call", "reviewed_task", "deep_task", "creativity"))
+RECOVERABLE_EXECUTORS = frozenset(("agent_call", "reviewed_task", "deep_task", "creativity", "duel"))
 
 
 class TaskControlConflict(RuntimeError):
@@ -63,6 +63,24 @@ def creativity_checkpoint_store(home, task_id):
         os.path.abspath(home), TASKS_DIRNAME, "creativity",
         kvstore.validate_fragment(task_id, "task_id"),
     ))
+
+
+def duel_checkpoint_store(home, task_id):
+    """Accepted Duel phases under the task's ordinary execution lease."""
+    return kvstore.LocalKVClient(os.path.join(
+        os.path.abspath(home), TASKS_DIRNAME, "duel",
+        kvstore.validate_fragment(task_id, "task_id"),
+    ))
+
+
+def duel_view(home, record):
+    checkpoint = duel_checkpoint_store(home, record["id"]).get("checkpoint")
+    if checkpoint is kvstore.ABSENT:
+        return None
+    return {key: copy.deepcopy(checkpoint[key]) for key in (
+        "output_directory", "round", "phase", "rounds_completed",
+        "candidates", "rounds", "stop_reason",
+    )}
 
 
 def _creativity_proposals(checkpoint, limit, order_mode=None, *, creativity_semantics=None):
@@ -701,6 +719,8 @@ def forget_task_evidence(home, record):
         )
     if (record.get("order") or {}).get("task_executor") == "creativity":
         shutil.rmtree(creativity_checkpoint_store(home, task_id).directory, ignore_errors=True)
+    if (record.get("order") or {}).get("task_executor") == "duel":
+        shutil.rmtree(duel_checkpoint_store(home, task_id).directory, ignore_errors=True)
     if (record.get("order") or {}).get("task_executor") == "brainstorming":
         try:
             work_area, _parent, _target = (
@@ -1942,7 +1962,7 @@ class DirectTaskHost:
             if executor in RECOVERABLE_EXECUTORS:
                 self._pause_boundary(task_id)
                 if (self._stop_reason(task_id) is not None and
-                        (executor in ("agent_call", "creativity") or (
+                        (executor in ("agent_call", "creativity", "duel") or (
                             executor == "reviewed_task" and not os.path.isfile(
                                 reviewed_state_path(self.home, task_id))))):
                     with registry.locked(self.home):
@@ -1963,6 +1983,8 @@ class DirectTaskHost:
                 self._run_worker(record, config_resolver)
             elif executor == "creativity":
                 self._run_creativity(record, config_resolver)
+            elif executor == "duel":
+                self._run_duel(record, config_resolver)
             elif executor == "brainstorming":
                 self._run_brainstorming(record, config_resolver)
             elif executor == "deep_task":
@@ -1978,11 +2000,11 @@ class DirectTaskHost:
             if (record["result"] is None and tasks.stored_task_executor(
                     record["order"]["task_executor"]) in RECOVERABLE_EXECUTORS):
                 reason = str(exc).strip() or type(exc).__name__
-                if executor == "creativity" and isinstance(exc, staffing.StaffingConditionError):
+                if executor in ("creativity", "duel") and isinstance(exc, staffing.StaffingConditionError):
                     reason = "staffing refused this call (%s): %s" % (exc.code, exc)
                 self._pause_failure(task_id, reason)
-                if executor == "creativity" and self._stop_reason(task_id) is not None:
-                    self._publish_creativity_terminal(record, None)
+                if executor in ("creativity", "duel") and self._stop_reason(task_id) is not None:
+                    self._publish_generated_terminal(record, None)
                 # A newly accepted Cancel can win while an error pause is
                 # quiescing a discussion. Settle it after releasing this host.
                 if not already_cancelling and self._stop_reason(task_id) is not None:
@@ -2690,7 +2712,7 @@ class DirectTaskHost:
                 ),
             )
 
-    def _publish_creativity_terminal(self, record, native):
+    def _publish_generated_terminal(self, record, native):
         task_id = record["id"]
         self._pause_boundary(task_id)
         if self._stop_reason(task_id) is not None:
@@ -2705,6 +2727,44 @@ class DirectTaskHost:
                 **brainstorming_tasks._zero_accounting(),
                 **({"reason": reason} if reason else {}),
             })
+
+    def _run_duel(self, record, config_resolver):
+        """Produce and review both document candidates at round barriers."""
+        task_id, order = record["id"], record["order"]
+        request, configuration = order["request"], order["configuration"]
+        store = duel_checkpoint_store(self.home, task_id)
+        checkpoint = store.get("checkpoint")
+        if checkpoint is kvstore.ABSENT:
+            checkpoint = duel.new_checkpoint(record, _workspace(record))
+            store.put("checkpoint", checkpoint)
+        runner = None
+        while True:
+            self._pause_boundary(task_id)
+            checkpoint = store.get("checkpoint")
+            if self._stop_reason(task_id) is not None or checkpoint["native_result"] is not None:
+                self._publish_generated_terminal(record, checkpoint["native_result"])
+                return
+            if runner is None:
+                config = config_resolver()
+                group = self.create_call_group(task_id, 2, config)
+                context = brainstorming_tasks._execution_context(request)
+                runner = self.runner_factory(config, _workspace(record))
+                options = dict(
+                    home=self.home, session=order.get("staffing_session"),
+                    workspace=_workspace(record), configuration=configuration,
+                    execution_context=context, families=config.get("families_order", ()),
+                    prompt_set=order.get("prompt_set", prompt_sets.DEFAULT_SET_NAME),
+                    ecosystem_map=prompts.project_context_body(context),
+                )
+            interruption = duel.run_phase(group, runner, store=store, request=request, **options)
+            if interruption is not None:
+                self._pause_failure(task_id, interruption.interrupt_reason)
+                if self._stop_reason(task_id) is not None:
+                    self._publish_generated_terminal(record, None)
+                return
+            checkpoint = store.get("checkpoint")
+            duel.advance(checkpoint, configuration["max_rounds"])
+            store.put("checkpoint", checkpoint)
 
     def _run_creativity(self, record, config_resolver):
         """Compose saved search handoffs under the ordinary task lifecycle."""
@@ -2733,7 +2793,7 @@ class DirectTaskHost:
             self._pause_boundary(task_id)
             checkpoint = store.get("checkpoint")
             if self._stop_reason(task_id) is not None or checkpoint["native_result"] is not None:
-                self._publish_creativity_terminal(record, checkpoint["native_result"])
+                self._publish_generated_terminal(record, checkpoint["native_result"])
                 return
             progress, material = checkpoint["progress"], checkpoint["search_material"]
             if progress["stop_reason"] is not None:

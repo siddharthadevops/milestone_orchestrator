@@ -548,7 +548,7 @@ class ReviewedCompleteVerificationTest(unittest.TestCase):
         catalogue = tasks.task_executor_catalogue()
         self.assertEqual(
             [entry["id"] for entry in catalogue],
-            ["agent_call", "brainstorming", "reviewed_task", "deep_task", "creativity"],
+            ["agent_call", "brainstorming", "reviewed_task", "deep_task", "duel", "creativity"],
         )
         self.assertNotIn("verification_task", [entry["id"] for entry in catalogue])
         self.assertEqual(

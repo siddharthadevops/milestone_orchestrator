@@ -2043,7 +2043,7 @@ def _effective(home, session, material, families):
 
 
 def resolve(home, session, role, index=1, round=1, material=None, brief=None,
-            families=(), review_breadth=None, rigor=_INHERIT_RIGOR):
+            families=(), review_breadth=None, rigor=_INHERIT_RIGOR, effort=None):
     """Staff one call: who runs it, on which model, at which effort.
 
     *session* is a stored session id, *role* one of :data:`ROLES`, *index*
@@ -2054,13 +2054,19 @@ def resolve(home, session, role, index=1, round=1, material=None, brief=None,
     is the one case where the machine's families cannot be read either.
     An optional *rigor* selects this call's tuning table only; omission uses
     the live session's rigor. A supplied value must be low, medium or high.
+    An optional *effort* replaces only this call's final effort, keeping the
+    resolved family and model. It must belong to that family's effort ladder;
+    omission leaves the ordinary tuning and step-up rules unchanged.
+    ``review_breadth="independent"`` staffs an individual review outside a
+    convergence cycle: assigned seats still apply, but different calls need
+    not use distinct families (for example, Duel's two candidate reviews).
 
     Returns a :data:`Resolution`: an answer of exactly ``agent``, ``model``
     and ``effort``, plus ``staffing_fallback`` when an input could not be
     read and the default document answered instead.
 
     It refuses in exactly three ways and no others. An unknown role, a
-    non-positive index or round, a non-string material, or invalid rigor are
+    non-positive index or round, a non-string material, or invalid rigor/effort are
     INPUT errors (:class:`StaffingError`), refused before resolution. `staffing_unavailable`
     and `distinct_families_unsatisfiable` are the two surfaced conditions
     (:class:`StaffingConditionError`, carrying the token). Everything else
@@ -2076,6 +2082,8 @@ def resolve(home, session, role, index=1, round=1, material=None, brief=None,
         raise StaffingError(
             "%s: rigor must be one of %s, got %s"
             % (_REQUEST_CTX, ", ".join(RIGORS), _shown(rigor)))
+    if effort is not None and (not isinstance(effort, str) or not effort.strip()):
+        raise StaffingError("%s: effort must be a non-empty string" % _REQUEST_CTX)
     effective = _effective(home, session, material, families)
     if not effective.available:
         raise _unavailable(effective)
@@ -2085,29 +2093,35 @@ def resolve(home, session, role, index=1, round=1, material=None, brief=None,
                 "%s: review breadth applies only to the review role"
                 % _REQUEST_CTX
             )
-        selected_seats, _selected_families = _review_cycle_for_breadth(
-            effective, review_breadth
-        )
-        if index not in selected_seats:
-            raise StaffingConditionError(
-                DISTINCT_FAMILIES_UNSATISFIABLE,
-                "the selected review cycle changed before seat %d dispatched"
-                % index,
+        if review_breadth != "independent":
+            selected_seats, _selected_families = _review_cycle_for_breadth(
+                effective, review_breadth
             )
+            if index not in selected_seats:
+                raise StaffingConditionError(
+                    DISTINCT_FAMILIES_UNSATISFIABLE,
+                    "the selected review cycle changed before seat %d dispatched"
+                    % index,
+                )
     elif not _honours_distinct_families(effective, role):
         raise _unsatisfiable(effective, role)
     slot = _running_slot(
         _slot_for(effective.layers, role, index), effective.available)
     family = effective.document["families"][slot]
+    if effort is not None and effort not in family["efforts"]:
+        raise StaffingError(
+            "%s: effort %r is not configured for family %r"
+            % (_REQUEST_CTX, effort, family["name"]))
     if rigor is _INHERIT_RIGOR:
         rigor = effective.selection.rigor
     model_rank, effort_rank = _ranks(
         effective.layers, rigor, slot, role)
-    model, effort = _rungs(
+    model, tuned_effort = _rungs(
         family, model_rank, effort_rank,
         _step_up_steps(effective.document, role, round_number))
     return Resolution(
-        answer={"agent": family["name"], "model": model, "effort": effort},
+        answer={"agent": family["name"], "model": model,
+                "effort": tuned_effort if effort is None else effort},
         staffing_fallback=effective.staffing_fallback)
 
 

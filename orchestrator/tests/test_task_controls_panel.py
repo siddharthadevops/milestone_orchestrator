@@ -25,7 +25,8 @@ class TaskControlsPanelTest(unittest.TestCase):
             "taskStatusClock", "deepTaskPipeline", "reviewedTaskPipeline",
             "taskControlHistory", "creativityProgress", "creativityProposals",
             "creativitySearchMaterial", "creativityCandidateEvaluations",
-            "creativityResult", "taskPhysicalCalls", "esc", "fmtTokenCount",
+            "creativityResult", "duelCandidates", "duelProgress", "duelResult",
+            "taskPhysicalCalls", "esc", "fmtTokenCount",
             "fmtTokenUsage", "costReading", "costHtml", "tokenUsageHtml",
         ) + functions
         sources = []
@@ -69,7 +70,7 @@ function record(executor = 'agent_call') {
 
     def test_paused_types_render_resume_cancel_and_failure_without_spinner(self):
         self.javascript(r"""
-for (const executor of ['agent_call', 'reviewed_task', 'deep_task', 'creativity']) {
+for (const executor of ['agent_call', 'reviewed_task', 'deep_task', 'creativity', 'duel']) {
   lastTaskLifecycle = {status: 'paused', revision: 7, source: 'error', history: [],
     reason: 'review quota <exhausted>', can_resume: true};
   const html = renderTaskPage(record(executor), 'today');
@@ -87,7 +88,7 @@ for (const executor of ['agent_call', 'reviewed_task', 'deep_task', 'creativity'
         self.javascript(r"""
 lastTaskLifecycle = {status: 'pausing', revision: 2, source: 'operator', history: [],
   reason: 'Please wait', can_resume: false};
-for (const executor of ['agent_call', 'reviewed_task', 'deep_task', 'creativity']) {
+for (const executor of ['agent_call', 'reviewed_task', 'deep_task', 'creativity', 'duel']) {
   const html = renderTaskPage(record(executor), null);
   assert(html.includes('<spin/>'));
   assert(html.includes('Pausing safely'));
@@ -383,7 +384,8 @@ selectedTask = pages.terminal.task.id;
                 source = TaskApiTest()
                 self.addCleanup(source.doCleanups)
                 pages, _ = source.creativity_projection_pages(sparse=True, order_mode=mode, all_zero=all_zero)
-                self.javascript("const pages = " + json.dumps(pages) + ";\n" + r"""
+                self.javascript("const pages = " + json.dumps(pages) + ";\n" +
+                                "const allInvalid = " + json.dumps(all_zero) + ";\n" + r"""
 function render(data) {
   lastTaskLifecycle = data.lifecycle;
   return renderTaskPage(data.task, 'today', data.creativity);
@@ -391,7 +393,17 @@ function render(data) {
 assert(render(pages.no_progress).includes('No saved progress available'));
 assert(render(pages.genes).includes('The generator has not returned search material yet'));
 assert(render(pages.batch).includes('Best candidates from all accepted evaluations'));
-assert(render(pages.batch).includes('Proposal 1'));
+const batchHTML = render(pages.batch);
+if (allInvalid) {
+  assert.equal(pages.batch.creativity.best_candidates.length, 0);
+  assert(batchHTML.includes('No valid proposals available yet.'));
+  assert(!batchHTML.includes('Proposal 1'));
+  assert(batchHTML.includes('Evaluated candidates (1)'));
+  assert(batchHTML.includes('A useful proposal.')); // Invalid work remains inspectable evidence.
+} else {
+  assert.equal(pages.batch.creativity.best_candidates.length, 1);
+  assert(batchHTML.includes('Proposal 1'));
+}
 assert(render(pages.paused).includes('>Resume</button>'));
 assert(render(pages.prepared).includes('awaiting task completion'));
 assert(!render(pages.prepared).includes('<h3>Result</h3>'));
@@ -451,9 +463,20 @@ for (const data of Object.values(pages)) {
 }
 const terminal = render(pages.terminal);
 for (const text of ['3 active · 7 omitted', '10 active · 0 omitted', 'assessment retained in ranking',
-    'constraint-invalid', 'Constraint violations', 'budget', 'not probabilities of success or proof of creativity',
+    'constraint-invalid', 'Constraint violations', '__insufficient_detail__', 'not probabilities of success or proof of creativity',
     'tokens unknown', 'cost unknown', 'some calls are still unpriced, so this is a floor'])
   assert(terminal.includes(text), text);
+const native = pages.terminal.task.result.native_result;
+if (allInvalid) {
+  assert.equal(native.outcome, 'no_valid_candidates');
+  assert.deepEqual(native.proposals, []);
+  assert(terminal.includes('No valid proposal was found.'));
+  assert(!terminal.includes('Proposal 1'));
+} else {
+  assert.equal(native.outcome, 'proposals');
+  assert(native.proposals.every(item => item.constraint_valid));
+  assert(terminal.includes('Proposal 1'));
+}
 const polls = [pages.batch, pages.paused, pages.prepared, pages.terminal], reads = [];
 const api = async path => { reads.push(path); return polls.shift(); };
 const detail = {innerHTML: '', querySelectorAll: () => []};
@@ -465,7 +488,8 @@ let taskPagePaintSeq = 0, pendingLanding = null;
 const lastTaskRows = [];
 selectedTask = pages.terminal.task.id;
 (async () => {
-  for (const text of ['Proposal 1', '>Resume</button>', 'awaiting task completion', '<h3>Result</h3>']) {
+  for (const text of [allInvalid ? 'No valid proposals available yet.' : 'Proposal 1',
+      '>Resume</button>', 'awaiting task completion', '<h3>Result</h3>']) {
     await refreshTaskPage();
     assert(detail.innerHTML.includes(text), text);
   }

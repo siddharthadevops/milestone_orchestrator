@@ -820,6 +820,32 @@ def _expand_genes(obj, bound, options, ctx):
                 _text(variant, key, actx + ".variants")
 
 
+def _duel_author(obj, bound, options, ctx):
+    _kind(bound, ("duel_author",))
+    _exact_keys(obj, ("action", "artifacts", "summary", "questions"), ctx)
+    action = _require(obj, "action", str, ctx)
+    if action not in ("revise", "finish"):
+        raise contracts.ContractError("%s.action must be revise or finish" % ctx)
+    if options["duel_round"] == 1 and action != "revise":
+        raise contracts.ContractError("%s.action must be revise in round 1" % ctx)
+    artifacts = _relative_paths(obj["artifacts"], "%s.artifacts" % ctx)
+    if not artifacts or len(set(artifacts)) != len(artifacts):
+        raise contracts.ContractError(
+            "%s.artifacts must contain at least one unique candidate-relative path" % ctx
+        )
+    _text(obj, "summary", ctx)
+
+
+def _duel_review(obj, bound, options, ctx):
+    del options
+    _kind(bound, ("duel_review",))
+    _exact_keys(obj, ("score", "report", "questions"), ctx)
+    score = _require(obj, "score", (int, float), ctx)
+    if isinstance(score, bool) or not 0 <= score <= 1:
+        raise contracts.ContractError("%s.score must be a finite number in [0, 1]" % ctx)
+    _text(obj, "report", ctx)
+
+
 REGISTERED_SECTIONS = {
     "common_fields": _common,
     "draft_skeleton_result": _author_result("draft_skeleton", "artifact"),
@@ -844,6 +870,8 @@ REGISTERED_SECTIONS = {
     "compose_candidates_result": _compose_candidates,
     "evaluate_candidates_result": _evaluate_candidates,
     "expand_genes_result": _expand_genes,
+    "duel_author_result": _duel_author,
+    "duel_review_result": _duel_review,
 }
 
 _PROTOCOL_FIELDS = frozenset({
@@ -859,6 +887,7 @@ _PROTOCOL_FIELDS = frozenset({
     "design_correction_verdict",
     "plan_authoring_authorized", "producer_planning", "vote", "revision",
     "session_id", "accepted_target_revision", "ready_revision",
+    "action", "artifacts", "summary", "score", "report",
 })
 _FIELD_CONTRACT_SECTIONS = frozenset(REGISTERED_SECTIONS) - {
     "envelope_compact", "envelope_verbose", "questions_output",
@@ -866,6 +895,7 @@ _FIELD_CONTRACT_SECTIONS = frozenset(REGISTERED_SECTIONS) - {
 _STRICT_FIELD_SECTIONS = frozenset({
     "reclassify_result", "suite_checkpoint_result", "merge_repair_result",
     "discussion_turn_envelope", "questioner_turn_envelope",
+    "duel_author_result", "duel_review_result",
 })
 
 
@@ -922,6 +952,10 @@ def _allowed_fields(bound, obj):
             allowed.update(("kind", "markdown", "ready"))
         elif section_id == "questioner_readiness":
             allowed.add("ready")
+        elif section_id == "duel_author_result":
+            allowed.update(("action", "artifacts", "summary", "questions"))
+        elif section_id == "duel_review_result":
+            allowed.update(("score", "report", "questions"))
         elif section_id == "reclassify_result":
             allowed.update((
                 "status", "kind", "drift_risk", "drift_damage", "reason",
@@ -1091,7 +1125,8 @@ def validate(bound, obj, *, queued_findings=None,
              expected_artifact=None, extension_fields=(),
              candidate_ids=None, constraint_ids=None,
              dimensions=None, creativity_semantics=None,
-             suite_checkpoint_origin=False, adjudication_ids=None):
+             suite_checkpoint_origin=False, adjudication_ids=None,
+             duel_round=None):
     """Validate a reply against served sections, using trusted caller context."""
     if not isinstance(bound, BoundContract):
         raise contracts.ContractError("bound must be a BoundContract")
@@ -1109,6 +1144,7 @@ def validate(bound, obj, *, queued_findings=None,
         "creativity_semantics": creativity_semantics,
         "suite_checkpoint_origin": suite_checkpoint_origin,
         "adjudication_ids": adjudication_ids,
+        "duel_round": duel_round,
     }
     for section_id in bound.registered_section_ids:
         REGISTERED_SECTIONS[section_id](

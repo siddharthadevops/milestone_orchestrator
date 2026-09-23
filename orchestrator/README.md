@@ -509,9 +509,62 @@ candidate exists yet, rejected candidates remain provisional parents so
 crossover and mutation can continue exploring instead of restarting from an
 unrelated random population.
 
+### Duel documents
+
+Choose **Duel** in the task form, or submit `task_executor: "duel"` through
+the ordinary task API. Both authors receive the same request, context and
+reference documents. `configuration.max_rounds` defaults to 10 and accepts
+any positive integer, including 1. The initial production counts as round 1;
+every new version receives its review, including the last configured round.
+
+Both authors produce their versions in parallel within each round. Each
+candidate writes one or more documents inside its own subdirectory of the
+task output directory, optionally selected by `request.output_directory`.
+The driver checks that both candidates have
+non-empty deliverables there. It does not audit repository changes or police
+cross-directory writes. The work area and references remain reading context;
+Duel does not produce a repository-wide change or merge the two versions.
+
+After production, the driver launches two independent review calls in
+parallel, one per candidate. Reviewers score the work against the request and
+write reports of concrete defects and justified alternatives, with the
+critical attitude of Brainstorming's opposition and Dante's few concrete
+questions about possible drift from the request. These questions belong in
+the saved report for the author; the reviewer's own context-search answers
+are discarded separately. The next round gives authors
+both evaluations and the locations of both versions. They may use or copy the
+other work, or improve only from their own review. Diversity is not required.
+
+An author can permanently declare its version finished. Its documents and
+latest review remain available while the other author continues. The task ends
+when both authors finish or the round limit is reached, and delivers both
+versions with scores and reports. It neither declares a winner nor discards
+the lower-scoring version. The panel opens each document and review report
+in its existing document viewer. Without `request.output_directory`, results
+live in `<workspace>/duel/<task-id>/a` and `b`, and review reports in
+`<workspace>/duel/<task-id>/reports/round-NNN`.
+
+Duel owns its author and reviewer prompt routes and result question sets.
+Those questions direct the agents to seek context; the driver discards their
+answers. Only the author's operational decision and deliverables, and the
+reviewer's score and report, drive the rounds. Authors use brainstorm seats
+1 and 2; both reviews use review seat 1 (Codex in the default document), in
+independent parallel calls with the same reviewer configuration. The
+`default` and `literature` prompt sets each supply both Duel prompts, including
+the opposition critique, Dante's anti-drift questions, and context checks.
+Optional `configuration.rigor`
+entries `author` and `reviewer` override `default`, then the live staffing
+session's rigor; all three choices support `low`, `medium`, and `high`.
+Rigor still selects the models, while every Duel author and reviewer call
+uses `max` effort, including with the `literature` prompt set. This is a
+per-call request to Staffing Router; it does not change stored staffing
+documents, session settings, or the effort of other task types.
+The task uses a prompt set and staffing session, with no
+strategy profile.
+
 ### Standalone task Pause, Resume and Cancel
 
-Standalone `agent_call`, `reviewed_task` and `deep_task` orders share durable
+Standalone `agent_call`, `reviewed_task`, `deep_task`, `creativity` and `duel` orders share durable
 Pause/Resume controls. A manual pause or execution failure preserves the task
 identity, completed phases, child identities, evidence and accounting, with
 `result: null`. Failure is not an automatic retry. The panel shows the reason,

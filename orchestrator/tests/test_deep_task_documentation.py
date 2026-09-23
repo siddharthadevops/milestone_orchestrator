@@ -139,7 +139,7 @@ class DeepTaskDocumentationTest(unittest.TestCase):
         catalogue = tasks.task_executor_catalogue()
         self.assertEqual(
             [entry["id"] for entry in catalogue],
-            ["agent_call", "brainstorming", "reviewed_task", "deep_task", "creativity"],
+            ["agent_call", "brainstorming", "reviewed_task", "deep_task", "duel", "creativity"],
         )
         schema = next(entry for entry in catalogue if entry["id"] == "deep_task")["configuration_schema"]
         self.assertEqual(set(schema), {"documentation", "implementation"})

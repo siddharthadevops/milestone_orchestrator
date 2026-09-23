@@ -772,6 +772,27 @@ class StaffingResolutionTest(unittest.TestCase):
 
     # -- the two surfaced conditions --------------------------------------
 
+    def test_independent_reviews_keep_seats_without_weakening_cycle_policy(self):
+        stf.save(self.home, resolver_doc())
+        session = self.open_session(families=["codex"])
+        for index in (1, 2):
+            with self.subTest(index=index):
+                resolved = stf.resolve(
+                    self.home, session, "review", index=index,
+                    review_breadth="independent",
+                )
+                self.assertEqual(resolved.answer["agent"], "codex")
+                with self.assertRaises(stf.StaffingConditionError):
+                    stf.resolve(self.home, session, "review", index=index)
+                with self.assertRaises(stf.StaffingConditionError):
+                    stf.resolve(self.home, session, "review", index=index, review_breadth=2)
+        with self.assertRaises(stf.StaffingError):
+            stf.resolve(self.home, session, "brainstorm", review_breadth="independent")
+        empty = self.open_session(families=[])
+        with self.assertRaises(stf.StaffingConditionError) as caught:
+            stf.resolve(self.home, empty, "review", review_breadth="independent")
+        self.assertEqual(caught.exception.code, "staffing_unavailable")
+
     def test_the_two_surfaced_conditions(self):
         """Exactly two conditions are surfaced, and an input error is
         neither of them."""
@@ -944,6 +965,62 @@ class StaffingResolutionTest(unittest.TestCase):
                          [1, 2])
 
     # -- live, and pure ----------------------------------------------------
+
+    def test_request_effort_override_preserves_rigor_models_and_is_local(self):
+        doc = resolver_doc()
+        for rank, rigor in enumerate(stf.RIGORS, 1):
+            for slot in ("2", "3"):
+                for role in ("brainstorm", "review"):
+                    doc["tuning"][rigor][slot][role] = [rank, rank]
+        doc["rules"] = [
+            {"type": "step_up", "role": role, "min_round": 3}
+            for role in ("brainstorm", "review")
+        ]
+        stf.save(self.home, doc)
+        sessions = {rigor: self.open_session(rigor=rigor) for rigor in stf.RIGORS}
+        before = self.snapshot()
+        for rank, (rigor, session) in enumerate(sessions.items(), 1):
+            for role in ("brainstorm", "review"):
+                for index, slot in ((1, "2"), (2, "3")):
+                    for round_number in (1, 3):
+                        with self.subTest(rigor=rigor, role=role, index=index, round=round_number):
+                            request = {"index": index, "round": round_number}
+                            if role == "review":
+                                request["review_breadth"] = "independent"
+                            family = doc["families"][slot]
+                            expected = staffing(
+                                family["name"], family["models"][rank - 1],
+                                family["efforts"][rank - 1 + (round_number == 3)],
+                            )
+                            self.assertEqual(self.answer(session, role, **request), expected)
+                            # Applying max before step_up would advance the model
+                            # at round 3; overriding only the final effort must not.
+                            self.assertEqual(
+                                self.answer(session, role, effort="max", **request),
+                                dict(expected, effort="max"),
+                            )
+                            self.assertEqual(self.answer(session, role, **request), expected)
+                            self.assertEqual(
+                                self.answer(session, role, effort=None, **request), expected,
+                            )
+        self.assertEqual(self.snapshot(), before)
+
+    def test_request_effort_rejects_invalid_or_unsupported_values_without_writes(self):
+        stf.save(self.home, resolver_doc())
+        session = self.open_session()
+        no_max = self.open_session(families=["gemini"])
+        before = self.snapshot()
+        for invalid in (True, False, 1, [], {}, "", "   "):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(stf.StaffingError) as caught:
+                    stf.resolve(self.home, "absent", "brainstorm", effort=invalid)
+                self.assertNotIsInstance(caught.exception, stf.StaffingConditionError)
+        for selected_session, effort in ((session, "unknown"), (no_max, "max")):
+            with self.subTest(session=selected_session, effort=effort):
+                with self.assertRaises(stf.StaffingError) as caught:
+                    stf.resolve(self.home, selected_session, "brainstorm", effort=effort)
+                self.assertNotIsInstance(caught.exception, stf.StaffingConditionError)
+        self.assertEqual(self.snapshot(), before)
 
     def test_request_rigor_is_local_and_live(self):
         doc = resolver_doc()

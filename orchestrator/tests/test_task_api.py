@@ -1409,16 +1409,25 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(len(task_api.StandaloneTaskStore(self.home).records()), before)
 
     def test_malformed_standing_config_refuses_no_standalone_order(self):
-        malformed_defaults = service.driver.load_config(None)
+        # Exercise admission bookkeeping with a fixed fixture; this test is
+        # independent of the models currently selected for real execution.
+        base_config = {
+            "families_order": ["codex"],
+            "model_defaults": {
+                "codex": {"model": "fixture-admission-model", "effort": "high"},
+            },
+            "commands": {"codex": ["codex", "exec", "--model", "{model}"]},
+            "timeouts": {},
+        }
+        malformed_defaults = copy.deepcopy(base_config)
         malformed_defaults["model_defaults"] = True
-        malformed_families = service.driver.load_config(None)
+        malformed_families = copy.deepcopy(base_config)
         malformed_families["families_order"] = "codex"
-        malformed_command = service.driver.load_config(None)
-        malformed_command["families_order"] = ["codex"]
+        malformed_command = copy.deepcopy(base_config)
         malformed_command["commands"]["codex"].append(
             {"{model}": "not an argv string"}
         )
-        malformed_timeouts = service.driver.load_config(None)
+        malformed_timeouts = copy.deepcopy(base_config)
         malformed_timeouts["timeouts"] = True
 
         # An agent call reads none of this at admission any more either.
@@ -1431,7 +1440,7 @@ class TaskApiTest(unittest.TestCase):
             (malformed_defaults, {}),
             (malformed_families, {}),
             (malformed_command, {"agent_call": {
-                "agent": "codex", "model": "gpt-5.6-sol", "effort": "xhigh",
+                "agent": "codex", "model": "fixture-admission-model", "effort": "high",
             }}),
         ):
             with self.subTest(executor="agent_call", config=config):

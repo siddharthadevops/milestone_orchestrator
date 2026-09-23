@@ -5805,6 +5805,30 @@ def direct_task_story(home, who, task_id, item):
 
 
 def direct_task_artifact(home, who, task_id, unit_key):
+    record = read_task(home, who, task_id)
+    if record["order"]["task_executor"] == "duel":
+        view = task_api.duel_view(home, record) or {}
+        available = {}
+        for candidate in view.get("candidates", []):
+            prefix = "duel:" + candidate["id"]
+            available.update({
+                "%s:artifact:%d" % (prefix, index): path
+                for index, path in enumerate(candidate["artifacts"])
+            })
+            if candidate["report_path"]:
+                available[prefix + ":report"] = candidate["report_path"]
+        path = available.get(unit_key)
+        if path is None:
+            raise ApiError(404, "unknown Duel document")
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                content = handle.read(ARTIFACT_MAX + 1)
+        except OSError as exc:
+            raise ApiError(404, "artifact unreadable: %s" % exc) from exc
+        return {
+            "unit": unit_key, "artifact": path, "path": path,
+            "truncated": len(content) > ARTIFACT_MAX, "content": content[:ARTIFACT_MAX],
+        }
     _record, path = _direct_reviewed_state(home, who, task_id)
     return run_artifact(home, None, unit_key, state_path=path)
 
@@ -5943,6 +5967,8 @@ def make_handler(home, task_host=None):
                                 )
                             elif executor == "creativity":
                                 payload["creativity"] = task_api.creativity_view(home, record)
+                            elif executor == "duel":
+                                payload["duel"] = task_api.duel_view(home, record)
                             session_id = task_api.task_session_id(
                                 home, record, task_host
                             )

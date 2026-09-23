@@ -108,6 +108,42 @@ class TaskContractsTest(unittest.TestCase):
             function(*args)
         self.assertEqual(caught.exception.code, code)
 
+    def test_duel_configuration_and_shared_reviewer_seat_contract(self):
+        self.assertEqual(tasks.resolve_configuration("duel"), {"max_rounds": 10})
+        order = tasks.validate_order(dict(task_order("duel"),
+            configuration={"max_rounds": 1}, prompt_set="default"))
+        self.assertEqual(order["configuration"], {"max_rounds": 1})
+        self.assertEqual(order["prompt_set"], "default")
+        for invalid in (None, [], {"max_rounds": 0}, {"max_rounds": -1},
+                        {"max_rounds": True}, {"max_rounds": 1.0},
+                        {"max_rounds": "2"}, {"unknown": 1}, {"rigor": []},
+                        {"rigor": {"author": "maximum"}},
+                        {"rigor": {"review_candidate": "high"}}):
+            with self.subTest(invalid=invalid):
+                self.assert_request_error(tasks.INVALID_TASK_REQUEST,
+                                          tasks.resolve_configuration, "duel", invalid)
+        for rigor, expected in (
+            (None, {}), ({}, {}), ({"default": "low"}, {"rigor": "low"}),
+            ({"default": "low", "author": "high", "reviewer": "medium"}, None),
+        ):
+            raw = {} if rigor is None else {"rigor": rigor}
+            resolved = tasks.resolve_configuration("duel", raw)
+            self.assertEqual(resolved, dict(raw, max_rounds=10))
+            if rigor is not None:
+                self.assertIsNot(resolved["rigor"], rigor)
+            for job, role, specific in (
+                ("author_candidate", "brainstorm", "high"),
+                ("review_candidate", "review", "medium"),
+            ):
+                for candidate, index in (("a", 1), ("b", 2)):
+                    with self.subTest(job=job, candidate=candidate, rigor=rigor):
+                        self.assertEqual(
+                            tasks.duel_job_staffing_request(job, candidate, resolved),
+                            dict({"role": role, "index": 1 if role == "review" else index,
+                                  "effort": "max"},
+                                 **(expected if expected is not None else {"rigor": specific})),
+                        )
+
     def test_creativity_automatic_budget_covers_requested_generations(self):
         configuration = {
             "population_size": 8,
@@ -576,7 +612,7 @@ class TaskContractsTest(unittest.TestCase):
         self.assertIsInstance(catalogue, list)
         self.assertEqual(
             [entry["id"] for entry in catalogue],
-            ["agent_call", "brainstorming", "reviewed_task", "deep_task", "creativity"],
+            ["agent_call", "brainstorming", "reviewed_task", "deep_task", "duel", "creativity"],
         )
         producer_catalogue = tasks.producer_task_executor_catalogue()
         self.assertEqual(
@@ -639,6 +675,11 @@ class TaskContractsTest(unittest.TestCase):
                     "prompt_set": True,
                 },
                 "creativity": {
+                    "staffing": True,
+                    "strategy_profile": False,
+                    "prompt_set": True,
+                },
+                "duel": {
                     "staffing": True,
                     "strategy_profile": False,
                     "prompt_set": True,

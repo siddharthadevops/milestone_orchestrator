@@ -403,6 +403,33 @@ _CREATIVITY_JOB_STAFFING = {
 
 _TASK_EXECUTORS += (
     {
+        "id": "duel",
+        "name": "Duel",
+        "description": "Develops and independently reviews two versions of one request.",
+        "operating_mode": "Two authors improve their own documents over bounded rounds.",
+        "usage_examples": ["developing two document proposals", "refining alternative manuscripts"],
+        "available_agent_configurations": (
+            "Authors use brainstorm seats 1 and 2; both independent reviews use "
+            "review seat 1 (Codex by default). Every Duel call uses max effort. "
+            "Optional author or reviewer rigor selects the model, overriding the "
+            "task default, then the live staffing session."
+        ),
+        "execution_bindings": {
+            "staffing": True, "prompt_set": True, "strategy_profile": False,
+        },
+        "configuration_schema": {
+            "max_rounds": {"type": "integer", "minimum": 1, "default": 10},
+            "rigor": {
+                "type": "object", "optional": True,
+                "properties": {
+                    name: {"type": "choice", "optional": True,
+                           "choices": list(staffing.RIGORS)}
+                    for name in ("default", "author", "reviewer")
+                },
+            },
+        },
+    },
+    {
         "id": "creativity",
         "name": "Creativity",
         "description": "Explores combinations and returns proposals for human assessment.",
@@ -651,6 +678,8 @@ def _resolve_configuration(
         )
     if task_executor == "creativity":
         return resolve_creativity_configuration(configuration)
+    if task_executor == "duel":
+        return resolve_duel_configuration(configuration)
 
     schema = entry["configuration_schema"]
     _exact_keys(configuration, (), schema, "configuration")
@@ -963,6 +992,44 @@ def reviewed_policy_defaults(task_kind, config):
             dict(control) if isinstance(control, dict) else None
         )
     return defaults
+
+
+def resolve_duel_configuration(value):
+    """Admit Duel controls without Brainstorming's minimum-round floor."""
+    try:
+        schema = _TASK_EXECUTOR_BY_ID["duel"]["configuration_schema"]
+        _exact_keys(value, (), schema, "configuration")
+        checked = {"max_rounds": schema["max_rounds"]["default"], **value}
+        if type(checked["max_rounds"]) is not int or checked["max_rounds"] < 1:
+            raise ContractError("configuration.max_rounds must be a positive integer")
+        if "rigor" in checked:
+            _exact_keys(checked["rigor"], (), schema["rigor"]["properties"],
+                        "configuration.rigor")
+            for name, choice in checked["rigor"].items():
+                if choice not in staffing.RIGORS:
+                    raise ContractError(
+                        "configuration.rigor.%s must be one of %s"
+                        % (name, staffing.RIGORS)
+                    )
+        return _json_copy(checked, "configuration")
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def duel_job_staffing_request(job, candidate_id, configuration):
+    """Use two author seats and one shared reviewer seat, all at max effort."""
+    role, rigor_key = {
+        "author_candidate": ("brainstorm", "author"),
+        "review_candidate": ("review", "reviewer"),
+    }[job]
+    author_index = {"a": 1, "b": 2}[candidate_id]
+    request = {"role": role, "index": 1 if role == "review" else author_index,
+               "effort": "max"}
+    rigor = configuration.get("rigor", {})
+    choice = rigor.get(rigor_key, rigor.get("default"))
+    if choice is not None:
+        request["rigor"] = choice
+    return request
 
 
 def resolve_creativity_configuration(value):

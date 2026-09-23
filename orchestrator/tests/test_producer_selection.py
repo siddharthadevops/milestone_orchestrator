@@ -346,7 +346,7 @@ class ProducerSelectionTest(unittest.TestCase):
         }
         self.assertEqual(
             public_catalogue,
-            {"agent_call", "brainstorming", "reviewed_task", "deep_task", "creativity"},
+            {"agent_call", "brainstorming", "reviewed_task", "deep_task", "duel", "creativity"},
         )
         self.assertEqual(
             producer_catalogue, {"agent_call"}

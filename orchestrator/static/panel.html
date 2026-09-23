@@ -5738,7 +5738,7 @@ function creativityProgress(view, configuration, open, sparse = false) {
   if (open) html += `<h4>${sparse ? "Best candidates from all accepted evaluations"
     : "Best candidates from the last completed comparison"}</h4>` +
     (view.best_candidates.length ? creativityProposals(view.best_candidates, view.search_material, sparse)
-      : `<div class="story-note">${sparse ? "No accepted candidate evaluations yet."
+      : `<div class="story-note">${sparse ? "No valid proposals available yet."
         : "No candidates available from a completed comparison."}</div>`);
   return html + `</div>`;
 }
@@ -5752,13 +5752,54 @@ function creativityResult(native, material = null, sparse = false) {
     `<div class="amend-hint">Scores are evaluations against this objective, not probabilities of success or proof of creativity.</div>` +
     creativityProposals(native.proposals, material, sparse);
 }
+function duelCandidates(candidates, taskId = null) {
+  return (candidates || []).map(candidate => {
+    const artifacts = Array.isArray(candidate.artifacts) ? candidate.artifacts : [];
+    const documentLink = (key, path) =>
+      taskId ? `<span class="morelink" onclick="showDoc(${esc(JSON.stringify(key))},${esc(JSON.stringify(taskId))})">${esc(path)}</span>` : esc(path);
+    return `<details class="card" data-task-detail-key="duel-candidate:${esc(candidate.id)}" open>` +
+      `<summary>Candidate ${esc(String(candidate.id).toUpperCase())}` +
+      ` · ${candidate.finished ? "Finished by author" : "Open to improvement"}</summary>` +
+      `<div class="story-note mono">${esc(candidate.directory || "")}</div>` +
+      `<div class="story-note">Score: ${esc(candidate.score ?? "Awaiting review")}` +
+      (candidate.review_round ? ` · reviewed in round ${esc(candidate.review_round)}` : "") + `</div>` +
+      (candidate.production_round
+        ? `<div class="story-note">Latest version: round ${esc(candidate.production_round)}</div>` : "") +
+      `<div class="story-note"><b>Documents</b></div>` +
+      (artifacts.length ? artifacts.map((path, index) =>
+        `<div class="story-note mono">${documentLink(`duel:${candidate.id}:artifact:${index}`, path)}</div>`).join("")
+        : `<div class="story-note">No documents produced yet.</div>`) +
+      (candidate.report_path ? `<div class="story-note"><b>Review report</b></div>` +
+        `<div class="story-note mono">${documentLink(`duel:${candidate.id}:report`, candidate.report_path)}</div>` : "") + `</details>`;
+  }).join("");
+}
+function duelProgress(view, configuration, taskId = null) {
+  if (!view) return `<div class="card"><h3>Duel progress</h3>` +
+    `<div class="story-note">Preparing both candidates.</div></div>`;
+  return `<div class="card"><h3>Duel progress</h3>` +
+    `<div class="story-note">Round ${esc(view.round ?? 1)} / ${esc(configuration.max_rounds)}` +
+    ` · ${esc(view.rounds_completed ?? 0)} completed` +
+    (view.phase ? ` · ${esc(view.phase.replace(/_/g, " "))}` : "") + `</div>` +
+    duelCandidates(view.candidates, taskId) + `</div>`;
+}
+function duelResult(native, taskId = null) {
+  return `<div class="story-note"><b>Both versions</b></div>` +
+    `<div class="story-note">${native.stop_reason === "both_finished"
+      ? "Both authors finished their versions." : "Configured round limit reached."}` +
+    ` · ${esc(native.rounds_completed)} rounds completed</div>` +
+    duelCandidates(native.candidates, taskId);
+}
 function taskPhysicalCalls(lifecycle) {
   const calls = lifecycle ? lifecycle.history.filter(event => event.physical_dispatch) : [];
   return `<details class="card" data-task-detail-key="physical-calls">` +
     `<summary>Physical calls (${calls.length})</summary>` +
     calls.map(event => {
       const call = event.physical_dispatch, context = call.call_context, attempt = event.attempt;
-      const meta = [context.job, `generation ${context.generation}`, `batch ${context.batch}`,
+      const meta = [context.job,
+        ...(context.candidate_id ? [`candidate ${context.candidate_id}`] : []),
+        ...(context.round !== undefined ? [`round ${context.round}`] : []),
+        ...(context.generation !== undefined ? [`generation ${context.generation}`] : []),
+        ...(context.batch !== undefined ? [`batch ${context.batch}`] : []),
         `family ${call.family ?? "unknown"}`, `model ${call.model ?? "unknown"}`,
         `effort ${call.effort ?? "unknown"}`, `prompt-set fallback: ${call.prompt_set_fallback ?? "none"}`,
         call.duration_s === null ? "duration unknown" : `duration ${fmtDHMS(call.duration_s)}`];
@@ -5787,7 +5828,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
   const stateCls = taskStateClassName(record, lifecycle);
   const standalone = !taskPageRunId;
   const controllable = standalone &&
-    ["agent_call", "reviewed_task", "deep_task", "creativity"].includes(executor);
+    ["agent_call", "reviewed_task", "deep_task", "creativity", "duel"].includes(executor);
   let html = `<div class="run-sticky-head">`;
   // Project line with the page menu at the far right: the few actions on
   // a task (delete) live there, out of the way, red where they must be.
@@ -5864,13 +5905,17 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
   }
   if (!open && result.reason)
     html += `<div class="failure">${esc(result.reason)}</div>`;
-  if (open && ["agent_call", "creativity"].includes(executor) && accounting)
+  if (open && ["agent_call", "creativity", "duel"].includes(executor) && accounting)
     html += `<div class="card"><h3>Work so far</h3>` +
       costHtml(accounting.cost, accounting.cost_partial) +
       tokenUsageHtml(accounting.token_usage, accounting.token_usage_partial) + `</div>`;
   html += taskControlHistory(lifecycle);
   if (executor === "creativity") {
     html += creativityProgress(taskPipeline, configuration, open, sparse);
+    html += taskPhysicalCalls(lifecycle);
+  }
+  if (executor === "duel") {
+    if (open) html += duelProgress(taskPipeline, configuration, record.id);
     html += taskPhysicalCalls(lifecycle);
   }
   if (executor === "deep_task") html += deepTaskPipeline(taskPipeline);
@@ -5901,6 +5946,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
       tokenUsageHtml(result.token_usage, result.token_usage_partial) +
       (executor === "creativity" && result.status === "success"
         ? creativityResult(result.native_result, sparse ? taskPipeline.search_material : null, sparse) : "") +
+      (executor === "duel" && result.status === "success" ? duelResult(result.native_result, record.id) : "") +
       `<details data-task-detail-key="native-result"><summary class="amend-hint">Native result (opaque TaskExecutor output)</summary>
        <pre class="story-note mono">${esc(typeof result.native_result === "string"
          ? result.native_result : JSON.stringify(result.native_result, null, 2))}</pre></details></div>`;
@@ -5989,7 +6035,7 @@ async function refreshTaskPage() {
     if (seq !== taskPageSeq || id !== selectedTask) return;
     lastTaskPage = data.task;
     lastTaskLifecycle = data.lifecycle || null;
-    lastTaskPipeline = data.deep_task || data.reviewed_task || data.creativity || null;
+    lastTaskPipeline = data.deep_task || data.reviewed_task || data.creativity || data.duel || null;
     if (data.session_id) lastTaskPageSession = data.session_id;
     if (data.task.result !== null) taskStopping = false;
     const det = document.getElementById("detail");

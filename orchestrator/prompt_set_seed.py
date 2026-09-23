@@ -6567,3 +6567,592 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'additions is an honest exhausted '
                                                                             'repertoire.'],
                                                                    'variables': []}]}}}
+
+
+# Duel owns its author/reviewer corpus and context-seeking questions.
+DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
+                           'process': 'duel',
+                           'description': 'Produce or improve one Duel candidate inside its '
+                                          'assigned directory, or finish after review.',
+                           'instructions': {'parts': [{'text': ['KIND: {{kind}}',
+                                                                'WORKSPACE: {{workspace}}',
+                                                                'candidate_id: {{candidate_id}}',
+                                                                'candidate_directory: '
+                                                                '{{candidate_directory}}',
+                                                                'round: {{round}}',
+                                                                'max_rounds: {{max_rounds}}',
+                                                                'ORIGINAL REQUEST:',
+                                                                '{{request}}',
+                                                                'CONTEXT (JSON):',
+                                                                '{{context}}',
+                                                                'REFERENCES (JSON; inspect the '
+                                                                'relevant sources):',
+                                                                '{{references}}'],
+                                                       'variables': [{'name': 'kind',
+                                                                      'required': True,
+                                                                      'description': 'Duel author '
+                                                                                     'or reviewer '
+                                                                                     'kind, fixed '
+                                                                                     'by the '
+                                                                                     'router.'},
+                                                                     {'name': 'workspace',
+                                                                      'required': True,
+                                                                      'description': 'Absolute '
+                                                                                     'project '
+                                                                                     'workspace '
+                                                                                     'used as '
+                                                                                     'reading '
+                                                                                     'context.'},
+                                                                     {'name': 'candidate_id',
+                                                                      'required': True,
+                                                                      'description': 'Assigned '
+                                                                                     'candidate '
+                                                                                     'ID, a or b.'},
+                                                                     {'name': 'candidate_directory',
+                                                                      'required': True,
+                                                                      'description': 'Absolute '
+                                                                                     'directory '
+                                                                                     'containing '
+                                                                                     'the assigned '
+                                                                                     'candidate '
+                                                                                     'documents.'},
+                                                                     {'name': 'round',
+                                                                      'required': True,
+                                                                      'description': 'Current '
+                                                                                     'round, '
+                                                                                     'starting '
+                                                                                     'with initial '
+                                                                                     'production '
+                                                                                     'as round 1.'},
+                                                                     {'name': 'max_rounds',
+                                                                      'required': True,
+                                                                      'description': 'Configured '
+                                                                                     'maximum '
+                                                                                     'number of '
+                                                                                     'rounds.'},
+                                                                     {'name': 'request',
+                                                                      'required': True,
+                                                                      'description': 'Original '
+                                                                                     'operator '
+                                                                                     'request, '
+                                                                                     'shared by '
+                                                                                     'both '
+                                                                                     'candidates.'},
+                                                                     {'name': 'context',
+                                                                      'required': True,
+                                                                      'description': 'Admitted '
+                                                                                     'request '
+                                                                                     'context as '
+                                                                                     'JSON.'},
+                                                                     {'name': 'references',
+                                                                      'required': True,
+                                                                      'description': 'Admitted '
+                                                                                     'request '
+                                                                                     'references '
+                                                                                     'as JSON.'}]},
+                                                      {'ref': 'project_context'},
+                                                      {'ref': 'contract_correction'},
+                                                      {'text': ['You are the author of the '
+                                                                'assigned candidate. Fulfil the '
+                                                                'original request with a complete,',
+                                                                'usable version of the work, '
+                                                                'consisting of one or several '
+                                                                'documents. Read the request,',
+                                                                'context and relevant reference '
+                                                                'sources; distinguish supported '
+                                                                'facts from your proposals.',
+                                                                'Write all deliverables only '
+                                                                'inside candidate_directory. The '
+                                                                'rest of the workspace is',
+                                                                'reading context, not permission '
+                                                                'to edit the repository. Leave '
+                                                                'documents on disk.',
+                                                                'Round 1 is mandatory production: '
+                                                                'write the first complete version '
+                                                                'and return action revise.',
+                                                                'For later rounds, both candidates '
+                                                                'have been evaluated '
+                                                                'independently. Read your current',
+                                                                'documents and the previous review '
+                                                                'reports at the supplied paths. '
+                                                                'Read their criticism and',
+                                                                'the anti-drift questions '
+                                                                'addressed to you. Address '
+                                                                'grounded questions through '
+                                                                'relevant',
+                                                                'revisions or a brief evidenced '
+                                                                'explanation in summary when no '
+                                                                'change is warranted.',
+                                                                'Challenge unsupported premises; '
+                                                                'do not invent changes or '
+                                                                'disagreement just to answer.',
+                                                                'Improve your version',
+                                                                'where concrete criticism warrants '
+                                                                'it; do not make cosmetic changes '
+                                                                'to simulate progress.',
+                                                                'You may inspect and copy anything '
+                                                                'useful from the opponent into '
+                                                                'your own documents.',
+                                                                'Copying is optional; improving '
+                                                                'solely from your own review is '
+                                                                'equally valid.',
+                                                                'No diversity, difference from the '
+                                                                'opponent, or rivalry is required. '
+                                                                'Preserve good work',
+                                                                'and defend decisions against '
+                                                                'unsupported criticism instead of '
+                                                                'accepting every suggestion.',
+                                                                'Return action revise after '
+                                                                'writing an improved version. Do '
+                                                                'the best complete work you can',
+                                                                'in this round even when no later '
+                                                                'round remains; the driver will '
+                                                                'evaluate it.',
+                                                                'From round 2 onward you may '
+                                                                'instead return action finish if '
+                                                                'you consider the existing',
+                                                                'version final. Finish is '
+                                                                'permanent: do not edit files in '
+                                                                'that turn and return the same',
+                                                                'artifact paths for the preserved '
+                                                                'version. Explain the decision '
+                                                                'briefly in summary.',
+                                                                'A review score does not compel '
+                                                                'continuation or finishing. The '
+                                                                'driver stops when both',
+                                                                'authors finish or max_rounds is '
+                                                                'reached and delivers both '
+                                                                'versions without merging them.'],
+                                                       'variables': []},
+                                                      {'text': ['opponent_directory: '
+                                                                '{{opponent_directory}}',
+                                                                'PREVIOUS REVIEWS (JSON; both '
+                                                                'candidate IDs, scores and report '
+                                                                'paths, empty in round 1):',
+                                                                '{{previous_reviews}}'],
+                                                       'variables': [{'name': 'opponent_directory',
+                                                                      'required': True,
+                                                                      'description': 'Absolute '
+                                                                                     'location of '
+                                                                                     'the other '
+                                                                                     'candidate; '
+                                                                                     'optional '
+                                                                                     'source to '
+                                                                                     'read and '
+                                                                                     'copy from.'},
+                                                                     {'name': 'previous_reviews',
+                                                                      'required': True,
+                                                                      'description': 'Previous '
+                                                                                     'independent '
+                                                                                     'reviews for '
+                                                                                     'both '
+                                                                                     'candidates, '
+                                                                                     'with scores '
+                                                                                     'and report '
+                                                                                     'paths, as '
+                                                                                     'JSON.'}]}]},
+                           'questions': {'intro': ['QUESTIONS (context-seeking checks): inspect '
+                                                   'the relevant files and references before '
+                                                   'answering.',
+                                                   'They are prompts for your own investigation, '
+                                                   'not questions for the operator or new '
+                                                   'requirements.',
+                                                   'Return the answers separately in questions; '
+                                                   'the driver discards them.'],
+                                         'items': [{'id': 'author_request_context',
+                                                    'text': 'Which concrete parts of the request, '
+                                                            'project guidance and reference files '
+                                                            'did you inspect, and what scope, '
+                                                            'audience and constraints do they '
+                                                            'establish for your documents?'},
+                                                   {'id': 'author_evidence_gaps',
+                                                    'text': 'Which claims or choices in your '
+                                                            'candidate depend on source evidence, '
+                                                            'which are authorized proposals, and '
+                                                            'what material gaps remain after '
+                                                            'checking those sources?'},
+                                                   {'id': 'author_review_response',
+                                                    'text': 'After reading your current documents '
+                                                            'and any previous report, which '
+                                                            'concrete defects and grounded '
+                                                            'anti-drift questions merit changes, '
+                                                            'which criticisms or question premises '
+                                                            'are unsupported, and what evidence '
+                                                            'explains your revision or decision to '
+                                                            'finish? In round 1, identify the '
+                                                            'weakest part of the initial work '
+                                                            'instead.'},
+                                                   {'id': 'author_complete_delivery',
+                                                    'text': 'Read the resulting documents together '
+                                                            'against the original request: can the '
+                                                            'intended user use them as a complete '
+                                                            'answer, and what unresolved '
+                                                            'limitation matters most?'}]},
+                           'output_contract': {'sections': [{'id': 'duel_author_result',
+                                                             'text': ['OUTPUT CONTRACT: return '
+                                                                      'exactly one JSON object and '
+                                                                      'nothing else.',
+                                                                      'The only top-level keys are '
+                                                                      'action, artifacts, summary '
+                                                                      'and questions.',
+                                                                      'action is "revise" or '
+                                                                      '"finish". Round 1 must use '
+                                                                      '"revise".',
+                                                                      'artifacts is a non-empty '
+                                                                      'list of unique, normalized '
+                                                                      'paths relative to '
+                                                                      'candidate_directory',
+                                                                      'for the actual deliverable '
+                                                                      'files, never absolute paths '
+                                                                      'or parent-directory '
+                                                                      'escapes.',
+                                                                      'summary is non-empty text '
+                                                                      'explaining what changed, or '
+                                                                      'why the existing version is '
+                                                                      'final.',
+                                                                      'On finish, preserve the '
+                                                                      'previous documents and '
+                                                                      'return their existing '
+                                                                      'artifact paths.'],
+                                                             'variables': []},
+                                                            {'id': 'questions_output',
+                                                             'text': ['questions is a list of '
+                                                                      'exactly {"id":"<question '
+                                                                      'id>","answer":"<non-empty '
+                                                                      'answer>"} records,',
+                                                                      'one for each supplied '
+                                                                      'QUESTIONS id, with no '
+                                                                      'missing, duplicate or '
+                                                                      'unknown IDs.',
+                                                                      'Use those questions to seek '
+                                                                      'and inspect relevant '
+                                                                      'context. Their answers are '
+                                                                      'discarded',
+                                                                      'by the driver and do not '
+                                                                      'control scores, acceptance, '
+                                                                      'continuation or stopping.'],
+                                                             'variables': []}]}},
+ 'duel/duel_review.json': {'kind': 'duel_review',
+                           'process': 'duel',
+                           'description': 'Independently evaluate one Duel candidate and report '
+                                          'evidence-based criticism plus concrete anti-drift '
+                                          'questions for its author.',
+                           'instructions': {'parts': [{'text': ['KIND: {{kind}}',
+                                                                'WORKSPACE: {{workspace}}',
+                                                                'candidate_id: {{candidate_id}}',
+                                                                'candidate_directory: '
+                                                                '{{candidate_directory}}',
+                                                                'round: {{round}}',
+                                                                'max_rounds: {{max_rounds}}',
+                                                                'ORIGINAL REQUEST:',
+                                                                '{{request}}',
+                                                                'CONTEXT (JSON):',
+                                                                '{{context}}',
+                                                                'REFERENCES (JSON; inspect the '
+                                                                'relevant sources):',
+                                                                '{{references}}'],
+                                                       'variables': [{'name': 'kind',
+                                                                      'required': True,
+                                                                      'description': 'Duel author '
+                                                                                     'or reviewer '
+                                                                                     'kind, fixed '
+                                                                                     'by the '
+                                                                                     'router.'},
+                                                                     {'name': 'workspace',
+                                                                      'required': True,
+                                                                      'description': 'Absolute '
+                                                                                     'project '
+                                                                                     'workspace '
+                                                                                     'used as '
+                                                                                     'reading '
+                                                                                     'context.'},
+                                                                     {'name': 'candidate_id',
+                                                                      'required': True,
+                                                                      'description': 'Assigned '
+                                                                                     'candidate '
+                                                                                     'ID, a or b.'},
+                                                                     {'name': 'candidate_directory',
+                                                                      'required': True,
+                                                                      'description': 'Absolute '
+                                                                                     'directory '
+                                                                                     'containing '
+                                                                                     'the assigned '
+                                                                                     'candidate '
+                                                                                     'documents.'},
+                                                                     {'name': 'round',
+                                                                      'required': True,
+                                                                      'description': 'Current '
+                                                                                     'round, '
+                                                                                     'starting '
+                                                                                     'with initial '
+                                                                                     'production '
+                                                                                     'as round 1.'},
+                                                                     {'name': 'max_rounds',
+                                                                      'required': True,
+                                                                      'description': 'Configured '
+                                                                                     'maximum '
+                                                                                     'number of '
+                                                                                     'rounds.'},
+                                                                     {'name': 'request',
+                                                                      'required': True,
+                                                                      'description': 'Original '
+                                                                                     'operator '
+                                                                                     'request, '
+                                                                                     'shared by '
+                                                                                     'both '
+                                                                                     'candidates.'},
+                                                                     {'name': 'context',
+                                                                      'required': True,
+                                                                      'description': 'Admitted '
+                                                                                     'request '
+                                                                                     'context as '
+                                                                                     'JSON.'},
+                                                                     {'name': 'references',
+                                                                      'required': True,
+                                                                      'description': 'Admitted '
+                                                                                     'request '
+                                                                                     'references '
+                                                                                     'as JSON.'}]},
+                                                      {'ref': 'project_context'},
+                                                      {'ref': 'contract_correction'},
+                                                      {'text': ['CANDIDATE ARTIFACTS (JSON; paths '
+                                                                'relative to candidate_directory):',
+                                                                '{{artifacts}}'],
+                                                       'variables': [{'name': 'artifacts',
+                                                                      'required': True,
+                                                                      'description': 'Delivered '
+                                                                                     'candidate '
+                                                                                     'file paths '
+                                                                                     'as JSON.'}]},
+                                                      {'text': ['You are an independent reviewer '
+                                                                'of the candidate in '
+                                                                'candidate_directory.',
+                                                                'Read its actual documents, the '
+                                                                'original request, admitted '
+                                                                'context and relevant references.',
+                                                                'Evaluate only this assigned '
+                                                                'candidate against that material. '
+                                                                'Do not inspect or compare',
+                                                                'the rival candidate, pick a '
+                                                                'winner, or make your score '
+                                                                'relative to another version.',
+                                                                'This is a read-only review. Do '
+                                                                'not edit candidate documents, '
+                                                                'references or the repository.',
+                                                                'Return the report as Markdown in '
+                                                                'the JSON reply; the driver saves '
+                                                                'it to a report file.',
+                                                                "Try to disprove the candidate's "
+                                                                'weakest premises and decisions. '
+                                                                'Look for a materially',
+                                                                'better alternative to the same '
+                                                                'actual problem. When evidence '
+                                                                'supports one, explain',
+                                                                'what concrete cost, harm, '
+                                                                'confusion or unnecessary '
+                                                                'machinery it avoids.',
+                                                                'Make every material premise, '
+                                                                'causal link, claimed consequence, '
+                                                                'necessity and remedy',
+                                                                'earn its place with concrete '
+                                                                'evidence. Do not concede merely '
+                                                                'because a claim sounds',
+                                                                'plausible, and do not invent '
+                                                                'disagreement after an issue is '
+                                                                'resolved.',
+                                                                'Attack the weakest inferential '
+                                                                'link: existence or possibility '
+                                                                'alone does not establish',
+                                                                'action, harm or a violated '
+                                                                'guarantee. Distinguish actual '
+                                                                'defects from personal preferences',
+                                                                'and from behavior or creative '
+                                                                'choices explicitly permitted by '
+                                                                'the request.',
+                                                                'For each real defect, identify '
+                                                                'the affected document or passage, '
+                                                                'the relevant evidence,',
+                                                                'its concrete consequence and a '
+                                                                'justified direction for '
+                                                                'improvement. Prioritize impact.',
+                                                                'Acknowledge what works and what '
+                                                                'is uncertain. An honest report '
+                                                                'may find no material',
+                                                                'defects; do not manufacture '
+                                                                'criticism, extra constraints or '
+                                                                'new requirements.',
+                                                                'Score the work on fulfilment of '
+                                                                'the request and its explicit '
+                                                                'criteria, from 0 to 1:',
+                                                                '0 means unusable or fundamentally '
+                                                                'fails the request; 0.5 means '
+                                                                'partly useful with',
+                                                                'substantial defects; 1 means '
+                                                                'fully satisfies the request with '
+                                                                'no material defects found.',
+                                                                'Explain the score in the report. '
+                                                                'Top-level questions support '
+                                                                'context gathering, not extra '
+                                                                'scoring',
+                                                                'dimensions. Neither your report '
+                                                                'nor your score determines whether '
+                                                                'an author must stop.',
+                                                                'Write the report in the language '
+                                                                'of the original request unless it '
+                                                                'asks otherwise.'],
+                                                       'variables': []},
+                                                      {'text': ["DANTE'S ANTI-DRIFT QUESTIONS FOR "
+                                                                'THE AUTHOR',
+                                                                'Alongside your critical '
+                                                                'assessment, act as a plain-spoken '
+                                                                'project lead who notices',
+                                                                'drift. Ask the author only the '
+                                                                'few simple, awkward questions '
+                                                                'that could change the',
+                                                                'work: what the project actually '
+                                                                'intends, who is really affected, '
+                                                                'what observable',
+                                                                'damage exists, whether ordinary '
+                                                                'permitted operation already '
+                                                                'includes the claimed',
+                                                                'state, and whether the proposed '
+                                                                'machinery is proportionate to the '
+                                                                'request.',
+                                                                'Ground each question in a '
+                                                                'concrete passage, source, missing '
+                                                                'fact or decision in this',
+                                                                'candidate. Speak like a real '
+                                                                'person, not a rubric. Do not turn '
+                                                                'these lenses into a',
+                                                                'checklist, speech, ruling or '
+                                                                'exhaustive audit, or question an '
+                                                                'already resolved issue.',
+                                                                'Where new machinery appears, ask '
+                                                                'what existing component or '
+                                                                'trusted source already',
+                                                                'does the job, who consumes the '
+                                                                'addition and who is harmed '
+                                                                'without it. Where guarantees',
+                                                                'are demanded, ask what could '
+                                                                'enforce them and whether the '
+                                                                'brief specifies an outcome',
+                                                                'or a mechanism. For technical '
+                                                                'plans, ask which observable '
+                                                                'contract requires detailed',
+                                                                'mechanism, or which '
+                                                                'decision-changing pinned fact a '
+                                                                'builder would otherwise lack.',
+                                                                'Put these questions in a clearly '
+                                                                'labeled section of the report '
+                                                                'Markdown, addressed',
+                                                                'to the author. In that section '
+                                                                'ask only: do not answer your own '
+                                                                'questions, disguise a',
+                                                                'solution as a question, or repeat '
+                                                                'your diagnosis. Keep your '
+                                                                'evidence-based defects and',
+                                                                'justified alternatives in the '
+                                                                'critical assessment elsewhere in '
+                                                                'the same report.',
+                                                                'If no material anti-drift '
+                                                                'question remains, say the natural '
+                                                                'equivalent of',
+                                                                '"No further questions." in that '
+                                                                'section. Do not invent questions '
+                                                                'to fill it.',
+                                                                'The driver persists report and '
+                                                                'gives it to the author in the '
+                                                                'next round, if one runs.',
+                                                                'These questions to the author '
+                                                                'belong in report, not only in the '
+                                                                'top-level questions',
+                                                                'answers, which are your '
+                                                                'context-seeking checks and are '
+                                                                'discarded by the driver.',
+                                                                'This is one review call with one '
+                                                                'score and report. These questions '
+                                                                'introduce no',
+                                                                'extra agent, separate turn, vote, '
+                                                                'readiness field or condition for '
+                                                                'ending the duel.'],
+                                                       'variables': []}]},
+                           'questions': {'intro': ['QUESTIONS (context-seeking checks): inspect '
+                                                   'the relevant files and references before '
+                                                   'answering.',
+                                                   'They are prompts for your own investigation, '
+                                                   'not questions for the operator or new '
+                                                   'requirements.',
+                                                   'Return the answers separately in questions; '
+                                                   'the driver discards them.'],
+                                         'items': [{'id': 'review_request_evidence',
+                                                    'text': 'Which request passages, project '
+                                                            'guidance and reference sources did '
+                                                            'you inspect to establish what this '
+                                                            'candidate must actually accomplish?'},
+                                                   {'id': 'review_weakest_link',
+                                                    'text': 'Which premise or causal link in the '
+                                                            'candidate is least supported after '
+                                                            'checking its sources, and what '
+                                                            'concrete consequence follows? If none '
+                                                            'is defective, state the evidence '
+                                                            'instead of inventing an objection.'},
+                                                   {'id': 'review_better_alternative',
+                                                    'text': 'Can a materially better alternative '
+                                                            'solve the same requested problem '
+                                                            'within its constraints? Explain the '
+                                                            'evidenced benefit, or why the current '
+                                                            'approach remains sound.'},
+                                                   {'id': 'review_reader_use',
+                                                    'text': 'Read the candidate as its intended '
+                                                            'user or audience: where, if anywhere, '
+                                                            'does a specific passage or omission '
+                                                            'prevent understanding or use, and is '
+                                                            'that a defect under the request '
+                                                            'rather than your preference?'}]},
+                           'output_contract': {'sections': [{'id': 'duel_review_result',
+                                                             'text': ['OUTPUT CONTRACT: return '
+                                                                      'exactly one JSON object and '
+                                                                      'nothing else.',
+                                                                      'The only top-level keys are '
+                                                                      'score, report and '
+                                                                      'questions.',
+                                                                      'score is a finite number '
+                                                                      'from 0 to 1 inclusive, '
+                                                                      'never a boolean.',
+                                                                      'report is non-empty '
+                                                                      'Markdown assessing this '
+                                                                      'candidate, explaining the '
+                                                                      'score and any',
+                                                                      'concrete defects with '
+                                                                      'evidence and justified '
+                                                                      'improvements. State plainly '
+                                                                      'when no material',
+                                                                      'defects are found. Include '
+                                                                      'the few concrete anti-drift '
+                                                                      'questions for the author in '
+                                                                      'report,',
+                                                                      'or state that no further '
+                                                                      'questions remain. Keep them '
+                                                                      'separate from the discarded',
+                                                                      'top-level questions '
+                                                                      'answers. Return report '
+                                                                      'content, not a filename; '
+                                                                      'the driver persists it.'],
+                                                             'variables': []},
+                                                            {'id': 'questions_output',
+                                                             'text': ['questions is a list of '
+                                                                      'exactly {"id":"<question '
+                                                                      'id>","answer":"<non-empty '
+                                                                      'answer>"} records,',
+                                                                      'one for each supplied '
+                                                                      'QUESTIONS id, with no '
+                                                                      'missing, duplicate or '
+                                                                      'unknown IDs.',
+                                                                      'Use those questions to seek '
+                                                                      'and inspect relevant '
+                                                                      'context. Their answers are '
+                                                                      'discarded',
+                                                                      'by the driver and do not '
+                                                                      'control scores, acceptance, '
+                                                                      'continuation or stopping.'],
+                                                             'variables': []}]}}})

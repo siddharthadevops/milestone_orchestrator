@@ -45,6 +45,8 @@ DIRECT_ROUTES = {
     "compose_candidates@creativity": ("compose_candidates", None),
     "evaluate_candidates@creativity": ("evaluate_candidates", None),
     "expand_genes@creativity": ("expand_genes", None),
+    "author_candidate@duel": ("duel_author", None),
+    "review_candidate@duel": ("duel_review", None),
 }
 STANDALONE_SESSION_JOB = "standalone@document"
 STANDALONE_REPOSITORY_SESSION_JOB = "standalone@repository"
@@ -184,7 +186,11 @@ def _values_for(job, values):
 
 
 def _document(prompt_set, kind):
-    process = "brainstorming" if kind in prompt_sets.BRAINSTORMING_KINDS else "milestone"
+    process = (
+        "duel" if kind in prompt_sets.DUEL_KINDS else
+        "brainstorming" if kind in prompt_sets.BRAINSTORMING_KINDS else
+        "milestone"
+    )
     return prompt_set.documents["%s/%s.json" % (process, kind)]
 
 

@@ -40,6 +40,7 @@ MILESTONE_KINDS = (
     "expand_genes",
 )
 BRAINSTORMING_KINDS = ("discussion_turn", "questioner_turn")
+DUEL_KINDS = ("duel_author", "duel_review")
 LEAD_TURN_CHARGE_KINDS = ("draft_slice_note", "implement")
 MOUNT_TAGS = frozenset((
     "executor:agent_call",
@@ -55,6 +56,7 @@ CANONICAL_MEMBERS = (
     "shared/shared.json",
     *("milestone/%s.json" % kind for kind in MILESTONE_KINDS),
     *("brainstorming/%s.json" % kind for kind in BRAINSTORMING_KINDS),
+    *("duel/%s.json" % kind for kind in DUEL_KINDS),
 )
 
 PROMPT_SET_FALLBACK_DEFAULT = "stored_default"

@@ -18,6 +18,95 @@ class TaskPanelTests(unittest.TestCase):
             "/* ---- standalone task ordering", 1
         )[1].split("/* ---- new brainstorming:", 1)[0]
 
+    def test_duel_form_and_both_deliveries(self):
+        from orchestrator import tasks
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for executable panel checks")
+        names = (
+            "esc", "taskExecutorEntry", "taskConfigurationApplicable",
+            "taskConfigurationValue", "taskConfigurationOption", "taskConfigurationLabel",
+            "renderTaskConfigurationSchema", "taskUsesExecutionBinding",
+            "setTaskConfigurationValue", "currentTaskConfiguration", "submitTaskForm",
+            "duelCandidates", "duelProgress", "duelResult",
+        )
+        sources = [re.search(r"(?:async )?function " + name + r"\([^\n]*\) \{.*?\n\}",
+                             self.panel, re.S).group(0) for name in names]
+        setup = "const taskExecutorCatalogue = " + json.dumps(tasks.task_executor_catalogue()) + ";\n"
+        checks = r"""
+const assert = require('node:assert/strict');
+const taskExecutorSelected = 'duel', taskDialogSeq = 1, taskReferences = ['source.md'];
+const taskProjects = [{families_order: ['codex']}], posts = [];
+let taskSubmitPending = false, closed = 0;
+const fields = Object.fromEntries(Object.entries({
+  t_request: 'Develop this document.', t_output: 'deliveries', t_project: '0',
+  t_prompt_set: 'literature',
+}).map(([id, value]) => [id, {value}]));
+fields.task_error = {textContent: '', style: {}};
+fields.taskform = {close: () => closed++};
+const controls = [{value: '1', checkValidity: () => true,
+  dataset: {taskConfig: 'max_rounds', taskConfigType: 'integer'}}];
+global.document = {getElementById: id => fields[id], querySelectorAll: () => controls};
+const taskBinding = () => ({project: 'docs', work_area: 'main'});
+const syncTaskSubmitDisabled = () => {};
+const standaloneStaffingSession = async () => 'session';
+const postJSON = async (path, payload) => posts.push({path, payload});
+(async () => {
+  const entry = taskExecutorEntry('duel');
+  assert.equal(entry.name, 'Duel');
+  assert.equal(taskUsesExecutionBinding('duel', 'strategy_profile'), false);
+  const markup = renderTaskConfigurationSchema(entry.configuration_schema, {});
+  assert.match(markup, /min="1"/);
+  assert.match(markup, /value="10" data-task-config="max_rounds"/);
+  for (const role of ['default', 'author', 'reviewer'])
+    assert(markup.includes(`data-task-config="rigor.${role}"`));
+  await submitTaskForm();
+  assert.equal(closed, 1);
+  assert.equal(taskSubmitPending, false);
+  assert.deepEqual(posts, [{path: '/api/tasks', payload: {
+    task_executor: 'duel', configuration: {max_rounds: 1}, prompt_set: 'literature',
+    staffing_session: 'session', request: {work_area: taskBinding(), request: fields.t_request.value,
+      context: '', reference_documents: ['source.md'], output_directory: 'deliveries'},
+  }}]);
+  const candidates = [
+    {id: 'a', directory: '/docs/a', artifacts: ['/docs/a/chapter.md', '/docs/a/notes.md'],
+     finished: true, score: 0, report_path: '/reports/<a>.md', production_round: 1, review_round: 1},
+    {id: 'b', directory: '/docs/b', artifacts: ['/docs/b/chapter.md'], finished: false,
+     score: 0.9, report_path: '/reports/b.md', production_round: 2, review_round: 2},
+  ];
+  const result = duelResult({stop_reason: 'round_limit', rounds_completed: 2, candidates}, 'task-id');
+  assert.match(result, /Configured round limit reached/);
+  assert.match(result, /2 rounds completed/);
+  assert.match(result, /Candidate A/);
+  assert.match(result, /Candidate B/);
+  assert.match(result, /Score: 0/);
+  assert.match(result, /showDoc/);
+  assert.match(result, /duel:a:artifact:0/);
+  assert.match(result, /duel:b:report/);
+  assert.match(result, /task-id/);
+  for (const path of ['/docs/a/chapter.md', '/docs/a/notes.md', '/docs/b/chapter.md', '/reports/b.md'])
+    assert(result.includes(path));
+  assert.match(result, /\/reports\/&lt;a&gt;\.md/);
+  assert(!result.includes('/reports/<a>.md'));
+  assert(result.indexOf('Candidate A') < result.indexOf('Candidate B'));
+  assert(!/winner/i.test(result));
+  assert.match(duelResult({stop_reason: 'both_finished', rounds_completed: 2, candidates}),
+    /Both authors finished their versions/);
+  const progress = duelProgress({round: 2, phase: 'review', rounds_completed: 1, candidates}, {max_rounds: 3});
+  assert.match(progress, /Round 2 \/ 3/);
+  assert.match(progress, /Finished by author/);
+  assert.match(progress, /Open to improvement/);
+  assert.match(duelProgress(null, {max_rounds: 1}), /Preparing both candidates/);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        result = subprocess.run([node, "-e", setup + "\n".join(sources) + checks],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("data.duel || null", self.panel)
+        self.assertTrue("duelProgress(taskPipeline, configuration, record.id)" in self.panel)
+        self.assertTrue("duelResult(result.native_result, record.id)" in self.panel)
+
     def test_creativity_schema_form_submits_public_order(self):
         from orchestrator import staffing
         from orchestrator.tests.test_staffing_sessions import session_body
@@ -684,7 +773,7 @@ async function postJSON(path, payload) {
         self.assertIn("renderSlicePipeline(", deep)
         self.assertIn("lastTaskPipeline", self.panel)
         self.assertIn(
-            "data.deep_task || data.reviewed_task || data.creativity || null", self.panel
+            "data.deep_task || data.reviewed_task || data.creativity || data.duel || null", self.panel
         )
 
         reviewed = re.search(
