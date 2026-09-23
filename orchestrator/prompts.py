@@ -2118,6 +2118,20 @@ def need_rethink_output_section():
     }
 
 
+def suite_checkpoint_fix_instruction():
+    """Runtime rule for fresh checkpoint evidence, including installed prompts."""
+    return {
+        "text": [
+            "SUITE CHECKPOINT REPAIR",
+            "The checkpoint failure is new evidence: judge and resolve it directly.",
+            "Use fixed, rejected with current evidence, or blocked;",
+            "rejected_adjudicated is forbidden even if a generic prompt offers it.",
+            "If the governing design contradicts the required fix, use need_rethink.",
+        ],
+        "variables": [],
+    }
+
+
 def build_delta_review(family, workspace, goal, unit_desc, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, debt=None, wave_docs=None,
@@ -2370,6 +2384,7 @@ def build_fix_findings(
     suite_repair_commands=None,
     suite_repair_cadence=None,
     suite_repair_periodic_checkpoint=None,
+    suite_checkpoint_origin=False,
 ):
     # `gap_enabled` answers only whether THIS fixer may emit a new gap.  A
     # legacy repair fixer deliberately cannot open a nested gap, but it still
@@ -2624,6 +2639,10 @@ def build_fix_findings(
         "  directly if rejecting.\n"
         "- confirmed and impossible -> per-finding `blocked`.\n\n"
     )
+    if suite_checkpoint_origin:
+        decision_block = "\n".join(
+            suite_checkpoint_fix_instruction()["text"]
+        ) + "\n\n"
     quality_block = _fix_quality_block(unit_kind)
     output_contract = (
         contracts.prompt_contract(
@@ -2649,8 +2668,8 @@ def build_fix_findings(
         + suite_repair
         + decision_block
         + quality_block
-        + _debt_block(debt)
-        + _registry_block(registry)
+        + ("" if suite_checkpoint_origin else _debt_block(debt))
+        + ("" if suite_checkpoint_origin else _registry_block(registry))
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"

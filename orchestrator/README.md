@@ -641,7 +641,12 @@ it does not block milestone completion.
 A failing scheduled suite opens a dedicated fixer episode through the preserved
 synthetic P1. The fixer receives the goal, reviewed design, project context,
 amendments, proportionality rules, command plan, and exact preserved failure
-account. For a current periodic checkpoint it fixes only actionable,
+account. It judges this fresh evidence directly, without deferred-debt or
+adjudicated-rejection lists; `rejected_adjudicated` is forbidden for the whole
+suite repair episode. A design contradiction uses the existing `need_rethink`
+route. Ordinary fixers retain their settled context, with adjudication references
+checked against the real registry inside the call contract, never against debt.
+For a current periodic checkpoint it fixes only actionable,
 nonpermitted defects, uses focused checks, and leaves explicitly authorized
 downstream failures to their pending slices. Its `ok` does not certify the suite:
 after the usual reviews, a fresh checkpoint establishes `passed` or

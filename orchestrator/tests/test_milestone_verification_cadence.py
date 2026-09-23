@@ -5,11 +5,13 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
-from orchestrator import canonical_plan, contracts, gitops
+from orchestrator import brainstorming_milestone, canonical_plan, contracts, gitops
 from orchestrator import driver as drv, state as st, tasks
 from orchestrator.tests import test_driver_mock as base
 from orchestrator.tests.test_suite_checkpoint_call import _document
+from orchestrator.tests.test_worker_tasks import _created, _rethink
 
 
 class MilestoneVerificationCadenceTest(unittest.TestCase):
@@ -215,6 +217,17 @@ class MilestoneVerificationCadenceTest(unittest.TestCase):
         ])
         return subject.reviewed_work.execute(subject.reviewed_work.next_action(unit))
 
+    @staticmethod
+    def _defer_helper_failure(unit):
+        unit["debt"].append({
+            "id": "claude-C1", "severity": "P2",
+            "summary": "Three stale metadata helpers mask 54 Chat tests; "
+                       "no pending slice owns these failures.",
+            "raised_by": "claude", "cleared_by": "codex",
+            "drift_risk": "high", "drift_damage": "medium",
+            "reason": "The prior review deferred the helper changes.",
+        })
+
     def test_periodic_not_verified_completes_and_resumes_without_green_proof(self):
         subject, unit = self._live_checkpoint()
         reply = self._checkpoint_reply()
@@ -294,7 +307,12 @@ class MilestoneVerificationCadenceTest(unittest.TestCase):
 
     def test_periodic_mixed_failure_repair_requires_fresh_checkpoint(self):
         subject, unit = self._live_checkpoint()
-        self._run_checkpoint(subject, unit, self._checkpoint_reply("failed"))
+        self._defer_helper_failure(unit)
+        failed = self._checkpoint_reply("failed")
+        failed["failure_account"]["diagnostics"] = (
+            "54 metadata helper failures have no authorized pending-slice exception."
+        )
+        self._run_checkpoint(subject, unit, failed)
         queued = unit["fix_queue"][0]
         subject.runner.script.extend([
             base.step("fix_findings", base.fix_ok([
@@ -325,9 +343,97 @@ class MilestoneVerificationCadenceTest(unittest.TestCase):
                             if kind == "fix_findings")
         self.assertNotIn("Return top-level `blocked` if you cannot leave the suite green",
                          fixer_prompt)
+        self.assertNotIn("\nDEFERRED DEBT", fixer_prompt)
+        self.assertNotIn("\nADJUDICATED REJECTIONS", fixer_prompt)
+        self.assertNotIn("claude-C1", fixer_prompt)
+        self.assertIn("54 metadata helper failures", fixer_prompt)
+        self.assertIn("need_rethink", fixer_prompt)
+        review_prompts = [prompt for _, kind, prompt in subject.runner.calls
+                          if kind in ("delta_review", "review_round")]
+        self.assertTrue(all("claude-C1" in prompt for prompt in review_prompts))
+        self.assertEqual(unit["debt"][0]["id"], "claude-C1")
         self.assertEqual(len(unit["seals"][-1]["reviews"]), 2)
         subject._consume_milestone_verification_result(unit, result)
         self.assertFalse(subject._prepare_milestone_verification())
+
+    def test_suite_fixer_invalid_adjudication_uses_existing_contract_correction(self):
+        subject, unit = self._live_checkpoint()
+        self._defer_helper_failure(unit)
+        self._run_checkpoint(subject, unit, self._checkpoint_reply("failed"))
+        queued = unit["fix_queue"][0]
+        subject.runner.script.extend([
+            base.step("fix_findings", base.fix_ok([
+                base.triaged(queued["id"], "rejected_adjudicated", queued["summary"],
+                             severity="P1", adjudication_ref="claude-C1")
+            ])),
+            base.step("fix_findings", base.fix_ok([
+                base.triaged(queued["id"], "fixed", queued["summary"], severity="P1")
+            ], files_changed=["app.txt"]),
+                side_effect=base.write_file("app.txt", "helper repaired\n")),
+        ])
+        subject._do_fix(unit)
+        self.assertIsNone(subject.state["failure"])
+        self.assertEqual(unit["status"], st.U_DELTA_REVIEW)
+        self.assertEqual([kind for _, kind, _ in subject.runner.calls],
+                         ["suite_checkpoint", "fix_findings", "fix_findings"])
+        self.assertEqual(unit["fix_loop_rounds"], 1)
+        self.assertEqual(unit["rounds"][-1]["result"]["findings"][0]["disposition"],
+                         "fixed")
+        self.assertEqual(st.registry_ids(subject.state), set())
+
+    def test_suite_fixer_rethink_preserves_queue_bytes_and_repair_context(self):
+        subject, unit = self._live_checkpoint()
+        self._defer_helper_failure(unit)
+        self._run_checkpoint(subject, unit, self._checkpoint_reply("failed"))
+        base.write_file("app.txt", "pending partial repair\n")(self.workspace)
+        base.write_file("pending-helper.txt", "untracked candidate bytes\n")(self.workspace)
+        subject._ensure_goal_ledger()
+        before = copy.deepcopy({key: unit[key] for key in
+                                ("fix_queue", "fix_source", "debt", "rounds")})
+        before_tree = gitops.snapshot_worktree_tree(self.workspace)
+        subject.runner.script.append(base.step("fix_findings", _rethink("fix_findings")))
+        created = _created("suite-design-conflict", self.path, self.workspace)
+        with mock.patch.object(brainstorming_milestone, "create_session",
+                               return_value=created) as create:
+            subject._do_fix(unit)
+        create.assert_called_once()
+        self.assertEqual(unit["status"], st.U_FIXING)
+        self.assertEqual({key: unit[key] for key in before}, before)
+        self.assertIn("suite_repair", unit["fix_source"])
+        self.assertEqual(unit["brainstorming_wait"]["session_id"], created["id"])
+        self.assertEqual(gitops.snapshot_worktree_tree(self.workspace), before_tree)
+        self.assertIsNone(subject.state["failure"])
+        self.assertEqual([e["status"] for e in subject.state["events"]
+                          if e["type"] == "verification"], ["failed"])
+
+    def test_suite_origin_excludes_context_after_delta_but_preserves_other_roles(self):
+        subject, unit = self._live_checkpoint()
+        self._defer_helper_failure(unit)
+        self._run_checkpoint(subject, unit, self._checkpoint_reply("failed"))
+        st.record_round(subject.state, unit, "codex", "fix_findings", base.fix_ok([
+            base.triaged("prior-F1", "rejected", "An unrelated settled finding")
+        ]), meta={"source_round_id": "prior-review"})
+        self.assertEqual(st.registry_ids(subject.state), {"prior-review/prior-F1"})
+        unit["fix_source"]["type"] = "delta"
+        # Old states recover origin from the immutable root transition.
+        unit["fix_source"].pop("origin_type")
+        values = subject._judgment_values(unit, "fix_findings", {})
+        self.assertNotIn("adjudicated_rejections", values)
+        self.assertNotIn("deferred_debt", values)
+        prepared = subject._routed_judgment_prepare_call(
+            unit, "fix_findings", "suite-fix", queued_findings=unit["fix_queue"]
+        )(None)
+        self.assertNotIn("\nDEFERRED DEBT", prepared.prompt)
+        self.assertNotIn("\nADJUDICATED REJECTIONS", prepared.prompt)
+        for kind, context in (("review_round", {}),
+                              ("delta_review", {"delta_base_revision": "HEAD"})):
+            values = subject._judgment_values(unit, kind, context)
+            self.assertIn("claude-C1", values["deferred_debt"])
+            self.assertIn("prior-review/prior-F1", values["adjudicated_rejections"])
+        unit["fix_source"]["origin_type"] = "round"
+        values = subject._judgment_values(unit, "fix_findings", {})
+        self.assertIn("claude-C1", values["deferred_debt"])
+        self.assertIn("prior-review/prior-F1", values["adjudicated_rejections"])
 
     def test_periodic_rejected_failure_cannot_repeat_past_existing_repair_cap(self):
         subject, unit = self._live_checkpoint()

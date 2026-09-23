@@ -263,7 +263,28 @@ def _fix_result(obj, bound, options, ctx):
         return
     findings = _require(obj, "findings", list, ctx)
     for index, finding in enumerate(findings):
-        _fix_finding(finding, "%s.findings[%d]" % (ctx, index))
+        finding_ctx = "%s.findings[%d]" % (ctx, index)
+        _fix_finding(finding, finding_ctx)
+        if (
+            options["suite_checkpoint_origin"]
+            and finding["disposition"] == "rejected_adjudicated"
+        ):
+            raise contracts.ContractError(
+                "%s: rejected_adjudicated is forbidden for a suite checkpoint "
+                "repair; judge the new evidence directly" % finding_ctx
+            )
+        adjudication_ref = finding.get("adjudication_ref")
+        adjudication_ids = options["adjudication_ids"]
+        if adjudication_ref is not None and adjudication_ids is not None:
+            if (
+                not isinstance(adjudication_ref, str)
+                or adjudication_ref not in adjudication_ids
+            ):
+                raise contracts.ContractError(
+                    "%s: adjudication_ref %r must name an existing adjudicated "
+                    "rejection; deferred debt is not an adjudication"
+                    % (finding_ctx, adjudication_ref)
+                )
     contracts._assert_unique_finding_ids(findings, ctx)
     files_changed = _relative_paths(
         _require(obj, "files_changed", list, ctx), "%s.files_changed" % ctx
@@ -1069,7 +1090,8 @@ def validate(bound, obj, *, queued_findings=None,
              configured_suite_commands=None, periodic_checkpoint=None, workspace=None,
              expected_artifact=None, extension_fields=(),
              candidate_ids=None, constraint_ids=None,
-             dimensions=None, creativity_semantics=None):
+             dimensions=None, creativity_semantics=None,
+             suite_checkpoint_origin=False, adjudication_ids=None):
     """Validate a reply against served sections, using trusted caller context."""
     if not isinstance(bound, BoundContract):
         raise contracts.ContractError("bound must be a BoundContract")
@@ -1085,6 +1107,8 @@ def validate(bound, obj, *, queued_findings=None,
         "constraint_ids": constraint_ids,
         "dimensions": dimensions,
         "creativity_semantics": creativity_semantics,
+        "suite_checkpoint_origin": suite_checkpoint_origin,
+        "adjudication_ids": adjudication_ids,
     }
     for section_id in bound.registered_section_ids:
         REGISTERED_SECTIONS[section_id](

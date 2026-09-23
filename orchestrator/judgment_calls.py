@@ -216,6 +216,8 @@ def prepare(
     configured_suite_commands=None,
     periodic_checkpoint=None,
     suite_repair=None,
+    suite_checkpoint_origin=False,
+    adjudication_ids=(),
 ):
     """Freshly resolve, render, bind, and pair one direct technical charge."""
     if job not in JUDGMENT_JOBS:
@@ -228,11 +230,28 @@ def prepare(
         "operator_amendments", "ecosystem_map", "queued_findings",
         "contract_correction", "fixer_recovery_state",
         "verification_commands", "periodic_checkpoint", "suite_repair",
+        "suite_checkpoint_origin", "adjudication_ids",
     )):
         raise prompt_router.PromptRouterError(
             "judgment-owned values are adapter-owned"
         )
     kind = prompt_router.DIRECT_ROUTES[job][0]
+    if not isinstance(suite_checkpoint_origin, bool):
+        raise prompt_router.PromptRouterError(
+            "suite checkpoint origin must be a boolean"
+        )
+    if not isinstance(adjudication_ids, (tuple, list, set, frozenset)) or any(
+        not isinstance(entry, str) or not entry.strip()
+        for entry in adjudication_ids
+    ):
+        raise prompt_router.PromptRouterError(
+            "adjudication ids must be a collection of non-empty strings"
+        )
+    if kind != "fix_findings" and (suite_checkpoint_origin or adjudication_ids):
+        raise prompt_router.PromptRouterError(
+            "only fix_findings accepts suite origin or adjudication ids"
+        )
+    frozen_adjudication_ids = tuple(adjudication_ids)
     frozen_suite_commands = None
     if kind == "suite_checkpoint":
         if configured_suite_commands is not None:
@@ -331,6 +350,8 @@ def prepare(
         (prompts.need_rethink_instruction(kind),)
         if rethink_enabled else ()
     )
+    if suite_checkpoint_origin:
+        runtime_instructions += (prompts.suite_checkpoint_fix_instruction(),)
     runtime_sections = (
         (prompts.need_rethink_output_section(),)
         if rethink_enabled else ()
@@ -561,6 +582,8 @@ def prepare(
                 queued_findings=frozen_queued_findings,
                 configured_suite_commands=frozen_suite_commands,
                 periodic_checkpoint=frozen_periodic_checkpoint,
+                suite_checkpoint_origin=suite_checkpoint_origin,
+                adjudication_ids=frozen_adjudication_ids,
                 workspace=validation_workspace,
                 extension_fields=extension_fields,
             ),

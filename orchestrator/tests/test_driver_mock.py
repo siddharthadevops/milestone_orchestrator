@@ -1571,22 +1571,69 @@ class TestFixerProtocolFailures(DriverTestCase):
     def test_rejected_adjudicated_with_unknown_ref_fails_run(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
-            mock = runners.MockRunner(self._dirty_round_prefix() + [
-                step("fix_findings",
-                     fix_ok([triaged("F1", "rejected_adjudicated",
-                                     "skeleton lacks explicit non-goals",
-                                     adjudication_ref="ghost/F9")]),
-                     family="codex"),
-            ])
+            invalid = step(
+                "fix_findings",
+                fix_ok([triaged("F1", "rejected_adjudicated",
+                                "skeleton lacks explicit non-goals",
+                                adjudication_ref="ghost/F9")]),
+                family="codex",
+            )
+            mock = runners.MockRunner(
+                self._dirty_round_prefix() + [invalid, copy.deepcopy(invalid)]
+            )
             driver = drv.Driver(path, runner=mock)
             _actions, final = self.drive(driver)
             self.assertEqual(final.type, drv.A_FAILED)
             self.assertEqual(mock.script, [])
             self.assert_failed(
                 path, driver,
-                ["rejected_adjudicated with unknown", "ghost/F9"],
+                ["contract-violating output twice", "adjudication_ref",
+                 "ghost/F9", "must name an existing adjudicated rejection"],
                 unit_key="skeleton",
             )
+            fix_calls = [call for call in mock.calls if call[1] == "fix_findings"]
+            self.assertEqual(len(fix_calls), 2)
+            self.assertIn("CONTRACT CORRECTION", fix_calls[-1][2])
+            self.assertNotIn("CONTRACT CORRECTION", fix_calls[0][2])
+
+    def test_invalid_adjudication_ref_can_be_corrected_to_direct_rejection(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            mock = runners.MockRunner(self._dirty_round_prefix() + [
+                step("fix_findings", fix_ok([triaged(
+                    "F1", "rejected_adjudicated",
+                    "skeleton lacks explicit non-goals",
+                    adjudication_ref="ghost/F9",
+                )]), family="codex"),
+                step("fix_findings", fix_ok([triaged(
+                    "F1", "rejected",
+                    "The current skeleton already states the non-goals.",
+                )]), family="codex"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
+            )
+            self.assertEqual(mock.script, [])
+            state = st.load(path)
+            self.assertIsNone(state["failure"])
+            fix_calls = [call for call in mock.calls if call[1] == "fix_findings"]
+            self.assertEqual(len(fix_calls), 2)
+            self.assertIn("CONTRACT CORRECTION", fix_calls[-1][2])
+            self.assertIn("ghost/F9", fix_calls[-1][2])
+            self.assertNotIn("The checkpoint failure is new evidence", fix_calls[-1][2])
+            rounds = state["units"][0]["rounds"]
+            self.assertEqual(
+                [round_["kind"] for round_ in rounds],
+                ["review_round", "fix_findings", "review_round", "review_round"],
+            )
+            result = rounds[1]["result"]["findings"][0]
+            self.assertEqual(result["disposition"], "rejected")
+            self.assertIsNone(result.get("adjudication_ref"))
+            self.assertEqual(st.registry_ids(state), {"skeleton-codex-r1/F1"})
 
     def test_contests_with_unknown_rejection_id_fails_run(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

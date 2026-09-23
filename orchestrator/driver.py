@@ -2597,6 +2597,11 @@ class Driver(object):
                 "finding_plain": finding["plain"],
                 "finding_example": finding["example"],
             }
+        if (
+            kind == contracts.KIND_FIX_FINDINGS
+            and st.active_fix_origin_type(self.state, unit) == "suite_checkpoint"
+        ):
+            return values
         registry_entries = self._registry()
         if registry_entries:
             values["adjudicated_rejections"] = json.dumps(
@@ -2642,6 +2647,15 @@ class Driver(object):
                 fixer_recovery_state=context.get("fixer_recovery_state"),
                 design_correction=context.get("design_correction"),
                 suite_repair=context.get("suite_repair"),
+                suite_checkpoint_origin=(
+                    kind == contracts.KIND_FIX_FINDINGS
+                    and st.active_fix_origin_type(self.state, unit)
+                    == "suite_checkpoint"
+                ),
+                adjudication_ids=(
+                    sorted(st.registry_ids(self.state))
+                    if kind == contracts.KIND_FIX_FINDINGS else ()
+                ),
             )
 
         return prepare
@@ -12018,9 +12032,12 @@ class Driver(object):
             call_preparation or self.milestone_reviewed_calls
         )
         source = unit.get("fix_source") or {}
+        suite_checkpoint_origin = (
+            st.active_fix_origin_type(self.state, unit) == "suite_checkpoint"
+        )
         suite_repair = (
             source.get("suite_repair")
-            if source.get("origin_type") == "suite_checkpoint"
+            if suite_checkpoint_origin
             and isinstance(source.get("suite_repair"), dict)
             else None
         )
@@ -12150,13 +12167,14 @@ class Driver(object):
             self._goal_for(unit),
             self._unit_desc(unit),
             unit.get("fix_queue") or [],
-            self._registry(),
+            [] if suite_checkpoint_origin else self._registry(),
             unit_kind=self._review_unit_kind(unit),
             amendments=(authority or {}).get("amendments"),
             phantom_retry=bool(unit.get("phantom_retried")),
             killed_notice=killed_notice,
             project_context=project_context,
-            debt=self._debt(unit),
+            debt=[] if suite_checkpoint_origin else self._debt(unit),
+            suite_checkpoint_origin=suite_checkpoint_origin,
             repair_artifact=(
                 # The editability declaration follows the unit's repair
                 # CYCLE (under_repair: reopen -> ... -> reseal), not the
