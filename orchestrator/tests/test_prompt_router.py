@@ -1464,6 +1464,142 @@ class PromptRouterTest(unittest.TestCase):
                                 self.assertIn("Do not reject an invented design", rendered)
                                 self.assertIn("never fill the missing detail yourself", rendered)
 
+    def test_creativity_request_defines_deliverable_in_every_domain(self):
+        literature_documents = {
+            member: json.loads(
+                (LITERATURE_CORPUS / member).read_text(encoding="utf-8")
+            )
+            for member in prompt_sets.CANONICAL_MEMBERS
+        }
+        unchanged_sections = {}
+        unchanged_questions = {}
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            self.write_set(home, "literature", literature_documents)
+            for set_name, material in (
+                ("default", "default"), ("default", "literature"),
+                ("default", "business"), ("literature", "default"),
+            ):
+                for semantics in ("fragments_v3", "sparse_v2", "legacy"):
+                    for kind in (
+                        "create_genes", "compose_candidates", "evaluate_candidates",
+                    ):
+                        with self.subTest(
+                            prompt_set=set_name, material=material,
+                            semantics=semantics, kind=kind,
+                        ):
+                            values = {
+                                "workspace": "/workspace", "objective": "Invent a lollipop.",
+                                "context": "It will be used in a novel.", "references": "[]",
+                                "search_material": '{"objective":"Invent a lollipop."}',
+                                "candidates": "[]", "compositions": "[]",
+                                "creativity_semantics": semantics,
+                            }
+                            selected = prompt_router.resolve(
+                                home, job=kind + "@creativity", executor="agent_call",
+                                material=material, values=values, prompt_set=set_name,
+                            )
+                            self.assertIsNone(selected.prompt_set_fallback)
+                            rendered = prompt_router.render(selected.prompt, values)
+                            self.assertIn(
+                                "REQUEST-FIRST EXPLORATION: the operator's request determines "
+                                "the task and the result to produce.",
+                                rendered,
+                            )
+                            for obsolete_instruction in (
+                                "LITERARY EXPLORATION ONLY",
+                                "TASK: compose one concrete proposal",
+                                "Use imagery, voice, rhythm, tension, theme and reader experience",
+                                "fulfil the literary assignment",
+                            ):
+                                self.assertNotIn(obsolete_instruction, rendered)
+                            if set_name == "literature" or material == "literature":
+                                for literary_context in (
+                                    "The result will be used in a literary context, where creativity, "
+                                    "imagination, originality,",
+                                    "coherence, voice and reader experience are valued when relevant "
+                                    "to the task.",
+                                    "This context informs usefulness and quality; it does not prescribe "
+                                    "the result's form or add deliverables.",
+                                ):
+                                    self.assertIn(literary_context, rendered)
+                            if kind == "create_genes":
+                                self.assertIn("return exactly 10 distinct fragments", rendered)
+                                self.assertIn("a seed for the composer to develop, not a complete answer", rendered)
+                            elif kind == "compose_candidates":
+                                for instruction in (
+                                    "TASK: fulfil the operator's task for each supplied candidate seed.",
+                                    "The operator's request determines what you must produce, its form "
+                                    "and the necessary detail.",
+                                    "Fulfil that request in the proposal itself; the supplied seeds "
+                                    "provide inspiration, not a substitute task.",
+                                ):
+                                    self.assertIn(instruction, rendered)
+                            else:
+                                for instruction in (
+                                    "Judge whether the proposal itself delivers what the operator "
+                                    "requested, in the requested form",
+                                    "and at the necessary level of detail. Domain qualities matter "
+                                    "only when relevant to that task.",
+                                    "__objective__ means the composition does not satisfy the "
+                                    "operator's objective;",
+                                    "This includes substituting a different task or deliverable, "
+                                    "even if the substitute is creative.",
+                                    "Every invalid evaluation scores 0",
+                                ):
+                                    self.assertIn(instruction, rendered)
+                            bound = prompt_contracts.bind(selected.prompt)
+                            self.assertEqual(bound.question_ids, CREATIVITY_QUESTION_IDS)
+                            self.assertEqual(
+                                bound.registered_section_ids,
+                                (kind + "_result", "questions_output"),
+                            )
+                            self.assertEqual(
+                                selected.prompt["output_contract"],
+                                unchanged_sections.setdefault(kind, selected.prompt["output_contract"]),
+                            )
+                            self.assertEqual(
+                                selected.prompt["questions"],
+                                unchanged_questions.setdefault(kind, selected.prompt["questions"]),
+                            )
+
+    def test_creativity_proposal_contract_does_not_prescribe_a_deliverable_type(self):
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            selected = prompt_router.resolve(
+                home, job="compose_candidates@creativity", executor="agent_call",
+                material="literature", values={
+                    "workspace": "/workspace", "search_material": "{}",
+                    "candidates": "[]", "creativity_semantics": "fragments_v3",
+                },
+            )
+            bound = prompt_contracts.bind(selected.prompt)
+            for proposal in (
+                "A lollipop whose edible layers reveal a different constellation as each dissolves.",
+                "They choose difficult projects because voluntary happiness does not erase preference.",
+                "She raised the lollipop to the window. A small constellation shone through its shell.",
+            ):
+                with self.subTest(proposal=proposal):
+                    reply = {
+                        "compositions": [{"candidate_id": "c1", "proposal": proposal}],
+                        "questions": [
+                            {"id": question_id, "answer": "Checked against the requested result."}
+                            for question_id in bound.question_ids
+                        ],
+                    }
+                    self.assertEqual(
+                        prompt_contracts.validate(bound, reply, candidate_ids=["c1"]),
+                        reply,
+                    )
+                    malformed = copy.deepcopy(reply)
+                    malformed["compositions"][0]["deliverable_type"] = "narrative"
+                    with self.assertRaises(contracts.ContractError):
+                        prompt_contracts.validate(bound, malformed, candidate_ids=["c1"])
+                    malformed = copy.deepcopy(reply)
+                    malformed.pop("questions")
+                    with self.assertRaises(contracts.ContractError):
+                        prompt_contracts.validate(bound, malformed, candidate_ids=["c1"])
+
     def test_creativity_scoring_breakdown_uses_existing_reason_and_score_contract(self):
         literature_documents = {
             member: json.loads(

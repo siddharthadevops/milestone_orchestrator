@@ -84,8 +84,11 @@
           "assignment and restrained adjacent vocabulary. Do not write the story, invent lore or",
           "scenes, interpret motives, critique the manuscript, or decide what a character should do.",
           "For fragments_v3, return only the requested number of 1-3-word inspiration fragments",
-          "related to the assignment and its context. Literary imagery, action and association",
-          "may inform the vocabulary; do not pre-compose a story or impose new requirements."
+          "related to the assignment and its context. Keep them open for the requested task,",
+          "without deciding the result's form or pre-composing a solution.",
+          "The result will be used in a literary context, where creativity, imagination, originality,",
+          "coherence, voice and reader experience are valued when relevant to the task.",
+          "This context informs usefulness and quality; it does not prescribe the result's form or add deliverables."
         ],
         "variables": []
       },

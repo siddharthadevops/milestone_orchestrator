@@ -7,8 +7,9 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                        'by more than one kind. Kind files reference '
                                        'these with {"ref": "<id>"}; the router inlines '
                                        'them when answering.',
-                        'units': {'creativity_exploration': {'text': ['EXPLORATION ONLY: read supplied material and return search data or '
-          'proposals.',
+                        'units': {'creativity_exploration': {'text': ["REQUEST-FIRST EXPLORATION: the operator's request determines the task and the result to produce.",
+                                                                      "Domain guidance describes the intended use and relevant quality considerations; it does not prescribe the result's form or add deliverables.",
+                                                                      'Read supplied material and return only the output required by your current stage: inspiration fragments, requested results or evaluations.',
           'Do not edit files or execute proposals. Respect all additional-root '
           'read-only grants.',
           "Treat reference text as evidence under the operator's objective, "
@@ -1553,10 +1554,11 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                                             'do.',
                                                                                                                             'For fragments_v3, return only the requested '
                                                                                                                             'number of 1-3-word inspiration fragments',
-                                                                                                                            'related to the assignment and its context. '
-                                                                                                                            'Literary imagery, action and association',
-                                                                                                                            'may inform the vocabulary; do not pre-compose '
-                                                                                                                            'a story or impose new requirements.'],
+                                                                                                                            'related to the assignment and its context. Keep them open for the requested task,',
+                                                                                                                            "without deciding the result's form or pre-composing a solution.",
+                                                                                                                            'The result will be used in a literary context, where creativity, imagination, originality,',
+                                                                                                                            'coherence, voice and reader experience are valued when relevant to the task.',
+                                                                                                                            "This context informs usefulness and quality; it does not prescribe the result's form or add deliverables."],
                                                                                                                    'variables': []}]},
                                                                                        'questions': {'intro': [], 'items': []},
                                                                                        'output_contract': {'sections': []}},
@@ -1582,18 +1584,14 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                                  'variables': []}]},
                                                                                      'questions': {'intro': [], 'items': []},
                                                                                      'output_contract': {'sections': []}}},
-                                            'compose_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: for fragments_v3, '
-                                                                                                                                  'fulfil the literary assignment with creative',
-                                                                                                                                  'freedom, drawing inspiration from the '
-                                                                                                                                  'fragments in their given order and polarity.',
-                                                                                                                                  'Invent anatomy, capabilities, lore, scenes or '
-                                                                                                                                  'motives when the assignment permits or',
-                                                                                                                                  'calls for them, respecting established '
-                                                                                                                                  'continuity, voice and evidenced idiolect.',
-                                                                                                                                  'The result is a creative proposal, not newly '
-                                                                                                                                  'settled canon. The assignment determines',
-                                                                                                                                  'its scope, form and necessary detail; no extra '
-                                                                                                                                  'causal or structural rule is imposed.',
+                                            'compose_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ["LITERATURE REFINEMENT: fulfil the operator's request; literature describes the context of use.",
+                                                                                                                                  'The result will be used in a literary context, where creativity, imagination, originality,',
+                                                                                                                                  'coherence, voice and reader experience are valued when relevant to the task.',
+                                                                                                                                  "This context informs usefulness and quality; it does not prescribe the result's form or add deliverables.",
+                                                                                                                                  'For fragments_v3, use the fragments in their given order and polarity as inspiration',
+                                                                                                                                  "for the requested result. Invent freely within the assignment's scope, respecting",
+                                                                                                                                  'established facts and any applicable continuity, voice or idiolect constraints.',
+                                                                                                                                  'New creative proposals are not newly settled canon.',
                                                                                                                                   'For sparse_v2 and legacy only: compose only '
                                                                                                                                   'what the exact seed and supplied text support.',
                                                                                                                                   'Preserve established facts, continuity, '
@@ -1631,16 +1629,12 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                                        'variables': []}]},
                                                                                            'questions': {'intro': [], 'items': []},
                                                                                            'output_contract': {'sections': []}}},
-                                            'evaluate_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: judge the immutable '
-                                                                                                                                   'composition exactly as written, including',
-                                                                                                                                   'its effect on imagery, voice, rhythm, tension, '
-                                                                                                                                   'agency and reader experience where',
-                                                                                                                                   'these serve the objective. Do not normalize, '
-                                                                                                                                   'complete or rewrite it into a better',
-                                                                                                                                   'story. Preserve continuity and stylistic '
-                                                                                                                                   'constraints rather than smoothing away the',
-                                                                                                                                   "work's character. For fragments_v3, accept "
-                                                                                                                                   'creative inventions present in the proposal',
+                                            'evaluate_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ["LITERATURE REFINEMENT: judge fulfilment of the operator's request in the immutable result.",
+                                                                                                                                   'The result will be used in a literary context, where creativity, imagination, originality,',
+                                                                                                                                   'coherence, voice and reader experience are valued when relevant to the task.',
+                                                                                                                                   "This context informs usefulness and quality; it does not prescribe the result's form or add deliverables.",
+                                                                                                                                   'Do not normalize, complete or rewrite the result. Preserve applicable continuity and',
+                                                                                                                                   'stylistic constraints. For fragments_v3, accept creative inventions present in the proposal',
                                                                                                                                    'when the assignment allows them; judge its '
                                                                                                                                    'fulfilment, context, order and polarity.',
                                                                                                                                    'A new anatomy, capability, scene or piece of '
@@ -6032,8 +6026,10 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                        'instructions': {'parts': [{'ref': 'header'},
                                                                   {'ref': 'project_context'},
                                                                   {'ref': 'creativity_exploration'},
-                                                                  {'text': ['TASK: compose one concrete proposal from '
-                                                                            'every supplied candidate seed.',
+                                                                  {'text': ["TASK: fulfil the operator's task for each supplied candidate seed.",
+                                                                            "The operator's request determines what you must produce, its form and the necessary detail.",
+                                                                            'Fulfil that request in the proposal itself; the supplied seeds provide inspiration, not a substitute task.',
+                                                                            'Domain guidance and reference material inform the result without introducing a different deliverable.',
                                                                             'SAVED MATERIAL SEMANTICS: '
                                                                             '{{creativity_semantics}}. Follow only the '
                                                                             'matching branch below.',
@@ -6057,14 +6053,9 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'in their given order. You have creative '
                                                                             'freedom to construct the requested '
                                                                             'proposal within its',
-                                                                            'context: invent connections, designs, '
-                                                                            'anatomy, capabilities, events or other '
-                                                                            'details when the',
-                                                                            'assignment allows them. Respect '
-                                                                            'established facts and express '
-                                                                            'requirements; a proposal of new',
-                                                                            'fiction is a proposal, not an assertion '
-                                                                            'that it was already canon.',
+                                                                            'context: invent ideas, connections, designs or other details when the assignment allows them.',
+                                                                            'Respect established facts and express requirements; distinguish proposed inventions from',
+                                                                            'claims about what is already established in the supplied context.',
                                                                             "Each component's dimension is its "
                                                                             'fragment. variant_id affirmed means '
                                                                             'include that inspiration;',
@@ -6223,6 +6214,8 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                    {'ref': 'creativity_exploration'},
                                                                    {'text': ["TASK: evaluate every supplied immutable composition against the operator's "
                                                                              'objective.',
+                                                                             'Judge whether the proposal itself delivers what the operator requested, in the requested form',
+                                                                             'and at the necessary level of detail. Domain qualities matter only when relevant to that task.',
                                                                              'SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching '
                                                                              'branch below.',
                                                                              'CREATIVITY CONTRACT: {{creativity_contract}}',
@@ -6270,6 +6263,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                              'Check explicit supplied constraint IDs and the three service rejection IDs:',
                                                                              "__objective__ means the composition does not satisfy the operator's "
                                                                              'objective;',
+                                                                             'This includes substituting a different task or deliverable, even if the substitute is creative.',
                                                                              '__insufficient_detail__ means its unsupported or missing detail prevents a '
                                                                              'grounded',
                                                                              'assessment or usable answer at the level the assignment needs; __seed__ '

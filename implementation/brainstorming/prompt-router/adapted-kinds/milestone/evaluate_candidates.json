@@ -16,6 +16,8 @@
       {
         "text": [
           "TASK: evaluate every supplied immutable composition against the operator's objective.",
+          "Judge whether the proposal itself delivers what the operator requested, in the requested form",
+          "and at the necessary level of detail. Domain qualities matter only when relevant to that task.",
           "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching branch below.",
           "CREATIVITY CONTRACT: {{creativity_contract}}",
           "Composition has already happened in a separate call. Judge only the supplied proposal.",
@@ -41,6 +43,7 @@
           "or use the proposal is absent, reject it instead of supplying that detail yourself.",
           "Check explicit supplied constraint IDs and the three service rejection IDs:",
           "__objective__ means the composition does not satisfy the operator's objective;",
+          "This includes substituting a different task or deliverable, even if the substitute is creative.",
           "__insufficient_detail__ means its unsupported or missing detail prevents a grounded",
           "assessment or usable answer at the level the assignment needs; __seed__ means it violates",
           "the supplied seed's order, meaning or polarity under the active semantics. These are ordinary invalid results.",

@@ -10,6 +10,8 @@
       {
         "text": [
           "TASK: evaluate every supplied immutable composition against the operator's objective.",
+          "Judge whether the proposal itself delivers what the operator requested, in the requested form",
+          "and at the necessary level of detail. Domain qualities matter only when relevant to that task.",
           "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching branch below.",
           "CREATIVITY CONTRACT: {{creativity_contract}}",
           "Composition has already happened in a separate call. Judge only the supplied proposal.",
@@ -35,6 +37,7 @@
           "or use the proposal is absent, reject it instead of supplying that detail yourself.",
           "Check explicit supplied constraint IDs and the three service rejection IDs:",
           "__objective__ means the composition does not satisfy the operator's objective;",
+          "This includes substituting a different task or deliverable, even if the substitute is creative.",
           "__insufficient_detail__ means its unsupported or missing detail prevents a grounded",
           "assessment or usable answer at the level the assignment needs; __seed__ means it violates",
           "the supplied seed's order, meaning or polarity under the active semantics. These are ordinary invalid results.",
@@ -99,11 +102,12 @@
       },
       {
         "text": [
-          "LITERATURE REFINEMENT: judge the immutable composition exactly as written, including",
-          "its effect on imagery, voice, rhythm, tension, agency and reader experience where",
-          "these serve the objective. Do not normalize, complete or rewrite it into a better",
-          "story. Preserve continuity and stylistic constraints rather than smoothing away the",
-          "work's character. For fragments_v3, accept creative inventions present in the proposal",
+          "LITERATURE REFINEMENT: judge fulfilment of the operator's request in the immutable result.",
+          "The result will be used in a literary context, where creativity, imagination, originality,",
+          "coherence, voice and reader experience are valued when relevant to the task.",
+          "This context informs usefulness and quality; it does not prescribe the result's form or add deliverables.",
+          "Do not normalize, complete or rewrite the result. Preserve applicable continuity and",
+          "stylistic constraints. For fragments_v3, accept creative inventions present in the proposal",
           "when the assignment allows them; judge its fulfilment, context, order and polarity.",
           "A new anatomy, capability, scene or piece of lore need not pre-exist in canon.",
           "Missing detail is grounds for rejection only when necessary to fulfil the assignment.",
