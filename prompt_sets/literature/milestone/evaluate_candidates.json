@@ -44,10 +44,43 @@
           "against its supplied candidate and the legacy search material in the same way.",
           "Set constraint_valid false when any supplied constraint or service rejection applies, list",
           "every applicable ID and explain the evidence in reason. Every invalid evaluation scores 0.",
-          "For a valid composition, score the whole proposal independently from 0 (least meets the",
-          "objective) to 1 (most meets it). Never rank or calibrate against batch mates, historical",
-          "scores or prestige. Return every candidate's evaluation; do not select survivors or offer",
-          "evolutionary advice. A score is not a probability or promise of success."
+          "For fragments_v3, this task evaluates creative contribution, not merely competent execution.",
+          "Reserve 1 for an extraordinary, transformative breakthrough, with Einstein's general",
+          "relativity as an anchor of exceptional originality and conceptual depth. A correct,",
+          "coherent or useful answer is not thereby close to 1; 0.9 means close to that exceptional",
+          "standard, not simply a good answer. Apply this standard to each criterion and justify",
+          "the quality actually achieved. Do not start at 1 and subtract defects, infer perfection",
+          "from a lack of criticism, or impose a distribution or a penalty for being in an early batch.",
+          "For every valid fragments_v3 proposal, assess exactly these five equally weighted criteria:",
+          "1. substantive_originality: a genuinely different idea beyond the obvious answer, not",
+          "new names, decorative details or a different presentation of the same answer.",
+          "2. new_understanding: a useful insight, distinction, simplification or reformulation",
+          "that reveals something about this problem that was not previously evident.",
+          "3. productive_connections: non-obvious relationships that produce a concrete benefit,",
+          "not merely juxtaposed fragments or arbitrary novelty.",
+          "4. fertility: meaningful possibilities for the requested work supported by features",
+          "already present in the proposal, not developments you invent on its behalf.",
+          "5. creative_contribution: what the proposal achieves for the actual assignment",
+          "specifically through its creative contribution, not merely by being correct or polished.",
+          "For programming, apply these criteria to approaches, mechanisms and capabilities; for",
+          "literature, apply them to ideas, relationships and possibilities. Assess the requested",
+          "result and level of development: do not demand implemented code for a technical idea",
+          "or a scene or polished prose for an explanatory answer.",
+          "Keep the existing JSON contract. Inside the existing reason string, list each criterion",
+          "by its exact name, give its numerical score in [0,1], and justify it with concrete evidence.",
+          "Then show the arithmetic: score = (substantive_originality + new_understanding +",
+          "productive_connections + fertility + creative_contribution) / 5. Set the existing score",
+          "field to that equal-weight mean of the five values you reported. Check the arithmetic;",
+          "do not choose an overall score first and fit the criterion scores to it. Add no JSON fields.",
+          "Compliance, coherence and seed fidelity remain validity checks, not bonus score components.",
+          "Do not add score components for answering the perspective questions or for prose polish.",
+          "For a rejected proposal, keep score at 0 and explain the violations in reason;",
+          "do not replace that rejection with a positive criterion average.",
+          "For sparse_v2 and legacy only, score a valid proposal as a whole from 0 (least meets the",
+          "objective) to 1 (most meets it), retaining their saved scoring semantics.",
+          "For every semantics, judge independently; never rank or calibrate against batch mates",
+          "or historical scores. Return every candidate's evaluation; do not select survivors or",
+          "offer evolutionary advice. A score is not a probability or promise of success."
         ],
         "variables": [
           {
@@ -93,15 +126,36 @@
   },
   "questions": {
     "intro": [
-      "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)"
+      "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)",
+      "Assess each immutable proposal as written. Identify candidate IDs and evidence in your answers.",
+      "You may draw consequences supported by the proposal, but do not invent developments, repair it or give credit for ideas absent from it.",
+      "These checks do not require scenes, narrative turns or polished prose, and do not change the requested deliverable."
     ],
     "items": [
-      {"id": "environment_fit", "text": "For each composition, does it match the declared audience, genre, form, and editorial stage while preserving deliberate voice, ambiguity, rhythm, and unconventional form? Identify candidate IDs and evidence; do not improve it."},
-      {"id": "human_scale", "text": "Put each composition next to the brief: is it the smallest coherent realization of the supplied seed and intended reader effect, with no unrelated polish or exhaustive lens audit? Identify candidate IDs and evidence."},
-      {"id": "character_idiolect", "text": "For each candidate containing character voice or dialogue, does it preserve that character's evidenced idiolect—lexicon, syntax, rhythm, register, and habitual omissions? Cite the candidate ID and supplied evidence; if no voice appears, answer not applicable. Do not rewrite it."},
-      {"id": "reader_emotion", "text": "For each candidate, what concrete emotion will a reader most likely experience when its consequences arrive, and which choices in the immutable composition cause that response?"},
-      {"id": "reader_legibility", "text": "For each candidate, can an ordinary reader understand what happens and why it matters from the supplied material alone? Name the unsupported gap; do not fill it in."},
-      {"id": "meaningful_surprise", "text": "Given the creative freedom available in the assignment, does each candidate surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Cite the setup and turn in the immutable composition."}
+      {
+        "id": "substantive_originality",
+        "text": "What does this proposal contribute beyond the most obvious answer to the brief? Distinguish a genuinely different idea from new names, decorative details or a different presentation of the same answer."
+      },
+      {
+        "id": "productive_connections",
+        "text": "Which non-obvious connections between the supplied fragments and this particular problem open useful possibilities? What do those connections contribute beyond merely placing the fragments together?"
+      },
+      {
+        "id": "unexamined_assumptions",
+        "text": "Which assumptions shape this proposal or your judgment of it? Which are established by the brief, and which come from familiar habits, conventions or solutions that need not apply here?"
+      },
+      {
+        "id": "creative_potential",
+        "text": "Which features already present in this proposal give it potential for the requested work beyond its initial formulation? What makes it fertile rather than a one-off trick, and what limits that potential?"
+      },
+      {
+        "id": "consequences_and_tensions",
+        "text": "What less obvious consequences follow from the proposal as written? Do they strengthen the idea, reveal a useful tension, or expose a weakness or contradiction that is easy to overlook?"
+      },
+      {
+        "id": "contribution_to_brief",
+        "text": "What does this proposal help us understand, solve or explore that was not already supplied by the brief? Does its creative contribution answer what was asked, or substitute a different task?"
+      }
     ]
   },
   "output_contract": {

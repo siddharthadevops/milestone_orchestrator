@@ -1,7 +1,7 @@
 {
   "kind": "create_genes",
   "process": "milestone",
-  "description": "Extract a small literal literary vocabulary for sparse creativity, or legacy search material for an old order.",
+  "description": "Generate diverse literary inspiration fragments while preserving older saved search semantics.",
   "instructions": {
     "parts": [
       {"ref": "header"},
@@ -9,15 +9,24 @@
       {"ref": "creativity_exploration"},
       {
         "text": [
-          "TASK: extract the vocabulary used by the creativity driver from the operator's problem.",
+          "TASK: generate creative starting points for proposals that answer the operator's assignment.",
           "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching branch below.",
           "CREATIVITY CONTRACT: {{creativity_contract}}",
           "Read the complete operator request, admitted context and references in the supplied order.",
           "Open the supplied reference paths in the workspace and admitted roots; paths are not their contents.",
           "For fragments_v3, return exactly {{gene_count}} distinct fragments, each containing 1-3 words.",
-          "Choose varied words or short phrases related to the assignment and its context, including",
-          "useful adjacent ideas. These are reusable inspiration, without grammatical categories.",
-          "Do not compose solutions, supply new requirements or hide a complete proposal in a fragment.",
+          "Use them as creative stimuli for proposals that answer the assignment. Use the context as a",
+          "starting point, not as text to summarize. Explore possibilities not yet formulated in it.",
+          "Seek direct, lateral and analogical associations: unexpected but useful connections that",
+          "make genuinely different answers possible.",
+          "Do not limit the repertoire to naming the assignment's themes, requirements or desired",
+          "outcomes. Add raw material from which to build something the assignment does not yet contain.",
+          "Build a semantically diverse repertoire; avoid spending fragments on synonyms or variations",
+          "of the same idea. Reusing a word from the assignment is allowed when it is a useful seed.",
+          "You may introduce new elements as creative stimuli, without presenting them as established",
+          "contextual facts. Mandatory requirements remain requirements, not optional ingredients.",
+          "Keep each fragment open: a seed for the composer to develop, not a complete answer or a",
+          "decision about the final proposal. Do not add grammatical categories or new requirements.",
           "Return the fragments themselves without attached negation; the driver assigns polarity.",
           "For sparse_v2, return only ten subjects, ten verbs and ten adjectives grounded in",
           "the assignment. Keep them short, literal and independently reusable. Include important",
@@ -95,15 +104,35 @@
   },
   "questions": {
     "intro": [
-      "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)"
+      "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)",
+      "Examine the fragment pool only. Broaden its creative potential without drafting candidate proposals or choosing a final solution.",
+      "These checks do not require scenes, narrative turns or polished prose, and do not change the requested deliverable."
     ],
     "items": [
-      {"id": "environment_fit", "text": "Does the extracted vocabulary match the declared audience, genre, form, and editorial stage while preserving deliberate voice, ambiguity, rhythm, and unconventional form? State the evidence and any excess found."},
-      {"id": "human_scale", "text": "Put the vocabulary next to the brief: is it the smallest useful repertoire at the grain and size requested, with no unrelated polish or exhaustive literary taxonomy? State what you checked."},
-      {"id": "character_idiolect", "text": "If the supplied material contains character voice, did the extracted vocabulary preserve only evidenced markers of each character's idiolect—lexicon, syntax, rhythm, register, and habitual omissions—without rewriting the character or judging what they should do? If no character voice is supplied, answer not applicable."},
-      {"id": "reader_emotion", "text": "What concrete emotion would a result built from this vocabulary most likely produce in a reader, and which words would drive that response?"},
-      {"id": "reader_legibility", "text": "Would an ordinary reader be able to understand the eventual result using only the supplied context? Name any missing context, but do not fill it in or turn it into a new requirement."},
-      {"id": "meaningful_surprise", "text": "Using the creative freedom available in the assignment, would a result built from this vocabulary surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Identify the words that create that potential."}
+      {
+        "id": "substantive_originality",
+        "text": "What does this fragment pool offer beyond extracting or paraphrasing the brief? Identify distinct starting points rather than synonyms, decorative wording or repetitions of the same theme."
+      },
+      {
+        "id": "productive_connections",
+        "text": "Which non-obvious connections between these fragments and this particular problem could open useful possibilities? Explain the connection without composing a candidate or deciding a solution."
+      },
+      {
+        "id": "unexamined_assumptions",
+        "text": "Which assumptions shaped your choice of fragments? Which come from the brief, and which come from familiar habits, conventions or solutions that need not apply here?"
+      },
+      {
+        "id": "creative_potential",
+        "text": "Which fragments offer several meaningful ways to develop the requested work rather than prescribing a single answer? What in the pool supports that potential, and what limits it?"
+      },
+      {
+        "id": "consequences_and_tensions",
+        "text": "What less obvious consequences or tensions could this pool invite the composer to examine? Ground your answer in the fragments and context, without asserting invented outcomes or adding requirements."
+      },
+      {
+        "id": "contribution_to_brief",
+        "text": "What does the pool make available for understanding, solving or exploring the brief beyond what was already supplied? Where might it redirect attention away from what was asked?"
+      }
     ]
   },
   "output_contract": {

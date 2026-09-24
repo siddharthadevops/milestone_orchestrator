@@ -23,13 +23,13 @@ from orchestrator.tests import test_task_cancel_recovery as cancel_fixture
 from orchestrator.tests import test_task_controls_api as controls_fixture
 from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
 from orchestrator.tests.test_tasks import creativity_configuration, legacy_creativity_configuration
-from orchestrator.tests.test_prompt_contracts import sparse_creation_reply
-
-
-DEFAULT_DILIGENCE_IDS = ("machinery_trust", "environment_fit", "human_scale")
-LITERATURE_DILIGENCE_IDS = DEFAULT_DILIGENCE_IDS + (
-    "character_idiolect", "reader_emotion", "reader_legibility", "meaningful_surprise",
+from orchestrator.tests.test_prompt_contracts import (
+    DEFAULT_CREATIVITY_QUESTION_IDS, sparse_creation_reply,
 )
+
+
+DEFAULT_DILIGENCE_IDS = DEFAULT_CREATIVITY_QUESTION_IDS
+LITERATURE_DILIGENCE_IDS = DEFAULT_CREATIVITY_QUESTION_IDS
 
 
 class CreativityTaskTest(unittest.TestCase):
@@ -829,7 +829,7 @@ class CreativityTaskTest(unittest.TestCase):
         worker = os.path.join(self.primary, "fake-creativity-cli.py")
         with open(worker, "w", encoding="utf-8") as handle:
             handle.write(textwrap.dedent(r'''
-                import json, sys
+                import json, re, sys
 
                 live = "--input-format" in sys.argv
                 prompt = (json.loads(sys.stdin.readline())["message"]["content"][0]["text"]
@@ -841,7 +841,7 @@ class CreativityTaskTest(unittest.TestCase):
                 with open(sys.argv[1], encoding="utf-8") as handle:
                     replies = json.load(handle)
                 questions = [{"id": identity, "answer": "Checked supplied material."}
-                             for identity in ("machinery_trust", "environment_fit", "human_scale")]
+                             for identity in re.findall(r"^- ([A-Za-z0-9_-]+):", prompt, re.MULTILINE)]
                 if job == "compose_candidates":
                     batch = json.loads(prompt.split(
                         "EXACT CANDIDATE SEEDS (JSON; IDs identify candidates, not rank):\n"

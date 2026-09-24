@@ -723,24 +723,7 @@
         },
         "questions": {
           "intro": [],
-          "items": [
-            {
-              "id": "character_idiolect",
-              "text": "If the supplied material contains character voice, did the extracted vocabulary preserve only evidenced markers of each character's idiolect—lexicon, syntax, rhythm, register, and habitual omissions—without rewriting the character or judging what they should do? If no character voice is supplied, answer not applicable."
-            },
-            {
-              "id": "reader_emotion",
-              "text": "What concrete emotion would a result built from this vocabulary most likely produce in a reader, and which words would drive that response?"
-            },
-            {
-              "id": "reader_legibility",
-              "text": "Would an ordinary reader be able to understand the eventual result using only the supplied context? Name any missing context, but do not fill it in or turn it into a new requirement."
-            },
-            {
-              "id": "meaningful_surprise",
-              "text": "Using the creative freedom available in the assignment, would a result built from this vocabulary surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Identify the words that create that potential."
-            }
-          ]
+          "items": []
         },
         "output_contract": {"sections": []}
       },
@@ -792,24 +775,7 @@
         },
         "questions": {
           "intro": [],
-          "items": [
-            {
-              "id": "character_idiolect",
-              "text": "For each composition containing character voice or dialogue, does it preserve that character's evidenced idiolect—lexicon, syntax, rhythm, register, and habitual omissions? Cite the candidate ID and supplied evidence; if no voice appears, answer not applicable."
-            },
-            {
-              "id": "reader_emotion",
-              "text": "For each composition, what concrete emotion will a reader most likely experience when its consequences arrive, and which choices in the proposal cause that response?"
-            },
-            {
-              "id": "reader_legibility",
-              "text": "For each composition, can an ordinary reader understand what happens and why it matters from the supplied material alone? Name any unsupported gap without filling it in."
-            },
-            {
-              "id": "meaningful_surprise",
-              "text": "Using the creative freedom available in the assignment, does each composition surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Identify the setup and turn already present in the proposal."
-            }
-          ]
+          "items": []
         },
         "output_contract": {
           "sections": []
@@ -866,24 +832,7 @@
         },
         "questions": {
           "intro": [],
-          "items": [
-            {
-              "id": "character_idiolect",
-              "text": "For each candidate containing character voice or dialogue, does it preserve that character's evidenced idiolect—lexicon, syntax, rhythm, register, and habitual omissions? Cite the candidate ID and supplied evidence; if no voice appears, answer not applicable. Do not rewrite it."
-            },
-            {
-              "id": "reader_emotion",
-              "text": "For each candidate, what concrete emotion will a reader most likely experience when its consequences arrive, and which choices in the immutable composition cause that response?"
-            },
-            {
-              "id": "reader_legibility",
-              "text": "For each candidate, can an ordinary reader understand what happens and why it matters from the supplied material alone? Name the unsupported gap; do not fill it in."
-            },
-            {
-              "id": "meaningful_surprise",
-              "text": "Given the creative freedom available in the assignment, does each candidate surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Cite the setup and turn in the immutable composition."
-            }
-          ]
+          "items": []
         },
         "output_contract": {
           "sections": []

@@ -89,15 +89,35 @@
   },
   "questions": {
     "intro": [
-      "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)"
+      "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)",
+      "Use these checks to broaden your perspective before finalizing each requested proposal. Identify candidate IDs and evidence in your answers.",
+      "These checks do not require scenes, narrative turns or polished prose, and do not change the requested deliverable."
     ],
     "items": [
-      {"id": "environment_fit", "text": "For each composition, does it match the declared audience, genre, form, and editorial stage while preserving deliberate voice, ambiguity, rhythm, and unconventional form? Identify candidate IDs and evidence; do not improve it."},
-      {"id": "human_scale", "text": "Put each composition next to the brief: is it the smallest coherent realization of the supplied seed and intended reader effect, with no unrelated polish or exhaustive lens audit? Identify candidate IDs and evidence."},
-      {"id": "character_idiolect", "text": "For each composition containing character voice or dialogue, does it preserve that character's evidenced idiolect—lexicon, syntax, rhythm, register, and habitual omissions? Cite the candidate ID and supplied evidence; if no voice appears, answer not applicable."},
-      {"id": "reader_emotion", "text": "For each composition, what concrete emotion will a reader most likely experience when its consequences arrive, and which choices in the proposal cause that response?"},
-      {"id": "reader_legibility", "text": "For each composition, can an ordinary reader understand what happens and why it matters from the supplied material alone? Name any unsupported gap without filling it in."},
-      {"id": "meaningful_surprise", "text": "Using the creative freedom available in the assignment, does each composition surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Identify the setup and turn already present in the proposal."}
+      {
+        "id": "substantive_originality",
+        "text": "What does this proposal contribute beyond the most obvious answer to the brief? Distinguish a genuinely different idea from new names, decorative details or a different presentation of the same answer."
+      },
+      {
+        "id": "productive_connections",
+        "text": "Which non-obvious connections between the supplied fragments and this particular problem open useful possibilities? What do those connections contribute beyond merely placing the fragments together?"
+      },
+      {
+        "id": "unexamined_assumptions",
+        "text": "Which assumptions shape this proposal or your judgment of it? Which are established by the brief, and which come from familiar habits, conventions or solutions that need not apply here?"
+      },
+      {
+        "id": "creative_potential",
+        "text": "Which features already present in this proposal give it potential for the requested work beyond its initial formulation? What makes it fertile rather than a one-off trick, and what limits that potential?"
+      },
+      {
+        "id": "consequences_and_tensions",
+        "text": "What less obvious consequences follow from the proposal as written? Do they strengthen the idea, reveal a useful tension, or expose a weakness or contradiction that is easy to overlook?"
+      },
+      {
+        "id": "contribution_to_brief",
+        "text": "What does this proposal help us understand, solve or explore that was not already supplied by the brief? Does its creative contribution answer what was asked, or substitute a different task?"
+      }
     ]
   },
   "output_contract": {

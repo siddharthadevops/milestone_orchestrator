@@ -24,6 +24,10 @@ CORPUS = (
 LITERATURE_CORPUS = (
     Path(__file__).resolve().parents[2] / "prompt_sets/literature"
 )
+CREATIVITY_QUESTION_IDS = (
+    "substantive_originality", "productive_connections", "unexamined_assumptions",
+    "creative_potential", "consequences_and_tensions", "contribution_to_brief",
+)
 EXPECTED_GOLDENS = frozenset((
     "brainstorming/discussion_turn.contrary.prompt.txt",
     "brainstorming/discussion_turn.prompt.txt",
@@ -559,7 +563,7 @@ class PromptRouterTest(unittest.TestCase):
                 with self.assertRaises(contracts.ContractError):
                     prompt_contracts.validate(bound, reply)
 
-    def test_literature_creativity_requires_emotion_and_tests_available_surprise(self):
+    def test_literature_creativity_questions_examine_ideas_not_narration(self):
         documents = {
             member: json.loads(
                 (LITERATURE_CORPUS / member).read_text(encoding="utf-8")
@@ -570,10 +574,6 @@ class PromptRouterTest(unittest.TestCase):
             self.write_set(home, "literature", documents)
             literature = prompt_sets.load(home, "literature")
 
-        expected = [
-            "environment_fit", "human_scale", "character_idiolect",
-            "reader_emotion", "reader_legibility", "meaningful_surprise",
-        ]
         for kind in (
             "create_genes", "compose_candidates", "evaluate_candidates",
         ):
@@ -590,14 +590,7 @@ class PromptRouterTest(unittest.TestCase):
                     item["id"]: item["text"]
                     for item in prompt["questions"]["items"]
                 }
-                self.assertEqual(list(questions), expected)
-                self.assertNotIn("machinery_trust", questions)
-                self.assertNotIn("not applicable", questions["reader_emotion"])
-                self.assertNotIn("does not establish", questions["reader_emotion"])
-                self.assertIn("creative freedom", questions["meaningful_surprise"])
-                self.assertNotIn("requires surprise", questions["meaningful_surprise"])
-                self.assertNotIn("calls for surprise", questions["meaningful_surprise"])
-                self.assertNotIn("not applicable", questions["meaningful_surprise"])
+                self.assertEqual(tuple(questions), CREATIVITY_QUESTION_IDS)
 
     def test_repository_editing_seats_leave_commits_to_the_driver(self):
         for job in (
@@ -1303,15 +1296,7 @@ class PromptRouterTest(unittest.TestCase):
                             question_ids = tuple(
                                 item["id"] for item in selected.prompt["questions"]["items"]
                             )
-                            expected_ids = (
-                                "machinery_trust", "environment_fit", "human_scale",
-                            )
-                            if material == "literature":
-                                expected_ids += (
-                                    "character_idiolect", "reader_emotion",
-                                    "reader_legibility", "meaningful_surprise",
-                                )
-                            self.assertEqual(question_ids, expected_ids)
+                            self.assertEqual(question_ids, CREATIVITY_QUESTION_IDS)
                             self.assertIn("one entry per QUESTIONS id", rendered)
                             expected_sections = [kind + "_result", "questions_output"]
                         self.assertEqual(
@@ -1366,9 +1351,76 @@ class PromptRouterTest(unittest.TestCase):
                         self.assertIn("CREATIVITY CONTRACT: ordered_fragments_v1", rendered)
                         self.assertIn("workspace and admitted roots", rendered)
                         bound = prompt_contracts.bind(selected.prompt)
+                        self.assertEqual(bound.question_ids, CREATIVITY_QUESTION_IDS)
+                        intro = "\n".join(selected.prompt["questions"]["intro"])
+                        questions = {
+                            item["id"]: item["text"]
+                            for item in selected.prompt["questions"]["items"]
+                        }
+                        self.assertIn(
+                            "These checks do not require scenes, narrative turns or polished prose, "
+                            "and do not change the requested deliverable.",
+                            intro,
+                        )
+                        if kind == "create_genes":
+                            self.assertIn("Examine the fragment pool only.", intro)
+                            self.assertIn("without drafting candidate proposals", intro)
+                            self.assertIn(
+                                "fragment pool offer beyond extracting or paraphrasing the brief",
+                                questions["substantive_originality"],
+                            )
+                            self.assertIn(
+                                "without composing a candidate or deciding a solution",
+                                questions["productive_connections"],
+                            )
+                        else:
+                            self.assertIn(
+                                "proposal contribute beyond the most obvious answer",
+                                questions["substantive_originality"],
+                            )
+                            self.assertIn(
+                                "consequences follow from the proposal as written",
+                                questions["consequences_and_tensions"],
+                            )
+                            if kind == "compose_candidates":
+                                self.assertIn(
+                                    "broaden your perspective before finalizing each requested proposal",
+                                    intro,
+                                )
+                            else:
+                                self.assertIn("Assess each immutable proposal as written.", intro)
+                                self.assertIn(
+                                    "do not invent developments, repair it or give credit for ideas absent",
+                                    intro,
+                                )
                         if kind == "create_genes":
                             self.assertIn("return exactly 6 distinct fragments", rendered)
                             self.assertIn("1-3 whitespace-separated words", rendered)
+                            self.assertNotIn("TASK: extract the vocabulary", rendered)
+                            for creative_instruction in (
+                                "TASK: generate creative starting points",
+                                "starting point, not as text to summarize",
+                                "Seek direct, lateral and analogical associations",
+                                "Build a semantically diverse repertoire",
+                                "Reusing a word from the assignment is allowed when it is a useful seed",
+                                "You may introduce new elements as creative stimuli",
+                                "without presenting them as established",
+                                "Mandatory requirements remain requirements, not optional ingredients",
+                                "a seed for the composer to develop, not a complete answer",
+                            ):
+                                self.assertIn(creative_instruction, rendered)
+                            self.assertIn(
+                                "For sparse_v2, return only ten subjects, ten verbs and ten adjectives",
+                                rendered,
+                            )
+                            self.assertIn(
+                                "For legacy, formulate a concise objective faithful to the operator's intent",
+                                rendered,
+                            )
+                            self.assertEqual(
+                                bound.registered_section_ids,
+                                ("create_genes_result", "questions_output"),
+                            )
                             reply = {
                                 "gene_pool": [
                                     "shared warmth", "flexible shell", "balance",
@@ -1385,6 +1437,11 @@ class PromptRouterTest(unittest.TestCase):
                             with self.assertRaises(contracts.ContractError):
                                 prompt_contracts.validate(
                                     bound, reply, creativity_semantics="fragments_v3", gene_count=10,
+                                )
+                            with self.assertRaises(contracts.ContractError):
+                                prompt_contracts.validate(
+                                    bound, {"gene_pool": reply["gene_pool"]},
+                                    creativity_semantics="fragments_v3", gene_count=6,
                                 )
                             values.pop("gene_count")
                             defaulted = prompt_router.resolve(
@@ -1406,6 +1463,100 @@ class PromptRouterTest(unittest.TestCase):
                             else:
                                 self.assertIn("Do not reject an invented design", rendered)
                                 self.assertIn("never fill the missing detail yourself", rendered)
+
+    def test_creativity_scoring_breakdown_uses_existing_reason_and_score_contract(self):
+        literature_documents = {
+            member: json.loads(
+                (LITERATURE_CORPUS / member).read_text(encoding="utf-8")
+            )
+            for member in prompt_sets.CANONICAL_MEMBERS
+        }
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            self.write_set(home, "literature", literature_documents)
+            for set_name, material in (
+                ("default", "default"), ("default", "literature"),
+                ("default", "business"), ("literature", "default"),
+            ):
+                with self.subTest(prompt_set=set_name, material=material):
+                    values = {
+                        "workspace": "/workspace", "search_material": "{}",
+                        "compositions": "[]", "creativity_semantics": "fragments_v3",
+                    }
+                    selected = prompt_router.resolve(
+                        home, job="evaluate_candidates@creativity", executor="agent_call",
+                        material=material, values=values, prompt_set=set_name,
+                    )
+                    self.assertIsNone(selected.prompt_set_fallback)
+                    rendered = prompt_router.render(selected.prompt, values)
+                    for instruction in (
+                        "For fragments_v3, this task evaluates creative contribution, not merely competent execution.",
+                        "Reserve 1 for an extraordinary, transformative breakthrough, with Einstein's general",
+                        "relativity as an anchor of exceptional originality and conceptual depth.",
+                        "0.9 means close to that exceptional",
+                        "For every valid fragments_v3 proposal, assess exactly these five equally weighted criteria:",
+                        "1. substantive_originality:", "2. new_understanding:",
+                        "3. productive_connections:", "4. fertility:", "5. creative_contribution:",
+                        "Inside the existing reason string, list each criterion",
+                        "give its numerical score in [0,1], and justify it with concrete evidence.",
+                        "score = (substantive_originality + new_understanding +\n"
+                        "productive_connections + fertility + creative_contribution) / 5.",
+                        "field to that equal-weight mean of the five values you reported. Check the arithmetic;",
+                        "do not choose an overall score first and fit the criterion scores to it. Add no JSON fields.",
+                        "Compliance, coherence and seed fidelity remain validity checks, not bonus score components.",
+                        "Do not add score components for answering the perspective questions or for prose polish.",
+                        "For a rejected proposal, keep score at 0 and explain the violations in reason;",
+                        "do not replace that rejection with a positive criterion average.",
+                        "For sparse_v2 and legacy only, score a valid proposal as a whole",
+                        "For every semantics, judge independently; never rank or calibrate against batch mates",
+                        "For programming, apply these criteria to approaches, mechanisms and capabilities; for",
+                        "literature, apply them to ideas, relationships and possibilities.",
+                        "do not demand implemented code for a technical idea",
+                        "or a scene or polished prose for an explanatory answer.",
+                    ):
+                        self.assertIn(instruction, rendered)
+                    bound = prompt_contracts.bind(selected.prompt)
+                    self.assertEqual(bound.question_ids, CREATIVITY_QUESTION_IDS)
+                    self.assertEqual(
+                        bound.registered_section_ids,
+                        ("evaluate_candidates_result", "questions_output"),
+                    )
+                    valid = {
+                        "candidate_id": "c1", "constraint_valid": True,
+                        "constraint_violations": [], "assumptions": [], "score": 0.3,
+                        "reason": (
+                            "substantive_originality: 0.2, a familiar idea with a useful twist. "
+                            "new_understanding: 0.3, identifies a hidden assumption. "
+                            "productive_connections: 0.4, connects two useful mechanisms. "
+                            "fertility: 0.3, supports a further application. "
+                            "creative_contribution: 0.3, a modest useful advance. "
+                            "Mean: (0.2 + 0.3 + 0.4 + 0.3 + 0.3) / 5 = 0.3."
+                        ),
+                    }
+                    invalid = {
+                        "candidate_id": "c2", "constraint_valid": False,
+                        "constraint_violations": ["__objective__"], "assumptions": [],
+                        "reason": "The proposal substitutes a different requested result.",
+                        "score": 0,
+                    }
+                    reply = {
+                        "evaluations": [valid, invalid],
+                        "questions": [
+                            {"id": question_id, "answer": "Inspected the written proposals."}
+                            for question_id in bound.question_ids
+                        ],
+                    }
+                    context = {"candidate_ids": ["c1", "c2"], "constraint_ids": []}
+                    prompt_contracts.validate(bound, reply, **context)
+                    for extra in ("criterion_scores", "criteria", "mean"):
+                        malformed = copy.deepcopy(reply)
+                        malformed["evaluations"][0][extra] = {}
+                        with self.assertRaises(contracts.ContractError):
+                            prompt_contracts.validate(bound, malformed, **context)
+                    malformed = copy.deepcopy(reply)
+                    malformed["evaluations"][1]["score"] = 0.3
+                    with self.assertRaises(contracts.ContractError):
+                        prompt_contracts.validate(bound, malformed, **context)
 
     def test_sparse_evaluation_prompt_contract(self):
         with tempfile.TemporaryDirectory() as home:
@@ -1430,7 +1581,7 @@ class PromptRouterTest(unittest.TestCase):
                             "If detail needed to judge\nor use the proposal is absent, reject it",
                             "__objective__", "__insufficient_detail__", "__seed__",
                             "Every invalid evaluation scores 0",
-                            "Never rank or calibrate against batch mates",
+                            "never rank or calibrate against batch mates",
                             "Do not return proposal",
                         ):
                             self.assertIn(instruction, rendered)
@@ -1443,9 +1594,9 @@ class PromptRouterTest(unittest.TestCase):
                             self.assertIn("For legacy, assess the proposal", rendered)
                         if material != "default":
                             self.assertIn(material.upper() + " REFINEMENT", rendered)
-                        expected_questions = 7 if material == "literature" else 3
                         self.assertEqual(
-                            len(selected.prompt["questions"]["items"]), expected_questions,
+                            tuple(item["id"] for item in selected.prompt["questions"]["items"]),
+                            CREATIVITY_QUESTION_IDS,
                         )
                         self.assertEqual(prompt_contracts.bind(selected.prompt).registered_section_ids,
                                          ("evaluate_candidates_result", "questions_output"))
@@ -1474,9 +1625,9 @@ class PromptRouterTest(unittest.TestCase):
                         "Return no evaluation, score, validity, violations, assumptions",
                     ):
                         self.assertIn(instruction, rendered)
-                    expected_questions = 7 if material == "literature" else 3
                     self.assertEqual(
-                        len(selected.prompt["questions"]["items"]), expected_questions,
+                        tuple(item["id"] for item in selected.prompt["questions"]["items"]),
+                        CREATIVITY_QUESTION_IDS,
                     )
                     self.assertEqual(
                         prompt_contracts.bind(selected.prompt).registered_section_ids,
@@ -1504,8 +1655,7 @@ class PromptRouterTest(unittest.TestCase):
                             bound.registered_section_ids,
                             ("create_genes_result", "questions_output"),
                         )
-                        expected_questions = 7 if material == "literature" else 3
-                        self.assertEqual(len(bound.question_ids), expected_questions)
+                        self.assertEqual(bound.question_ids, CREATIVITY_QUESTION_IDS)
                         if semantics == "legacy":
                             self.assertIn("For legacy, formulate a concise objective", rendered)
                             reply = sparse_creation_reply()

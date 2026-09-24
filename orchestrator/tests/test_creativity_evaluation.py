@@ -26,9 +26,7 @@ from orchestrator.tests.test_prompt_contracts import (
 
 
 DEFAULT_QUESTION_IDS = DEFAULT_CREATIVITY_QUESTION_IDS
-LITERATURE_QUESTION_IDS = DEFAULT_QUESTION_IDS + (
-    "character_idiolect", "reader_emotion", "reader_legibility", "meaningful_surprise",
-)
+LITERATURE_QUESTION_IDS = DEFAULT_CREATIVITY_QUESTION_IDS
 
 
 class CreativityEvaluationFixture(unittest.TestCase):

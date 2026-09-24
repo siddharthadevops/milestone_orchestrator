@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from orchestrator import driver, runners, service
+from orchestrator import contracts, driver, prompt_contracts, prompt_router, runners, service
 from orchestrator import prompt_sets as ps
 from orchestrator import state as st
 
@@ -306,6 +306,86 @@ class PromptSetStoreTest(unittest.TestCase):
         )
         self.assertIsNone(second.prompt_set_fallback)
         self.assertEqual(set(self.stored_bytes()), before_files)
+
+    def test_creativity_questions_reload_without_changing_an_already_bound_call(self):
+        directory = self.write_set("live")
+        values = {
+            "workspace": "/workspace", "objective": "Explore useful alternatives.",
+            "context": "", "references": "[]", "creativity_semantics": "fragments_v3",
+            "gene_count": 1,
+        }
+
+        def resolve():
+            return prompt_router.resolve(
+                self.home, job="create_genes@creativity", executor="agent_call",
+                material="default", values=values, prompt_set="live",
+            )
+
+        first = resolve()
+        first_prompt = copy.deepcopy(first.prompt)
+        first_bound = prompt_contracts.bind(first.prompt)
+        member = directory / "milestone/create_genes.json"
+        document = json.loads(member.read_text(encoding="utf-8"))
+        document["questions"]["items"][0] = {
+            "id": "new_live_question", "text": "What fresh possibility does this pool open?",
+        }
+        member.write_text(json.dumps(document), encoding="utf-8")
+
+        second = resolve()
+        second_bound = prompt_contracts.bind(second.prompt)
+        self.assertIsNone(second.prompt_set_fallback)
+        self.assertEqual(first.prompt, first_prompt)
+        self.assertEqual(first_bound.question_ids[0], "substantive_originality")
+        self.assertEqual(second_bound.question_ids[0], "new_live_question")
+        self.assertEqual(first_bound.question_ids[1:], second_bound.question_ids[1:])
+
+        reply = {
+            "gene_pool": ["shared shelter"],
+            "questions": [
+                {"id": question_id, "answer": "Inspected the supplied repertoire."}
+                for question_id in first_bound.question_ids
+            ],
+        }
+        prompt_contracts.validate(
+            first_bound, reply, creativity_semantics="fragments_v3", gene_count=1,
+        )
+        with self.assertRaises(contracts.ContractError):
+            prompt_contracts.validate(
+                second_bound, reply, creativity_semantics="fragments_v3", gene_count=1,
+            )
+
+    def test_creativity_scoring_instructions_reload_without_changing_reply_contract(self):
+        directory = self.write_set("live")
+        values = {
+            "workspace": "/workspace", "search_material": "{}", "compositions": "[]",
+            "creativity_semantics": "fragments_v3",
+        }
+
+        def resolve():
+            return prompt_router.resolve(
+                self.home, job="evaluate_candidates@creativity", executor="agent_call",
+                material="default", values=values, prompt_set="live",
+            )
+
+        first = resolve()
+        first_prompt = copy.deepcopy(first.prompt)
+        first_bound = prompt_contracts.bind(first.prompt)
+        member = directory / "milestone/evaluate_candidates.json"
+        document = json.loads(member.read_text(encoding="utf-8"))
+        marker = "LIVE CALIBRATION: justify every criterion in reason before averaging into score."
+        document["instructions"]["parts"].append({"text": [marker], "variables": []})
+        member.write_text(json.dumps(document), encoding="utf-8")
+
+        second = resolve()
+        second_bound = prompt_contracts.bind(second.prompt)
+        self.assertIsNone(second.prompt_set_fallback)
+        self.assertEqual(first.prompt, first_prompt)
+        self.assertNotIn(marker, prompt_router.render(first.prompt, values))
+        self.assertIn(marker, prompt_router.render(second.prompt, values))
+        self.assertEqual(first_bound.registered_section_ids, second_bound.registered_section_ids)
+        self.assertEqual(first_bound.question_ids, second_bound.question_ids)
+        self.assertEqual(first.prompt["questions"], second.prompt["questions"])
+        self.assertEqual(first.prompt["output_contract"], second.prompt["output_contract"])
 
     def test_default_install_is_missing_only_at_home_boundaries(self):
         def driver_start(home, workspace):

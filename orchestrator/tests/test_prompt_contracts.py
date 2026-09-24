@@ -100,7 +100,8 @@ def sparse_creation_reply():
 
 
 DEFAULT_CREATIVITY_QUESTION_IDS = (
-    "machinery_trust", "environment_fit", "human_scale",
+    "substantive_originality", "productive_connections", "unexamined_assumptions",
+    "creative_potential", "consequences_and_tensions", "contribution_to_brief",
 )
 
 
@@ -534,6 +535,51 @@ class PromptContractsTest(unittest.TestCase):
             "create_genes", {"three_fragments": valid}, invalid,
             creativity_semantics="fragments_v3", gene_count=3,
         )
+
+    def test_creativity_requires_every_new_question_and_rejects_retired_answers(self):
+        values = validation_values(prompt_sets.default_seed())
+        values.pop("task_executor_catalogue")
+        replies = {
+            "create_genes": {"gene_pool": ["casa", "roja", "limpiar"]},
+            "compose_candidates": {"compositions": [
+                {"candidate_id": "c1", "proposal": "Use the supplied seed."},
+            ]},
+            "evaluate_candidates": {"evaluations": [{
+                "candidate_id": "c1", "constraint_valid": True,
+                "constraint_violations": [], "reason": "Answers the brief.",
+                "assumptions": [], "score": 0.5,
+            }]},
+        }
+        context = dict(creativity_semantics="fragments_v3", gene_count=3,
+                       candidate_ids=["c1"], constraint_ids=[])
+        retired = ("machinery_trust", "environment_fit", "human_scale",
+                   "character_idiolect", "reader_emotion", "reader_legibility",
+                   "meaningful_surprise")
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            for material in ("default", "literature", "business"):
+                for kind, payload in replies.items():
+                    with self.subTest(material=material, kind=kind):
+                        served = prompt_router.resolve(
+                            home, job=kind + "@creativity", executor="agent_call",
+                            material=material, values=values,
+                        ).prompt
+                        bound = prompt_contracts.bind(served)
+                        self.assertEqual(bound.question_ids, DEFAULT_CREATIVITY_QUESTION_IDS)
+                        answers = question_answers(DEFAULT_CREATIVITY_QUESTION_IDS)
+                        prompt_contracts.validate(bound, dict(payload, questions=answers), **context)
+                        for missing in range(len(answers)):
+                            with self.subTest(missing=answers[missing]["id"]):
+                                with self.assertRaises(contracts.ContractError):
+                                    prompt_contracts.validate(bound, dict(
+                                        payload, questions=answers[:missing] + answers[missing + 1:],
+                                    ), **context)
+                        for old_id in retired:
+                            with self.subTest(retired=old_id):
+                                with self.assertRaises(contracts.ContractError):
+                                    prompt_contracts.validate(bound, dict(
+                                        payload, questions=[dict(answers[0], id=old_id)] + answers[1:],
+                                    ), **context)
 
     def test_fragment_canonical_material_uses_shared_variants(self):
         reply = sparse_creation_reply()
