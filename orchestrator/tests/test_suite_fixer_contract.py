@@ -153,7 +153,7 @@ class SuiteFixerContractTest(unittest.TestCase):
             self.assertIn(REJECTION_ID, text)
             self.assertNotIn("The checkpoint failure is new evidence", text)
         for job in ("review_round@slice_impl", "delta_review@slice_impl"):
-            prepared = self.prepare(job)
+            prepared = self.prepare(job, contestable_ids=[DEBT["id"], REJECTION_ID])
             finding = report_finding()
             finding["contests"] = {
                 "rejection_id": DEBT["id"], "new_evidence": "Current test failed."

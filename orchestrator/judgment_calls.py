@@ -218,6 +218,7 @@ def prepare(
     suite_repair=None,
     suite_checkpoint_origin=False,
     adjudication_ids=(),
+    contestable_ids=(),
 ):
     """Freshly resolve, render, bind, and pair one direct technical charge."""
     if job not in JUDGMENT_JOBS:
@@ -230,7 +231,7 @@ def prepare(
         "operator_amendments", "ecosystem_map", "queued_findings",
         "contract_correction", "fixer_recovery_state",
         "verification_commands", "periodic_checkpoint", "suite_repair",
-        "suite_checkpoint_origin", "adjudication_ids",
+        "suite_checkpoint_origin", "adjudication_ids", "contestable_ids",
     )):
         raise prompt_router.PromptRouterError(
             "judgment-owned values are adapter-owned"
@@ -252,6 +253,18 @@ def prepare(
             "only fix_findings accepts suite origin or adjudication ids"
         )
     frozen_adjudication_ids = tuple(adjudication_ids)
+    if not isinstance(contestable_ids, (tuple, list, set, frozenset)) or any(
+        not isinstance(entry, str) or not entry.strip()
+        for entry in contestable_ids
+    ):
+        raise prompt_router.PromptRouterError(
+            "contestable ids must be a collection of non-empty strings"
+        )
+    if kind not in ("review_round", "delta_review") and contestable_ids:
+        raise prompt_router.PromptRouterError(
+            "only review_round and delta_review accept contestable ids"
+        )
+    frozen_contestable_ids = frozenset(contestable_ids)
     frozen_suite_commands = None
     if kind == "suite_checkpoint":
         if configured_suite_commands is not None:
@@ -352,6 +365,10 @@ def prepare(
     )
     if suite_checkpoint_origin:
         runtime_instructions += (prompts.suite_checkpoint_fix_instruction(),)
+    if kind in ("review_round", "delta_review"):
+        runtime_instructions += (
+            prompts.review_contests_instruction(frozen_contestable_ids),
+        )
     runtime_sections = (
         (prompts.need_rethink_output_section(),)
         if rethink_enabled else ()
@@ -584,6 +601,7 @@ def prepare(
                 periodic_checkpoint=frozen_periodic_checkpoint,
                 suite_checkpoint_origin=suite_checkpoint_origin,
                 adjudication_ids=frozen_adjudication_ids,
+                contestable_ids=frozen_contestable_ids,
                 workspace=validation_workspace,
                 extension_fields=extension_fields,
             ),

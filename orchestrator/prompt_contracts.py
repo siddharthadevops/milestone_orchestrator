@@ -218,7 +218,6 @@ def _problem_rethink(obj, bound, options, ctx):
 
 
 def _review_result(obj, bound, options, ctx):
-    del options
     status = _status(
         obj, bound, ("ok", "blocked", "need_rethink"), ctx, _REVIEW_KINDS
     )
@@ -226,9 +225,21 @@ def _review_result(obj, bound, options, ctx):
         return
     findings = _require(obj, "findings", list, ctx)
     for index, finding in enumerate(findings):
+        finding_ctx = "%s.findings[%d]" % (ctx, index)
         _report_finding(
-            finding, "%s.findings[%d]" % (ctx, index), require_plain=True
+            finding, finding_ctx, require_plain=True
         )
+        contests = finding.get("contests")
+        contestable_ids = options["contestable_ids"]
+        if contests is not None and contestable_ids is not None:
+            if contests["rejection_id"] not in contestable_ids:
+                raise contracts.ContractError(
+                    "%s: contests.rejection_id %r must name a current "
+                    "adjudicated rejection or active debt; historical or "
+                    "already-contested debt is not contestable. Keep the "
+                    "finding with contests: null if no current reference applies"
+                    % (finding_ctx, contests["rejection_id"])
+                )
     contracts._assert_unique_finding_ids(findings, ctx)
     if "notes" in obj:
         _require(obj, "notes", str, ctx)
@@ -1126,6 +1137,7 @@ def validate(bound, obj, *, queued_findings=None,
              candidate_ids=None, constraint_ids=None,
              dimensions=None, creativity_semantics=None,
              suite_checkpoint_origin=False, adjudication_ids=None,
+             contestable_ids=None,
              duel_round=None):
     """Validate a reply against served sections, using trusted caller context."""
     if not isinstance(bound, BoundContract):
@@ -1144,6 +1156,7 @@ def validate(bound, obj, *, queued_findings=None,
         "creativity_semantics": creativity_semantics,
         "suite_checkpoint_origin": suite_checkpoint_origin,
         "adjudication_ids": adjudication_ids,
+        "contestable_ids": contestable_ids,
         "duel_round": duel_round,
     }
     for section_id in bound.registered_section_ids:

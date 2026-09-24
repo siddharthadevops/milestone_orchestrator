@@ -30,7 +30,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from orchestrator import contracts, driver as drv
+from orchestrator import contracts, driver as drv, judgment_calls, prompt_contracts
 from orchestrator import prompt_router
 from orchestrator import runners
 from orchestrator import state as st
@@ -1635,17 +1635,18 @@ class TestFixerProtocolFailures(DriverTestCase):
             self.assertIsNone(result.get("adjudication_ref"))
             self.assertEqual(st.registry_ids(state), {"skeleton-codex-r1/F1"})
 
-    def test_contests_with_unknown_rejection_id_fails_run(self):
+    def test_twice_unknown_contest_uses_existing_worker_output_failure(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
+            invalid = step("review_round",
+                           report("review_round", [finding(
+                               "F1", "re-raising a settled point",
+                               contests={"rejection_id": "nope/F1",
+                                         "new_evidence": "made-up evidence"})]),
+                           family="codex")
             mock = runners.MockRunner([
                 skeleton_script()[0],  # draft ok
-                step("review_round",
-                     report("review_round", [finding(
-                         "F1", "re-raising a settled point",
-                         contests={"rejection_id": "nope/F1",
-                                   "new_evidence": "made-up evidence"})]),
-                     family="codex"),
+                invalid, copy.deepcopy(invalid),
             ])
             driver = drv.Driver(path, runner=mock)
             _actions, final = self.drive(driver)
@@ -1653,11 +1654,15 @@ class TestFixerProtocolFailures(DriverTestCase):
             self.assertEqual(mock.script, [])
             self.assert_failed(
                 path, driver,
-                ["contests unknown adjudication", "nope/F1"],
+                ["contract-violating output twice", "contests.rejection_id", "nope/F1"],
                 unit_key="skeleton",
             )
+            self.assertEqual(st.load(path)["failure"]["type"], "worker_output")
+            review_calls = [call for call in mock.calls if call[1] == "review_round"]
+            self.assertEqual(len(review_calls), 2)
+            self.assertIn("CONTRACT CORRECTION", review_calls[-1][2])
 
-    def test_structural_failure_does_not_save_before_call_accounting(self):
+    def test_legacy_structural_failure_does_not_save_before_call_accounting(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
             runner = runners.MockRunner([
@@ -1674,7 +1679,20 @@ class TestFixerProtocolFailures(DriverTestCase):
                 lambda state: state["units"][0]["status"] == st.U_ROUNDS,
             )
 
+            prepare = judgment_calls.prepare
+
+            def legacy_prepare(*args, **kwargs):
+                prepared = prepare(*args, **kwargs)
+                # Old persisted tasks may carry structural-only validation;
+                # explicitly bypass current reference binding to reach the
+                # retained post-call integrity defense.
+                return prepared._replace(validate=lambda output: prompt_contracts.validate(
+                    prepared.bound, output,
+                ))
+
             with mock.patch.object(
+                judgment_calls, "prepare", side_effect=legacy_prepare,
+            ), mock.patch.object(
                 driver,
                 "_record_worker_unaccepted",
                 side_effect=KeyboardInterrupt(),

@@ -2118,6 +2118,20 @@ def need_rethink_output_section():
     }
 
 
+def review_contests_instruction(contestable_ids):
+    """Current references only, including for already-installed prompt sets."""
+    return {
+        "text": [
+            "CONTEST REFERENCES",
+            "Only cite the current adjudicated rejection or active debt IDs listed below.",
+            "An ID found only in historical records or raw outputs is not contestable:",
+            "report the finding with contests: null instead.",
+            "Contestable IDs: " + json.dumps(sorted(contestable_ids), ensure_ascii=False),
+        ],
+        "variables": [],
+    }
+
+
 def suite_checkpoint_fix_instruction():
     """Runtime rule for fresh checkpoint evidence, including installed prompts."""
     return {

@@ -2656,6 +2656,13 @@ class Driver(object):
                     sorted(st.registry_ids(self.state))
                     if kind == contracts.KIND_FIX_FINDINGS else ()
                 ),
+                contestable_ids=(
+                    st.registry_ids(self.state) | st.debt_ids(self.state)
+                    if kind in (
+                        contracts.KIND_REVIEW_ROUND,
+                        contracts.KIND_DELTA_REVIEW,
+                    ) else ()
+                ),
             )
 
         return prepare
@@ -11920,11 +11927,11 @@ class Driver(object):
         return fam
 
     def _validate_contests(self, unit, output, kind):
-        """Structural check: a finding's contests.rejection_id must exist in
-        the milestone registry — adjudicated rejections OR tracked debt,
-        the two ways a finding gets dispatched without a fix. A bad
-        reference is a protocol violation and fails the run with the
-        explanation."""
+        """Secondary defense for outputs from older task contracts.
+
+        Fresh review calls check these references inside their correctable
+        contract. Only current adjudications and active debt are contestable.
+        """
         known = st.registry_ids(self.state) | st.debt_ids(self.state)
         for f in output.get("findings", []):
             contests = f.get("contests")
