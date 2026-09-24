@@ -888,10 +888,15 @@ def _duel_author(obj, bound, options, ctx):
 def _duel_review(obj, bound, options, ctx):
     del options
     _kind(bound, ("duel_review",))
-    _exact_keys(obj, ("score", "report", "questions"), ctx)
-    score = _require(obj, "score", (int, float), ctx)
-    if isinstance(score, bool) or not 0 <= score <= 1:
-        raise contracts.ContractError("%s.score must be a finite number in [0, 1]" % ctx)
+    _exact_keys(obj, ("scores", "report", "questions"), ctx)
+    scores = _require(obj, "scores", dict, ctx)
+    _exact_keys(scores, ("a", "b"), ctx + ".scores")
+    for candidate_id in ("a", "b"):
+        score = _require(scores, candidate_id, (int, float), ctx + ".scores")
+        if isinstance(score, bool) or not 0 <= score <= 1:
+            raise contracts.ContractError(
+                "%s.scores.%s must be a finite number in [0, 1]" % (ctx, candidate_id)
+            )
     _text(obj, "report", ctx)
 
 
@@ -1004,7 +1009,7 @@ def _allowed_fields(bound, obj):
         elif section_id == "duel_author_result":
             allowed.update(("action", "artifacts", "summary", "questions"))
         elif section_id == "duel_review_result":
-            allowed.update(("score", "report", "questions"))
+            allowed.update(("scores", "report", "questions"))
         elif section_id == "reclassify_result":
             allowed.update((
                 "status", "kind", "drift_risk", "drift_damage", "reason",

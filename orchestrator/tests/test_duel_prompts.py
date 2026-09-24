@@ -1,4 +1,4 @@
-"""Duel's independent routes, context questions and operational replies."""
+"""Duel's own routes, shared comparative review and operational replies."""
 
 import copy
 import json
@@ -22,7 +22,13 @@ class DuelPromptsTest(unittest.TestCase):
             "context": "{}", "references": "[]", "candidate_id": "a",
             "candidate_directory": "/workspace/duel/a",
             "opponent_directory": "/workspace/duel/b", "round": 1,
-            "max_rounds": 3, "previous_reviews": "[]", "artifacts": '["proposal.md"]',
+            "max_rounds": 3, "previous_reviews": "[]",
+            "candidates": json.dumps([
+                {"id": "a", "directory": "/workspace/duel/a", "artifacts": ["proposal.md"],
+                 "finished": False, "production_round": 1},
+                {"id": "b", "directory": "/workspace/duel/b", "artifacts": ["alternative.md"],
+                 "finished": True, "production_round": 1},
+            ]),
         }
 
     def route(self, role, prompt_set_name="default", material="document"):
@@ -37,7 +43,7 @@ class DuelPromptsTest(unittest.TestCase):
         reply = (
             {"action": "revise", "artifacts": ["proposal.md", "appendix/sources.md"], "summary": "Wrote the complete proposal."}
             if role == "author" else
-            {"score": 0.7, "report": "# Review\nThe proposed schedule omits the stated delivery constraint."}
+            {"scores": {"a": 0.7, "b": 0.6}, "report": "# Review\nA omits the delivery constraint; B provides a schedule A could adopt."}
         )
         reply["questions"] = [{"id": item, "answer": "No supporting evidence found."} for item in bound.question_ids]
         return bound, reply
@@ -51,18 +57,28 @@ class DuelPromptsTest(unittest.TestCase):
                 self.assertEqual(served["kind"], "duel_" + role)
                 self.assertEqual(bound.registered_section_ids, ("duel_" + role + "_result", "questions_output"))
                 self.assertTrue(all(identifier.startswith(role + "_") for identifier in bound.question_ids))
-                self.assertIn("candidate_id: a", rendered)
-                self.assertIn("candidate_directory: /workspace/duel/a", rendered)
                 self.assertIn("round: 1", rendered)
                 self.assertIn("driver discards", rendered)
                 self.assertNotIn("ready_revision", rendered)
+                self.assertEqual(len(bound.question_ids), 4)
                 if role == "author":
+                    self.assertIn("candidate_id: a", rendered)
+                    self.assertIn("candidate_directory: /workspace/duel/a", rendered)
                     self.assertIn("opponent_directory: /workspace/duel/b", rendered)
                     self.assertIn("No diversity", rendered)
+                    self.assertIn("one shared report", rendered)
+                    self.assertIn("same comparative report", rendered)
+                    self.assertIn("Copying is optional", rendered)
                 else:
-                    self.assertNotIn("/workspace/duel/b", rendered)
+                    self.assertIn("CANDIDATES (JSON):", rendered)
+                    self.assertIn(self.values["candidates"], rendered)
+                    self.assertNotIn("candidate_id:", rendered)
+                    self.assertNotIn("CANDIDATE ARTIFACTS", rendered)
                     self.assertNotIn("PREVIOUS REVIEWS", rendered)
                     self.assertIn("Do not concede merely because a claim sounds", rendered)
+                    self.assertIn("one shared comparative report", rendered)
+                    self.assertIn("including any candidate already marked finished", rendered)
+                    self.assertIn("Do not invent differences or force a winner or unequal scores", rendered)
 
     def test_author_contract_requires_real_delivery_shape_and_initial_production(self):
         bound, reply = self.replies("author")
@@ -83,18 +99,28 @@ class DuelPromptsTest(unittest.TestCase):
                 with self.assertRaises(contracts.ContractError):
                     prompt_contracts.validate(bound, record, duel_round=round_number)
 
-    def test_review_contract_has_no_vote_and_only_checks_score_and_report_shape(self):
+    def test_joint_review_contract_requires_both_scores_and_one_report(self):
         bound, reply = self.replies("review")
-        for score in (0, 0.5, 1):
-            record = dict(reply, score=score)
-            self.assertIs(prompt_contracts.validate(bound, record), record)
-        for score in (True, -0.01, 1.01, float("nan"), float("inf"), "0.7"):
-            with self.subTest(score=score):
+        for candidate in ("a", "b"):
+            for score in (0, 0.5, 1):
+                record = dict(reply, scores=dict(reply["scores"], **{candidate: score}))
+                self.assertIs(prompt_contracts.validate(bound, record), record)
+            for score in (True, False, -0.01, 1.01, float("nan"), float("inf"), "0.7"):
+                with self.subTest(candidate=candidate, score=score):
+                    with self.assertRaises(contracts.ContractError):
+                        prompt_contracts.validate(bound, dict(reply, scores={"a": 0.7, "b": 0.6, candidate: score}))
+        invalid = [
+            dict(reply, scores={"a": 0.7}), dict(reply, scores={"b": 0.6}),
+            dict(reply, scores={"a": 0.7, "b": 0.6, "c": 0.8}),
+            dict(reply, scores=[0.7, 0.6]), dict(reply, report=" "),
+            dict(reply, vote="accept"), dict(reply, score=0.7),
+            {"score": 0.7, "report": reply["report"], "questions": reply["questions"]},
+            dict(reply, report={"a": "Review A", "b": "Review B"}),
+        ]
+        for record in invalid:
+            with self.subTest(record=record):
                 with self.assertRaises(contracts.ContractError):
-                    prompt_contracts.validate(bound, dict(reply, score=score))
-        for record in (dict(reply, report=" "), dict(reply, vote="accept")):
-            with self.assertRaises(contracts.ContractError):
-                prompt_contracts.validate(bound, record)
+                    prompt_contracts.validate(bound, record)
 
     def test_context_answers_have_structural_but_no_semantic_authority(self):
         for role in ("author", "review"):
@@ -135,7 +161,7 @@ class DuelPromptsTest(unittest.TestCase):
                 reviewer = self.route("review", set_name).prompt
                 rendered = prompt_router.render(reviewer, self.values)
                 self.assertIn("Try to disprove", rendered)
-                self.assertIn("DANTE'S ANTI-DRIFT QUESTIONS FOR THE AUTHOR", rendered)
+                self.assertIn("DANTE'S ANTI-DRIFT QUESTIONS FOR THE AUTHORS", rendered)
                 self.assertIn("few simple, awkward questions", rendered)
                 self.assertIn("observable\ndamage", rendered)
                 self.assertIn("ordinary permitted operation", rendered)
@@ -144,10 +170,15 @@ class DuelPromptsTest(unittest.TestCase):
                 self.assertIn('"No further questions."', rendered)
                 self.assertIn("not only in the top-level questions", rendered)
                 self.assertIn("extra agent, separate turn, vote, readiness field or condition", rendered)
+                self.assertIn("1 es obra maestra. te borrarías antes que tocar un byte de ese trabajo entregado.", rendered)
+                self.assertIn("no prescribed bands, intermediate anchors or target distribution", rendered)
+                self.assertNotRegex(rendered, r"\b0\.[0-9]+\b")
+                self.assertNotIn("0: unusable", rendered)
+                self.assertIn("Keep scoring independent of the criticism and anti-drift questions", rendered)
                 bound = prompt_contracts.bind(reviewer)
                 reply = {
-                    "score": 0.8,
-                    "report": "# Assessment\nUseful plan; delivery timing is uncertain.\n\n## Questions for the author\nWho needs the result before the stated deadline?",
+                    "scores": {"a": 0.8, "b": 0.8},
+                    "report": "# Shared assessment\nA's structure helps B; B's schedule helps A.\n\n## Questions for both authors\nWho needs the result before the stated deadline?",
                     "questions": [{"id": item, "answer": "Inspected the request."} for item in bound.question_ids],
                 }
                 self.assertIs(prompt_contracts.validate(bound, reply), reply)

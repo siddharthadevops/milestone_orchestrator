@@ -81,15 +81,16 @@
           "Write all deliverables only inside candidate_directory. The rest of the workspace is",
           "reading context, not permission to edit the repository. Leave documents on disk.",
           "Round 1 is mandatory production: write the first complete version and return action revise.",
-          "For later rounds, both candidates have been evaluated independently. Read your current",
-          "documents and the previous review reports at the supplied paths. Read their criticism and",
-          "the anti-drift questions addressed to you. Address grounded questions through relevant",
-          "revisions or a brief evidenced explanation in summary when no change is warranted.",
+          "For later rounds, both candidates have been evaluated together in one shared report.",
+          "Read your current documents, that report at the supplied paths, and the opponent's version.",
+          "Both previous_reviews entries point to the same comparative report, with a score for each.",
+          "Read the criticism and anti-drift questions addressed to you, and consider what the other",
+          "version resolves better and what you can use from it. Address grounded questions through",
+          "relevant revisions or a brief evidenced explanation in summary when no change is warranted.",
           "Challenge unsupported premises; do not invent changes or disagreement just to answer.",
-          "Improve your version",
-          "where concrete criticism warrants it; do not make cosmetic changes to simulate progress.",
-          "You may inspect and copy anything useful from the opponent into your own documents.",
-          "Copying is optional; improving solely from your own review is equally valid.",
+          "Improve your version where concrete criticism or the comparison warrants it; do not make",
+          "cosmetic changes to simulate progress. You may copy anything useful from the opponent",
+          "into your own documents. Copying is optional; improving solely from the criticism is valid.",
           "No diversity, difference from the opponent, or rivalry is required. Preserve good work",
           "and defend decisions against unsupported criticism instead of accepting every suggestion.",
           "Return action revise after writing an improved version. Do the best complete work you can",
@@ -105,7 +106,7 @@
       {
         "text": [
           "opponent_directory: {{opponent_directory}}",
-          "PREVIOUS REVIEWS (JSON; both candidate IDs, scores and report paths, empty in round 1):",
+          "PREVIOUS REVIEWS (JSON; both candidate IDs and scores, one shared report path, empty in round 1):",
           "{{previous_reviews}}"
         ],
         "variables": [
@@ -117,7 +118,7 @@
           {
             "name": "previous_reviews",
             "required": true,
-            "description": "Previous independent reviews for both candidates, with scores and report paths, as JSON."
+            "description": "Previous joint evaluation as JSON: both candidate scores and their shared report path."
           }
         ]
       },
@@ -153,7 +154,7 @@
       },
       {
         "id": "author_review_response",
-        "text": "After reading your current documents and any previous report, which concrete defects and grounded anti-drift questions merit changes, which criticisms or question premises are unsupported, and what evidence explains your revision or decision to finish? In round 1, identify the weakest part of the initial work instead."
+        "text": "After reading your current documents, the shared report and the opponent's version, which concrete defects, grounded anti-drift questions or useful alternatives merit changes? What can you adopt, which criticism is unsupported, and what evidence explains your revision or decision to finish? In round 1, identify the weakest part of the initial work instead."
       },
       {
         "id": "author_complete_delivery",

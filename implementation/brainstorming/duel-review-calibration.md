@@ -1,6 +1,6 @@
 # Duel: revisión de la exigencia del evaluador
 
-24 de septiembre de 2026. Revisión posterior al cierre. Criterio actualizado en `_impl` siguiendo las dos aclaraciones del autor: máximo de obra maestra y puntuación independiente de las críticas y preguntas. Las notas del duelo cerrado permanecen intactas.
+24 de septiembre de 2026. Revisión posterior al cierre. Criterio actualizado en `_impl`: una evaluación conjunta, un informe compartido y únicamente la definición de obra maestra para el máximo; las notas son independientes de las críticas y preguntas. Las notas del duelo cerrado permanecen intactas.
 
 El duelo `f404ef98-f6ca-400e-b8ff-bebe06e6e676` terminó correctamente en la ronda 3 porque ambos autores eligieron finalizar. A conservó su producción de la ronda 1; B revisó en la ronda 2. Las notas fueron A: 1; B: 0,98 → 1. Los tres dictámenes usaron `gpt-6-astra`, esfuerzo `max`, sin fallback del prompt set `literature`, según los despachos registrados en la [API de la tarea](http://127.0.0.1:8700/api/tasks/f404ef98-f6ca-400e-b8ff-bebe06e6e676).
 
@@ -48,72 +48,30 @@ No propongo neutralizar la dureza de Marco, hacer razonable a todo el grupo, añ
 
 ## Criterio actualizado
 
-Una puntuación y el mismo informe. Se distinguen cumplimiento, juicio global de calidad, críticas y preguntas. **La puntuación es independiente de las críticas y preguntas**: no se calcula, limita ni ajusta por su número, gravedad o ausencia. No encontrar una mejora no demuestra que no exista una estructura o ejecución mejor. Encontrarla tampoco activa una deducción automática. La nota debe defenderse por el resultado logrado.
+La única definición cualitativa de la escala es la literal del autor:
 
-El máximo conserva las palabras exactas del autor: **«1 es obra maestra. te borrarías antes que tocar un byte de ese trabajo entregado.»** Se descarta la interpretación anterior de usar las mejoras detectadas como condición mecánica para permitir o prohibir un 1.
+> 1 es obra maestra. te borrarías antes que tocar un byte de ese trabajo entregado.
 
-Párrafo común aplicado a default y literature:
+El evaluador elige libremente las demás notas dentro del formato numérico 0–1. No se prescriben bandas, etiquetas para notas inferiores, distribuciones ni descuentos por defectos. No encontrar una mejora no demuestra que no exista una estructura o ejecución mejor.
 
-```text
-Assess both compliance with the request and the quality of its execution for the intended
-user or reader. Distinguish those judgments in the report. The score is an independent,
-overall assessment of the delivered work: its structure, coherence, execution and achieved
-purpose, supported by positive evidence from the work itself.
-Use these qualitative anchors on the 0-1 scale:
-0: unusable or fundamentally fails the request.
-0.5: a partly successful result of limited overall quality.
-0.8: good, solid work.
-0.9: excellent work.
-The maximum has this exact definition:
-1 es obra maestra. te borrarías antes que tocar un byte de ese trabajo entregado.
-Full compliance or "no material defects found" alone does not justify 1. Being unable
-to propose an improvement does not establish that a better structure, approach or
-execution could not exist. Justify the score by the quality actually achieved, not
-by the limits of your ability to criticize it.
-Keep scoring independent of the criticism and anti-drift questions. Do not calculate,
-cap or adjust the score from their number, severity or absence. Finding no criticism
-or questions does not imply 1; raising them does not automatically lower the score.
-Explain the overall quality judgment and its evidence separately from your actionable
-criticism and open questions. Neither judgment substitutes for the other.
-For criticism, consider proportionate local improvements as well as structural alternatives.
-An improvement need not require redesigning the work or rewriting a whole scene:
-identify its location, evidenced effect and proportionate benefit. If no justified
-improvement is apparent, say so without manufacturing an objection or inferring perfection.
-Interpolate only as the evidence warrants. These anchors are not quotas or automatic
-deductions: do not start at 1 and subtract penalties, impose a distribution, or imply
-precision that the evidence cannot support. Acknowledge uncertainty. Judge the requested
-purpose and form without adding requirements, prescribing another style, comparing
-candidates or requiring diversity.
-Top-level questions support context gathering, not extra scoring dimensions.
-Neither your report nor your score determines whether an author must stop.
-```
+La puntuación de cada trabajo es un juicio sobre la calidad del resultado frente al encargo. Se justifica por separado de las críticas y de las preguntas de Dante. La comparación permite reconocer soluciones mejores, pero no obliga a que las notas sean distintas ni convierte a la mejor de las dos versiones en una obra maestra.
 
-Adición específica a literature:
+## Una evaluación y un informe para los dos autores
 
-```text
-Distinguish whether a requested beat is present from how effectively the prose makes
-the reader experience it. Ground judgments about rhythm, voice, tension, emotion and
-clarity in passages and their surrounding context, using the supplied voice references
-when relevant. A weakness may reduce an intended effect without preventing comprehension.
-Explain that effect without treating taste as fact, prescribing a different style,
-or neutralizing character agency and conflict. The author's delivery note is context,
-not proof that the prose achieves its claims.
-```
+Después de la producción paralela, una sola llamada del revisor lee las dos versiones completas y devuelve dos notas junto con un único informe comparativo. Identifica los logros y problemas de cada trabajo y qué decisiones de uno podrían mejorar el otro, incluyendo estructura y ejecución. Oposición busca alternativas mejores y objeciones sustentadas; Dante hace preguntas concretas para evitar deriva. No se fabrican defectos ni preguntas.
 
-Dos preguntas de contexto actualizadas, conservando sus identificadores y sin aumentar la tanda:
+Ambos autores reciben exactamente el mismo documento y las ubicaciones de las dos versiones. Se les invita a aprovechar o copiar lo que funcione en el oponente, sin imponer copia, diversidad ni una fusión final. Cada uno sigue escribiendo exclusivamente su versión y puede darla por terminada. Las dos versiones se entregan.
 
-- `review_better_alternative`: «Can a materially better approach or a proportionate local change improve the same requested result within its constraints? Identify the concrete benefit, or explain why the strongest plausible intervention would not help.»
-
-- `review_reader_use`: «Read the candidate as its intended user or audience. Which specific passage or omission most weakens the requested result, even if the work remains understandable and usable? Ground the effect in evidence and distinguish it from preference. If none does, explain what supports that conclusion.»
-
-Oposición mantiene la búsqueda de objeciones sustentadas y alternativas mejores. Dante conserva sus preguntas concretas y abiertas en `report`, sin responderlas ni disfrazar soluciones. Las respuestas a las preguntas de contexto siguen descartándose y no determinan la nota. La defensa autónoma de la puntuación, las críticas y las preguntas deben quedar distinguibles en el informe que recibe el autor.
+Mientras un autor siga trabajando, la revisión conjunta considera ambas versiones vigentes, incluida la del autor que haya finalizado; esa comparación no vuelve a activar al autor terminado. Si ambos terminan, no hay otra llamada de revisión.
 
 ## Alcance de los cambios
 
-El párrafo común y las dos preguntas se aplican a `default` y `literature`; la adición literaria solo a `literature`. Las fuentes son el [seed de default](../../orchestrator/prompt_set_seed.py), su [espejo legible](prompt-router/adapted-kinds/duel/duel_review.json) y el [set literature](../../prompt_sets/literature/duel/duel_review.json). Los dos documentos persistidos activos bajo `~/.impl_roadmap/prompt_sets/` deben contener el mismo criterio: modificar solo el seed no actualizaría por sí mismo esta instalación.
+El contrato del revisor devuelve `scores: {a, b}`, `report` y `questions`. Las respuestas a las preguntas de contexto se descartan; las notas y el informe se conservan. Cada candidato mantiene su nota y ambos apuntan al mismo `reports/round-NNN/review.md`, también mostrado como informe compartido en el panel.
 
-El contrato JSON (`score`, `report`, `questions`), el revisor común, el paralelismo, el esfuerzo `max`, los rigores y las reglas de cierre siguen sirviendo. No hacen falta más agentes, nuevas votaciones, umbrales de parada ni campos de resultado. El criterio no reevalúa retrospectivamente las notas ni altera las trazas de la ejecución cerrada.
+El [seed de default](../../orchestrator/prompt_set_seed.py), su [espejo legible](prompt-router/adapted-kinds/duel/duel_review.json), el [set literature](../../prompt_sets/literature/duel/duel_review.json) y los prompts de autor reflejan la revisión conjunta. Se conservan las preguntas propias de ambos sets y el enfoque literario de voz, efecto lector y continuidad. El revisor sigue siendo la primera plaza de review, Codex por defecto; todas las llamadas continúan en `max` y los tres rigores siguen seleccionando los modelos.
+
+La actualización de los cuatro documentos persistidos de Duel bajo `~/.impl_roadmap/prompt_sets/` se realiza al activar el nuevo driver y contrato: los prompts de revisión conjunta no son compatibles con el driver anterior. La ejecución que seguía en marcha durante este cambio conserva sus prompts y sus notas; no se cambia su criterio a mitad de ronda.
 
 ## Ubicación de los nuevos duelos
 
-El directorio por defecto pasa de `<workspace>/duel/<task-id>` a `<workspace>/implementation/duel/<task-id>`, con `a/`, `b/` y `reports/` dentro. Una salida explícita conserva su ubicación elegida. Los checkpoints existentes conservan sus rutas; el primer duelo no se traslada ni pierde sus enlaces.
+El directorio por defecto sigue siendo `<workspace>/implementation/duel/<task-id>`, con `a/`, `b/` y `reports/` dentro. Una salida explícita conserva su ubicación elegida. Los checkpoints existentes conservan sus rutas; el primer duelo no se traslada ni pierde sus enlaces.

@@ -5753,10 +5753,16 @@ function creativityResult(native, material = null, sparse = false) {
     creativityProposals(native.proposals, material, sparse);
 }
 function duelCandidates(candidates, taskId = null) {
-  return (candidates || []).map(candidate => {
+  candidates = candidates || [];
+  const documentLink = (key, path) =>
+    taskId ? `<span class="morelink" onclick="showDoc(${esc(JSON.stringify(key))},${esc(JSON.stringify(taskId))})">${esc(path)}</span>` : esc(path);
+  const sharedReport = candidates.length === 2 && candidates[0].report_path &&
+    candidates.every(candidate => candidate.report_path === candidates[0].report_path)
+    ? candidates[0] : null;
+  const review = sharedReport ? `<div class="story-note"><b>Shared comparative review</b></div>` +
+    `<div class="story-note mono">${documentLink(`duel:${sharedReport.id}:report`, sharedReport.report_path)}</div>` : "";
+  return review + candidates.map(candidate => {
     const artifacts = Array.isArray(candidate.artifacts) ? candidate.artifacts : [];
-    const documentLink = (key, path) =>
-      taskId ? `<span class="morelink" onclick="showDoc(${esc(JSON.stringify(key))},${esc(JSON.stringify(taskId))})">${esc(path)}</span>` : esc(path);
     return `<details class="card" data-task-detail-key="duel-candidate:${esc(candidate.id)}" open>` +
       `<summary>Candidate ${esc(String(candidate.id).toUpperCase())}` +
       ` · ${candidate.finished ? "Finished by author" : "Open to improvement"}</summary>` +
@@ -5769,7 +5775,7 @@ function duelCandidates(candidates, taskId = null) {
       (artifacts.length ? artifacts.map((path, index) =>
         `<div class="story-note mono">${documentLink(`duel:${candidate.id}:artifact:${index}`, path)}</div>`).join("")
         : `<div class="story-note">No documents produced yet.</div>`) +
-      (candidate.report_path ? `<div class="story-note"><b>Review report</b></div>` +
+      (candidate.report_path && !sharedReport ? `<div class="story-note"><b>Review report</b></div>` +
         `<div class="story-note mono">${documentLink(`duel:${candidate.id}:report`, candidate.report_path)}</div>` : "") + `</details>`;
   }).join("");
 }

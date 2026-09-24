@@ -6727,31 +6727,36 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                 'write the first complete version '
                                                                 'and return action revise.',
                                                                 'For later rounds, both candidates '
-                                                                'have been evaluated '
-                                                                'independently. Read your current',
-                                                                'documents and the previous review '
-                                                                'reports at the supplied paths. '
-                                                                'Read their criticism and',
-                                                                'the anti-drift questions '
-                                                                'addressed to you. Address '
-                                                                'grounded questions through '
-                                                                'relevant',
-                                                                'revisions or a brief evidenced '
-                                                                'explanation in summary when no '
-                                                                'change is warranted.',
+                                                                'have been evaluated together in '
+                                                                'one shared report.',
+                                                                'Read your current documents, that '
+                                                                'report at the supplied paths, and '
+                                                                "the opponent's version.",
+                                                                'Both previous_reviews entries '
+                                                                'point to the same comparative '
+                                                                'report, with a score for each.',
+                                                                'Read the criticism and anti-drift '
+                                                                'questions addressed to you, and '
+                                                                'consider what the other',
+                                                                'version resolves better and what '
+                                                                'you can use from it. Address '
+                                                                'grounded questions through',
+                                                                'relevant revisions or a brief '
+                                                                'evidenced explanation in summary '
+                                                                'when no change is warranted.',
                                                                 'Challenge unsupported premises; '
                                                                 'do not invent changes or '
                                                                 'disagreement just to answer.',
-                                                                'Improve your version',
-                                                                'where concrete criticism warrants '
-                                                                'it; do not make cosmetic changes '
-                                                                'to simulate progress.',
-                                                                'You may inspect and copy anything '
-                                                                'useful from the opponent into '
-                                                                'your own documents.',
-                                                                'Copying is optional; improving '
-                                                                'solely from your own review is '
-                                                                'equally valid.',
+                                                                'Improve your version where '
+                                                                'concrete criticism or the '
+                                                                'comparison warrants it; do not '
+                                                                'make',
+                                                                'cosmetic changes to simulate '
+                                                                'progress. You may copy anything '
+                                                                'useful from the opponent',
+                                                                'into your own documents. Copying '
+                                                                'is optional; improving solely '
+                                                                'from the criticism is valid.',
                                                                 'No diversity, difference from the '
                                                                 'opponent, or rivalry is required. '
                                                                 'Preserve good work',
@@ -6783,8 +6788,9 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                       {'text': ['opponent_directory: '
                                                                 '{{opponent_directory}}',
                                                                 'PREVIOUS REVIEWS (JSON; both '
-                                                                'candidate IDs, scores and report '
-                                                                'paths, empty in round 1):',
+                                                                'candidate IDs and scores, one '
+                                                                'shared report path, empty in '
+                                                                'round 1):',
                                                                 '{{previous_reviews}}'],
                                                        'variables': [{'name': 'opponent_directory',
                                                                       'required': True,
@@ -6799,14 +6805,15 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                      {'name': 'previous_reviews',
                                                                       'required': True,
                                                                       'description': 'Previous '
-                                                                                     'independent '
-                                                                                     'reviews for '
+                                                                                     'joint '
+                                                                                     'evaluation '
+                                                                                     'as JSON: '
                                                                                      'both '
-                                                                                     'candidates, '
-                                                                                     'with scores '
-                                                                                     'and report '
-                                                                                     'paths, as '
-                                                                                     'JSON.'}]}]},
+                                                                                     'candidate '
+                                                                                     'scores and '
+                                                                                     'their shared '
+                                                                                     'report '
+                                                                                     'path.'}]}]},
                            'questions': {'intro': ['QUESTIONS (context-seeking checks): inspect '
                                                    'the relevant files and references before '
                                                    'answering.',
@@ -6828,12 +6835,13 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                             'what material gaps remain after '
                                                             'checking those sources?'},
                                                    {'id': 'author_review_response',
-                                                    'text': 'After reading your current documents '
-                                                            'and any previous report, which '
-                                                            'concrete defects and grounded '
-                                                            'anti-drift questions merit changes, '
-                                                            'which criticisms or question premises '
-                                                            'are unsupported, and what evidence '
+                                                    'text': 'After reading your current documents, '
+                                                            "the shared report and the opponent's "
+                                                            'version, which concrete defects, '
+                                                            'grounded anti-drift questions or '
+                                                            'useful alternatives merit changes? '
+                                                            'What can you adopt, which criticism '
+                                                            'is unsupported, and what evidence '
                                                             'explains your revision or decision to '
                                                             'finish? In round 1, identify the '
                                                             'weakest part of the initial work '
@@ -6890,14 +6898,11 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                              'variables': []}]}},
  'duel/duel_review.json': {'kind': 'duel_review',
                            'process': 'duel',
-                           'description': 'Independently evaluate one Duel candidate and report '
-                                          'evidence-based criticism plus concrete anti-drift '
-                                          'questions for its author.',
+                           'description': 'Evaluate both Duel candidates together, with separate '
+                                          'scores and one shared comparative report of '
+                                          'evidence-based criticism and anti-drift questions.',
                            'instructions': {'parts': [{'text': ['KIND: {{kind}}',
                                                                 'WORKSPACE: {{workspace}}',
-                                                                'candidate_id: {{candidate_id}}',
-                                                                'candidate_directory: '
-                                                                '{{candidate_directory}}',
                                                                 'round: {{round}}',
                                                                 'max_rounds: {{max_rounds}}',
                                                                 'ORIGINAL REQUEST:',
@@ -6922,19 +6927,6 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                                      'used as '
                                                                                      'reading '
                                                                                      'context.'},
-                                                                     {'name': 'candidate_id',
-                                                                      'required': True,
-                                                                      'description': 'Assigned '
-                                                                                     'candidate '
-                                                                                     'ID, a or b.'},
-                                                                     {'name': 'candidate_directory',
-                                                                      'required': True,
-                                                                      'description': 'Absolute '
-                                                                                     'directory '
-                                                                                     'containing '
-                                                                                     'the assigned '
-                                                                                     'candidate '
-                                                                                     'documents.'},
                                                                      {'name': 'round',
                                                                       'required': True,
                                                                       'description': 'Current '
@@ -6971,34 +6963,60 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                                      'as JSON.'}]},
                                                       {'ref': 'project_context'},
                                                       {'ref': 'contract_correction'},
-                                                      {'text': ['CANDIDATE ARTIFACTS (JSON; paths '
-                                                                'relative to candidate_directory):',
-                                                                '{{artifacts}}'],
-                                                       'variables': [{'name': 'artifacts',
+                                                      {'text': ['CANDIDATES (JSON):',
+                                                                '{{candidates}}'],
+                                                       'variables': [{'name': 'candidates',
                                                                       'required': True,
-                                                                      'description': 'Delivered '
-                                                                                     'candidate '
-                                                                                     'file paths '
-                                                                                     'as JSON.'}]},
+                                                                      'description': 'Both '
+                                                                                     'candidates '
+                                                                                     'as a JSON '
+                                                                                     'list: id, '
+                                                                                     'absolute '
+                                                                                     'directory, '
+                                                                                     'relative '
+                                                                                     'artifact '
+                                                                                     'paths, '
+                                                                                     'finished '
+                                                                                     'status and '
+                                                                                     'production_round.'}]},
                                                       {'text': ['You are an independent reviewer '
-                                                                'of the candidate in '
-                                                                'candidate_directory.',
-                                                                'Read its actual documents, the '
-                                                                'original request, admitted '
-                                                                'context and relevant references.',
-                                                                'Evaluate only this assigned '
-                                                                'candidate against that material. '
-                                                                'Do not inspect or compare',
-                                                                'the rival candidate, pick a '
-                                                                'winner, or make your score '
-                                                                'relative to another version.',
+                                                                'evaluating both candidates a and '
+                                                                'b in one review call.',
+                                                                'Read the actual documents listed '
+                                                                'for each candidate, the original '
+                                                                'request, admitted',
+                                                                'context and relevant references. '
+                                                                'Paths in artifacts are relative '
+                                                                "to that candidate's",
+                                                                'directory. Evaluate the current '
+                                                                'versions, including any candidate '
+                                                                'already marked finished.',
                                                                 'This is a read-only review. Do '
                                                                 'not edit candidate documents, '
                                                                 'references or the repository.',
-                                                                'Return the report as Markdown in '
-                                                                'the JSON reply; the driver saves '
-                                                                'it to a report file.',
-                                                                "Try to disprove the candidate's "
+                                                                'Return one shared comparative '
+                                                                'report as Markdown in the JSON '
+                                                                'reply; the driver saves',
+                                                                'the same report for both authors. '
+                                                                'Give each candidate its own '
+                                                                'assessment and score.',
+                                                                'Compare concrete choices of '
+                                                                'structure, approach and '
+                                                                'execution: what each version '
+                                                                'resolves',
+                                                                'better, why it works, and what '
+                                                                'the other author could use or '
+                                                                'copy to improve their work.',
+                                                                'Use evidence from both versions '
+                                                                'to expose alternatives a separate '
+                                                                'reading might miss.',
+                                                                'Encourage useful borrowing '
+                                                                'without requiring either author '
+                                                                'to copy, preserve differences',
+                                                                'or merge the versions. Do not '
+                                                                'invent differences or force a '
+                                                                'winner or unequal scores.',
+                                                                "Try to disprove each candidate's "
                                                                 'weakest premises and decisions. '
                                                                 'Look for a materially',
                                                                 'better alternative to the same '
@@ -7037,47 +7055,97 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                 'defects; do not manufacture '
                                                                 'criticism, extra constraints or '
                                                                 'new requirements.',
-                                                                'Assess both compliance with the request and the quality of its execution for the intended',
-                                                                'user or reader. Distinguish those judgments in the report. The score is an independent,',
-                                                                'overall assessment of the delivered work: its structure, coherence, execution and achieved',
-                                                                'purpose, supported by positive evidence from the work itself.',
-                                                                'Use these qualitative anchors on the 0-1 scale:',
-                                                                '0: unusable or fundamentally fails the request.',
-                                                                '0.5: a partly successful result of limited overall quality.',
-                                                                '0.8: good, solid work.',
-                                                                '0.9: excellent work.',
-                                                                'The maximum has this exact definition:',
-                                                                '1 es obra maestra. te borrarías antes que tocar un byte de ese trabajo entregado.',
-                                                                'Full compliance or "no material defects found" alone does not justify 1. Being unable',
-                                                                'to propose an improvement does not establish that a better structure, approach or',
-                                                                'execution could not exist. Justify the score by the quality actually achieved, not',
-                                                                'by the limits of your ability to criticize it.',
-                                                                'Keep scoring independent of the criticism and anti-drift questions. Do not calculate,',
-                                                                'cap or adjust the score from their number, severity or absence. Finding no criticism',
-                                                                'or questions does not imply 1; raising them does not automatically lower the score.',
-                                                                'Explain the overall quality judgment and its evidence separately from your actionable',
-                                                                'criticism and open questions. Neither judgment substitutes for the other.',
-                                                                'For criticism, consider proportionate local improvements as well as structural alternatives.',
-                                                                'An improvement need not require redesigning the work or rewriting a whole scene:',
-                                                                'identify its location, evidenced effect and proportionate benefit. If no justified',
-                                                                'improvement is apparent, say so without manufacturing an objection or inferring perfection.',
-                                                                'Interpolate only as the evidence warrants. These anchors are not quotas or automatic',
-                                                                'deductions: do not start at 1 and subtract penalties, impose a distribution, or imply',
-                                                                'precision that the evidence cannot support. Acknowledge uncertainty. Judge the requested',
-                                                                'purpose and form without adding requirements, prescribing another style, comparing',
-                                                                'candidates or requiring diversity.',
-                                                                'Top-level questions support context gathering, not extra scoring dimensions.',
-                                                                'Neither your report nor your score determines whether an author must stop.',
+                                                                'Assess both compliance with the '
+                                                                'request and the quality of its '
+                                                                'execution for the intended',
+                                                                'user or reader. Distinguish those '
+                                                                'judgments for each candidate in '
+                                                                'the report. Each score is an',
+                                                                'independent overall assessment of '
+                                                                'that work: its structure, '
+                                                                'coherence, execution and achieved',
+                                                                'purpose, supported by positive '
+                                                                'evidence from the work itself.',
+                                                                'Choose each score freely from 0 '
+                                                                'to 1 according to your judgment '
+                                                                'of the quality achieved',
+                                                                'against the original request. '
+                                                                'Judge each result on its own '
+                                                                'merits, not by its rank within',
+                                                                'this pair. There are no '
+                                                                'prescribed bands, intermediate '
+                                                                'anchors or target distribution.',
+                                                                'The sole scoring anchor is the '
+                                                                'maximum, with this exact '
+                                                                'definition:',
+                                                                '1 es obra maestra. te borrarías '
+                                                                'antes que tocar un byte de ese '
+                                                                'trabajo entregado.',
+                                                                'Full compliance or "no material '
+                                                                'defects found" alone does not '
+                                                                'justify 1. Being unable',
+                                                                'to propose an improvement does '
+                                                                'not establish that a better '
+                                                                'structure, approach or',
+                                                                'execution could not exist. '
+                                                                'Justify the score by the quality '
+                                                                'actually achieved, not',
+                                                                'by the limits of your ability to '
+                                                                'criticize it.',
+                                                                'Keep scoring independent of the '
+                                                                'criticism and anti-drift '
+                                                                'questions. Do not calculate,',
+                                                                'cap or adjust the score from '
+                                                                'their number, severity or '
+                                                                'absence. Finding no criticism',
+                                                                'or questions does not imply 1; '
+                                                                'raising them does not '
+                                                                'automatically lower the score.',
+                                                                'Explain the overall quality '
+                                                                'judgment and its evidence '
+                                                                'separately from your actionable',
+                                                                'criticism and open questions. '
+                                                                'Neither judgment substitutes for '
+                                                                'the other.',
+                                                                'For criticism, consider '
+                                                                'proportionate local improvements '
+                                                                'as well as structural '
+                                                                'alternatives.',
+                                                                'An improvement need not require '
+                                                                'redesigning the work or rewriting '
+                                                                'a whole scene:',
+                                                                'identify its location, evidenced '
+                                                                'effect and proportionate benefit. '
+                                                                'If no justified',
+                                                                'improvement is apparent, say so '
+                                                                'without manufacturing an '
+                                                                'objection or inferring '
+                                                                'perfection.',
+                                                                'Do not start at 1 and subtract '
+                                                                'penalties, impose a distribution, '
+                                                                'or imply precision that',
+                                                                'the evidence cannot support. '
+                                                                'Acknowledge uncertainty. Judge '
+                                                                'the requested purpose and',
+                                                                'form without adding requirements, '
+                                                                'prescribing another style or '
+                                                                'requiring diversity.',
+                                                                'Top-level questions support '
+                                                                'context gathering, not extra '
+                                                                'scoring dimensions.',
+                                                                'Neither your report nor the '
+                                                                'scores determine whether an '
+                                                                'author must stop.',
                                                                 'Write the report in the language '
                                                                 'of the original request unless it '
                                                                 'asks otherwise.'],
                                                        'variables': []},
                                                       {'text': ["DANTE'S ANTI-DRIFT QUESTIONS FOR "
-                                                                'THE AUTHOR',
+                                                                'THE AUTHORS',
                                                                 'Alongside your critical '
                                                                 'assessment, act as a plain-spoken '
                                                                 'project lead who notices',
-                                                                'drift. Ask the author only the '
+                                                                'drift. Ask the authors only the '
                                                                 'few simple, awkward questions '
                                                                 'that could change the',
                                                                 'work: what the project actually '
@@ -7092,9 +7160,10 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                 'Ground each question in a '
                                                                 'concrete passage, source, missing '
                                                                 'fact or decision in this',
-                                                                'candidate. Speak like a real '
-                                                                'person, not a rubric. Do not turn '
-                                                                'these lenses into a',
+                                                                'candidate or the comparison. '
+                                                                'Speak like a real person, not a '
+                                                                'rubric. Do not turn these lenses '
+                                                                'into a',
                                                                 'checklist, speech, ruling or '
                                                                 'exhaustive audit, or question an '
                                                                 'already resolved issue.',
@@ -7116,9 +7185,10 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                 'Put these questions in a clearly '
                                                                 'labeled section of the report '
                                                                 'Markdown, addressed',
-                                                                'to the author. In that section '
-                                                                'ask only: do not answer your own '
-                                                                'questions, disguise a',
+                                                                'to candidate a, candidate b or '
+                                                                'both. In that section ask only: '
+                                                                'do not answer your own questions, '
+                                                                'disguise a',
                                                                 'solution as a question, or repeat '
                                                                 'your diagnosis. Keep your '
                                                                 'evidence-based defects and',
@@ -7131,18 +7201,18 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                 '"No further questions." in that '
                                                                 'section. Do not invent questions '
                                                                 'to fill it.',
-                                                                'The driver persists report and '
-                                                                'gives it to the author in the '
-                                                                'next round, if one runs.',
-                                                                'These questions to the author '
+                                                                'The driver persists one report '
+                                                                'and gives it to both authors in '
+                                                                'the next round, if one runs.',
+                                                                'These questions to the authors '
                                                                 'belong in report, not only in the '
                                                                 'top-level questions',
                                                                 'answers, which are your '
                                                                 'context-seeking checks and are '
                                                                 'discarded by the driver.',
-                                                                'This is one review call with one '
-                                                                'score and report. These questions '
-                                                                'introduce no',
+                                                                'This is one review call with two '
+                                                                'scores and one shared report. '
+                                                                'These questions introduce no',
                                                                 'extra agent, separate turn, vote, '
                                                                 'readiness field or condition for '
                                                                 'ending the duel.'],
@@ -7158,41 +7228,63 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                          'items': [{'id': 'review_request_evidence',
                                                     'text': 'Which request passages, project '
                                                             'guidance and reference sources did '
-                                                            'you inspect to establish what this '
-                                                            'candidate must actually accomplish?'},
+                                                            'you inspect to establish what both '
+                                                            'candidates must actually accomplish?'},
                                                    {'id': 'review_weakest_link',
-                                                    'text': 'Which premise or causal link in the '
+                                                    'text': 'Which premise or causal link in each '
                                                             'candidate is least supported after '
                                                             'checking its sources, and what '
                                                             'concrete consequence follows? If none '
                                                             'is defective, state the evidence '
                                                             'instead of inventing an objection.'},
                                                    {'id': 'review_better_alternative',
-                                                    'text': 'Can a materially better approach or a proportionate local change improve the same requested result within its constraints? Identify the concrete benefit, or explain why the strongest plausible intervention would not help.'},
+                                                    'text': 'Compare both versions: which concrete '
+                                                            'structure, approach or local choice '
+                                                            'could improve the other candidate '
+                                                            "within the request's constraints, and "
+                                                            'what benefit would borrowing it '
+                                                            'bring? Consider other plausible '
+                                                            'alternatives too; do not invent a '
+                                                            'difference or require a copy when no '
+                                                            'useful transfer is supported.'},
                                                    {'id': 'review_reader_use',
-                                                    'text': 'Read the candidate as its intended user or audience. Which specific passage or omission most weakens the requested result, even if the work remains understandable and usable? Ground the effect in evidence and distinguish it from preference. If none does, explain what supports that conclusion.'}]},
+                                                    'text': 'Read both candidates as their '
+                                                            'intended user or audience. Which '
+                                                            'specific passages or omissions most '
+                                                            'weaken the requested result in each, '
+                                                            'even when the work remains usable? '
+                                                            'Ground the effects and comparative '
+                                                            'strengths in evidence, distinguishing '
+                                                            'preference from defect.'}]},
                            'output_contract': {'sections': [{'id': 'duel_review_result',
                                                              'text': ['OUTPUT CONTRACT: return '
                                                                       'exactly one JSON object and '
                                                                       'nothing else.',
                                                                       'The only top-level keys are '
-                                                                      'score, report and '
+                                                                      'scores, report and '
                                                                       'questions.',
-                                                                      'score is a finite number '
+                                                                      'scores is an object with '
+                                                                      'exactly the keys a and b. '
+                                                                      'Each value is a finite '
+                                                                      'number',
                                                                       'from 0 to 1 inclusive, '
                                                                       'never a boolean.',
-                                                                      'report is non-empty '
-                                                                      'Markdown assessing this '
-                                                                      'candidate, explaining the '
-                                                                      'score and any',
-                                                                      'concrete defects with '
+                                                                      'report is one non-empty '
+                                                                      'Markdown document shared by '
+                                                                      'both authors. Assess each '
+                                                                      'candidate,',
+                                                                      'explain each score, and '
+                                                                      'compare concrete strengths, '
+                                                                      'weaknesses and useful ideas '
+                                                                      'to borrow.',
+                                                                      'Ground criticism in '
                                                                       'evidence and justified '
-                                                                      'improvements. State plainly '
+                                                                      'improvements; state plainly '
                                                                       'when no material',
                                                                       'defects are found. Include '
                                                                       'the few concrete anti-drift '
-                                                                      'questions for the author in '
-                                                                      'report,',
+                                                                      'questions for a, b or both '
+                                                                      'in report,',
                                                                       'or state that no further '
                                                                       'questions remain. Keep them '
                                                                       'separate from the discarded',

@@ -97,6 +97,14 @@ const postJSON = async (path, payload) => posts.push({path, payload});
   assert.match(progress, /Round 2 \/ 3/);
   assert.match(progress, /Finished by author/);
   assert.match(progress, /Open to improvement/);
+  const shared = candidates.map(candidate => ({...candidate, report_path: '/reports/review.md'}));
+  const joint = duelResult({stop_reason: 'round_limit', rounds_completed: 2, candidates: shared}, 'task-id');
+  assert.equal((joint.match(/\/reports\/review\.md/g) || []).length, 1);
+  assert.match(joint, /Shared comparative review/);
+  assert.match(joint, /duel:a:report/);
+  assert.match(joint, /Score: 0\.9/);
+  assert.match(joint, /Candidate A/);
+  assert.match(joint, /Candidate B/);
   assert.match(duelProgress(null, {max_rounds: 1}), /Preparing both candidates/);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """

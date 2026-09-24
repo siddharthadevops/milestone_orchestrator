@@ -1,4 +1,4 @@
-"""Two document candidates, independent criticism, and bounded revisions.
+"""Two document candidates, shared criticism, and bounded revisions.
 
 The task owns the round barriers and accepted results. Prompts own the work;
 question answers are discarded. Validation checks the declared deliverables,
@@ -114,18 +114,12 @@ def call_candidate(
         return None, result
     # The answers have done their job by making the agent seek context. They
     # are not task state, review findings, or a continuation decision.
-    fields = ("action", "artifacts", "summary") if job == "author_candidate" else ("score", "report")
+    fields = ("action", "artifacts", "summary") if job == "author_candidate" else ("scores", "report")
     return {key: reply[key] for key in fields}, result
 
 
 def _values(checkpoint, candidate, request, configuration, ecosystem_map):
-    author = checkpoint["phase"] == "author"
-    opponent = next(item for item in checkpoint["candidates"] if item["id"] != candidate["id"])
-    previous_reviews = [
-        {key: item[key] for key in ("id", "score", "report_path", "review_round", "finished")}
-        for item in checkpoint["candidates"] if item["report_path"] is not None
-    ] if author else []
-    return {
+    values = {
         "workspace": request["work_area"].get("workspace_path") or (
             request["work_area"]["primary"].get("path")
             if isinstance(request["work_area"]["primary"], dict)
@@ -133,28 +127,66 @@ def _values(checkpoint, candidate, request, configuration, ecosystem_map):
         ),
         "request": request["request"], "context": json.dumps(request["context"], ensure_ascii=False),
         "references": json.dumps(request["reference_documents"], ensure_ascii=False),
-        "candidate_id": candidate["id"], "candidate_directory": candidate["directory"],
-        "opponent_directory": opponent["directory"] if author else "",
         "round": checkpoint["round"], "max_rounds": configuration["max_rounds"],
-        "previous_reviews": json.dumps(previous_reviews, ensure_ascii=False),
+        "ecosystem_map": ecosystem_map,
+    }
+    if candidate is None:
+        values["candidates"] = json.dumps([
+            {
+                **{key: item[key] for key in ("id", "directory", "finished", "production_round")},
+                "artifacts": [os.path.relpath(path, item["directory"]) for path in item["artifacts"]],
+            }
+            for item in checkpoint["candidates"]
+        ], ensure_ascii=False)
+        return values
+    opponent = next(item for item in checkpoint["candidates"] if item["id"] != candidate["id"])
+    values.update({
+        "candidate_id": candidate["id"], "candidate_directory": candidate["directory"],
+        "opponent_directory": opponent["directory"],
+        "previous_reviews": json.dumps([
+            {key: item[key] for key in ("id", "score", "report_path", "review_round", "finished")}
+            for item in checkpoint["candidates"] if item["report_path"] is not None
+        ], ensure_ascii=False),
         "artifacts": json.dumps([
             os.path.relpath(path, candidate["directory"]) for path in candidate["artifacts"]
         ], ensure_ascii=False),
-        "ecosystem_map": ecosystem_map,
-    }
+    })
+    return values
+
+
+def _review_pending(checkpoint):
+    """Review new productions; keep already accepted checkpoint history intact."""
+    ledger = checkpoint["rounds"][-1]["reviews"]
+    return any(
+        item["production_round"] == checkpoint["round"] and item["id"] not in ledger
+        for item in checkpoint["candidates"]
+    )
 
 
 def run_phase(group, runner, *, store, request, configuration, ecosystem_map, **options):
-    """Run at most two calls concurrently and save each accepted sibling.
+    """Run authors concurrently, then review both deliveries in one call.
 
     All calls settle before the next phase starts or an error leaves this
     function. Resume only calls the missing members of the current phase.
     """
     group.ensure_quiescent()
     checkpoint = store.get("checkpoint")
-    author = checkpoint["phase"] == "author"
-    charge = "author_candidate" if author else "review_candidate"
-    ledger = checkpoint["rounds"][-1]["authors" if author else "reviews"]
+    if checkpoint["phase"] == "review":
+        if not _review_pending(checkpoint):
+            return None
+        reply, result = call_candidate(
+            group, runner, job="review_candidate", candidate_id="both",
+            round_number=checkpoint["round"], configuration=configuration,
+            values=_values(checkpoint, None, request, configuration, ecosystem_map),
+            **options,
+        )
+        group.ensure_quiescent()
+        if reply is None:
+            return result
+        _accept_review(checkpoint, reply, result)
+        store.put("checkpoint", checkpoint)
+        return None
+    ledger = checkpoint["rounds"][-1]["authors"]
     pending = [
         candidate for candidate in checkpoint["candidates"]
         if not candidate["finished"] and candidate["id"] not in ledger
@@ -163,7 +195,7 @@ def run_phase(group, runner, *, store, request, configuration, ecosystem_map, **
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="duel") as pool:
         futures = {
             pool.submit(
-                call_candidate, group, runner, job=charge, candidate_id=candidate["id"],
+                call_candidate, group, runner, job="author_candidate", candidate_id=candidate["id"],
                 round_number=checkpoint["round"], configuration=configuration,
                 values=_values(checkpoint, candidate, request, configuration, ecosystem_map),
                 **options,
@@ -177,10 +209,7 @@ def run_phase(group, runner, *, store, request, configuration, ecosystem_map, **
                 if reply is None:
                     interruption = result
                     continue
-                if author:
-                    _accept_author(checkpoint, candidate, reply, result)
-                else:
-                    _accept_review(checkpoint, candidate, reply, result)
+                _accept_author(checkpoint, candidate, reply, result)
                 store.put("checkpoint", checkpoint)
             except Exception as exc:
                 errors.append(exc)
@@ -195,7 +224,8 @@ def _accept_author(checkpoint, candidate, reply, result):
     if reply["action"] == "finish":
         if not candidate["production_round"]:
             raise ValueError("Duel authors must produce a version before finishing")
-        # Finishing preserves the last production and its evaluation.
+        # Finishing preserves the last production. A later joint review may
+        # evaluate it again alongside the other author's new version.
         candidate["finished"] = True
     else:
         candidate.update(artifacts=artifacts, production_round=checkpoint["round"])
@@ -205,20 +235,22 @@ def _accept_author(checkpoint, candidate, reply, result):
     }
 
 
-def _accept_review(checkpoint, candidate, reply, result):
+def _accept_review(checkpoint, reply, result):
     directory = tasks.resolve_derived_path(
         checkpoint["output_directory"], "reports/round-%03d" % checkpoint["round"],
     )
     os.makedirs(directory, exist_ok=True)
-    path = tasks.resolve_derived_path(directory, candidate["id"] + ".md")
+    path = tasks.resolve_derived_path(directory, "review.md")
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write("# Candidate %s — round %d\n\nScore: %s / 1\n\n%s\n" % (
-            candidate["id"].upper(), checkpoint["round"], reply["score"], reply["report"],
+        handle.write("# Duel review — round %d\n\nA: %s / 1\n\nB: %s / 1\n\n%s\n" % (
+            checkpoint["round"], reply["scores"]["a"], reply["scores"]["b"], reply["report"],
         ))
-    candidate.update(score=reply["score"], report_path=path, review_round=checkpoint["round"])
-    checkpoint["rounds"][-1]["reviews"][candidate["id"]] = {
-        "score": reply["score"], "report_path": path, "call_id": result.call_id,
-    }
+    for candidate in checkpoint["candidates"]:
+        score = reply["scores"][candidate["id"]]
+        candidate.update(score=score, report_path=path, review_round=checkpoint["round"])
+        checkpoint["rounds"][-1]["reviews"][candidate["id"]] = {
+            "score": score, "report_path": path, "call_id": result.call_id,
+        }
 
 
 def advance(checkpoint, max_rounds):
@@ -229,8 +261,7 @@ def advance(checkpoint, max_rounds):
             raise ValueError("Duel author phase is incomplete")
         checkpoint["phase"] = "review"
         return
-    if any(not item["finished"] and item["id"] not in checkpoint["rounds"][-1]["reviews"]
-           for item in checkpoint["candidates"]):
+    if _review_pending(checkpoint):
         raise ValueError("Duel review phase is incomplete")
     checkpoint["rounds_completed"] = checkpoint["round"]
     finished = all(item["finished"] for item in checkpoint["candidates"])

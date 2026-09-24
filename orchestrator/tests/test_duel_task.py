@@ -99,12 +99,20 @@ class DuelTaskTest(unittest.TestCase):
         ]
 
     def call_info(self, prompt):
-        return {
-            "kind": self.prompt_value(prompt, "KIND"),
-            "id": self.prompt_value(prompt, "candidate_id"),
-            "directory": self.prompt_value(prompt, "candidate_directory"),
+        kind = self.prompt_value(prompt, "KIND")
+        call = {
+            "kind": kind,
             "round": int(self.prompt_value(prompt, "round")),
         }
+        if kind == "duel_author":
+            call.update(
+                id=self.prompt_value(prompt, "candidate_id"),
+                directory=self.prompt_value(prompt, "candidate_directory"),
+            )
+        else:
+            candidates = prompt.split("CANDIDATES (JSON):\n", 1)[1].splitlines()[0]
+            call.update(id="both", candidates=json.loads(candidates))
+        return call
 
     @staticmethod
     def runner_result(reply):
@@ -142,10 +150,15 @@ class DuelTaskTest(unittest.TestCase):
             }
         else:
             self.assertEqual(call["kind"], "duel_review")
+            self.assertEqual({item["id"] for item in call["candidates"]}, {"a", "b"})
+            for candidate in call["candidates"]:
+                for artifact in candidate["artifacts"]:
+                    self.assertFalse(os.path.isabs(artifact))
+                    self.assertTrue(os.path.isfile(os.path.join(candidate["directory"], artifact)))
             reply = {
-                "score": 0.75,
-                "report": "# Candidate %s\n\nRound %s: substantiate the weakest premise.\n\n%s\n" % (
-                    call["id"], call["round"], REVIEW_CONTEXT_FINDING,
+                "scores": {"a": 0.75, "b": 0.65},
+                "report": "# Shared review\n\nRound %s: substantiate the weakest premise.\n\n%s\n" % (
+                    call["round"], REVIEW_CONTEXT_FINDING,
                 ),
                 "questions": questions,
             }
@@ -167,7 +180,7 @@ class DuelTaskTest(unittest.TestCase):
             for event in host.store.lifecycle(record["id"])["history"]
             if "physical_dispatch" in event
         ]
-        self.assertEqual(len(receipts), 4)
+        self.assertEqual(len(receipts), 3)
         expected = {
             ("author_candidate" if call["kind"] == "duel_author" else "review_candidate", call["id"]):
             (call["family"], call["model"], "max")
@@ -183,9 +196,8 @@ class DuelTaskTest(unittest.TestCase):
             )
         self.assertEqual(actual, expected)
 
-    def test_one_round_produces_both_candidates_and_reviews_in_parallel(self):
+    def test_one_round_produces_in_parallel_then_reviews_both_together(self):
         author_barrier = threading.Barrier(2)
-        review_barrier = threading.Barrier(2)
         self.documents["a"] = ["draft.md", "appendix/evidence.md"]
 
         def parallel(family, prompt, workspace, **kwargs):
@@ -194,7 +206,7 @@ class DuelTaskTest(unittest.TestCase):
                 author_barrier.wait(timeout=5)
             else:
                 self.assertEqual(sum(item["kind"] == "duel_author" for item in self.calls), 2)
-                review_barrier.wait(timeout=5)
+                self.assertEqual(set(self.checkpoint(record)["rounds"][0]["authors"]), {"a", "b"})
             return self.physical(family, prompt, workspace, **kwargs)
 
         record, host = self.admit(), self.host(parallel)
@@ -204,7 +216,7 @@ class DuelTaskTest(unittest.TestCase):
         self.assertEqual(native["rounds_completed"], 1)
         self.assertEqual(self.call_counts(), Counter({
             ("duel_author", "a"): 1, ("duel_author", "b"): 1,
-            ("duel_review", "a"): 1, ("duel_review", "b"): 1,
+            ("duel_review", "both"): 1,
         }))
         self.assertEqual({item["id"] for item in native["candidates"]}, {"a", "b"})
         for candidate in native["candidates"]:
@@ -215,13 +227,21 @@ class DuelTaskTest(unittest.TestCase):
             self.assertFalse(candidate["finished"])
             self.assertEqual(candidate["production_round"], 1)
             self.assertEqual(candidate["review_round"], 1)
-            self.assertEqual(candidate["score"], 0.75)
+            self.assertEqual(candidate["score"], {"a": 0.75, "b": 0.65}[candidate["id"]])
             for path in candidate["artifacts"]:
                 self.assertTrue(os.path.isabs(path))
                 with open(path, encoding="utf-8") as handle:
                     self.assertIn("production round 1", handle.read())
             with open(candidate["report_path"], encoding="utf-8") as handle:
                 self.assertIn("substantiate the weakest premise", handle.read())
+        reports = {item["report_path"] for item in native["candidates"]}
+        self.assertEqual(len(reports), 1)
+        report = Path(reports.pop())
+        self.assertEqual(report.name, "review.md")
+        self.assertEqual(list(report.parent.iterdir()), [report])
+        reviews = native["rounds"][0]["reviews"]
+        self.assertEqual(set(reviews), {"a", "b"})
+        self.assertEqual(reviews["a"]["call_id"], reviews["b"]["call_id"])
         for call in self.calls:
             self.assertIn(record["order"]["request"]["request"], call["prompt"])
             self.assertIn(self.reference, call["prompt"])
@@ -236,7 +256,7 @@ class DuelTaskTest(unittest.TestCase):
         self.assertEqual(native["rounds_completed"], 3)
         self.assertEqual(self.call_counts(), Counter({
             ("duel_author", "a"): 2, ("duel_author", "b"): 3,
-            ("duel_review", "a"): 1, ("duel_review", "b"): 3,
+            ("duel_review", "both"): 3,
         }))
         candidates = {item["id"]: item for item in native["candidates"]}
         self.assertTrue(candidates["a"]["finished"])
@@ -244,9 +264,14 @@ class DuelTaskTest(unittest.TestCase):
         for identity, expected_round in (("a", 1), ("b", 3)):
             candidate = candidates[identity]
             self.assertEqual(candidate["production_round"], expected_round)
-            self.assertEqual(candidate["review_round"], expected_round)
+            self.assertEqual(candidate["review_round"], 3)
             with open(candidate["artifacts"][0], encoding="utf-8") as handle:
                 self.assertIn("production round %s" % expected_round, handle.read())
+        for call in self.calls:
+            if call["kind"] == "duel_review" and call["round"] > 1:
+                a = next(item for item in call["candidates"] if item["id"] == "a")
+                self.assertTrue(a["finished"])
+                self.assertEqual(a["production_round"], 1)
         for call in self.calls:
             if call["kind"] == "duel_author" and call["round"] > 1:
                 other = "b" if call["id"] == "a" else "a"
@@ -264,7 +289,7 @@ class DuelTaskTest(unittest.TestCase):
                 candidate["report_path"], os.path.join(output_directory, "reports"),
             ]), os.path.join(output_directory, "reports"))
 
-    def test_independent_reviewers_can_use_the_only_available_family(self):
+    def test_joint_reviewer_can_use_the_only_available_family(self):
         self.session = staffing.create_session(
             self.home, session_body(document="matrix", families=["codex"]),
         )["id"]
@@ -272,7 +297,7 @@ class DuelTaskTest(unittest.TestCase):
         host.start(record, self.config)
         self.completed(host, record)
         reviews = [call for call in self.calls if call["kind"] == "duel_review"]
-        self.assertEqual(len(reviews), 2)
+        self.assertEqual(len(reviews), 1)
         self.assertEqual({call["family"] for call in reviews}, {"codex"})
 
     def test_default_staffing_uses_one_codex_reviewer_seat_for_both_candidates(self):
@@ -291,20 +316,13 @@ class DuelTaskTest(unittest.TestCase):
                         document="default", rigor=rigor, families=["codex", "claude"],
                         **({"material": "literature"} if prompt_set == "literature" else {}),
                     ))["id"]
-                    review_barrier = threading.Barrier(2)
-
-                    def parallel_reviews(family, prompt, workspace, **kwargs):
-                        if self.call_info(prompt)["kind"] == "duel_review":
-                            review_barrier.wait(timeout=5)
-                        return self.physical(family, prompt, workspace, **kwargs)
-
                     record = self.admit(prompt_set=prompt_set)
-                    host = self.host(parallel_reviews)
+                    host = self.host()
                     host.start(record, self.config)
                     self.completed(host, record)
                     self.assert_max_effort_receipts(host, record)
                     reviews = [call for call in self.calls if call["kind"] == "duel_review"]
-                    self.assertEqual({call["id"] for call in reviews}, {"a", "b"})
+                    self.assertEqual({call["id"] for call in reviews}, {"both"})
                     expected_review = staffing.base_staffing(seed, rigor, "review", 1)[:2] + ("max",)
                     self.assertEqual(expected_review[0], "codex")
                     self.assertEqual({
@@ -344,7 +362,7 @@ class DuelTaskTest(unittest.TestCase):
             self.assertEqual((call["family"], call["model"], call["effort"]), expected[:2] + ("max",))
         self.assertEqual(self.call_counts(), Counter({
             ("duel_author", "a"): 1, ("duel_author", "b"): 1,
-            ("duel_review", "a"): 1, ("duel_review", "b"): 1,
+            ("duel_review", "both"): 1,
         }))
 
     def test_both_finish_before_round_limit_without_repeated_reviews(self):
@@ -357,7 +375,7 @@ class DuelTaskTest(unittest.TestCase):
         self.assertTrue(all(item["finished"] for item in native["candidates"]))
         self.assertEqual(self.call_counts(), Counter({
             ("duel_author", "a"): 2, ("duel_author", "b"): 2,
-            ("duel_review", "a"): 1, ("duel_review", "b"): 1,
+            ("duel_review", "both"): 1,
         }))
 
     def test_context_question_answers_are_discarded_after_validation(self):
@@ -376,6 +394,7 @@ class DuelTaskTest(unittest.TestCase):
             if call["kind"] == "duel_author" and call["round"] == 2:
                 previous = self.checkpoint(record)["candidates"]
                 self.assertEqual(len(previous), 2)
+                self.assertEqual(len({item["report_path"] for item in previous}), 1)
                 for candidate in previous:
                     self.assertEqual(candidate["review_round"], 1)
                     self.assertIn(candidate["report_path"], prompt)
@@ -390,7 +409,7 @@ class DuelTaskTest(unittest.TestCase):
         self.completed(host, record)
         self.assertEqual(checked_authors, {"a", "b"})
 
-    def test_public_task_detail_exposes_both_candidates_and_reports(self):
+    def test_public_task_detail_exposes_both_candidates_and_shared_report(self):
         record, host = self.admit(), self.host()
         self.start_server(host)
         path = "/api/tasks/" + record["id"]
@@ -406,6 +425,7 @@ class DuelTaskTest(unittest.TestCase):
         self.assertEqual(completed["duel"]["rounds"], native["rounds"])
         self.assertEqual(completed["duel"]["stop_reason"], "round_limit")
         self.assertNotIn(QUESTION_SENTINEL, json.dumps(completed["duel"]))
+        self.assertEqual(len({item["report_path"] for item in native["candidates"]}), 1)
         for candidate in native["candidates"]:
             for item, recorded_path, expected in (
                 ("artifact:0", candidate["artifacts"][0], "Candidate %s, production round 1" % candidate["id"]),
@@ -451,24 +471,21 @@ class DuelTaskTest(unittest.TestCase):
         )
         failed = threading.Event()
 
-        def failure_after_sibling(family, prompt, workspace, **kwargs):
+        def failed_joint_review(family, prompt, workspace, **kwargs):
             call = self.call_info(prompt)
-            if call["kind"] == "duel_review" and call["id"] == "b" and not failed.is_set():
-                self._wait(lambda: any(
-                    candidate.get("review_round") == 1 and candidate["id"] == "a"
-                    for candidate in self.checkpoint(record)["candidates"]
-                ), "the independent sibling review was not saved")
+            if call["kind"] == "duel_review" and not failed.is_set():
+                self.assertEqual(set(self.checkpoint(record)["rounds"][0]["authors"]), {"a", "b"})
                 failed.set()
                 with self.lock:
                     self.calls.append(call)
                 raise runners.RunnerError("review provider disconnected")
             return self.physical(family, prompt, workspace, **kwargs)
 
-        host = self.host(failure_after_sibling)
+        host = self.host(failed_joint_review)
         host.start(record, self.config)
         paused = self._paused(host, record["id"])
         self.assertTrue(failed.is_set())
-        host = self.host(failure_after_sibling)
+        host = self.host(failed_joint_review)
         host.resume(record["id"], self.config, paused["revision"])
         native = self.completed(host, record)
         self.assertEqual(native["stop_reason"], "round_limit")
@@ -481,30 +498,63 @@ class DuelTaskTest(unittest.TestCase):
             ]), legacy_output)
         self.assertEqual(self.call_counts(), Counter({
             ("duel_author", "a"): 1, ("duel_author", "b"): 1,
-            ("duel_review", "a"): 1, ("duel_review", "b"): 2,
+            ("duel_review", "both"): 2,
         }))
 
-    def test_pause_or_stop_waits_for_parallel_reviews_to_settle(self):
+    def test_accepted_legacy_reviews_are_not_repeated_or_rewritten(self):
+        record, host = self.admit(max_rounds=2), self.host()
+        checkpoint = duel.new_checkpoint(record, self.primary)
+        checkpoint.update(round=2, phase="review", rounds_completed=1)
+        checkpoint["rounds"].append({"round": 2, "authors": {}, "reviews": {}})
+        for candidate in checkpoint["candidates"]:
+            identity = candidate["id"]
+            production_round = 1 if identity == "a" else 2
+            artifact = Path(candidate["directory"]) / "draft.md"
+            artifact.write_text("Legacy candidate " + identity, encoding="utf-8")
+            report = Path(checkpoint["output_directory"]) / "reports" / (
+                "round-%03d" % production_round
+            ) / (identity + ".md")
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text("Accepted independent review " + identity, encoding="utf-8")
+            candidate.update(
+                artifacts=[str(artifact)], production_round=production_round,
+                finished=identity == "a", score=0.8, report_path=str(report),
+                review_round=production_round,
+            )
+            checkpoint["rounds"][production_round - 1]["reviews"][identity] = {
+                "score": 0.8, "report_path": str(report), "call_id": "legacy-" + identity,
+            }
+        expected_candidates = copy.deepcopy(checkpoint["candidates"])
+        expected_rounds = copy.deepcopy(checkpoint["rounds"])
+        task_api.duel_checkpoint_store(self.home, record["id"]).put("checkpoint", checkpoint)
+        host.start(record, self.config)
+        native = self.completed(host, record)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(native["candidates"], expected_candidates)
+        self.assertEqual(native["rounds"], expected_rounds)
+        self.assertEqual(native["stop_reason"], "round_limit")
+        for candidate in native["candidates"]:
+            self.assertEqual(
+                Path(candidate["report_path"]).read_text(encoding="utf-8"),
+                "Accepted independent review " + candidate["id"],
+            )
+
+    def test_pause_or_stop_waits_for_joint_review_to_settle(self):
         for action in ("pause", "stop"):
             with self.subTest(action=action):
                 self.calls.clear()
                 ready, release = threading.Event(), threading.Event()
-                pending = []
-
-                def held_reviews(family, prompt, workspace, **kwargs):
+                def held_review(family, prompt, workspace, **kwargs):
                     if self.call_info(prompt)["kind"] == "duel_review":
-                        with self.lock:
-                            pending.append(prompt)
-                            if len(pending) == 2:
-                                ready.set()
+                        ready.set()
                         if not release.wait(timeout=10):
-                            raise runners.RunnerError("test did not release the held reviews")
+                            raise runners.RunnerError("test did not release the held review")
                     return self.physical(family, prompt, workspace, **kwargs)
 
-                record, host = self.admit(), self.host(held_reviews)
+                record, host = self.admit(), self.host(held_review)
                 thread = host.start(record, self.config)
                 try:
-                    self.assertTrue(ready.wait(timeout=5), "both review calls must start")
+                    self.assertTrue(ready.wait(timeout=5), "the joint review must start")
                     getattr(host, action)(record["id"])
                     self.assertTrue(host.is_active(record["id"]))
                     self.assertIsNone(host.store.record(record["id"])["result"])

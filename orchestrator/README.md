@@ -533,32 +533,40 @@ non-empty deliverables there. It does not audit repository changes or police
 cross-directory writes. The work area and references remain reading context;
 Duel does not produce a repository-wide change or merge the two versions.
 
-After production, the driver launches two independent review calls in
-parallel, one per candidate. Reviewers score the work against the request and
-write reports of concrete defects and justified alternatives, with the
-critical attitude of Brainstorming's opposition and Dante's few concrete
-questions about possible drift from the request. These questions belong in
-the saved report for the author; the reviewer's own context-search answers
-are discarded separately. The next round gives authors
-both evaluations and the locations of both versions. They may use or copy the
-other work, or improve only from their own review. Diversity is not required.
+After production, the driver makes one independent reviewer call that reads
+and compares both latest versions. It returns a score for each candidate and
+one shared Markdown report of concrete strengths, defects and better alternatives,
+with Brainstorming's opposition and Dante's few concrete questions about drift.
+The comparison identifies what each author could learn from or copy from the
+other. Both authors receive the same report and the locations of both versions
+in the next round. Reuse is encouraged; neither copying nor diversity is required.
+The reviewer's own context-search answers are discarded separately.
 
-An author can permanently declare its version finished. Its documents and
-latest review remain available while the other author continues. The task ends
+Each score is an overall quality judgment independent of the criticisms and
+questions, not a count of findings or a relative ranking of the two versions.
+The only qualitative anchor is the literal maximum: "1 es obra maestra.
+te borrarías antes que tocar un byte de ese trabajo entregado." The reviewer
+chooses all lower scores without prescribed bands or score distributions.
+
+An author can permanently declare its version finished. Its documents remain
+available for the joint comparison while the other author continues; subsequent
+joint reviews score both latest versions without restarting a finished author.
+When both authors finish, no additional review is needed. The task ends
 when both authors finish or the round limit is reached, and delivers both
-versions with scores and reports. It neither declares a winner nor discards
+versions with scores and their shared report. It neither declares a winner nor discards
 the lower-scoring version. The panel opens each document and review report
 in its existing document viewer. Without `request.output_directory`, results
-live in `<workspace>/implementation/duel/<task-id>/a` and `b`, and review
-reports in `<workspace>/implementation/duel/<task-id>/reports/round-NNN`.
+live in `<workspace>/implementation/duel/<task-id>/a` and `b`, with the shared
+report in `<workspace>/implementation/duel/<task-id>/reports/round-NNN/review.md`.
 Resuming a task preserves the output directory already saved in its checkpoint.
 
 Duel owns its author and reviewer prompt routes and result question sets.
 Those questions direct the agents to seek context; the driver discards their
 answers. Only the author's operational decision and deliverables, and the
-reviewer's score and report, drive the rounds. Authors use brainstorm seats
-1 and 2; both reviews use review seat 1 (Codex in the default document), in
-independent parallel calls with the same reviewer configuration. The
+reviewer's scores and shared report are retained in task state. Only the authors'
+finish decisions and the configured round limit determine when the task ends.
+Authors use brainstorm seats 1 and 2; the joint review uses review seat 1
+(Codex in the default document). The
 `default` and `literature` prompt sets each supply both Duel prompts, including
 the opposition critique, Dante's anti-drift questions, and context checks.
 Optional `configuration.rigor`

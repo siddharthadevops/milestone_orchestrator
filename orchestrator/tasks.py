@@ -405,11 +405,11 @@ _TASK_EXECUTORS += (
     {
         "id": "duel",
         "name": "Duel",
-        "description": "Develops and independently reviews two versions of one request.",
-        "operating_mode": "Two authors improve their own documents over bounded rounds.",
+        "description": "Develops two versions of one request with a shared comparative review.",
+        "operating_mode": "Two authors improve their own documents from one shared report over bounded rounds.",
         "usage_examples": ["developing two document proposals", "refining alternative manuscripts"],
         "available_agent_configurations": (
-            "Authors use brainstorm seats 1 and 2; both independent reviews use "
+            "Authors use brainstorm seats 1 and 2; one joint review uses "
             "review seat 1 (Codex by default). Every Duel call uses max effort. "
             "Optional author or reviewer rigor selects the model, overriding the "
             "task default, then the live staffing session."
@@ -1022,8 +1022,7 @@ def duel_job_staffing_request(job, candidate_id, configuration):
         "author_candidate": ("brainstorm", "author"),
         "review_candidate": ("review", "reviewer"),
     }[job]
-    author_index = {"a": 1, "b": 2}[candidate_id]
-    request = {"role": role, "index": 1 if role == "review" else author_index,
+    request = {"role": role, "index": 1 if role == "review" else {"a": 1, "b": 2}[candidate_id],
                "effort": "max"}
     rigor = configuration.get("rigor", {})
     choice = rigor.get(rigor_key, rigor.get("default"))

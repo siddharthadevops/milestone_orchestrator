@@ -1,15 +1,13 @@
 {
   "kind": "duel_review",
   "process": "duel",
-  "description": "Independently evaluate one Duel candidate and report evidence-based criticism plus concrete anti-drift questions for its author.",
+  "description": "Evaluate both Duel candidates together, with separate scores and one shared comparative report of evidence-based criticism and anti-drift questions.",
   "instructions": {
     "parts": [
       {
         "text": [
           "KIND: {{kind}}",
           "WORKSPACE: {{workspace}}",
-          "candidate_id: {{candidate_id}}",
-          "candidate_directory: {{candidate_directory}}",
           "round: {{round}}",
           "max_rounds: {{max_rounds}}",
           "ORIGINAL REQUEST:",
@@ -29,16 +27,6 @@
             "name": "workspace",
             "required": true,
             "description": "Absolute project workspace used as reading context."
-          },
-          {
-            "name": "candidate_id",
-            "required": true,
-            "description": "Assigned candidate ID, a or b."
-          },
-          {
-            "name": "candidate_directory",
-            "required": true,
-            "description": "Absolute directory containing the assigned candidate documents."
           },
           {
             "name": "round",
@@ -75,26 +63,32 @@
       },
       {
         "text": [
-          "CANDIDATE ARTIFACTS (JSON; paths relative to candidate_directory):",
-          "{{artifacts}}"
+          "CANDIDATES (JSON):",
+          "{{candidates}}"
         ],
         "variables": [
           {
-            "name": "artifacts",
+            "name": "candidates",
             "required": true,
-            "description": "Delivered candidate file paths as JSON."
+            "description": "Both candidates as a JSON list: id, absolute directory, relative artifact paths, finished status and production_round."
           }
         ]
       },
       {
         "text": [
-          "You are an independent reviewer of the candidate in candidate_directory.",
-          "Read its actual documents, the original request, admitted context and relevant references.",
-          "Evaluate only this assigned candidate against that material. Do not inspect or compare",
-          "the rival candidate, pick a winner, or make your score relative to another version.",
+          "You are an independent reviewer evaluating both candidates a and b in one review call.",
+          "Read the actual documents listed for each candidate, the original request, admitted",
+          "context and relevant references. Paths in artifacts are relative to that candidate's",
+          "directory. Evaluate the current versions, including any candidate already marked finished.",
           "This is a read-only review. Do not edit candidate documents, references or the repository.",
-          "Return the report as Markdown in the JSON reply; the driver saves it to a report file.",
-          "Try to disprove the candidate's weakest premises and decisions. Look for a materially",
+          "Return one shared comparative report as Markdown in the JSON reply; the driver saves",
+          "the same report for both authors. Give each candidate its own assessment and score.",
+          "Compare concrete choices of structure, approach and execution: what each version resolves",
+          "better, why it works, and what the other author could use or copy to improve their work.",
+          "Use evidence from both versions to expose alternatives a separate reading might miss.",
+          "Encourage useful borrowing without requiring either author to copy, preserve differences",
+          "or merge the versions. Do not invent differences or force a winner or unequal scores.",
+          "Try to disprove each candidate's weakest premises and decisions. Look for a materially",
           "better alternative to the same actual problem. When evidence supports one, explain",
           "what concrete cost, harm, confusion or unnecessary machinery it avoids.",
           "Make every material premise, causal link, claimed consequence, necessity and remedy",
@@ -108,15 +102,13 @@
           "Acknowledge what works and what is uncertain. An honest report may find no material",
           "defects; do not manufacture criticism, extra constraints or new requirements.",
           "Assess both compliance with the request and the quality of its execution for the intended",
-          "user or reader. Distinguish those judgments in the report. The score is an independent,",
-          "overall assessment of the delivered work: its structure, coherence, execution and achieved",
+          "user or reader. Distinguish those judgments for each candidate in the report. Each score is an",
+          "independent overall assessment of that work: its structure, coherence, execution and achieved",
           "purpose, supported by positive evidence from the work itself.",
-          "Use these qualitative anchors on the 0-1 scale:",
-          "0: unusable or fundamentally fails the request.",
-          "0.5: a partly successful result of limited overall quality.",
-          "0.8: good, solid work.",
-          "0.9: excellent work.",
-          "The maximum has this exact definition:",
+          "Choose each score freely from 0 to 1 according to your judgment of the quality achieved",
+          "against the original request. Judge each result on its own merits, not by its rank within",
+          "this pair. There are no prescribed bands, intermediate anchors or target distribution.",
+          "The sole scoring anchor is the maximum, with this exact definition:",
           "1 es obra maestra. te borrarías antes que tocar un byte de ese trabajo entregado.",
           "Full compliance or \"no material defects found\" alone does not justify 1. Being unable",
           "to propose an improvement does not establish that a better structure, approach or",
@@ -131,27 +123,25 @@
           "An improvement need not require redesigning the work or rewriting a whole scene:",
           "identify its location, evidenced effect and proportionate benefit. If no justified",
           "improvement is apparent, say so without manufacturing an objection or inferring perfection.",
-          "Interpolate only as the evidence warrants. These anchors are not quotas or automatic",
-          "deductions: do not start at 1 and subtract penalties, impose a distribution, or imply",
-          "precision that the evidence cannot support. Acknowledge uncertainty. Judge the requested",
-          "purpose and form without adding requirements, prescribing another style, comparing",
-          "candidates or requiring diversity.",
+          "Do not start at 1 and subtract penalties, impose a distribution, or imply precision that",
+          "the evidence cannot support. Acknowledge uncertainty. Judge the requested purpose and",
+          "form without adding requirements, prescribing another style or requiring diversity.",
           "Top-level questions support context gathering, not extra scoring dimensions.",
-          "Neither your report nor your score determines whether an author must stop.",
+          "Neither your report nor the scores determine whether an author must stop.",
           "Write the report in the language of the original request unless it asks otherwise."
         ],
         "variables": []
       },
       {
         "text": [
-          "DANTE'S ANTI-DRIFT QUESTIONS FOR THE AUTHOR",
+          "DANTE'S ANTI-DRIFT QUESTIONS FOR THE AUTHORS",
           "Alongside your critical assessment, act as a plain-spoken project lead who notices",
-          "drift. Ask the author only the few simple, awkward questions that could change the",
+          "drift. Ask the authors only the few simple, awkward questions that could change the",
           "work: what the project actually intends, who is really affected, what observable",
           "damage exists, whether ordinary permitted operation already includes the claimed",
           "state, and whether the proposed machinery is proportionate to the request.",
           "Ground each question in a concrete passage, source, missing fact or decision in this",
-          "candidate. Speak like a real person, not a rubric. Do not turn these lenses into a",
+          "candidate or the comparison. Speak like a real person, not a rubric. Do not turn these lenses into a",
           "checklist, speech, ruling or exhaustive audit, or question an already resolved issue.",
           "Where new machinery appears, ask what existing component or trusted source already",
           "does the job, who consumes the addition and who is harmed without it. Where guarantees",
@@ -159,15 +149,15 @@
           "or a mechanism. For technical plans, ask which observable contract requires detailed",
           "mechanism, or which decision-changing pinned fact a builder would otherwise lack.",
           "Put these questions in a clearly labeled section of the report Markdown, addressed",
-          "to the author. In that section ask only: do not answer your own questions, disguise a",
+          "to candidate a, candidate b or both. In that section ask only: do not answer your own questions, disguise a",
           "solution as a question, or repeat your diagnosis. Keep your evidence-based defects and",
           "justified alternatives in the critical assessment elsewhere in the same report.",
           "If no material anti-drift question remains, say the natural equivalent of",
           "\"No further questions.\" in that section. Do not invent questions to fill it.",
-          "The driver persists report and gives it to the author in the next round, if one runs.",
-          "These questions to the author belong in report, not only in the top-level questions",
+          "The driver persists one report and gives it to both authors in the next round, if one runs.",
+          "These questions to the authors belong in report, not only in the top-level questions",
           "answers, which are your context-seeking checks and are discarded by the driver.",
-          "This is one review call with one score and report. These questions introduce no",
+          "This is one review call with two scores and one shared report. These questions introduce no",
           "extra agent, separate turn, vote, readiness field or condition for ending the duel."
         ],
         "variables": []
@@ -183,19 +173,19 @@
     "items": [
       {
         "id": "review_request_evidence",
-        "text": "Which request passages, project guidance and reference sources did you inspect to establish what this candidate must actually accomplish?"
+        "text": "Which request passages, project guidance and reference sources did you inspect to establish what both candidates must actually accomplish?"
       },
       {
         "id": "review_weakest_link",
-        "text": "Which premise or causal link in the candidate is least supported after checking its sources, and what concrete consequence follows? If none is defective, state the evidence instead of inventing an objection."
+        "text": "Which premise or causal link in each candidate is least supported after checking its sources, and what concrete consequence follows? If none is defective, state the evidence instead of inventing an objection."
       },
       {
         "id": "review_better_alternative",
-        "text": "Can a materially better approach or a proportionate local change improve the same requested result within its constraints? Identify the concrete benefit, or explain why the strongest plausible intervention would not help."
+        "text": "Compare both versions: which concrete structure, approach or local choice could improve the other candidate within the request's constraints, and what benefit would borrowing it bring? Consider other plausible alternatives too; do not invent a difference or require a copy when no useful transfer is supported."
       },
       {
         "id": "review_reader_use",
-        "text": "Read the candidate as its intended user or audience. Which specific passage or omission most weakens the requested result, even if the work remains understandable and usable? Ground the effect in evidence and distinguish it from preference. If none does, explain what supports that conclusion."
+        "text": "Read both candidates as their intended user or audience. Which specific passages or omissions most weaken the requested result in each, even when the work remains usable? Ground the effects and comparative strengths in evidence, distinguishing preference from defect."
       }
     ]
   },
@@ -205,11 +195,13 @@
         "id": "duel_review_result",
         "text": [
           "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
-          "The only top-level keys are score, report and questions.",
-          "score is a finite number from 0 to 1 inclusive, never a boolean.",
-          "report is non-empty Markdown assessing this candidate, explaining the score and any",
-          "concrete defects with evidence and justified improvements. State plainly when no material",
-          "defects are found. Include the few concrete anti-drift questions for the author in report,",
+          "The only top-level keys are scores, report and questions.",
+          "scores is an object with exactly the keys a and b. Each value is a finite number",
+          "from 0 to 1 inclusive, never a boolean.",
+          "report is one non-empty Markdown document shared by both authors. Assess each candidate,",
+          "explain each score, and compare concrete strengths, weaknesses and useful ideas to borrow.",
+          "Ground criticism in evidence and justified improvements; state plainly when no material",
+          "defects are found. Include the few concrete anti-drift questions for a, b or both in report,",
           "or state that no further questions remain. Keep them separate from the discarded",
           "top-level questions answers. Return report content, not a filename; the driver persists it."
         ],
