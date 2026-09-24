@@ -1031,6 +1031,21 @@ def duel_job_staffing_request(job, candidate_id, configuration):
     return request
 
 
+def validate_creativity_rigor(value):
+    """Validate the optional job overrides shared by admission and live edits."""
+    try:
+        schema = _TASK_EXECUTOR_BY_ID["creativity"]["configuration_schema"]
+        _exact_keys(value, (), schema["rigor"]["properties"], "configuration.rigor")
+        for name, choice in value.items():
+            if choice not in staffing.RIGORS:
+                raise ContractError(
+                    "configuration.rigor.%s must be one of %s" % (name, staffing.RIGORS)
+                )
+        return _json_copy(value, "configuration.rigor")
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
 def resolve_creativity_configuration(value):
     """Fill omitted controls from the catalogue, then admit strictly.
 
@@ -1087,16 +1102,7 @@ def resolve_creativity_configuration(value):
         if value["max_evaluated_candidates"] < population:
             raise ContractError("configuration evaluation budget must cover population")
         if "rigor" in value:
-            _exact_keys(
-                value["rigor"], (), schema["rigor"]["properties"],
-                "configuration.rigor",
-            )
-            for name, choice in value["rigor"].items():
-                if choice not in staffing.RIGORS:
-                    raise ContractError(
-                        "configuration.rigor.%s must be one of %s"
-                        % (name, staffing.RIGORS)
-                    )
+            value["rigor"] = validate_creativity_rigor(value["rigor"])
         return _json_copy(value, "configuration")
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)

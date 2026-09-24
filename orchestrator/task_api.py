@@ -234,7 +234,8 @@ class StandaloneTaskStore:
         )
 
     @staticmethod
-    def _document(record, admitted_at, stop_reason=None, lifecycle=None):
+    def _document(record, admitted_at, stop_reason=None, lifecycle=None,
+                  creativity_rigor=None):
         document = {
             "schema_version": _DOCUMENT_SCHEMA_VERSION,
             "admitted_at": admitted_at,
@@ -244,6 +245,8 @@ class StandaloneTaskStore:
             document["stop_reason"] = stop_reason
         if lifecycle is not None:
             document["lifecycle"] = lifecycle
+        if creativity_rigor is not None:
+            document["creativity_rigor"] = creativity_rigor
         return document
 
     @staticmethod
@@ -252,7 +255,8 @@ class StandaloneTaskStore:
             not isinstance(value, dict)
             or not {"schema_version", "admitted_at", "record"} <= set(value)
             or set(value) - {
-                "schema_version", "admitted_at", "record", "stop_reason", "lifecycle"
+                "schema_version", "admitted_at", "record", "stop_reason", "lifecycle",
+                "creativity_rigor",
             }
             or value["schema_version"] != _DOCUMENT_SCHEMA_VERSION
             or not isinstance(value["admitted_at"], str)
@@ -268,6 +272,13 @@ class StandaloneTaskStore:
             raise tasks.TaskRecordError(
                 "standalone task document %s is malformed" % key
             )
+        if "creativity_rigor" in value:
+            try:
+                if value["record"].get("order", {}).get("task_executor") != "creativity":
+                    raise ValueError("rigor overrides require a Creativity task")
+                tasks.validate_creativity_rigor(value["creativity_rigor"])
+            except (tasks.TaskRequestError, TypeError, ValueError) as exc:
+                raise tasks.TaskRecordError("standalone Creativity rigor is malformed") from exc
         if "lifecycle" not in value:
             return value  # Pre-control documents deliberately remain readable.
         lifecycle = value["lifecycle"]
@@ -464,6 +475,33 @@ class StandaloneTaskStore:
     def record(self, task_id):
         return tasks.task_record({"tasks": self._load()}, task_id)
 
+    def creativity_rigor(self, task_id):
+        """Read live job overrides, inheriting the original order until edited."""
+        _current, document = self._read_document(task_id)
+        order = document["record"]["order"]
+        if order["task_executor"] != "creativity":
+            raise TaskControlConflict("rigor controls require a Creativity task")
+        return copy.deepcopy(document.get(
+            "creativity_rigor", order["configuration"].get("rigor", {})
+        ))
+
+    def set_creativity_rigor_locked(self, task_id, rigor):
+        """Replace next-call overrides without changing the admitted order or work."""
+        checked = tasks.validate_creativity_rigor(rigor)
+        current, document = self._read_document(task_id)
+        record = document["record"]
+        if record["order"]["task_executor"] != "creativity":
+            raise TaskControlConflict("rigor controls require a Creativity task")
+        if record["result"] is not None or document.get("stop_reason") is not None:
+            raise TaskControlConflict("a finished or stopped Creativity task cannot change rigor")
+        outcome = self._store.cas(
+            task_key(task_id), current["revision"],
+            dict(document, creativity_rigor=checked),
+        )
+        if not outcome.ok:
+            raise TaskControlConflict("Creativity task changed while updating rigor")
+        return copy.deepcopy(checked)
+
     def owner_chain(self, task_id):
         """Return the task and its durable parents, nearest first."""
         records = self._load()
@@ -656,6 +694,7 @@ class StandaloneTaskStore:
                 document["admitted_at"],
                 document.get("stop_reason"),
                 document.get("lifecycle"),
+                document.get("creativity_rigor"),
             ),
         )
         if not outcome.ok:
@@ -693,7 +732,7 @@ class StandaloneTaskStore:
             key,
             current["revision"],
             self._document(record, document["admitted_at"], reason.strip(),
-                           document.get("lifecycle")),
+                           document.get("lifecycle"), document.get("creativity_rigor")),
         )
         if not outcome.ok:
             raise tasks.TaskRecordError(
@@ -2833,6 +2872,7 @@ class DirectTaskHost:
                     configuration=configuration, execution_context=context,
                     prompt_set=order.get("prompt_set", prompt_sets.DEFAULT_SET_NAME),
                     prompt_values={"ecosystem_map": prompts.project_context_body(context)},
+                    resolve_rigor=lambda: self.store.creativity_rigor(task_id),
                 )
             interruption = None
             if material is None:

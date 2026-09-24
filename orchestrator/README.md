@@ -490,6 +490,22 @@ clients send the object itself. The standalone panel intentionally sends an
 empty request context, while the API continues to accept and preserve a
 non-empty `request.context`.
 
+An open Creativity task exposes **Staffing…** for its bound staffing session
+and **Rigors…** for task-default, gene-creation and composition/evaluation
+overrides. Both apply to subsequent physical calls, including the existing
+contract-correction call; an already dispatched call keeps its model and effort.
+Changing the session affects other work sharing that session. Job rigor overrides
+take precedence over the task default, then the session rigor. Rigor selects the
+staffing document's tuning; it is not a direct effort selector.
+
+`GET /api/tasks/<id>/creativity-rigor` reads the effective override map.
+`POST` to the same route accepts `{"rigor": {...}}`, replacing that whole map;
+`{"rigor": {}}` clears overrides and inherits the live session. Accepted keys are
+`default`, `create_genes` and `evaluate_candidates`, with values `low`, `medium`
+or `high`. These edits preserve the original order, candidates, accepted scores
+and checkpoint. They are allowed while running or paused, but not after completion
+or cancellation. A task without a bound session can still edit its rigor overrides.
+
 The evaluation budget defaults to `population_size * generation_limit`, using
 the values resolved for the order. The advanced `max_evaluated_candidates`
 field may be left empty for this automatic budget, or set explicitly to

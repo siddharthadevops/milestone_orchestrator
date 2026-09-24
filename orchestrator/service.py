@@ -5050,6 +5050,32 @@ def control_task(home, who, task_id, action, body, host):
     return {"lifecycle": lifecycle}
 
 
+def _creativity_control_store(home, who, task_id):
+    record = _controllable_task(home, who, task_id)
+    if record["order"]["task_executor"] != "creativity":
+        raise ApiError(409, "rigor controls require a Creativity task")
+    return task_api.StandaloneTaskStore(home)
+
+
+def read_creativity_rigor(home, who, task_id):
+    store = _creativity_control_store(home, who, task_id)
+    return {"rigor": store.creativity_rigor(task_id)}
+
+
+def edit_creativity_rigor(home, who, task_id, body):
+    store = _creativity_control_store(home, who, task_id)
+    if not isinstance(body, dict) or set(body) != {"rigor"}:
+        raise ApiError(400, "Creativity rigor accepts only a rigor object")
+    try:
+        with registry.locked(home):
+            rigor = store.set_creativity_rigor_locked(task_id, body["rigor"])
+    except tasks.TaskRequestError as exc:
+        _raise_task_request(exc)
+    except task_api.TaskControlConflict as exc:
+        raise ApiError(409, str(exc)) from exc
+    return {"rigor": rigor}
+
+
 def stop_task(home, who, task_id, host):
     """Stop one running standalone task the caller may see.
 
@@ -5975,6 +6001,10 @@ def make_handler(home, task_host=None):
                             if session_id:
                                 payload["session_id"] = session_id
                         self._json(200, payload)
+                    elif len(parts) == 5 and parts[3] and parts[4] == "creativity-rigor":
+                        self._json(200, {"ok": True, **read_creativity_rigor(
+                            home, who, parts[3]
+                        )})
                     elif len(parts) == 5 and parts[3] and parts[4] == "story":
                         self._json(200, {
                             "ok": True,
@@ -6209,6 +6239,14 @@ def make_handler(home, task_host=None):
                 if route == "/api/tasks":
                     task = create_task(home, who, self._task_body(), task_host)
                     self._json(201, {"ok": True, "task": task})
+                elif (
+                    route.startswith("/api/tasks/")
+                    and len(route.rstrip("/").split("/")) == 5
+                    and route.rstrip("/").split("/")[4] == "creativity-rigor"
+                ):
+                    self._json(200, {"ok": True, **edit_creativity_rigor(
+                        home, who, route.rstrip("/").split("/")[3], self._task_body()
+                    )})
                 elif (
                     route.startswith("/api/tasks/")
                     and len(route.rstrip("/").split("/")) == 5

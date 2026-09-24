@@ -76,6 +76,151 @@ function record(executor = 'agent_call') {
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_creativity_live_staffing_and_rigors_are_available_until_completion(self):
+        self.javascript(r"""
+const task = record('creativity');
+task.order.staffing_session = 'stf-live';
+for (const status of ['running', 'pausing', 'paused']) {
+  lastTaskLifecycle = {status};
+  const html = renderTaskPage(task, null);
+  assert(html.includes('onclick="openTaskStaffing()">Staffing…'));
+  assert(html.includes('onclick="openCreativityRigor()">Rigors…'));
+}
+delete task.order.staffing_session;
+let html = renderTaskPage(task, null);
+assert(html.includes('No staffing session is bound to this task.'));
+assert(!html.includes('onclick="openTaskStaffing()"'));
+assert(html.includes('onclick="openCreativityRigor()"'));
+task.result = {status: 'failure', native_result: {}};
+html = renderTaskPage(task, null);
+assert(!html.includes('onclick="openTaskStaffing()"'));
+assert(!html.includes('onclick="openCreativityRigor()"'));
+task.result = null;
+taskPageRunId = 'attached-run';
+assert(!renderTaskPage(task, null).includes('onclick="openCreativityRigor()"'));
+taskPageRunId = null;
+assert(!renderTaskPage(record('duel'), null).includes('onclick="openCreativityRigor()"'));
+""")
+        self.assertLess(self.panel.index('<dialog id="creativityrigordlg">'),
+                        self.panel.index('<script>'))
+        self.assertIn('Composition and evaluation', self.panel)
+        self.assertIn('Changes apply to subsequent calls; running calls keep', self.panel)
+
+    def test_creativity_staffing_reuses_its_bound_session_editor(self):
+        self.javascript(r"""
+let lastTaskPage = record('creativity');
+lastTaskPage.order.staffing_session = 'stf-bound';
+const opened = [];
+const refreshTaskPage = () => {};
+const openStaffingSession = async (id, afterSave) => opened.push({id, afterSave});
+(async () => {
+  await openTaskStaffing();
+  assert.deepEqual(opened, [{id: 'stf-bound', afterSave: refreshTaskPage}]);
+  delete lastTaskPage.order.staffing_session;
+  await openTaskStaffing();
+  lastTaskPage.order.staffing_session = 'stf-bound';
+  lastTaskPage.result = {status: 'success'};
+  await openTaskStaffing();
+  lastTaskPage.result = null;
+  taskPageRunId = 'attached-run';
+  await openTaskStaffing();
+  assert.equal(opened.length, 1);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""", ("openTaskStaffing",))
+
+    def test_creativity_rigors_read_live_and_clear_overrides_without_mutating_order(self):
+        self.javascript(r"""
+let lastTaskPage = record('creativity');
+lastTaskPage.order.configuration = {rigor: {default: 'high'}};
+let openedCreativityRigorTask = null, creativityRigorSaving = false;
+const STANDALONE_RIGORS = ['low', 'medium', 'high'];
+const fields = Object.fromEntries(['cr_default', 'cr_create_genes',
+  'cr_evaluate_candidates', 'cr_error', 'cr_save'].map(id => [id, {value: ''}]));
+let shown = 0, closed = 0, refreshed = 0;
+fields.creativityrigordlg = {showModal: () => shown++, close: () => closed++};
+const document = {getElementById: id => fields[id]};
+const sent = [];
+const api = async path => {
+  sent.push({method: 'GET', path});
+  return {ok: true, rigor: {default: 'low', evaluate_candidates: 'medium'}};
+};
+const postJSON = async (path, body) => {
+  sent.push({method: 'POST', path, body});
+  return {ok: true, rigor: body.rigor};
+};
+const refreshTaskPage = () => refreshed++;
+const alert = message => { throw Error(message); };
+(async () => {
+  await openCreativityRigor();
+  assert.equal(shown, 1);
+  assert.equal(fields.cr_default.value, 'low');
+  assert.equal(fields.cr_create_genes.value, '');
+  assert.equal(fields.cr_evaluate_candidates.value, 'medium');
+  assert.deepEqual(sent, [{method: 'GET', path: '/api/tasks/task-1/creativity-rigor'}]);
+  fields.cr_default.value = '';
+  fields.cr_create_genes.value = 'high';
+  fields.cr_evaluate_candidates.value = 'low';
+  await saveCreativityRigor();
+  assert.deepEqual(sent[1], {method: 'POST', path: '/api/tasks/task-1/creativity-rigor',
+    body: {rigor: {create_genes: 'high', evaluate_candidates: 'low'}}});
+  assert.deepEqual(lastTaskPage.order.configuration, {rigor: {default: 'high'}});
+  fields.cr_create_genes.value = '';
+  fields.cr_evaluate_candidates.value = '';
+  await saveCreativityRigor();
+  assert.deepEqual(sent[2].body, {rigor: {}});
+  assert.equal(closed, 2);
+  assert.equal(refreshed, 2);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""", ("openCreativityRigor", "saveCreativityRigor"))
+
+    def test_creativity_rigors_keep_refusals_and_do_not_duplicate_saves(self):
+        self.javascript(r"""
+let lastTaskPage = record('creativity');
+let openedCreativityRigorTask = 'task-1', creativityRigorSaving = false;
+const fields = Object.fromEntries(['cr_default', 'cr_create_genes',
+  'cr_evaluate_candidates', 'cr_error', 'cr_save'].map(id => [id, {value: ''}]));
+let closed = 0, refreshed = 0;
+fields.creativityrigordlg = {close: () => closed++};
+const document = {getElementById: id => fields[id]};
+const sent = [];
+let rejectRequest;
+const postJSON = (path, body) => {
+  sent.push({path, body});
+  return new Promise((resolve, reject) => { rejectRequest = reject; });
+};
+const refreshTaskPage = () => refreshed++;
+(async () => {
+  const first = saveCreativityRigor();
+  await saveCreativityRigor();
+  assert.equal(sent.length, 1);
+  assert.equal(fields.cr_save.disabled, true);
+  rejectRequest(Error('task is already complete'));
+  await first;
+  assert.equal(fields.cr_error.textContent, 'task is already complete');
+  assert.equal(fields.cr_save.disabled, false);
+  assert.equal(creativityRigorSaving, false);
+  assert.equal(closed, 0);
+  assert.equal(refreshed, 0);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""", ("saveCreativityRigor",))
+
+    def test_creativity_rigor_read_does_not_open_for_a_different_selected_task(self):
+        self.javascript(r"""
+let lastTaskPage = record('creativity');
+let openedCreativityRigorTask = null, creativityRigorSaving = false;
+let resolveRequest;
+const api = () => new Promise(resolve => { resolveRequest = resolve; });
+const document = {getElementById: () => { throw Error('stale dialog was opened'); }};
+const alert = message => { throw Error(message); };
+(async () => {
+  const opening = openCreativityRigor();
+  selectedTask = 'task-2';
+  resolveRequest({ok: true, rigor: {default: 'low'}});
+  await opening;
+  assert.equal(openedCreativityRigorTask, null);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+""", ("openCreativityRigor",))
+
     def test_paused_types_render_resume_cancel_and_failure_without_spinner(self):
         self.javascript(r"""
 for (const executor of ['agent_call', 'reviewed_task', 'deep_task', 'creativity', 'duel']) {

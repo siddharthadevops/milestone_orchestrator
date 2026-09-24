@@ -6,10 +6,11 @@ and scores do not establish the literary or engineering quality of a model.
 
 import copy
 import json
+import threading
 import unittest
 from unittest import mock
 
-from orchestrator import creativity_search, task_api
+from orchestrator import creativity_search, registry, staffing, task_api, tasks
 from orchestrator.tests import test_creativity_task as fixture
 
 
@@ -110,6 +111,84 @@ class FragmentCreativityTaskTest(unittest.TestCase):
                 view = task_api.creativity_view(self.home, terminal)
                 self.assertTrue(view["initial_genes_supplied"])
                 self.assertNotIn("create_genes", view["diligence"])
+
+    def test_live_rigor_edit_changes_next_call_not_running_composition(self):
+        record = self.admit(
+            supplied=True, gene_count=4, generation_limit=1,
+            evaluation_batch_size=2, evaluation_concurrency=1,
+            rigor={"default": "high"},
+        )
+        original_order = copy.deepcopy(record["order"])
+        high = staffing.resolve(
+            self.home, self.session,
+            **tasks.creativity_job_staffing_request("compose_candidates", original_order["configuration"]),
+        ).answer
+        low = staffing.resolve(
+            self.home, self.session,
+            **tasks.creativity_job_staffing_request("evaluate_candidates", {"rigor": {"evaluate_candidates": "low"}}),
+        ).answer
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def physical(family, prompt, workspace, **kwargs):
+            result = self.physical(family, prompt, workspace, **kwargs)
+            if "KIND: compose_candidates" in prompt:
+                entered.set()
+                self.assertTrue(release.wait(5))
+            return result
+
+        host = self.host(physical)
+        host.start(record, self.config)
+        self.assertTrue(entered.wait(5), "composition did not start")
+        before = self.checkpoint(record)
+        with registry.locked(self.home):
+            host.store.set_creativity_rigor_locked(record["id"], {"evaluate_candidates": "low"})
+        self.assertEqual(self.checkpoint(record), before)
+        self.assertEqual(host.store.record(record["id"])["order"], original_order)
+        self.assertEqual(len(self.calls), 1)
+        release.set()
+        terminal = self._terminal(host, record["id"])
+        self.assertEqual(terminal["result"]["status"], "success")
+        self.assertEqual([call["job"] for call in self.calls], ["compose_candidates", "evaluate_candidates"])
+        for call, expected in zip(self.calls, (high, low)):
+            self.assertEqual(
+                (call["family"], call["model"], call["effort"]),
+                (expected["agent"], expected["model"], expected["effort"]),
+            )
+        self.assertEqual(terminal["order"], original_order)
+        self.assertEqual(host.store.creativity_rigor(record["id"]), {"evaluate_candidates": "low"})
+        evaluation = self.checkpoint(record)["evaluation"]
+        self.assertEqual(evaluation["accepted_count"], 2)
+        self.assertEqual(evaluation["composition_batches"][0]["regime"]["effort"], high["effort"])
+        self.assertEqual(evaluation["batches"][0]["regime"]["effort"], low["effort"])
+
+    def test_cleared_rigor_survives_resume_and_inherits_live_staffing(self):
+        record = self.admit(
+            supplied=True, gene_count=4, generation_limit=1,
+            evaluation_batch_size=2, rigor={"default": "high"},
+        )
+        first = self.host()
+        with registry.locked(self.home):
+            first.store.pause_locked(record["id"], "change staffing")
+            first.store.set_creativity_rigor_locked(record["id"], {})
+        staffing.edit_session(self.home, self.session, {"rigor": "low"})
+        current = staffing.read_session(self.home, self.session)
+        fresh = self.host()
+        fresh.resume(record["id"], self.config, fresh.store.lifecycle(record["id"])["revision"])
+        terminal = self._terminal(fresh, record["id"])
+        self.assertEqual(terminal["result"]["status"], "success")
+        for call in self.calls:
+            expected = staffing.resolve(
+                self.home, self.session,
+                **tasks.creativity_job_staffing_request(call["job"], {"rigor": {}}),
+            ).answer
+            self.assertEqual(
+                (call["family"], call["model"], call["effort"]),
+                (expected["agent"], expected["model"], expected["effort"]),
+            )
+        self.assertEqual(terminal["order"], record["order"])
+        self.assertEqual(fresh.store.creativity_rigor(record["id"]), {})
+        self.assertEqual(staffing.read_session(self.home, self.session), current)
 
     def test_negation_order_and_omission_cross_both_call_boundaries(self):
         record = self.admit(

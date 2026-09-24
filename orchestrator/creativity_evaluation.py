@@ -153,7 +153,7 @@ def search_material_from_fragments(fragments, *, objective, context, references)
 def create_genes(
     group, runner, *, objective, context, references, home, session, workspace,
     configuration, execution_context, prompt_set="default", prompt_values=None,
-    creativity_semantics=None,
+    creativity_semantics=None, resolve_rigor=None,
 ):
     """Derive compact search material from the original operator request."""
     values = dict(prompt_values or {})
@@ -174,6 +174,7 @@ def create_genes(
             },
             context={"job": "create_genes", "generation": 0, "batch": uuid.uuid4().hex},
             execution_context=execution_context, prompt_set=prompt_set,
+            resolve_rigor=resolve_rigor,
         )
     finally:
         group.ensure_quiescent()
@@ -199,7 +200,7 @@ def create_genes(
 def call_composition_batch(
     group, runner, *, home, session, workspace, configuration, search_material,
     candidates, generation, batch, execution_context, prompt_set="default",
-    prompt_values=None, creativity_semantics=None,
+    prompt_values=None, creativity_semantics=None, resolve_rigor=None,
 ):
     """Materialize candidate text once, before any reviewer sees it."""
     genomes = {candidate_id: dict(genome) for candidate_id, genome in candidates.items()}
@@ -228,6 +229,7 @@ def call_composition_batch(
         workspace=workspace, configuration=configuration, values=values,
         validation_context={"candidate_ids": list(genomes)}, context=context,
         execution_context=execution_context, prompt_set=prompt_set,
+        resolve_rigor=resolve_rigor,
     )
     if isinstance(result, runners.ControlledInterruptionResult):
         return None, result
@@ -252,7 +254,7 @@ def call_evaluation_batch(
     group, runner, *, home, session, workspace, configuration, search_material,
     candidates, generation, batch, execution_context, prompt_set="default",
     prompt_values=None, record_dispatch=None, creativity_semantics=None,
-    compositions=None,
+    compositions=None, resolve_rigor=None,
 ):
     """Evaluate one owner-admitted batch, including the runner's one correction.
 
@@ -298,6 +300,7 @@ def call_evaluation_batch(
         validation_context={"candidate_ids": list(genomes), "constraint_ids": constraint_ids},
         context=context, execution_context=execution_context, prompt_set=prompt_set,
         record_dispatch=record_dispatch,
+        resolve_rigor=resolve_rigor,
     )
     if isinstance(result, runners.ControlledInterruptionResult):
         return None, result
@@ -323,6 +326,7 @@ def call_evaluation_batch(
 def _call_semantic_job(
     group, runner, *, job, home, session, workspace, configuration, values,
     validation_context, context, execution_context, prompt_set, record_dispatch=None,
+    resolve_rigor=None,
 ):
     """Share live routing, served validation and correction preparation."""
     prepared_prompt = None
@@ -354,9 +358,13 @@ def _call_semantic_job(
         )
 
     def resolve_dispatch():
+        current_configuration = (
+            dict(configuration, rigor=resolve_rigor())
+            if resolve_rigor is not None else configuration
+        )
         answer = staffing.resolve(
             home, session, material=context["material"],
-            **tasks.creativity_job_staffing_request(job, configuration),
+            **tasks.creativity_job_staffing_request(job, current_configuration),
         ).answer
         return answer["agent"], answer["model"], answer["effort"]
 
@@ -383,7 +391,7 @@ def _call_semantic_job(
 def expand_progress(
     group, runner, *, progress, search_material, explored, explored_account,
     home, session, workspace, configuration, execution_context,
-    prompt_set="default", prompt_values=None,
+    prompt_set="default", prompt_values=None, resolve_rigor=None,
 ):
     """Apply one due intervention; return (current material, runner result).
 
@@ -418,6 +426,7 @@ def expand_progress(
             workspace=workspace, configuration=configuration, values=values,
             validation_context={"dimensions": search_material["dimensions"]},
             context=context, execution_context=execution_context, prompt_set=prompt_set,
+            resolve_rigor=resolve_rigor,
         )
     finally:
         group.ensure_quiescent()

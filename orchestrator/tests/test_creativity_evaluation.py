@@ -529,6 +529,31 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         self.assertTrue(accounting["token_usage_partial"])
         self.assertTrue(accounting["cost_partial"])
 
+    def test_correction_reads_live_rigor_without_mutating_call_configuration(self):
+        configuration = dict(self.configuration, rigor={"default": "high"})
+        original = copy.deepcopy(configuration)
+        live = {"default": "high"}
+        dispatched = []
+
+        def physical(family, prompt, workspace, model=None, effort=None, **kwargs):
+            dispatched.append((family, model, effort))
+            if len(dispatched) == 1:
+                live.clear()  # The existing correction must now inherit the low session.
+                return self.evaluation_result(prompt, [])
+            return self.batch_result(family, prompt, workspace, **kwargs)
+
+        accepted, result = self.call(
+            physical, configuration=configuration, resolve_rigor=lambda: dict(live),
+        )
+        self.assertEqual(dispatched, [
+            ("codex", "gpt-5.6-sol", "xhigh"),
+            ("codex", "gpt-5.6-luna", "low"),
+        ])
+        self.assertEqual(configuration, original)
+        self.assertEqual(accepted["regime"]["effort"], "low")
+        self.assertEqual(result.resolved_effort, "low")
+        self.assertEqual(len(self.evidence()[0]), 2)
+
     def test_each_attempt_reads_live_authorities(self):
         self.write_prompt("FIRST PROMPT")
         staffing.edit_session(self.home, self.session, {"material": "literature"})
