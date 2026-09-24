@@ -328,6 +328,27 @@
           padding: 14px 16px; margin-bottom: 14px; }
   .card h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
              color: var(--dim); margin-bottom: 10px; }
+  .physical-call { border-top: 1px solid var(--line); }
+  .physical-call:first-of-type { margin-top: 8px; }
+  .physical-call > summary { display: flex; align-items: center; gap: 8px;
+    padding: 6px 0; cursor: pointer; list-style: none; font-size: 12px; }
+  .physical-call > summary::-webkit-details-marker { display: none; }
+  .physical-call > summary::before { content: "›"; color: var(--dim); flex: none; }
+  .physical-call[open] > summary::before { transform: rotate(90deg); }
+  .physical-call > summary:hover { background: var(--panel); }
+  .physical-call > summary:focus-visible { outline: 2px solid var(--accent);
+    outline-offset: 2px; border-radius: 3px; }
+  .physical-call-title { flex: 1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .physical-call-agent { flex: none; max-width: 35%; overflow: hidden;
+    text-overflow: ellipsis; }
+  .physical-call-status { flex: none; display: inline-flex; align-items: center;
+    gap: 5px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--dim); }
+  .physical-call-status.success { color: var(--ok); }
+  .physical-call-status.failed { color: var(--bad); }
+  .physical-call-status.running { color: var(--accent); }
+  .physical-call-detail { padding: 2px 0 10px 12px; overflow-wrap: anywhere; }
+  .physical-call-detail .story-meta { margin-bottom: 0; }
   .unit { padding: 8px 0; border-bottom: 1px solid var(--line); }
   .unit:last-child { border-bottom: none; }
   .unit-head { display: flex; justify-content: space-between; }
@@ -2792,6 +2813,7 @@ function spinEl() {
   return `<span class="spin" style="animation-delay:-${Date.now() % SPIN_MS}ms"></span>`;
 }
 const MODEL_LABELS = Object.freeze({
+  "gpt-6-astra": "astra",
   "gpt-6-sol": "sol",
   "gpt-6-luna": "luna",
   "gpt-5.6-sol": "sol",
@@ -5796,11 +5818,32 @@ function duelResult(native, taskId = null) {
     duelCandidates(native.candidates, taskId);
 }
 function taskPhysicalCalls(lifecycle) {
-  const calls = lifecycle ? lifecycle.history.filter(event => event.physical_dispatch) : [];
+  const history = (lifecycle && lifecycle.history) || [];
+  const calls = history.filter(event => event.physical_dispatch);
+  // Receipt positions survive outcome updates. A resume starts a new period;
+  // older unconfirmed receipts must never start ticking again.
+  const resumedAt = history.reduce((last, event, index) =>
+    !event.physical_dispatch && event.status === "running" ? index : last, -1);
   return `<details class="card" data-task-detail-key="physical-calls">` +
     `<summary>Physical calls (${calls.length})</summary>` +
     calls.map(event => {
       const call = event.physical_dispatch, context = call.call_context, attempt = event.attempt;
+      const label = [String(context.job || "Call").replace(/^duel_/, "").replace(/_/g, " "),
+        ...(context.candidate_id ? [`candidate ${context.candidate_id.toUpperCase()}`] : []),
+        ...(context.round !== undefined ? [`round ${context.round}`] : []),
+        ...(context.generation !== undefined ? [`generation ${context.generation}`] : [])
+      ].join(" · ");
+      const agent = modelEffort(call.model, call.effort) || call.family || "unknown";
+      const started = Date.parse(event.at) / 1000;
+      const running = !call.completed && !call.error && call.duration_s == null &&
+        ["running", "pausing"].includes(lifecycle.status) &&
+        history.indexOf(event) > resumedAt && Number.isFinite(started) && started > 0;
+      const state = call.error ? "failed" : call.completed ? "success"
+        : running ? "running" : "unknown";
+      const status = call.error ? "Failed" : call.completed ? "Completed"
+        : running ? "Running" : "Completion unconfirmed";
+      const duration = running ? liveClock(0, {started_at: started}, "", "Elapsed time")
+        : call.duration_s == null ? "" : esc(fmtDHMS(call.duration_s));
       const meta = [context.job,
         ...(context.candidate_id ? [`candidate ${context.candidate_id}`] : []),
         ...(context.round !== undefined ? [`round ${context.round}`] : []),
@@ -5808,13 +5851,21 @@ function taskPhysicalCalls(lifecycle) {
         ...(context.batch !== undefined ? [`batch ${context.batch}`] : []),
         `family ${call.family ?? "unknown"}`, `model ${call.model ?? "unknown"}`,
         `effort ${call.effort ?? "unknown"}`, `prompt-set fallback: ${call.prompt_set_fallback ?? "none"}`,
-        call.duration_s === null ? "duration unknown" : `duration ${fmtDHMS(call.duration_s)}`];
-      return `<div class="card"><div class="story-meta">${esc(event.call_id)}` +
+        call.duration_s == null ? "duration unknown" : `duration ${fmtDHMS(call.duration_s)}`];
+      return `<details class="physical-call" data-task-detail-key="physical-call:${esc(event.call_id)}">` +
+        `<summary><span class="physical-call-title" title="${esc(label)}">${esc(label)}</span>` +
+        `<span class="physical-call-agent chip" title="${esc([call.family, call.model, call.effort].filter(Boolean).join(" · "))}">${esc(agent)}</span>` +
+        `<span class="physical-call-status ${state}" title="${status}" aria-label="${status}">` +
+        (state === "success" ? `<span aria-hidden="true">&#10003;</span>`
+          : state === "failed" ? `<span aria-hidden="true">!</span>`
+          : !duration ? `<span aria-hidden="true">?</span>` : "") +
+        `${duration}</span></summary>` +
+        `<div class="physical-call-detail"><div class="story-meta">${esc(event.call_id)}` +
         ` · ${call.completed ? "completed" : "completion unconfirmed"}</div>` +
         `<div class="story-note">${esc(meta.join(" · "))}</div>` +
         (call.error ? `<div class="failure">${esc(call.error)}</div>` : "") +
         costHtml(attempt.cost, attempt.cost_partial) +
-        tokenUsageHtml(attempt.token_usage, attempt.token_usage_partial) + `</div>`;
+        tokenUsageHtml(attempt.token_usage, attempt.token_usage_partial) + `</div></details>`;
     }).join("") + `</details>`;
 }
 function renderTaskPage(record, admittedAt, taskPipeline = null) {

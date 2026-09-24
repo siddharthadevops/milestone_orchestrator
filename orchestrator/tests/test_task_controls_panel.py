@@ -28,8 +28,16 @@ class TaskControlsPanelTest(unittest.TestCase):
             "creativityResult", "duelCandidates", "duelProgress", "duelResult",
             "taskPhysicalCalls", "esc", "fmtTokenCount",
             "fmtTokenUsage", "costReading", "costHtml", "tokenUsageHtml",
+            "modelEffort", "shortModel",
         ) + functions
         sources = []
+        for name in ("MODEL_LABELS", "EFFORT_LABELS"):
+            match = re.search(
+                r"const " + name + r" = Object\.freeze\(\{.*?\n\}\);",
+                self.panel, re.S,
+            )
+            self.assertIsNotNone(match, name)
+            sources.append(match.group(0))
         for name in names:
             match = re.search(
                 r"(?:async )?function " + name + r"\([^\n]*\) \{.*?\n\}",
@@ -243,6 +251,82 @@ const refreshRuns = () => {};
   assert.equal(taskControlPending, null);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """, ("controlSelectedTask",))
+
+    def test_physical_calls_are_compact_and_only_current_pending_calls_tick(self):
+        self.javascript(r"""
+const receipt = {
+  status: 'running', at: '2026-09-24T10:00:00.123456+0000',
+  call_id: '019a7bd7-39d1-7097-87dc-280c381ae1b3',
+  physical_dispatch: {
+    call_context: {job: 'evaluate_candidates', generation: 3,
+      batch: '6b63c56a-d4ba-48fb-ac2b-fbefa28e1255'},
+    family: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    prompt_set_fallback: null, completed: true, duration_s: 42, error: null,
+  },
+  attempt: {cost: {api_usd: 0.75, real_usd: 0.25}, cost_partial: false,
+    token_usage: {input_tokens: 100, output_tokens: 50, total_tokens: 150},
+    token_usage_partial: false},
+};
+const callSummary = (html, id = receipt.call_id) => {
+  const row = html.split(`data-task-detail-key="physical-call:${id}"`)[1];
+  assert(row, 'every call has its own disclosure');
+  return row.match(/<summary>(.*?)<\/summary>/s)[1];
+};
+const visible = html => html.replace(/<[^>]*>/g, '');
+let html = taskPhysicalCalls({status: 'success', history: [receipt]});
+let summary = callSummary(html);
+assert(visible(summary).includes('evaluate candidates · generation 3'));
+assert(visible(summary).includes('Astra-X'));
+assert(summary.includes('physical-call-status success'));
+assert(summary.includes('&#10003;'));
+assert(visible(summary).includes('42'));
+for (const detail of [receipt.call_id, receipt.physical_dispatch.call_context.batch,
+    '$0.25', 'input 100', 'prompt-set fallback: none']) {
+  assert(html.includes(detail), 'details retain ' + detail);
+  assert(!summary.includes(detail), 'summary hides ' + detail);
+}
+assert(!visible(summary).includes('gpt-6-astra'));
+const duel = structuredClone(receipt);
+duel.physical_dispatch.call_context = {job: 'author_candidate', candidate_id: 'a', round: 2};
+Object.assign(duel.physical_dispatch, {family: 'claude', model: 'claude-opus-5-5', effort: 'high'});
+summary = callSummary(taskPhysicalCalls({status: 'running', history: [duel]}));
+assert(visible(summary).includes('author candidate · candidate A · round 2'));
+assert(visible(summary).includes('Opus-H'));
+const failed = structuredClone(receipt);
+failed.physical_dispatch.error = 'Provider <failed>';
+html = taskPhysicalCalls({status: 'failure', history: [failed]});
+summary = callSummary(html);
+assert(summary.includes('physical-call-status failed'));
+assert(!summary.includes('&#10003;'));
+assert(visible(summary).includes('42'));
+assert(html.includes('Provider &lt;failed&gt;'));
+const pending = structuredClone(receipt);
+Object.assign(pending.physical_dispatch, {completed: false, duration_s: null});
+const expectedClock = JSON.stringify({completed: 0,
+  inFlight: {started_at: Date.parse(pending.at) / 1000}});
+for (const status of ['running', 'pausing']) {
+  summary = callSummary(taskPhysicalCalls({status, history: [pending]}));
+  assert(summary.includes('physical-call-status running'));
+  assert(summary.includes(expectedClock), 'live time starts at the receipt timestamp');
+  assert(!summary.includes('&#10003;'));
+}
+for (const status of ['paused', 'success', 'failure']) {
+  summary = callSummary(taskPhysicalCalls({status, history: [pending]}));
+  assert(summary.includes('physical-call-status unknown'));
+  assert(!summary.includes(expectedClock), 'inactive receipts must not tick');
+}
+const latest = structuredClone(pending);
+latest.call_id = 'new-dispatch';
+latest.at = '2026-09-24T10:02:00.123456+0000';
+html = taskPhysicalCalls({status: 'running', history: [pending,
+  {status: 'paused', at: '2026-09-24T10:00:30+0000'},
+  {status: 'running', at: '2026-09-24T10:01:00+0000'}, latest]});
+assert(callSummary(html).includes('physical-call-status unknown'));
+assert(!callSummary(html).includes(expectedClock), 'resume must not restart old clocks');
+assert(callSummary(html, latest.call_id).includes('physical-call-status running'));
+assert(callSummary(html, latest.call_id).includes(JSON.stringify({completed: 0,
+  inFlight: {started_at: Date.parse(latest.at) / 1000}})));
+""")
 
     def test_creativity_task_page_presents_progress_results_and_controls(self):
         from orchestrator.tests.test_task_api import TaskApiTest
