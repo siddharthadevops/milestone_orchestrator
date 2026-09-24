@@ -541,8 +541,9 @@ when both authors finish or the round limit is reached, and delivers both
 versions with scores and reports. It neither declares a winner nor discards
 the lower-scoring version. The panel opens each document and review report
 in its existing document viewer. Without `request.output_directory`, results
-live in `<workspace>/duel/<task-id>/a` and `b`, and review reports in
-`<workspace>/duel/<task-id>/reports/round-NNN`.
+live in `<workspace>/implementation/duel/<task-id>/a` and `b`, and review
+reports in `<workspace>/implementation/duel/<task-id>/reports/round-NNN`.
+Resuming a task preserves the output directory already saved in its checkpoint.
 
 Duel owns its author and reviewer prompt routes and result question sets.
 Those questions direct the agents to seek context; the driver discards their

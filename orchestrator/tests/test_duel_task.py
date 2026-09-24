@@ -1,6 +1,7 @@
 """Duel keeps both document candidates and improves only unfinished authors."""
 
 from collections import Counter
+import copy
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
-from orchestrator import prompt_sets, runners, staffing, task_api
+from orchestrator import duel, prompt_sets, runners, staffing, task_api
 from orchestrator.tests import test_task_api as api_fixture
 from orchestrator.tests import test_task_recovery as recovery_fixture
 from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
@@ -208,7 +209,7 @@ class DuelTaskTest(unittest.TestCase):
         self.assertEqual({item["id"] for item in native["candidates"]}, {"a", "b"})
         for candidate in native["candidates"]:
             self.assertEqual(candidate["directory"], os.path.realpath(os.path.join(
-                self.primary, "duel", record["id"], candidate["id"],
+                self.primary, "implementation", "duel", record["id"], candidate["id"],
             )))
             self.assertEqual(len(candidate["artifacts"]), len(self.documents[candidate["id"]]))
             self.assertFalse(candidate["finished"])
@@ -442,6 +443,12 @@ class DuelTaskTest(unittest.TestCase):
 
     def test_failed_review_resumes_without_repeating_accepted_work(self):
         record = self.admit()
+        legacy_output = os.path.realpath(os.path.join(self.primary, "duel", record["id"]))
+        legacy_record = copy.deepcopy(record)
+        legacy_record["order"]["request"]["output_directory"] = legacy_output
+        task_api.duel_checkpoint_store(self.home, record["id"]).put(
+            "checkpoint", duel.new_checkpoint(legacy_record, self.primary),
+        )
         failed = threading.Event()
 
         def failure_after_sibling(family, prompt, workspace, **kwargs):
@@ -461,9 +468,17 @@ class DuelTaskTest(unittest.TestCase):
         host.start(record, self.config)
         paused = self._paused(host, record["id"])
         self.assertTrue(failed.is_set())
+        host = self.host(failure_after_sibling)
         host.resume(record["id"], self.config, paused["revision"])
         native = self.completed(host, record)
         self.assertEqual(native["stop_reason"], "round_limit")
+        self.assertEqual(self.checkpoint(record)["output_directory"], legacy_output)
+        self.assertFalse(os.path.exists(os.path.join(self.primary, "implementation", "duel")))
+        for candidate in native["candidates"]:
+            self.assertEqual(candidate["directory"], os.path.join(legacy_output, candidate["id"]))
+            self.assertEqual(os.path.commonpath([
+                candidate["report_path"], legacy_output,
+            ]), legacy_output)
         self.assertEqual(self.call_counts(), Counter({
             ("duel_author", "a"): 1, ("duel_author", "b"): 1,
             ("duel_review", "a"): 1, ("duel_review", "b"): 2,

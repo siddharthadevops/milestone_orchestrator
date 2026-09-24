@@ -21,7 +21,7 @@ KINDS = {"author_candidate": "duel_author", "review_candidate": "duel_review"}
 def new_checkpoint(record, workspace):
     request = record["order"]["request"]
     output = request.get("output_directory") or os.path.join(
-        workspace, "duel", record["id"],
+        workspace, "implementation", "duel", record["id"],
     )
     output = os.path.realpath(output)
     candidates = []
