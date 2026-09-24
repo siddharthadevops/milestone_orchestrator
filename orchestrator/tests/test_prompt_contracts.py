@@ -338,7 +338,7 @@ class PromptContractsTest(unittest.TestCase):
         )
         self.assertNotEqual(minimal["search_material"]["objective"], request)
         echoed = replaced(("search_material", "objective"), request)
-        values = {"workspace": "/workspace", "objective": request,
+        values = {"workspace": "/workspace", "objective": request, "gene_count": 10,
                   "context": "", "references": "[]"}
         with tempfile.TemporaryDirectory() as home:
             prompt_sets.ensure_default(home)
@@ -492,6 +492,65 @@ class PromptContractsTest(unittest.TestCase):
             admitted = prompt_contracts.validate_create_genes_reply(value, creativity_semantics="sparse_v2")
             self.assertEqual(value, before)
             self.assertEqual(admitted, expected)
+
+    def test_fragment_pool_contract_uses_requested_count_and_preserves_input(self):
+        source = {"gene_pool": ["Firebase", "rojo intenso", "calor   compartido local"]}
+        before = copy.deepcopy(source)
+        self.assertIs(prompt_contracts.validate_fragment_pool_reply(
+            source, gene_count=3,
+        ), source)
+        self.assertEqual(source, before)
+        self.assertEqual(prompt_contracts.validate_fragment_pool_reply(
+            {"gene_pool": ["fragmento %d" % index for index in range(10)]},
+        )["gene_pool"], ["fragmento %d" % index for index in range(10)])
+
+        invalid = [None, [], {}, {"gene_pool": {}},
+                   {"gene_pool": source["gene_pool"], "questions": []}]
+        for pool in ([], source["gene_pool"][:2], source["gene_pool"] + ["extra"],
+                     [None, "rojo", "verde"], ["", "rojo", "verde"],
+                     [" \n\t", "rojo", "verde"], ["uno dos tres cuatro", "rojo", "verde"],
+                     ["rojo intenso", " ROJO   intenso ", "verde"],
+                     ["Firebase", "firebase", "verde"]):
+            invalid.append({"gene_pool": pool})
+        for reply in invalid:
+            with self.subTest(reply=reply), self.assertRaises(contracts.ContractError):
+                prompt_contracts.validate_fragment_pool_reply(reply, gene_count=3)
+        for count in (None, True, 0, -1, 3.0, "3"):
+            with self.subTest(count=count), self.assertRaises(contracts.ContractError):
+                prompt_contracts.validate_fragment_pool_reply(source, gene_count=count)
+
+    def test_fragment_creation_requires_questions_and_exact_configured_pool(self):
+        valid = {"gene_pool": ["casa", "roja", "limpiar"]}
+        invalid = closed_object_defects(valid)
+        invalid.update({
+            "wrong_count": {"gene_pool": ["casa", "roja"]},
+            "four_words": {"gene_pool": ["casa de color rojo", "roja", "limpiar"]},
+            "duplicate": {"gene_pool": ["casa", " CASA ", "limpiar"]},
+            "missing_questions": dict(valid, questions=[]),
+            "sparse_v2_shape": {"gene_pool": sparse_gene_pool_reply()["gene_pool"]},
+            "canonical_material": sparse_creation_reply(),
+        })
+        self.assert_creativity_replies(
+            "create_genes", {"three_fragments": valid}, invalid,
+            creativity_semantics="fragments_v3", gene_count=3,
+        )
+
+    def test_fragment_canonical_material_uses_shared_variants(self):
+        reply = sparse_creation_reply()
+        material = reply["search_material"]
+        material["dimensions"] = [
+            {"id": "fragment_01", "meaning": "casa"},
+            {"id": "fragment_02", "meaning": "roja"},
+        ]
+        material["variants"] = [
+            {"id": "affirm", "text": "Include"},
+            {"id": "negate", "text": "Exclude"},
+        ]
+        self.assertEqual(prompt_contracts.validate_create_genes_reply(
+            reply, creativity_semantics="fragments_v3",
+        ), reply)
+        with self.assertRaises(contracts.ContractError):
+            prompt_contracts.validate_create_genes_reply(reply)
 
     def test_shipped_contract_section_registry_is_complete(self):
         documents = prompt_sets.default_seed().documents

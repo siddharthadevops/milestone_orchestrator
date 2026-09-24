@@ -758,7 +758,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
             component["dimension_id"] != evaluation.creativity_search.ORDER_GENE
             for components in by_id.values() for component in components
         ))
-        self.assertIn("exact order", prompts[0])
+        self.assertIn("the supplied seed's order, meaning or polarity", prompts[0])
         self.assertEqual(accepted["genomes"], candidates)
         self.assertNotEqual(
             evaluation.creativity_search.genome_key(candidates["c-0"]),

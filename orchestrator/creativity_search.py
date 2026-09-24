@@ -20,6 +20,7 @@ ORDER_GENE = "__order__"
 OMIT = "__omit__"
 FIXED_ORDER = "fixed"
 INTERCHANGEABLE_ORDER = "interchangeable"
+SPARSE_SEMANTICS = ("sparse_v2", "fragments_v3")
 
 
 def _order_mode(configuration):
@@ -83,7 +84,8 @@ def make_genome(dimensions, variant_indices, *, order=None, variants=None,
 
     Each index is a zero-based position in that dimension's variants list. An
     optional validated order integer is inserted first as synthetic material.
-    Explicit sparse_v2 calls use shared variants and allow the OMIT sentinel.
+    Explicit sparse semantics use shared variants and allow the OMIT sentinel.
+    Fragments use those choices for affirmation, negation and omission.
     """
     dimension_ids = _dimension_ids(dimensions)
     genome = {}
@@ -92,7 +94,7 @@ def make_genome(dimensions, variant_indices, *, order=None, variants=None,
         if type(order) is not int or not 0 <= order < order_count:
             raise ValueError("order value must be an integer in [0, %s)" % order_count)
         genome[ORDER_GENE] = order
-    sparse = creativity_semantics == "sparse_v2"
+    sparse = creativity_semantics in SPARSE_SEMANTICS
     for dimension in dimensions:
         index = variant_indices[dimension["id"]]
         values = variants if sparse else dimension["variants"]
@@ -104,9 +106,9 @@ def genome_key(genome, dimensions=None, order_mode=None, *, creativity_semantics
     """Identify choices within one material, independent of mapping order.
 
     Sparse identity is the effective sequence; empty proposals have no key.
-    Pass the admitted dimensions and recorded order mode for sparse_v2.
+    Pass the admitted dimensions and recorded order mode for sparse semantics.
     """
-    if creativity_semantics == "sparse_v2":
+    if creativity_semantics in SPARSE_SEMANTICS:
         return _genome_pairs(dimensions, genome, order_mode, creativity_semantics) or None
     return frozenset(genome.items())
 
@@ -123,7 +125,7 @@ def _genome_pairs(dimensions, genome, order_mode, creativity_semantics):
         ordered_ids = dimension_ids
     return tuple(
         (dimension_id, genome[dimension_id]) for dimension_id in ordered_ids
-        if creativity_semantics != "sparse_v2" or genome[dimension_id] != OMIT
+        if creativity_semantics not in SPARSE_SEMANTICS or genome[dimension_id] != OMIT
     )
 
 
@@ -131,7 +133,7 @@ def genome_components(dimensions, genome, order_mode=None, *, variants=None,
                       creativity_semantics=None):
     """Return active semantic components in their effective order.
 
-    Missing order_mode remains fixed. Only explicit sparse_v2 calls use the
+    Missing order_mode remains fixed. Only explicit sparse semantics use the
     shared variants and omit inactive choices; legacy calls stay unchanged.
     """
     by_id = {dimension["id"]: dimension for dimension in dimensions}
@@ -140,7 +142,7 @@ def genome_components(dimensions, genome, order_mode=None, *, variants=None,
         dimensions, genome, order_mode, creativity_semantics,
     ):
         dimension = by_id[dimension_id]
-        values = variants if creativity_semantics == "sparse_v2" else dimension["variants"]
+        values = variants if creativity_semantics in SPARSE_SEMANTICS else dimension["variants"]
         variant = next(
             variant for variant in values
             if variant["id"] == variant_id
@@ -157,7 +159,7 @@ def genome_components(dimensions, genome, order_mode=None, *, variants=None,
 def _repertoire(dimensions, order_mode, *, variants=None, creativity_semantics=None):
     """Yield every effective seed lazily, including active interchangeable order."""
     dimension_ids = _dimension_ids(dimensions)
-    if creativity_semantics == "sparse_v2":
+    if creativity_semantics in SPARSE_SEMANTICS:
         for choices in product([OMIT] + [v["id"] for v in variants], repeat=len(dimensions)):
             active = [d for d, value in zip(dimension_ids, choices) if value != OMIT]
             if not active:
@@ -219,7 +221,7 @@ def make_population(dimensions, count, configuration, *, explored=(), rng=random
     order_mode = _order_mode(configuration)
     dimension_ids = _dimension_ids(dimensions)
     order_count = math.factorial(len(dimension_ids))
-    sparse = creativity_semantics == "sparse_v2"
+    sparse = creativity_semantics in SPARSE_SEMANTICS
     proposals = (
         make_genome(dimensions, {
             dimension["id"]: OMIT if sparse and rng.random() < 0.5 else rng.randrange(
@@ -274,7 +276,7 @@ def select_survivors(evaluated, configuration, *, dimensions=None, creativity_se
             distinct.append(pair)
 
     def distance(left, right):
-        if creativity_semantics == "sparse_v2":
+        if creativity_semantics in SPARSE_SEMANTICS:
             return _effective_distance(
                 genome_key(left, dimensions, order_mode, creativity_semantics=creativity_semantics),
                 genome_key(right, dimensions, order_mode, creativity_semantics=creativity_semantics),
@@ -313,7 +315,7 @@ def make_child(dimensions, parents, mutation_rate, *, order_mode=None, rng=rando
             replacement = rng.randrange(order_count - 1)
             choice = replacement + (replacement >= choice)
         child[ORDER_GENE] = choice
-    sparse = creativity_semantics == "sparse_v2"
+    sparse = creativity_semantics in SPARSE_SEMANTICS
     for dimension in dimensions:
         dimension_id = dimension["id"]
         choice = rng.choice(mates)[0][dimension_id]
@@ -391,7 +393,7 @@ def begin_generation(progress, candidates, configuration, *, creativity_semantic
     """
     if progress["stop_reason"] is not None:
         return
-    sparse = creativity_semantics == "sparse_v2"
+    sparse = creativity_semantics in SPARSE_SEMANTICS
     if (candidates or sparse) and progress["evaluated_candidates"] == configuration["max_evaluated_candidates"]:
         progress["stop_reason"] = "evaluation_budget"
         return
@@ -458,7 +460,7 @@ def accept_evaluation_wave(progress, wave, configuration, *, dimensions=None,
     if changed:
         return
 
-    previous_had_valid = creativity_semantics != "sparse_v2" and any(
+    previous_had_valid = creativity_semantics not in SPARSE_SEMANTICS and any(
         evaluation["constraint_valid"]
         for _genome, evaluation in progress["archive"]
     )
@@ -487,7 +489,7 @@ def accept_evaluation_wave(progress, wave, configuration, *, dimensions=None,
     progress["pending"] = None
     if progress["generations_completed"] == configuration["generation_limit"]:
         progress["stop_reason"] = "generation_limit"
-    if creativity_semantics == "sparse_v2":
+    if creativity_semantics in SPARSE_SEMANTICS:
         return
 
     # Compare decimal spellings exactly: binary subtraction can put a gain
@@ -532,7 +534,7 @@ def expansion_due(progress, configuration, *, creativity_semantics=None):
     if progress["evaluated_candidates"] == configuration["max_evaluated_candidates"]:
         progress["stop_reason"] = "evaluation_budget"
         return False
-    if creativity_semantics == "sparse_v2" or not progress["window_complete"]:
+    if creativity_semantics in SPARSE_SEMANTICS or not progress["window_complete"]:
         return False
     if progress["consecutive_expansions"] == configuration["max_stagnation_expansions"]:
         progress["stop_reason"] = "persistent_stagnation"

@@ -20,7 +20,7 @@ from . import (
 )
 
 
-CREATIVITY_CONTRACT = "separated_gene_pool_v1"
+CREATIVITY_CONTRACT = "ordered_fragments_v1"
 
 
 def _validate_sparse_prompt(prompt, defaulted_variables):
@@ -108,6 +108,48 @@ def _problem_material(search_material):
     )}
 
 
+def search_material_from_fragments(fragments, *, objective, context, references):
+    """Keep the brief intact and encode inclusion/negation on each fragment.
+
+    The existing sparse engine supplies omission and ordering. A fragment is
+    never paired with another fragment or interpreted as a grammatical slot.
+    """
+    return {
+        "objective": objective,
+        "context_summary": json.dumps({
+            "context": context, "reference_documents": references,
+        }, ensure_ascii=False),
+        "facts": [], "constraints": [], "assumptions": [], "unknowns": [],
+        "dimensions": [
+            {"id": "fragment_%02d" % index, "meaning": fragment}
+            for index, fragment in enumerate(fragments, 1)
+        ],
+        "variants": [
+            {"id": "affirmed", "text": "Include"},
+            {"id": "negated", "text": "Exclude"},
+        ],
+        "composition_guidance": (
+            "Fulfil the operator's brief and context using the ordered fragments as "
+            "inspiration. Create the proposal freely within that brief. An affirmed "
+            "fragment inspires inclusion; a negated fragment excludes only that "
+            "concept, without prescribing its replacement. Omitted fragments impose "
+            "nothing. The brief takes precedence over the inspiration."
+        ),
+        "criteria": [
+            {"id": "objective_fit", "text": "Fulfils the operator's brief and context."},
+            {"id": "inspiration_order", "text": (
+                "Uses the inspiration in its supplied order, respecting its polarity."
+            )},
+        ],
+        "order_semantics": (
+            "Follow the semantic order of the inspiration while meeting the brief. "
+            "Do not impose a sentence, scene, causal role or amount of detail per "
+            "fragment. For casa, roja, limpiar: introducing a house, painting it red "
+            "and then cleaning it follows the order; cleaning a red house reverses it."
+        ),
+    }
+
+
 def create_genes(
     group, runner, *, objective, context, references, home, session, workspace,
     configuration, execution_context, prompt_set="default", prompt_values=None,
@@ -119,12 +161,17 @@ def create_genes(
                   creativity_semantics=creativity_semantics or "legacy",
                   context=json.dumps(context, ensure_ascii=False),
                   references=json.dumps(references, ensure_ascii=False))
+    if creativity_semantics == "fragments_v3":
+        values["gene_count"] = configuration["gene_count"]
     group.ensure_quiescent()
     try:
         reply, result = _call_semantic_job(
             group, runner, job="create_genes", home=home, session=session,
             workspace=workspace, configuration=configuration, values=values,
-            validation_context={"creativity_semantics": creativity_semantics},
+            validation_context={
+                "creativity_semantics": creativity_semantics,
+                "gene_count": configuration.get("gene_count", 10),
+            },
             context={"job": "create_genes", "generation": 0, "batch": uuid.uuid4().hex},
             execution_context=execution_context, prompt_set=prompt_set,
         )
@@ -133,6 +180,11 @@ def create_genes(
     if isinstance(result, runners.ControlledInterruptionResult):
         return None, result
     result.diligence_questions = reply.get("questions", [])
+    if creativity_semantics == "fragments_v3":
+        return search_material_from_fragments(
+            reply["gene_pool"], objective=objective, context=context,
+            references=references,
+        ), result
     material = (
         _search_material_from_gene_pool(
             reply["gene_pool"], objective=objective, context=context,
@@ -151,7 +203,7 @@ def call_composition_batch(
 ):
     """Materialize candidate text once, before any reviewer sees it."""
     genomes = {candidate_id: dict(genome) for candidate_id, genome in candidates.items()}
-    sparse = creativity_semantics == "sparse_v2"
+    sparse = creativity_semantics in ("sparse_v2", "fragments_v3")
     values = dict(prompt_values or {})
     values.update(
         workspace=workspace,
@@ -213,7 +265,7 @@ def call_evaluation_batch(
     immediately before each attempt, so completion order cannot choose it.
     """
     genomes = {candidate_id: dict(genome) for candidate_id, genome in candidates.items()}
-    sparse = creativity_semantics == "sparse_v2"
+    sparse = creativity_semantics in ("sparse_v2", "fragments_v3")
     problem = _problem_material(search_material)
     compositions = list(compositions or [])
     by_candidate = {item["candidate_id"]: item for item in compositions}
@@ -283,7 +335,7 @@ def _call_semantic_job(
             material=context["material"], values=values, prompt_set=prompt_set,
             prompt_validator=(
                 _validate_sparse_prompt
-                if values.get("creativity_semantics") == "sparse_v2"
+                if values.get("creativity_semantics") in ("sparse_v2", "fragments_v3")
                 and job in ("create_genes", "compose_candidates", "evaluate_candidates")
                 else None
             ),
@@ -382,7 +434,7 @@ def _current_evaluations(state, creativity_semantics=None):
     return {
         item["candidate_id"]: (batch["genomes"][item["candidate_id"]], item)
         for batch in state["batches"]
-        if creativity_semantics == "sparse_v2" or batch["regime_revision"] == state["regime_revision"]
+        if creativity_semantics in ("sparse_v2", "fragments_v3") or batch["regime_revision"] == state["regime_revision"]
         for item in batch["evaluations"]
     }
 
@@ -520,7 +572,7 @@ def evaluate_wave(
         "accepted_count": state["accepted_count"], "unfinished": unfinished,
         "comparison_ready": ready,
         "evaluated": [current[key] for key in comparison_ids] if ready else [],
-        "rebaseline_required": creativity_semantics != "sparse_v2" and state["regime_revision"] > (
+        "rebaseline_required": creativity_semantics not in ("sparse_v2", "fragments_v3") and state["regime_revision"] > (
             1 if reference_revision is None else reference_revision
         ),
         "interruption": interruption,

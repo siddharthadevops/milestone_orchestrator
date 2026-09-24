@@ -84,7 +84,7 @@ def duel_view(home, record):
 
 
 def _creativity_proposals(checkpoint, limit, order_mode=None, *, creativity_semantics=None):
-    if creativity_semantics == "sparse_v2":
+    if creativity_semantics in ("sparse_v2", "fragments_v3"):
         accepted = _creativity_candidate_evaluations(
             checkpoint, order_mode, creativity_semantics=creativity_semantics,
         )
@@ -128,11 +128,11 @@ def _creativity_candidate_evaluations(checkpoint, order_mode=None, *, creativity
                     dimensions,
                     batch["genomes"][candidate_id],
                     order_mode=order_mode,
-                    variants=material["variants"] if creativity_semantics == "sparse_v2" else None,
+                    variants=material["variants"] if creativity_semantics in ("sparse_v2", "fragments_v3") else None,
                     creativity_semantics=creativity_semantics,
                 ),
             })
-            if creativity_semantics == "sparse_v2":
+            if creativity_semantics in ("sparse_v2", "fragments_v3"):
                 active_count = len(projected[-1]["components"])
                 projected[-1].update(
                     active_count=active_count,
@@ -195,7 +195,7 @@ def creativity_view(home, record):
         diligence["evaluate_candidates"] = evaluation_questions
     if diligence:
         view["diligence"] = diligence
-    if semantics == "sparse_v2":
+    if semantics in ("sparse_v2", "fragments_v3"):
         view["stop_reason"] = progress["stop_reason"]
         view["best_score"] = proposals[0]["score"] if proposals else None
         view["best_candidate_valid"] = proposals[0]["constraint_valid"] if proposals else None
@@ -2776,11 +2776,18 @@ class DirectTaskHost:
         checkpoint = store.get("checkpoint")
         if checkpoint is kvstore.ABSENT:
             initial = order.get("initial_genes")
+            initial_material = None
+            if initial is not None:
+                initial_material = (
+                    creativity_evaluation.search_material_from_fragments(
+                        initial["gene_pool"], objective=request["request"],
+                        context=request["context"],
+                        references=request["reference_documents"],
+                    ) if semantics == "fragments_v3"
+                    else copy.deepcopy(initial["search_material"])
+                )
             checkpoint = {
-                "search_material": (
-                    copy.deepcopy(initial["search_material"])
-                    if initial is not None else None
-                ),
+                "search_material": initial_material,
                 "candidates": {},
                 "progress": creativity_search.new_progress(),
                 "job": "evolve" if initial is not None else "create_genes",
@@ -2811,7 +2818,7 @@ class DirectTaskHost:
                         "expansion_interventions",
                     )},
                 }, dimensions=material["dimensions"], shortlist_size=configuration["shortlist_size"],
-                    variants=material["variants"] if semantics == "sparse_v2" else None,
+                    variants=material["variants"] if semantics in ("sparse_v2", "fragments_v3") else None,
                     creativity_semantics=semantics)
                 checkpoint["job"] = "complete"
                 store.put("checkpoint", checkpoint)
@@ -2882,7 +2889,7 @@ class DirectTaskHost:
                 elif progress["stop_reason"] is None:
                     search_options = dict(
                         explored=explored, creativity_semantics=semantics,
-                        variants=material["variants"] if semantics == "sparse_v2" else None,
+                        variants=material["variants"] if semantics in ("sparse_v2", "fragments_v3") else None,
                     )
                     if progress["archive"]:
                         population = creativity_search.reproduce(

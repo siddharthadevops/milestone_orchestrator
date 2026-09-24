@@ -449,18 +449,29 @@ is project-wide standing law supplied explicitly by the operator.
 
 ### Creativity search objectives
 
-The task order retains the complete operator request. `create_genes` derives
-a compact, self-contained `search_material.objective` from that request,
-alongside context, facts, constraints, assumptions, dimensions, criteria and
-`order_semantics`.
-The objective must preserve the operator's intent and scope; it need not repeat
-the request verbatim. Its contract checks structure and non-empty content,
-while semantic faithfulness remains model judgment.
+New orders use `fragments_v3`. `create_genes` returns exactly
+`configuration.gene_count` distinct contextual fragments, each 1–3 words
+(default: 10). The service retains the complete original request, context and
+ordered reference paths for both composition and evaluation. Each worker reads
+the relevant source material; the extractor's vocabulary is not a substitute
+for that context.
 
-Evaluation and expansion use that accepted search objective and the same
-search material. They do not rewrite it during evolution. This supersedes the
-literal-echo rule recorded in the original creativity skeleton and slice 02;
-the original request remains available in the task order.
+Each fragment can be affirmed, negated or omitted. `Firebase` inspires use of
+Firebase; negated `Firebase` excludes it without prescribing a replacement;
+omission imposes nothing. The existing sparse search supplies selection,
+ordering, crossover and mutation over those three choices. It does not create
+subject–verb–adjective products. Existing legacy and `sparse_v2` tasks retain
+their recorded interpretation; new orders never reinterpret their checkpoints.
+
+The compositor fulfils the brief with creative freedom, using the selected
+fragments as ordered inspiration. For `casa → roja → limpiar`, presenting a
+house, painting it red and then cleaning it follows the inspiration; cleaning
+a red house reverses it. No sentence, scene, causal role or minimum detail is
+required per fragment. The brief determines the required content and detail.
+The separate evaluator judges the immutable proposal against that brief,
+context, inspiration order and polarity. It cannot complete or repair the
+proposal; it rejects contradictions or missing detail needed by the brief,
+not creative invention itself.
 
 New Creativity orders resolve `configuration.order_mode` to
 `interchangeable` unless the caller explicitly selects `fixed`. Fixed searches
@@ -470,12 +481,10 @@ ordered semantic components to evaluation; the synthetic value is never a
 prompt component. Stored orders from before this field existed retain fixed
 ordering.
 
-An order may provide `initial_genes` as the canonical `search_material`
-envelope. Admission applies its closed structural validator, then starts at
-generation one without making or accounting for a vocabulary-extraction call.
-For generated sparse work, that extractor returns only ten subjects, ten verbs
-and ten adjectives; the service maps subjects to dimensions and the verb ×
-adjective product to the existing shared variants ABI. The panel accepts
+An order may provide `initial_genes` as `{"gene_pool": ["casa", "roja", "limpiar"]}`
+with matching `configuration.gene_count` (3 in this example). Admission applies
+the same fragment validator as the generated pool, then starts at generation
+one without making or accounting for a vocabulary-extraction call. The panel accepts
 pasted JSON or reads one local `.json` file into the same editor; direct API
 clients send the object itself. The standalone panel intentionally sends an
 empty request context, while the API continues to accept and preserve a
@@ -487,8 +496,8 @@ field may be left empty for this automatic budget, or set explicitly to
 another cap. Existing orders keep their recorded cap.
 The budget counts accepted evaluations, including any reassessment after an
 evaluator change; it is not a limit on tokens, money, or all physical calls.
-Stagnation and repertoire exhaustion may still end a search before its maximum
-generation count.
+Repertoire exhaustion may end a search before its maximum generation count;
+historical legacy orders also retain their stagnation controls.
 
 New Creativity orders default to 10 candidate combinations over 20
 generations, with all 10 candidates from one generation handled in one batch.
@@ -499,10 +508,9 @@ how many two-call batch pipelines may overlap. The resulting automatic
 evaluation budget is 200 evaluated candidates; composition calls do not spend
 additional candidate-budget places.
 
-Sparse vocabulary extraction has a fixed ten subjects, ten verbs and ten
-adjectives; there is no order-form gene-count control. `population_size` is the
-number of candidate combinations per generation and the panel labels it
-accordingly. The task view exposes the accepted search material and every
+`gene_count` controls the fragment pool; `population_size` controls candidate
+combinations per generation. The panel exposes both separately. The task view
+exposes the accepted search material and every
 scored candidate evaluation, including rejected combinations and their reasons.
 Rejected candidates never enter the final proposal shortlist. If no valid
 candidate exists yet, rejected candidates remain provisional parents so

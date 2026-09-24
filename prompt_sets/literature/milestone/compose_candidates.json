@@ -10,11 +10,28 @@
       {
         "text": [
           "TASK: compose one concrete proposal from every supplied candidate seed.",
-          "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}.",
+          "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching branch below.",
           "CREATIVITY CONTRACT: {{creativity_contract}}",
           "Composition and evaluation are separate. Build the proposal here; do not score, rank,",
           "accept, reject or repair the seed, predict an evaluator's verdict, or add evaluation fields.",
-          "Preserve every selected element and its supplied order exactly. Do not substitute a better",
+          "Read the complete operator request and context in search_material. Open its supplied reference",
+          "paths in the workspace and admitted roots; the vocabulary generator did not replace these sources.",
+          "For fragments_v3, fulfil the operator's assignment using the supplied fragments as inspiration",
+          "in their given order. You have creative freedom to construct the requested proposal within its",
+          "context: invent connections, designs, anatomy, capabilities, events or other details when the",
+          "assignment allows them. Respect established facts and express requirements; a proposal of new",
+          "fiction is a proposal, not an assertion that it was already canon.",
+          "Each component's dimension is its fragment. variant_id affirmed means include that inspiration;",
+          "variant_id negated means exclude that fragment's meaning. Negation does not prescribe an",
+          "opposite: no red excludes red without requiring blue. Omitted fragments are not supplied and",
+          "impose no inclusion or exclusion. Apply polarity at the fragment's supplied position.",
+          "The order is the order of the ideas in the proposed result, not merely a list of seed words.",
+          "For house -> red -> clean, having a house, painting it red, then cleaning it respects the",
+          "order; cleaning a red house does not. Require only what the assignment asks, following this",
+          "order. Do not impose one sentence per fragment, independent development, causal importance,",
+          "a fixed structure, length or extra detail. If a seed conflicts with an explicit requirement,",
+          "do not relax that requirement or silently reverse the seed; expose the conflict.",
+          "For sparse_v2 and legacy only: Preserve every selected element and its supplied order exactly. Do not substitute a better",
           "combination, omit an awkward element, change its meaning or make any selected element",
           "incidental. Use only the operator request, admitted context, references, immutable search",
           "material and exact seed. You may connect those supplied elements into a coherent proposal,",
@@ -23,17 +40,33 @@
           "the gap plainly in the proposal instead of filling it. Still return a proposal for every ID.",
           "For sparse_v2, the seed is the exact ordered set of active subject and verb-adjective",
           "combinations. For legacy, interpret its exact selected variants under the immutable",
-          "order_semantics and composition_guidance. The resulting proposal becomes immutable input",
-          "to a different worker, so make the supplied composition explicit enough to judge as written."
+          "order_semantics and composition_guidance. For every semantics, the resulting proposal becomes",
+          "immutable input to a different worker. Include the detail needed by the operator's assignment."
         ],
         "variables": [
-          {"name": "creativity_semantics", "required": false, "default": "legacy", "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."},
-          {"name": "creativity_contract", "required": false, "default": "separated_gene_pool_v1", "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."}
+          {
+            "name": "creativity_semantics",
+            "required": false,
+            "default": "legacy",
+            "description": "Service-owned saved interpretation: fragments_v3 for new tasks, sparse_v2 or legacy for earlier orders."
+          },
+          {
+            "name": "creativity_contract",
+            "required": false,
+            "default": "ordered_fragments_v1",
+            "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."
+          }
         ]
       },
       {
         "text": [
-          "LITERATURE REFINEMENT: compose only what the exact seed and supplied text support.",
+          "LITERATURE REFINEMENT: for fragments_v3, fulfil the literary assignment with creative",
+          "freedom, drawing inspiration from the fragments in their given order and polarity.",
+          "Invent anatomy, capabilities, lore, scenes or motives when the assignment permits or",
+          "calls for them, respecting established continuity, voice and evidenced idiolect.",
+          "The result is a creative proposal, not newly settled canon. The assignment determines",
+          "its scope, form and necessary detail; no extra causal or structural rule is imposed.",
+          "For sparse_v2 and legacy only: compose only what the exact seed and supplied text support.",
           "Preserve established facts, continuity, character agency and any evidenced idiolect;",
           "do not take over the novel, decide what a character ought to do, smooth deliberate",
           "strangeness, or invent lore, anatomy, capabilities, scenes or motives to rescue a seed.",

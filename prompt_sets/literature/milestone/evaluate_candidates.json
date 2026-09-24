@@ -10,18 +10,34 @@
       {
         "text": [
           "TASK: evaluate every supplied immutable composition against the operator's objective.",
-          "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}.",
+          "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching branch below.",
           "CREATIVITY CONTRACT: {{creativity_contract}}",
           "Composition has already happened in a separate call. Judge only the supplied proposal.",
+          "Read the complete operator request and context in search_material. Open its supplied reference",
+          "paths in the workspace and admitted roots; the vocabulary generator did not replace these sources.",
           "Do not compose, rewrite, improve, complete, reinterpret, reorder, substitute or return it.",
           "Do not give a composition credit for an idea that is absent from its proposal. Do not",
-          "invent missing facts, capabilities or evidence of feasibility. If detail needed to judge",
+          "invent missing facts, capabilities or evidence of feasibility on the composer's behalf.",
+          "For fragments_v3, judge fulfilment of the assignment and its context, plus the supplied",
+          "fragments' order and polarity. Each component's dimension is its inspiration fragment:",
+          "variant_id affirmed includes that inspiration; variant_id negated excludes its meaning.",
+          "An exclusion does not prescribe an opposite; omitted fragments impose no requirement.",
+          "The order concerns the ideas in the result, not mere keyword placement: house -> red -> clean",
+          "permits having a house, painting it red, then cleaning it; cleaning a red house violates it.",
+          "Require only what the assignment asks, following that order. Do not add a fixed structure,",
+          "length, independent development, causal importance or extra detail for each fragment.",
+          "Creative inventions expressly present in the proposal are allowed within the assignment's",
+          "freedom. Do not reject an invented design, anatomy, capability, event or worldbuilding simply",
+          "because it was not already present in the references or canon. Reject contradictions with",
+          "the assignment or established facts, and missing detail only when that detail is necessary",
+          "to fulfil the assignment. Assess what is written; never fill the missing detail yourself.",
+          "For sparse_v2 and legacy only: If detail needed to judge",
           "or use the proposal is absent, reject it instead of supplying that detail yourself.",
           "Check explicit supplied constraint IDs and the three service rejection IDs:",
           "__objective__ means the composition does not satisfy the operator's objective;",
           "__insufficient_detail__ means its unsupported or missing detail prevents a grounded",
-          "assessment or usable answer; __seed__ means it does not faithfully realize every element",
-          "and the exact order of its supplied candidate seed. These are ordinary invalid results.",
+          "assessment or usable answer at the level the assignment needs; __seed__ means it violates",
+          "the supplied seed's order, meaning or polarity under the active semantics. These are ordinary invalid results.",
           "For sparse_v2, compare the immutable proposal with the exact components in the same",
           "composition record. Every active subject and verb-adjective value must retain its meaning,",
           "order and causal importance; no element may be incidental. For legacy, assess the proposal",
@@ -34,8 +50,18 @@
           "evolutionary advice. A score is not a probability or promise of success."
         ],
         "variables": [
-          {"name": "creativity_semantics", "required": false, "default": "legacy", "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."},
-          {"name": "creativity_contract", "required": false, "default": "separated_gene_pool_v1", "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."}
+          {
+            "name": "creativity_semantics",
+            "required": false,
+            "default": "legacy",
+            "description": "Service-owned saved interpretation: fragments_v3 for new tasks, sparse_v2 or legacy for earlier orders."
+          },
+          {
+            "name": "creativity_contract",
+            "required": false,
+            "default": "ordered_fragments_v1",
+            "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."
+          }
         ]
       },
       {
@@ -44,8 +70,12 @@
           "its effect on imagery, voice, rhythm, tension, agency and reader experience where",
           "these serve the objective. Do not normalize, complete or rewrite it into a better",
           "story. Preserve continuity and stylistic constraints rather than smoothing away the",
-          "work's character. Reject unsupported anatomy, capabilities, lore, motives or causal",
-          "bridges instead of inventing them. Distinguish textual evidence from interpretation."
+          "work's character. For fragments_v3, accept creative inventions present in the proposal",
+          "when the assignment allows them; judge its fulfilment, context, order and polarity.",
+          "A new anatomy, capability, scene or piece of lore need not pre-exist in canon.",
+          "Missing detail is grounds for rejection only when necessary to fulfil the assignment.",
+          "For sparse_v2 and legacy only, reject unsupported anatomy, capabilities, lore, motives",
+          "or causal bridges instead of inventing them. Distinguish textual evidence from interpretation."
         ],
         "variables": []
       },

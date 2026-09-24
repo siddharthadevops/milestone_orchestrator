@@ -87,7 +87,7 @@ class CreativityTaskTest(unittest.TestCase):
 
     def admit(self, prompt_set="default", work_area=None, supplied=False, **configuration):
         configuration.setdefault("order_mode", "fixed")
-        fixture = (creativity_configuration if self.creativity_semantics == "sparse_v2"
+        fixture = (creativity_configuration if self.creativity_semantics in ("sparse_v2", "fragments_v3")
                    else legacy_creativity_configuration)
         order = self.order("creativity", work_area=work_area, request=search_fixture.OBJECTIVE,
                            reference_documents=self.references)
@@ -96,21 +96,29 @@ class CreativityTaskTest(unittest.TestCase):
             configuration=fixture(**configuration),
         )
         if supplied:
-            order["initial_genes"] = {"search_material": self.material}
-        if self.creativity_semantics == "sparse_v2":
+            order["initial_genes"] = (
+                {"gene_pool": self.fragments} if self.creativity_semantics == "fragments_v3"
+                else {"search_material": self.material}
+            )
+        if self.creativity_semantics == "fragments_v3":
             return task_api.StandaloneTaskStore(self.home).admit(order, {}, self.primary)
-        return self.legacy_order(order)
+        return self.legacy_order(order, semantics=self.creativity_semantics)
 
-    def legacy_order(self, order):
-        """Persist historical unmarked orders for the full-search regressions."""
+    def legacy_order(self, order, *, semantics=None):
+        """Persist historical orders without re-admitting their retired input."""
         source = copy.deepcopy(order)
         initial = source.pop("initial_genes", None)
         configuration = source.pop("configuration")
         store = task_api.StandaloneTaskStore(self.home)
         record = store.admit(source, {}, self.primary)
         record["order"].pop("creativity_semantics")
+        if semantics is not None:
+            record["order"]["creativity_semantics"] = semantics
         record["order"]["configuration"] = configuration
         if initial is not None:
+            initial = tasks.prompt_contracts.validate_create_genes_reply(
+                initial, creativity_semantics=semantics,
+            )
             record["order"]["initial_genes"] = copy.deepcopy(initial)
         api_fixture.TaskApiTest._age_stored_record(store, record)
         return record
@@ -140,7 +148,7 @@ class CreativityTaskTest(unittest.TestCase):
                     if supplied:
                         order["initial_genes"] = source
                     store = task_api.StandaloneTaskStore(self.home)
-                    record = store.admit(order, {}, self.primary) if semantics else self.legacy_order(order)
+                    record = self.legacy_order(order, semantics=semantics)
                     source["search_material"]["objective"] = "Caller mutation after admission"
                     first = self.host()
                     first.adopt_open_tasks(lambda _record: self.config)
@@ -352,6 +360,11 @@ class CreativityTaskTest(unittest.TestCase):
                 if "SAVED MATERIAL SEMANTICS: sparse_v2" in prompt
                 else {"search_material": self.material, "questions": questions}
             )
+            if "SAVED MATERIAL SEMANTICS: fragments_v3" in prompt:
+                reply = {
+                    "gene_pool": getattr(self, "fragments", ["Fragment %02d" % i for i in range(10)]),
+                    "questions": questions,
+                }
         elif job == "expand_genes":
             reply = {"additions": self.additions}
         elif job == "compose_candidates":
@@ -1549,6 +1562,7 @@ class SparseCreativityTaskTest(unittest.TestCase):
     setUp = CreativityTaskTest.setUp
     order = CreativityTaskTest.order
     admit = CreativityTaskTest.admit
+    legacy_order = CreativityTaskTest.legacy_order
     host = CreativityTaskTest.host
     config = staticmethod(CreativityTaskTest.config)
     checkpoint = CreativityTaskTest.checkpoint

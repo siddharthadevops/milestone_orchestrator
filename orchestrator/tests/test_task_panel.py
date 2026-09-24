@@ -142,18 +142,7 @@ const postJSON = async (path, payload) => posts.push({path, payload});
         )
         sources = [re.search(r"(?:async )?function " + name + r"\([^\n]*\) \{.*?\n\}",
                              self.panel, re.S).group(0) for name in names]
-        initial_genes = {"search_material": {
-            "objective": "Find a useful possibility.",
-            "context_summary": "Use what is available.",
-            "facts": [], "constraints": [], "assumptions": [], "unknowns": [],
-            "dimensions": [{
-                "id": "approach", "meaning": "How to proceed",
-            }],
-            "variants": [{"id": "reuse", "text": "Reuse the café space"}],
-            "composition_guidance": "Apply the selected components in order.",
-            "criteria": [{"id": "usefulness", "text": "Serves the objective"}],
-            "order_semantics": "Sequence in which the selected actions are applied.",
-        }}
+        initial_genes = {"gene_pool": ["Fragment %d" % i for i in range(10)]}
         setup = "const fixture = " + json.dumps({
             "base": server.base, "binding": binding, "session": session,
             "configuration": configuration, "initialGenes": initial_genes,
@@ -205,7 +194,7 @@ async function postJSON(path, payload) {
   });
   const body = await response.json();
   assert.equal(response.status, 201, JSON.stringify(body));
-  assert.equal(body.task.order.creativity_semantics, 'sparse_v2');
+  assert.equal(body.task.order.creativity_semantics, 'fragments_v3');
   assert.deepEqual(body.task.order.initial_genes, payload.initial_genes);
   const admitted = {...body.task.order.configuration};
   if (!Object.hasOwn(payload.configuration, 'max_evaluated_candidates')) {
@@ -517,7 +506,7 @@ async function postJSON(path, payload) {
                       self.task_ui)
         self.assertIn('if (initialGenesText)', self.task_ui)
         self.assertIn('#t_initial_genes {', self.panel)
-        self.assertIn("The generator decides how many genes", task_dialog)
+        self.assertIn("configured number of inspiration fragments", task_dialog)
         self.assertIn('return "Candidates per generation"', self.task_ui)
 
     def test_creativity_renders_search_genes_and_every_evaluation(self):

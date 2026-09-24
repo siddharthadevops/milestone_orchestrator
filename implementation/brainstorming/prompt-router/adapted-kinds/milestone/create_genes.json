@@ -1,7 +1,7 @@
 {
   "kind": "create_genes",
   "process": "milestone",
-  "description": "Extract a small literal vocabulary for sparse creativity, or legacy search material for an old order.",
+  "description": "Generate short contextual inspiration fragments, preserving older saved search semantics.",
   "instructions": {
     "parts": [
       {
@@ -19,6 +19,12 @@
           "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching branch below.",
           "CREATIVITY CONTRACT: {{creativity_contract}}",
           "Read the complete operator request, admitted context and references in the supplied order.",
+          "Open the supplied reference paths in the workspace and admitted roots; paths are not their contents.",
+          "For fragments_v3, return exactly {{gene_count}} distinct fragments, each containing 1-3 words.",
+          "Choose varied words or short phrases related to the assignment and its context, including",
+          "useful adjacent ideas. These are reusable inspiration, without grammatical categories.",
+          "Do not compose solutions, supply new requirements or hide a complete proposal in a fragment.",
+          "Return the fragments themselves without attached negation; the driver assigns polarity.",
           "For sparse_v2, return only ten subjects, ten verbs and ten adjectives grounded in",
           "the assignment. Keep them short, literal and independently reusable. Include important",
           "terms already supplied and useful adjacent vocabulary, but do not compose a proposal,",
@@ -43,13 +49,19 @@
             "name": "creativity_semantics",
             "required": false,
             "default": "legacy",
-            "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."
+            "description": "Service-owned saved interpretation: fragments_v3 for new tasks, sparse_v2 or legacy for earlier orders."
           },
           {
             "name": "creativity_contract",
             "required": false,
-            "default": "separated_gene_pool_v1",
+            "default": "ordered_fragments_v1",
             "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."
+          },
+          {
+            "name": "gene_count",
+            "required": false,
+            "default": "10",
+            "description": "Exact number of 1-3-word inspiration fragments requested by fragments_v3."
           }
         ]
       },
@@ -107,6 +119,11 @@
         "id": "create_genes_result",
         "text": [
           "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+          "For fragments_v3 its only top-level keys are gene_pool and questions.",
+          "gene_pool is a JSON list of exactly the requested number of distinct non-blank strings,",
+          "each containing 1-3 whitespace-separated words. Example shape: {\"gene_pool\":[\"shared warmth\",\"flexible shell\"],\"questions\":[...]}",
+          "The example illustrates shape only; use the exact requested count. Return no categories, IDs,",
+          "search_material, explanations or semantics marker. All objects are closed.",
           "For sparse_v2 its only top-level keys are gene_pool and questions.",
           "gene_pool is exactly {\"subjects\":[...],\"verbs\":[...],\"adjectives\":[...]}.",
           "Each list contains exactly 10 distinct non-blank strings. All objects are closed.",

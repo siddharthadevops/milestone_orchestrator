@@ -68,6 +68,7 @@ def task_order(task_executor="agent_call", **request_changes):
 def creativity_configuration(**changes):
     """Boundary fixture, not catalogue defaults."""
     value = {
+        "gene_count": 10,
         "population_size": 2,
         "generation_limit": 1,
         "max_evaluated_candidates": 2,
@@ -87,6 +88,7 @@ def legacy_creativity_configuration(**changes):
     value = creativity_configuration(
         minimum_improvement=1, patience_generations=1, max_stagnation_expansions=1,
     )
+    value.pop("gene_count")
     value.update(changes)
     return value
 
@@ -178,10 +180,11 @@ class TaskContractsTest(unittest.TestCase):
         }
         self.assertEqual(
             {key: defaults[key] for key in (
-                "population_size", "generation_limit",
+                "gene_count", "population_size", "generation_limit",
                 "evaluation_batch_size", "evaluation_concurrency",
             )},
             {
+                "gene_count": 10,
                 "population_size": 10,
                 "generation_limit": 20,
                 "evaluation_batch_size": 10,
@@ -329,44 +332,31 @@ class TaskContractsTest(unittest.TestCase):
                 dict(task_order("creativity"), configuration=configuration),
             )
 
-    def test_creativity_initial_genes_reuses_reply_contract_and_detaches(self):
-        initial = {"search_material": {
-            "objective": "Choose a useful reading plan.",
-            "context_summary": "A finished story needs readers.",
-            "facts": ["The story is complete."],
-            "constraints": [{"id": "budget", "text": "Spend no money."}],
-            "assumptions": ["A library may host an event."],
-            "unknowns": ["Likely attendance."],
-            "dimensions": [{
-                "id": "format",
-                "meaning": "Reading format",
-            }],
-            "variants": [
-                {"id": "excerpt", "text": "Read an excerpt."},
-                {"id": "full", "text": "Read the full story."},
-            ],
-            "composition_guidance": "Apply the selected components in order.",
-            "criteria": [{"id": "reach", "text": "Reach interested readers."}],
-            "order_semantics": "sequence in which the components are applied",
-        }}
+    def test_creativity_initial_fragments_reuse_pool_contract_and_detach(self):
+        initial = {"gene_pool": ["fragmento %d" % index for index in range(10)]}
         source = dict(task_order("creativity"), initial_genes=copy.deepcopy(initial))
         checked = tasks.validate_order(source)
         self.assertEqual(checked["initial_genes"], initial)
+        self.assertEqual(checked["configuration"]["gene_count"], 10)
         self.assertEqual(checked["configuration"]["order_mode"], "interchangeable")
-        source["initial_genes"]["search_material"]["objective"] = "Changed later"
-        self.assertEqual(
-            checked["initial_genes"]["search_material"]["objective"],
-            "Choose a useful reading plan.",
-        )
+        source["initial_genes"]["gene_pool"][0] = "Changed later"
+        self.assertEqual(checked["initial_genes"]["gene_pool"][0], "fragmento 0")
 
-        invalid = []
-        missing_order_semantics = copy.deepcopy(initial)
-        missing_order_semantics["search_material"].pop("order_semantics")
-        invalid.append(missing_order_semantics)
-        reserved = copy.deepcopy(initial)
-        reserved["search_material"]["dimensions"][0]["id"] = "__order__"
-        invalid.append(reserved)
-        invalid.extend((None, [], {}, {"search_material": []}))
+        custom = dict(task_order("creativity"), configuration={"gene_count": 3},
+                      initial_genes={"gene_pool": ["casa", "roja", "limpiar"]})
+        self.assertEqual(tasks.validate_order(custom)["initial_genes"], custom["initial_genes"])
+        state = {"tasks": []}
+        admitted = tasks.admit_task(state, custom, {})
+        self.assertEqual(admitted["order"]["creativity_semantics"], "fragments_v3")
+        self.assertEqual(admitted["order"]["configuration"]["gene_count"], 3)
+        custom["configuration"]["gene_count"] = 12
+        custom["initial_genes"]["gene_pool"][0] = "mutated"
+        self.assertEqual(state["tasks"][0]["order"]["configuration"]["gene_count"], 3)
+        self.assertEqual(state["tasks"][0]["order"]["initial_genes"]["gene_pool"][0], "casa")
+
+        invalid = [None, [], {}, {"search_material": []},
+                   {"gene_pool": ["casa", "roja", "limpiar"]},
+                   dict(initial, questions=[])]
         for value in invalid:
             with self.subTest(initial_genes=value):
                 self.assert_request_error(
@@ -379,7 +369,7 @@ class TaskContractsTest(unittest.TestCase):
             tasks.validate_order,
             dict(task_order("agent_call"), initial_genes=initial),
         )
-        for semantics in ("legacy", "sparse_v2"):
+        for semantics in ("legacy", "sparse_v2", "fragments_v3"):
             self.assert_request_error(
                 tasks.INVALID_TASK_REQUEST, tasks.validate_order,
                 dict(task_order("creativity"), creativity_semantics=semantics),
@@ -547,6 +537,40 @@ class TaskContractsTest(unittest.TestCase):
         )
         ordered_native = dict(native, proposals=[first, reordered])
         self.assertEqual(validate(ordered_native), ordered_native)
+
+    def test_fragment_and_sparse_results_share_active_component_representation(self):
+        dimensions = [
+            {"id": "fragment_01", "meaning": "Firebase"},
+            {"id": "fragment_02", "meaning": "local cache"},
+        ]
+        variants = [{"id": "affirm", "text": "Include"},
+                    {"id": "negate", "text": "Exclude"}]
+        proposal = {
+            "candidate_id": "c1", "proposal": "Use an embedded database.",
+            "reason": "Satisfies the request without Firebase.", "assumptions": [],
+            "score": 0.8, "constraint_valid": True, "constraint_violations": [],
+            "components": [{"dimension_id": "fragment_01", "dimension": "Firebase",
+                            "variant_id": "negate", "variant": "Exclude"}],
+        }
+        native = {
+            "outcome": "proposals", "proposals": [proposal],
+            "stop_reason": "repertoire_exhausted", "generations_completed": 1,
+            "evaluated_candidates": 1, "expansion_interventions": 0,
+        }
+        for semantics in ("sparse_v2", "fragments_v3"):
+            with self.subTest(semantics=semantics):
+                checked = tasks.validate_creativity_native_result(
+                    native, dimensions=dimensions, variants=variants,
+                    shortlist_size=2, creativity_semantics=semantics,
+                )
+                self.assertEqual(checked, native)
+                self.assertIsNot(checked["proposals"], native["proposals"])
+                with self.assertRaises(tasks.ContractError):
+                    tasks.validate_creativity_native_result(
+                        dict(native, stop_reason="persistent_stagnation"),
+                        dimensions=dimensions, variants=variants, shortlist_size=2,
+                        creativity_semantics=semantics,
+                    )
 
     def test_creativity_job_staffing_contract(self):
         from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body

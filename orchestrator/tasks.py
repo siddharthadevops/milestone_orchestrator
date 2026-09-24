@@ -388,7 +388,7 @@ _TASK_EXECUTORS += (
     },
 )
 _CREATIVITY_COUNTS = (
-    "population_size", "generation_limit", "max_evaluated_candidates",
+    "gene_count", "population_size", "generation_limit", "max_evaluated_candidates",
     "elite_count", "diversity_count", "evaluation_batch_size",
     "evaluation_concurrency", "shortlist_size",
 )
@@ -452,7 +452,7 @@ _TASK_EXECUTORS += (
             **{name: {"type": "integer", "default": default,
                       "exclusive_minimum": 1 if name == "population_size" else 0}
                for name, default in {
-                   "population_size": 10, "generation_limit": 20,
+                   "gene_count": 10, "population_size": 10, "generation_limit": 20,
                    "elite_count": 2,
                    "diversity_count": 1, "evaluation_batch_size": 10,
                    "evaluation_concurrency": 1, "shortlist_size": 3,
@@ -1128,7 +1128,7 @@ def validate_creativity_native_result(result, *, dimensions, shortlist_size,
     task envelope continues to treat native_result as executor-opaque.
     """
     context = "creativity native_result"
-    sparse = creativity_semantics == "sparse_v2"
+    sparse = creativity_semantics in ("sparse_v2", "fragments_v3")
     counts = (
         "generations_completed", "evaluated_candidates", "expansion_interventions",
     )
@@ -1485,9 +1485,9 @@ def validate_order(order, reviewed_defaults=None):
             )
         if "initial_genes" in order:
             try:
-                initial = prompt_contracts.validate_create_genes_reply(
+                initial = prompt_contracts.validate_fragment_pool_reply(
                     order["initial_genes"], context="task order.initial_genes",
-                    creativity_semantics="sparse_v2",
+                    gene_count=checked["configuration"]["gene_count"],
                 )
             except contracts.ContractError as exc:
                 raise ContractError(str(exc)) from exc
@@ -1748,7 +1748,7 @@ def admit_task(
         validate_order(order), primary_workspace
     )
     if checked_order["task_executor"] == "creativity":
-        checked_order["creativity_semantics"] = "sparse_v2"
+        checked_order["creativity_semantics"] = "fragments_v3"
     try:
         staffing = _json_copy(resolved_staffing, "resolved staffing")
     except ContractError as exc:

@@ -391,7 +391,7 @@ class TaskApiTest(unittest.TestCase):
         code, response = self.request("POST", "/api/tasks", order)
         self.assertEqual(code, 201, response)
         record = response["task"]
-        self.assertEqual(record["order"]["creativity_semantics"], "sparse_v2")
+        self.assertEqual(record["order"]["creativity_semantics"], "fragments_v3")
         path = "/api/tasks/" + record["id"]
         self.assertEqual(self.request("GET", path)[1]["task"], record)
         self.assertEqual(self.request("GET", "/api/tasks")[1]["tasks"], [record])
@@ -482,7 +482,7 @@ class TaskApiTest(unittest.TestCase):
                 expected = dict(defaults, **submitted.get("configuration", {}))
                 expected["max_evaluated_candidates"] = expected["population_size"] * expected["generation_limit"]
                 self.assertEqual(record["order"]["configuration"], expected)
-                self.assertEqual(record["order"]["creativity_semantics"], "sparse_v2")
+                self.assertEqual(record["order"]["creativity_semantics"], "fragments_v3")
                 host.start(record, search.config)
                 path = "/api/tasks/" + record["id"]
                 self.assertEqual(self.request("GET", path)[1]["task"]["order"]["configuration"], expected)

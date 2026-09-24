@@ -823,9 +823,9 @@
   <div id="task_configuration"></div>
   <div class="field" id="t_initial_genes_field" style="display:none">
     <label>Initial genes JSON (optional)</label>
-    <div class="hint">The generator decides how many genes the problem needs. “Candidates per generation” controls combinations, not genes.</div>
+    <div class="hint">Supply the configured number of inspiration fragments, each 1–3 words. Each may be included, negated or omitted; combinations preserve their selected order.</div>
     <textarea id="t_initial_genes" class="mono" spellcheck="false"
-      placeholder='{"search_material": { … }}'></textarea>
+      placeholder='{"gene_pool": ["house", "red", "clean", …]}'></textarea>
     <div class="pathrow">
       <button class="btn" type="button"
         onclick="document.getElementById('t_initial_genes_file').click()">Load JSON file…</button>
@@ -5823,7 +5823,7 @@ function renderTaskPage(record, admittedAt, taskPipeline = null) {
   fullRequestText = String(request.request || "");
   const context = request.context || {};
   const configuration = (record.order || {}).configuration || {};
-  const sparse = record.order.creativity_semantics === "sparse_v2";
+  const sparse = ["sparse_v2", "fragments_v3"].includes(record.order.creativity_semantics);
   const state = open ? ((lifecycle || {}).status || "running") : result.status;
   const stateCls = taskStateClassName(record, lifecycle);
   const standalone = !taskPageRunId;
@@ -6427,6 +6427,7 @@ function taskConfigurationOption(choice) {
 function taskConfigurationLabel(name, definition) {
   if (definition.label) return definition.label;
   if (name === "population_size") return "Candidates per generation";
+  if (name === "gene_count") return "Inspiration fragments";
   return name.replace(/_/g, " ").replace(/^./, letter => letter.toUpperCase());
 }
 function renderTaskConfigurationSchema(schema, draft, prefix = "") {

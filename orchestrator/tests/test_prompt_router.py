@@ -1332,6 +1332,81 @@ class PromptRouterTest(unittest.TestCase):
                         self.assertEqual(resolved[material]["output_contract"],
                                          resolved["default"]["output_contract"])
 
+    def test_fragment_prompts_mount_count_sources_order_and_polarity_in_both_sets(self):
+        literature_documents = {
+            member: json.loads(
+                (LITERATURE_CORPUS / member).read_text(encoding="utf-8")
+            )
+            for member in prompt_sets.CANONICAL_MEMBERS
+        }
+        with tempfile.TemporaryDirectory() as home:
+            prompt_sets.ensure_default(home)
+            self.write_set(home, "literature", literature_documents)
+            for set_name, material in (
+                ("default", "default"), ("default", "literature"),
+                ("default", "business"), ("literature", "default"),
+            ):
+                for kind in (
+                    "create_genes", "compose_candidates", "evaluate_candidates",
+                ):
+                    with self.subTest(prompt_set=set_name, material=material, kind=kind):
+                        values = {
+                            "workspace": "/workspace", "objective": "Invent a creature.",
+                            "context": "It must manipulate a terminal.",
+                            "references": '["species.md"]', "search_material": "{}",
+                            "candidates": "[]", "compositions": "[]",
+                            "creativity_semantics": "fragments_v3", "gene_count": 6,
+                        }
+                        selected = prompt_router.resolve(
+                            home, job=kind + "@creativity", executor="agent_call",
+                            material=material, values=values, prompt_set=set_name,
+                        )
+                        self.assertIsNone(selected.prompt_set_fallback)
+                        rendered = prompt_router.render(selected.prompt, values)
+                        self.assertIn("CREATIVITY CONTRACT: ordered_fragments_v1", rendered)
+                        self.assertIn("workspace and admitted roots", rendered)
+                        bound = prompt_contracts.bind(selected.prompt)
+                        if kind == "create_genes":
+                            self.assertIn("return exactly 6 distinct fragments", rendered)
+                            self.assertIn("1-3 whitespace-separated words", rendered)
+                            reply = {
+                                "gene_pool": [
+                                    "shared warmth", "flexible shell", "balance",
+                                    "translucent fingers", "touch", "hinged plates",
+                                ],
+                                "questions": [
+                                    {"id": question_id, "answer": "Inspected the context."}
+                                    for question_id in bound.question_ids
+                                ],
+                            }
+                            prompt_contracts.validate(
+                                bound, reply, creativity_semantics="fragments_v3", gene_count=6,
+                            )
+                            with self.assertRaises(contracts.ContractError):
+                                prompt_contracts.validate(
+                                    bound, reply, creativity_semantics="fragments_v3", gene_count=10,
+                                )
+                            values.pop("gene_count")
+                            defaulted = prompt_router.resolve(
+                                home, job=kind + "@creativity", executor="agent_call",
+                                material=material, values=values, prompt_set=set_name,
+                            )
+                            self.assertIn(
+                                "return exactly 10 distinct fragments",
+                                prompt_router.render(defaulted.prompt, values),
+                            )
+                        else:
+                            self.assertIn("variant_id affirmed", rendered)
+                            self.assertIn("variant_id negated", rendered)
+                            self.assertIn("house -> red -> clean", rendered)
+                            self.assertIn("Require only what the assignment asks", rendered)
+                            self.assertIn("For sparse_v2 and legacy only", rendered)
+                            if kind == "compose_candidates":
+                                self.assertIn("You have creative freedom", rendered)
+                            else:
+                                self.assertIn("Do not reject an invented design", rendered)
+                                self.assertIn("never fill the missing detail yourself", rendered)
+
     def test_sparse_evaluation_prompt_contract(self):
         with tempfile.TemporaryDirectory() as home:
             prompt_sets.ensure_default(home)

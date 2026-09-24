@@ -661,7 +661,7 @@ def validate_create_genes_reply(
     Missing semantics preserves the legacy envelope without normalization.
     """
     ctx = context
-    sparse = creativity_semantics == "sparse_v2"
+    sparse = creativity_semantics in ("sparse_v2", "fragments_v3")
     if not isinstance(obj, dict):
         raise contracts.ContractError("%s must be an object" % ctx)
     _exact_keys(obj, ("search_material",), ctx)
@@ -727,6 +727,37 @@ def _creativity_result_keys(bound, primary):
     return (primary, "questions") if bound.question_ids else (primary,)
 
 
+def validate_fragment_pool_reply(obj, *, gene_count=GENE_POOL_SIZE,
+                                 context="create_genes reply"):
+    """Admit a fixed-size pool of distinct one-to-three-word inspirations.
+
+    Preserve the supplied text and order. Callers persisting the returned value
+    remain responsible for detaching it from the input.
+    """
+    if type(gene_count) is not int or gene_count < 1:
+        raise contracts.ContractError("%s gene_count must be a positive integer" % context)
+    if not isinstance(obj, dict):
+        raise contracts.ContractError("%s must be an object" % context)
+    _exact_keys(obj, ("gene_pool",), context)
+    pool = _require(obj, "gene_pool", list, context)
+    if len(pool) != gene_count:
+        raise contracts.ContractError(
+            "%s.gene_pool must contain exactly %d entries" % (context, gene_count)
+        )
+    seen = set()
+    for index, fragment in enumerate(pool):
+        item_context = "%s.gene_pool[%d]" % (context, index)
+        if not isinstance(fragment, str) or not 1 <= len(fragment.split()) <= 3:
+            raise contracts.ContractError(
+                "%s must be a string containing 1 to 3 words" % item_context
+            )
+        normalized = " ".join(fragment.split()).casefold()
+        if normalized in seen:
+            raise contracts.ContractError("%s.gene_pool entries must be distinct" % context)
+        seen.add(normalized)
+    return obj
+
+
 def _gene_pool(obj, ctx):
     pool = _require(obj, "gene_pool", dict, ctx)
     _exact_keys(pool, ("subjects", "verbs", "adjectives"), ctx + ".gene_pool")
@@ -754,6 +785,13 @@ def _gene_pool(obj, ctx):
 
 def _create_genes(obj, bound, options, ctx):
     _kind(bound, ("create_genes",))
+    if options["creativity_semantics"] == "fragments_v3":
+        _exact_keys(obj, _creativity_result_keys(bound, "gene_pool"), ctx)
+        validate_fragment_pool_reply(
+            {"gene_pool": obj["gene_pool"]},
+            gene_count=options["gene_count"], context=ctx,
+        )
+        return
     if options["creativity_semantics"] == "sparse_v2":
         _exact_keys(obj, _creativity_result_keys(bound, "gene_pool"), ctx)
         _gene_pool(obj, ctx)
@@ -1135,7 +1173,7 @@ def validate(bound, obj, *, queued_findings=None,
              configured_suite_commands=None, periodic_checkpoint=None, workspace=None,
              expected_artifact=None, extension_fields=(),
              candidate_ids=None, constraint_ids=None,
-             dimensions=None, creativity_semantics=None,
+             dimensions=None, creativity_semantics=None, gene_count=GENE_POOL_SIZE,
              suite_checkpoint_origin=False, adjudication_ids=None,
              contestable_ids=None,
              duel_round=None):
@@ -1154,6 +1192,7 @@ def validate(bound, obj, *, queued_findings=None,
         "constraint_ids": constraint_ids,
         "dimensions": dimensions,
         "creativity_semantics": creativity_semantics,
+        "gene_count": gene_count,
         "suite_checkpoint_origin": suite_checkpoint_origin,
         "adjudication_ids": adjudication_ids,
         "contestable_ids": contestable_ids,

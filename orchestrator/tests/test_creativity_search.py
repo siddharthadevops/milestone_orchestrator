@@ -95,6 +95,156 @@ class CreativitySearchTest(unittest.TestCase):
             genome, material["dimensions"], mode, creativity_semantics="sparse_v2",
         )
 
+    def fragment_material(self, *fragments):
+        return {
+            "dimensions": [
+                {"id": "fragment_%02d" % index, "meaning": fragment}
+                for index, fragment in enumerate(fragments, 1)
+            ],
+            "variants": [
+                {"id": "affirmed", "text": "Include"},
+                {"id": "negated", "text": "Exclude"},
+            ],
+        }
+
+    def test_fragments_exhaust_exact_nonempty_repertoire(self):
+        for fragments in (("Firebase",), ("Firebase", "local storage")):
+            material = self.fragment_material(*fragments)
+            dimensions = material["dimensions"]
+            ids = [d["id"] for d in dimensions]
+            context = dict(variants=material["variants"], creativity_semantics="fragments_v3")
+            singletons = {((dimension, value),) for dimension in ids
+                          for value in ("affirmed", "negated")}
+            for mode in ("fixed", "interchangeable"):
+                expected = set(singletons)
+                if len(ids) == 2:
+                    for left in ("affirmed", "negated"):
+                        for right in ("affirmed", "negated"):
+                            pair = ((ids[0], left), (ids[1], right))
+                            expected.add(pair)
+                            if mode == "interchangeable":
+                                expected.add(pair[::-1])
+                with self.subTest(fragments=fragments, mode=mode):
+                    configuration = creativity_configuration(population_size=20, order_mode=mode)
+                    rng = random.Random(4)
+                    # Even exclusively empty random draws must enumerate every
+                    # nonempty inspiration once, then report real exhaustion.
+                    with mock.patch.object(rng, "random", return_value=0):
+                        population = search.make_population(
+                            dimensions, 20, configuration, rng=rng, **context,
+                        )
+                    keys = {search.genome_key(g, dimensions, mode,
+                                              creativity_semantics="fragments_v3")
+                            for g in population}
+                    self.assertEqual(keys, expected)
+                    self.assertEqual(len(population), len(expected))
+                    self.assertNotIn(None, keys)
+                    self.assertEqual(search.make_population(
+                        dimensions, 20, configuration, explored=keys, rng=rng, **context,
+                    ), [])
+                    progress = search.new_progress()
+                    search.begin_generation(progress, {}, configuration,
+                                            creativity_semantics="fragments_v3")
+                    self.assertEqual(progress["stop_reason"], "repertoire_exhausted")
+
+    def test_fragments_identity_tracks_polarity_and_effective_order(self):
+        material = self.fragment_material("casa", "roja", "limpiar")
+        dimensions = material["dimensions"]
+        genome = {search.ORDER_GENE: 0, "fragment_01": "affirmed",
+                  "fragment_02": search.OMIT, "fragment_03": "affirmed"}
+
+        def key(value):
+            return search.genome_key(value, dimensions, "interchangeable",
+                                     creativity_semantics="fragments_v3")
+
+        self.assertEqual(key(genome), (("fragment_01", "affirmed"), ("fragment_03", "affirmed")))
+        # Moving only the omitted fragment leaves the effective inspiration unchanged.
+        self.assertEqual(key(dict(genome, **{search.ORDER_GENE: 2})), key(genome))
+        distinct = [genome, dict(genome, fragment_01="negated"),
+                    dict(genome, fragment_01=search.OMIT),
+                    dict(genome, **{search.ORDER_GENE: 5})]
+        self.assertEqual(len({key(value) for value in distinct}), 4)
+        empty = {search.ORDER_GENE: 0, **{dimension["id"]: search.OMIT for dimension in dimensions}}
+        self.assertIsNone(key(empty))
+
+    def test_fragments_ordered_components_preserve_words_and_negation(self):
+        material = self.fragment_material("casa", "roja", "limpiar")
+        dimensions = material["dimensions"]
+        context = dict(variants=material["variants"], creativity_semantics="fragments_v3")
+        genome = search.make_genome(dimensions, {
+            "fragment_01": 0, "fragment_02": 1, "fragment_03": 0,
+        }, **context)
+        expected = [
+            {"dimension_id": "fragment_01", "dimension": "casa", "variant_id": "affirmed", "variant": "Include"},
+            {"dimension_id": "fragment_02", "dimension": "roja", "variant_id": "negated", "variant": "Exclude"},
+            {"dimension_id": "fragment_03", "dimension": "limpiar", "variant_id": "affirmed", "variant": "Include"},
+        ]
+        self.assertEqual(search.genome_components(dimensions, genome, "fixed", **context), expected)
+        reordered = dict(genome, **{search.ORDER_GENE: search.rank_order(
+            [d["id"] for d in dimensions], ["fragment_03", "fragment_01", "fragment_02"],
+        )})
+        self.assertEqual(search.genome_components(dimensions, reordered, "interchangeable", **context),
+                         [expected[2], expected[0], expected[1]])
+        omitted = dict(genome, fragment_02=search.OMIT)
+        self.assertEqual(search.genome_components(dimensions, omitted, "fixed", **context),
+                         [expected[0], expected[2]])
+
+    def test_fragments_mutation_can_toggle_every_polarity_and_participation(self):
+        material = self.fragment_material("Firebase")
+        dimensions = material["dimensions"]
+        context = dict(variants=material["variants"], creativity_semantics="fragments_v3")
+        cases = [
+            ("affirmed", "negated", 0.75), ("negated", "affirmed", 0.75),
+            ("affirmed", search.OMIT, 0.25), ("negated", search.OMIT, 0.25),
+            (search.OMIT, "affirmed", 0.25), (search.OMIT, "negated", 0.25),
+        ]
+        for source, target, mutation_kind in cases:
+            with self.subTest(source=source, target=target):
+                parent = {"fragment_01": source}
+                parents = self.evaluated([parent], [0.8])
+                before = copy.deepcopy(parents)
+                rng = random.Random(1)
+
+                def choose(choices):
+                    if choices and isinstance(choices[0], dict):
+                        return next(value for value in choices if value["id"] == target)
+                    return choices[0]
+
+                with mock.patch.object(rng, "random", side_effect=[0, mutation_kind]), \
+                     mock.patch.object(rng, "choice", side_effect=choose):
+                    child = search.make_child(dimensions, parents, 1, rng=rng, **context)
+                self.assertEqual(child, {"fragment_01": target})
+                self.assertEqual(parents, before)
+
+        parent = {"fragment_01": "affirmed"}
+        empty = {"fragment_01": search.OMIT}
+        with mock.patch.object(search, "make_child", return_value=empty):
+            offspring = search.reproduce(
+                dimensions, self.evaluated([parent], [1]), 10,
+                creativity_configuration(population_size=10), **context,
+            )
+        self.assertEqual(offspring, [{"fragment_01": "negated"}])
+
+    def test_fragments_reject_invalid_survivors_when_valid_candidate_exists(self):
+        material = self.fragment_material("Firebase", "local storage")
+        context = dict(dimensions=material["dimensions"], creativity_semantics="fragments_v3")
+        configuration = creativity_configuration(generation_limit=3)
+        pairs = self.evaluated([
+            {"fragment_01": "affirmed", "fragment_02": "affirmed"},
+            {"fragment_01": "negated", "fragment_02": "affirmed"},
+        ], [1, 0.4], invalid=(0,))
+        self.assertEqual(search.select_survivors(pairs, configuration, **context), pairs[1:])
+        provisional = search.select_survivors(pairs[:1], configuration, **context)
+        self.assertEqual(provisional, pairs[:1])
+        self.assertFalse(provisional[0][1]["constraint_valid"])
+        progress = search.new_progress()
+        self.observe_generation(progress, provisional, configuration, **context)
+        self.assertIsNone(progress["stop_reason"])
+        self.assertEqual(progress["stagnant_generations"], 0)
+        progress["window_complete"] = True
+        self.assertFalse(search.expansion_due(progress, configuration, creativity_semantics="fragments_v3"))
+        self.assertIsNone(progress["stop_reason"])
+
     def test_sparse_search_context_and_legacy_compatibility(self):
         material = self.sparse_material(2)
         dimensions = material["dimensions"]

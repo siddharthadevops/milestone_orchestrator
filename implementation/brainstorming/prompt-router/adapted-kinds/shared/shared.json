@@ -712,7 +712,10 @@
                 "the proposal is explained. For sparse_v2, extract only the ten subjects, ten verbs",
                 "and ten adjectives requested by the generic prompt. Prefer words evidenced by the",
                 "assignment and restrained adjacent vocabulary. Do not write the story, invent lore or",
-                "scenes, interpret motives, critique the manuscript, or decide what a character should do."
+                "scenes, interpret motives, critique the manuscript, or decide what a character should do.",
+                "For fragments_v3, return only the requested number of 1-3-word inspiration fragments",
+                "related to the assignment and its context. Literary imagery, action and association",
+                "may inform the vocabulary; do not pre-compose a story or impose new requirements."
               ],
               "variables": []
             }
@@ -752,7 +755,9 @@
                 "to agree. These are lenses, not a required business-plan schema. Keep the",
                 "generic objective and result contract unchanged. Preserve logical, position-independent",
                 "units and the declared order semantics. For sparse_v2, extract only literal subjects,",
-                "verbs and adjectives; do not pre-compose a plan or smuggle one into a list entry."
+                "verbs and adjectives; do not pre-compose a plan or smuggle one into a list entry.",
+                "For fragments_v3, return only the requested number of 1-3-word contextual inspiration",
+                "fragments. No plan, taxonomy or new requirements belong in that vocabulary."
               ],
               "variables": []
             }
@@ -768,7 +773,13 @@
           "parts": [
             {
               "text": [
-                "LITERATURE REFINEMENT: compose only what the exact seed and supplied text support.",
+                "LITERATURE REFINEMENT: for fragments_v3, fulfil the literary assignment with creative",
+                "freedom, drawing inspiration from the fragments in their given order and polarity.",
+                "Invent anatomy, capabilities, lore, scenes or motives when the assignment permits or",
+                "calls for them, respecting established continuity, voice and evidenced idiolect.",
+                "The result is a creative proposal, not newly settled canon. The assignment determines",
+                "its scope, form and necessary detail; no extra causal or structural rule is imposed.",
+                "For sparse_v2 and legacy only: compose only what the exact seed and supplied text support.",
                 "Preserve established facts, continuity, character agency and any evidenced idiolect;",
                 "do not take over the novel, decide what a character ought to do, smooth deliberate",
                 "strangeness, or invent lore, anatomy, capabilities, scenes or motives to rescue a seed.",
@@ -809,7 +820,12 @@
           "parts": [
             {
               "text": [
-                "BUSINESS REFINEMENT: compose the chosen resources, recipients, agreements and",
+                "BUSINESS REFINEMENT: for fragments_v3, fulfil the assignment with creative freedom,",
+                "using the ordered fragments and their polarity as inspiration for the proposed design.",
+                "Respect supplied budget and capacity; distinguish proposed mechanisms or agreements",
+                "from claims that demand, access or agreement already exist. Require only the detail",
+                "the assignment needs, without prescribing a business-plan structure or causal chain.",
+                "For sparse_v2 and legacy only: compose the chosen resources, recipients, agreements and",
                 "uses exactly as supplied. Respect supplied budget and capacity and expose absent",
                 "demand, access or willingness instead of inventing it to rescue the seed. Do not",
                 "execute the plan or turn the proposal into an evaluation or forecast."
@@ -837,8 +853,12 @@
                 "its effect on imagery, voice, rhythm, tension, agency and reader experience where",
                 "these serve the objective. Do not normalize, complete or rewrite it into a better",
                 "story. Preserve continuity and stylistic constraints rather than smoothing away the",
-                "work's character. Reject unsupported anatomy, capabilities, lore, motives or causal",
-                "bridges instead of inventing them. Distinguish textual evidence from interpretation."
+                "work's character. For fragments_v3, accept creative inventions present in the proposal",
+                "when the assignment allows them; judge its fulfilment, context, order and polarity.",
+                "A new anatomy, capability, scene or piece of lore need not pre-exist in canon.",
+                "Missing detail is grounds for rejection only when necessary to fulfil the assignment.",
+                "For sparse_v2 and legacy only, reject unsupported anatomy, capabilities, lore, motives",
+                "or causal bridges instead of inventing them. Distinguish textual evidence from interpretation."
               ],
               "variables": []
             }

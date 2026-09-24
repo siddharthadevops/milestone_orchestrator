@@ -1524,87 +1524,39 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                    'you '
                                                                                    'wrote>"'],
                                                                           'variables': []}},
-                        'material_layers': {'create_genes@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE '
-                                                                                                                            'REFINEMENT: for '
-                                                                                                                            'legacy, derive '
-                                                                                                                            'movable '
-                                                                                                                            'narrative units '
-                                                                                                                            'such as actions, '
+                        'material_layers': {'create_genes@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: for legacy, derive '
+                                                                                                                            'movable narrative units such as actions, '
                                                                                                                             'decisions,',
-                                                                                                                            'disclosures, '
-                                                                                                                            'reversals or '
-                                                                                                                            'experiential '
-                                                                                                                            'beats when they '
-                                                                                                                            'serve the '
-                                                                                                                            'objective. Use',
-                                                                                                                            'imagery, voice, '
-                                                                                                                            'rhythm, tension '
-                                                                                                                            'and agency as '
-                                                                                                                            'judgment lenses, '
-                                                                                                                            'not as abstract',
-                                                                                                                            'dimensions or '
-                                                                                                                            'fixed slots. '
-                                                                                                                            'Preserve '
-                                                                                                                            'supplied '
-                                                                                                                            'continuity and '
-                                                                                                                            'stylistic '
-                                                                                                                            'constraints;',
-                                                                                                                            'only operator or '
-                                                                                                                            'canon '
-                                                                                                                            'requirements, or '
-                                                                                                                            'dependencies '
-                                                                                                                            'grounded in '
-                                                                                                                            'supplied '
-                                                                                                                            'evidence,',
-                                                                                                                            'are hard '
-                                                                                                                            'constraints. Put '
-                                                                                                                            'unresolved',
-                                                                                                                            'risk or '
-                                                                                                                            'feasibility in '
-                                                                                                                            'assumptions, '
-                                                                                                                            'unknowns or '
-                                                                                                                            'criteria instead '
-                                                                                                                            'of manufacturing',
-                                                                                                                            'a prohibition. '
-                                                                                                                            'order_semantics '
-                                                                                                                            'must name how '
-                                                                                                                            'relative '
-                                                                                                                            'placement '
-                                                                                                                            'changes the '
-                                                                                                                            'story,',
-                                                                                                                            'causal execution '
-                                                                                                                            'or reader '
-                                                                                                                            'experience; '
-                                                                                                                            'never define it '
-                                                                                                                            'as merely the '
-                                                                                                                            'order in which',
-                                                                                                                            'the proposal is '
-                                                                                                                            'explained. For '
-                                                                                                                            'sparse_v2, '
-                                                                                                                            'extract only the '
-                                                                                                                            'ten subjects, '
-                                                                                                                            'ten verbs',
-                                                                                                                            'and ten '
-                                                                                                                            'adjectives '
-                                                                                                                            'requested by the '
-                                                                                                                            'generic prompt. '
-                                                                                                                            'Prefer words '
-                                                                                                                            'evidenced by the',
-                                                                                                                            'assignment and '
-                                                                                                                            'restrained '
-                                                                                                                            'adjacent '
-                                                                                                                            'vocabulary. Do '
-                                                                                                                            'not write the '
-                                                                                                                            'story, invent '
-                                                                                                                            'lore or',
-                                                                                                                            'scenes, '
-                                                                                                                            'interpret '
-                                                                                                                            'motives, '
-                                                                                                                            'critique the '
-                                                                                                                            'manuscript, or '
-                                                                                                                            'decide what a '
-                                                                                                                            'character should '
-                                                                                                                            'do.'],
+                                                                                                                            'disclosures, reversals or experiential beats '
+                                                                                                                            'when they serve the objective. Use',
+                                                                                                                            'imagery, voice, rhythm, tension and agency as '
+                                                                                                                            'judgment lenses, not as abstract',
+                                                                                                                            'dimensions or fixed slots. Preserve supplied '
+                                                                                                                            'continuity and stylistic constraints;',
+                                                                                                                            'only operator or canon requirements, or '
+                                                                                                                            'dependencies grounded in supplied evidence,',
+                                                                                                                            'are hard constraints. Put unresolved',
+                                                                                                                            'risk or feasibility in assumptions, unknowns '
+                                                                                                                            'or criteria instead of manufacturing',
+                                                                                                                            'a prohibition. order_semantics must name how '
+                                                                                                                            'relative placement changes the story,',
+                                                                                                                            'causal execution or reader experience; never '
+                                                                                                                            'define it as merely the order in which',
+                                                                                                                            'the proposal is explained. For sparse_v2, '
+                                                                                                                            'extract only the ten subjects, ten verbs',
+                                                                                                                            'and ten adjectives requested by the generic '
+                                                                                                                            'prompt. Prefer words evidenced by the',
+                                                                                                                            'assignment and restrained adjacent vocabulary. '
+                                                                                                                            'Do not write the story, invent lore or',
+                                                                                                                            'scenes, interpret motives, critique the '
+                                                                                                                            'manuscript, or decide what a character should '
+                                                                                                                            'do.',
+                                                                                                                            'For fragments_v3, return only the requested '
+                                                                                                                            'number of 1-3-word inspiration fragments',
+                                                                                                                            'related to the assignment and its context. '
+                                                                                                                            'Literary imagery, action and association',
+                                                                                                                            'may inform the vocabulary; do not pre-compose '
+                                                                                                                            'a story or impose new requirements.'],
                                                                                                                    'variables': []}]},
                                                                                        'questions': {'intro': [],
                                                                                                      'items': [{'id': 'character_idiolect',
@@ -1645,106 +1597,53 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                                {'id': 'meaningful_surprise',
                                                                                                                 'text': 'Using the creative freedom available in the assignment, would a result built from this vocabulary surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Identify the words that create that potential.'}]},
                                                                                        'output_contract': {'sections': []}},
-                                                                        'business': {'instructions': {'parts': [{'text': ['BUSINESS '
-                                                                                                                          'REFINEMENT: '
-                                                                                                                          'consider '
-                                                                                                                          'resources, '
-                                                                                                                          'recipients, '
-                                                                                                                          'agreements and '
-                                                                                                                          'alternative',
-                                                                                                                          'uses when they '
-                                                                                                                          'serve this '
-                                                                                                                          'objective. '
-                                                                                                                          'Preserve supplied '
-                                                                                                                          'budget, capacity '
-                                                                                                                          'and',
-                                                                                                                          'other hard '
-                                                                                                                          'conditions; label '
-                                                                                                                          'assumptions about '
-                                                                                                                          'demand, access and '
-                                                                                                                          'willingness',
-                                                                                                                          'to agree. These '
-                                                                                                                          'are lenses, not a '
-                                                                                                                          'required '
-                                                                                                                          'business-plan '
-                                                                                                                          'schema. Keep the',
-                                                                                                                          'generic objective '
-                                                                                                                          'and result '
-                                                                                                                          'contract '
-                                                                                                                          'unchanged. '
-                                                                                                                          'Preserve logical, '
+                                                                        'business': {'instructions': {'parts': [{'text': ['BUSINESS REFINEMENT: consider resources, '
+                                                                                                                          'recipients, agreements and alternative',
+                                                                                                                          'uses when they serve this objective. Preserve '
+                                                                                                                          'supplied budget, capacity and',
+                                                                                                                          'other hard conditions; label assumptions about '
+                                                                                                                          'demand, access and willingness',
+                                                                                                                          'to agree. These are lenses, not a required '
+                                                                                                                          'business-plan schema. Keep the',
+                                                                                                                          'generic objective and result contract '
+                                                                                                                          'unchanged. Preserve logical, '
                                                                                                                           'position-independent',
-                                                                                                                          'units and the '
-                                                                                                                          'declared order '
-                                                                                                                          'semantics. For '
-                                                                                                                          'sparse_v2, extract '
-                                                                                                                          'only literal '
-                                                                                                                          'subjects,',
-                                                                                                                          'verbs and '
-                                                                                                                          'adjectives; do not '
-                                                                                                                          'pre-compose a plan '
-                                                                                                                          'or smuggle one '
-                                                                                                                          'into a list '
-                                                                                                                          'entry.'],
+                                                                                                                          'units and the declared order semantics. For '
+                                                                                                                          'sparse_v2, extract only literal subjects,',
+                                                                                                                          'verbs and adjectives; do not pre-compose a '
+                                                                                                                          'plan or smuggle one into a list entry.',
+                                                                                                                          'For fragments_v3, return only the requested '
+                                                                                                                          'number of 1-3-word contextual inspiration',
+                                                                                                                          'fragments. No plan, taxonomy or new '
+                                                                                                                          'requirements belong in that vocabulary.'],
                                                                                                                  'variables': []}]},
                                                                                      'questions': {'intro': [], 'items': []},
                                                                                      'output_contract': {'sections': []}}},
-                                            'compose_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE '
-                                                                                                                                  'REFINEMENT: '
-                                                                                                                                  'compose '
-                                                                                                                                  'only what '
-                                                                                                                                  'the exact '
-                                                                                                                                  'seed and '
-                                                                                                                                  'supplied '
-                                                                                                                                  'text '
-                                                                                                                                  'support.',
-                                                                                                                                  'Preserve '
-                                                                                                                                  'established '
-                                                                                                                                  'facts, '
-                                                                                                                                  'continuity, '
-                                                                                                                                  'character '
-                                                                                                                                  'agency and '
-                                                                                                                                  'any '
-                                                                                                                                  'evidenced '
-                                                                                                                                  'idiolect;',
-                                                                                                                                  'do not '
-                                                                                                                                  'take over '
-                                                                                                                                  'the novel, '
-                                                                                                                                  'decide '
-                                                                                                                                  'what a '
-                                                                                                                                  'character '
-                                                                                                                                  'ought to '
-                                                                                                                                  'do, smooth '
-                                                                                                                                  'deliberate',
-                                                                                                                                  'strangeness, '
-                                                                                                                                  'or invent '
-                                                                                                                                  'lore, '
-                                                                                                                                  'anatomy, '
-                                                                                                                                  'capabilities, '
-                                                                                                                                  'scenes or '
-                                                                                                                                  'motives to '
-                                                                                                                                  'rescue a '
+                                            'compose_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: for fragments_v3, '
+                                                                                                                                  'fulfil the literary assignment with creative',
+                                                                                                                                  'freedom, drawing inspiration from the '
+                                                                                                                                  'fragments in their given order and polarity.',
+                                                                                                                                  'Invent anatomy, capabilities, lore, scenes or '
+                                                                                                                                  'motives when the assignment permits or',
+                                                                                                                                  'calls for them, respecting established '
+                                                                                                                                  'continuity, voice and evidenced idiolect.',
+                                                                                                                                  'The result is a creative proposal, not newly '
+                                                                                                                                  'settled canon. The assignment determines',
+                                                                                                                                  'its scope, form and necessary detail; no extra '
+                                                                                                                                  'causal or structural rule is imposed.',
+                                                                                                                                  'For sparse_v2 and legacy only: compose only '
+                                                                                                                                  'what the exact seed and supplied text support.',
+                                                                                                                                  'Preserve established facts, continuity, '
+                                                                                                                                  'character agency and any evidenced idiolect;',
+                                                                                                                                  'do not take over the novel, decide what a '
+                                                                                                                                  'character ought to do, smooth deliberate',
+                                                                                                                                  'strangeness, or invent lore, anatomy, '
+                                                                                                                                  'capabilities, scenes or motives to rescue a '
                                                                                                                                   'seed.',
-                                                                                                                                  'Make '
-                                                                                                                                  'action and '
-                                                                                                                                  'consequence '
-                                                                                                                                  'legible '
-                                                                                                                                  'enough for '
-                                                                                                                                  'separate '
-                                                                                                                                  'judgment. '
-                                                                                                                                  'If a '
-                                                                                                                                  'necessary',
-                                                                                                                                  'bridge is '
-                                                                                                                                  'absent, '
-                                                                                                                                  'expose '
-                                                                                                                                  'that '
-                                                                                                                                  'absence in '
-                                                                                                                                  'the '
-                                                                                                                                  'proposal '
-                                                                                                                                  'instead of '
-                                                                                                                                  'writing it '
-                                                                                                                                  'into '
-                                                                                                                                  'canon.'],
+                                                                                                                                  'Make action and consequence legible enough for '
+                                                                                                                                  'separate judgment. If a necessary',
+                                                                                                                                  'bridge is absent, expose that absence in the '
+                                                                                                                                  'proposal instead of writing it into canon.'],
                                                                                                                          'variables': []}]},
                                                                                              'questions': {'intro': [],
                                                                                                            'items': [{'id': 'character_idiolect',
@@ -1795,98 +1694,48 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                                      {'id': 'meaningful_surprise',
                                                                                                                       'text': 'Using the creative freedom available in the assignment, does each composition surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Identify the setup and turn already present in the proposal.'}]},
                                                                                              'output_contract': {'sections': []}},
-                                                                              'business': {'instructions': {'parts': [{'text': ['BUSINESS '
-                                                                                                                                'REFINEMENT: '
-                                                                                                                                'compose the '
-                                                                                                                                'chosen '
-                                                                                                                                'resources, '
-                                                                                                                                'recipients, '
-                                                                                                                                'agreements '
-                                                                                                                                'and',
-                                                                                                                                'uses exactly '
-                                                                                                                                'as supplied. '
-                                                                                                                                'Respect '
-                                                                                                                                'supplied '
-                                                                                                                                'budget and '
-                                                                                                                                'capacity and '
-                                                                                                                                'expose '
-                                                                                                                                'absent',
-                                                                                                                                'demand, '
-                                                                                                                                'access or '
-                                                                                                                                'willingness '
-                                                                                                                                'instead of '
-                                                                                                                                'inventing it '
-                                                                                                                                'to rescue '
-                                                                                                                                'the seed. Do '
-                                                                                                                                'not',
-                                                                                                                                'execute the '
-                                                                                                                                'plan or turn '
-                                                                                                                                'the proposal '
-                                                                                                                                'into an '
-                                                                                                                                'evaluation '
-                                                                                                                                'or '
-                                                                                                                                'forecast.'],
+                                                                              'business': {'instructions': {'parts': [{'text': ['BUSINESS REFINEMENT: for fragments_v3, fulfil '
+                                                                                                                                'the assignment with creative freedom,',
+                                                                                                                                'using the ordered fragments and their polarity '
+                                                                                                                                'as inspiration for the proposed design.',
+                                                                                                                                'Respect supplied budget and capacity; '
+                                                                                                                                'distinguish proposed mechanisms or agreements',
+                                                                                                                                'from claims that demand, access or agreement '
+                                                                                                                                'already exist. Require only the detail',
+                                                                                                                                'the assignment needs, without prescribing a '
+                                                                                                                                'business-plan structure or causal chain.',
+                                                                                                                                'For sparse_v2 and legacy only: compose the '
+                                                                                                                                'chosen resources, recipients, agreements and',
+                                                                                                                                'uses exactly as supplied. Respect supplied '
+                                                                                                                                'budget and capacity and expose absent',
+                                                                                                                                'demand, access or willingness instead of '
+                                                                                                                                'inventing it to rescue the seed. Do not',
+                                                                                                                                'execute the plan or turn the proposal into an '
+                                                                                                                                'evaluation or forecast.'],
                                                                                                                        'variables': []}]},
                                                                                            'questions': {'intro': [], 'items': []},
                                                                                            'output_contract': {'sections': []}}},
-                                            'evaluate_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE '
-                                                                                                                                   'REFINEMENT: '
-                                                                                                                                   'judge the '
-                                                                                                                                   'immutable '
-                                                                                                                                   'composition '
-                                                                                                                                   'exactly '
-                                                                                                                                   'as '
-                                                                                                                                   'written, '
-                                                                                                                                   'including',
-                                                                                                                                   'its '
-                                                                                                                                   'effect on '
-                                                                                                                                   'imagery, '
-                                                                                                                                   'voice, '
-                                                                                                                                   'rhythm, '
-                                                                                                                                   'tension, '
-                                                                                                                                   'agency '
-                                                                                                                                   'and '
-                                                                                                                                   'reader '
-                                                                                                                                   'experience '
-                                                                                                                                   'where',
-                                                                                                                                   'these '
-                                                                                                                                   'serve the '
-                                                                                                                                   'objective. '
-                                                                                                                                   'Do not '
-                                                                                                                                   'normalize, '
-                                                                                                                                   'complete '
-                                                                                                                                   'or '
-                                                                                                                                   'rewrite '
-                                                                                                                                   'it into a '
-                                                                                                                                   'better',
-                                                                                                                                   'story. '
-                                                                                                                                   'Preserve '
-                                                                                                                                   'continuity '
-                                                                                                                                   'and '
-                                                                                                                                   'stylistic '
-                                                                                                                                   'constraints '
-                                                                                                                                   'rather '
-                                                                                                                                   'than '
-                                                                                                                                   'smoothing '
-                                                                                                                                   'away the',
-                                                                                                                                   "work's "
-                                                                                                                                   'character. '
-                                                                                                                                   'Reject '
-                                                                                                                                   'unsupported '
-                                                                                                                                   'anatomy, '
-                                                                                                                                   'capabilities, '
-                                                                                                                                   'lore, '
-                                                                                                                                   'motives '
-                                                                                                                                   'or causal',
-                                                                                                                                   'bridges '
-                                                                                                                                   'instead '
-                                                                                                                                   'of '
-                                                                                                                                   'inventing '
-                                                                                                                                   'them. '
-                                                                                                                                   'Distinguish '
-                                                                                                                                   'textual '
-                                                                                                                                   'evidence '
-                                                                                                                                   'from '
+                                            'evaluate_candidates@creativity': {'literature': {'instructions': {'parts': [{'text': ['LITERATURE REFINEMENT: judge the immutable '
+                                                                                                                                   'composition exactly as written, including',
+                                                                                                                                   'its effect on imagery, voice, rhythm, tension, '
+                                                                                                                                   'agency and reader experience where',
+                                                                                                                                   'these serve the objective. Do not normalize, '
+                                                                                                                                   'complete or rewrite it into a better',
+                                                                                                                                   'story. Preserve continuity and stylistic '
+                                                                                                                                   'constraints rather than smoothing away the',
+                                                                                                                                   "work's character. For fragments_v3, accept "
+                                                                                                                                   'creative inventions present in the proposal',
+                                                                                                                                   'when the assignment allows them; judge its '
+                                                                                                                                   'fulfilment, context, order and polarity.',
+                                                                                                                                   'A new anatomy, capability, scene or piece of '
+                                                                                                                                   'lore need not pre-exist in canon.',
+                                                                                                                                   'Missing detail is grounds for rejection only '
+                                                                                                                                   'when necessary to fulfil the assignment.',
+                                                                                                                                   'For sparse_v2 and legacy only, reject '
+                                                                                                                                   'unsupported anatomy, capabilities, lore, '
+                                                                                                                                   'motives',
+                                                                                                                                   'or causal bridges instead of inventing them. '
+                                                                                                                                   'Distinguish textual evidence from '
                                                                                                                                    'interpretation.'],
                                                                                                                           'variables': []}]},
                                                                                               'questions': {'intro': [],
@@ -1939,44 +1788,15 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                                                       {'id': 'meaningful_surprise',
                                                                                                                        'text': 'Given the creative freedom available in the assignment, does each candidate surprise the reader in a prepared, meaningful way rather than through arbitrary strangeness? Cite the setup and turn in the immutable composition.'}]},
                                                                                               'output_contract': {'sections': []}},
-                                                                               'business': {'instructions': {'parts': [{'text': ['BUSINESS '
-                                                                                                                                 'REFINEMENT: '
-                                                                                                                                 'assess the '
-                                                                                                                                 'chosen '
-                                                                                                                                 'resources, '
-                                                                                                                                 'recipients, '
-                                                                                                                                 'agreements '
-                                                                                                                                 'and',
-                                                                                                                                 'alternative '
-                                                                                                                                 'uses '
-                                                                                                                                 'against the '
-                                                                                                                                 'objective. '
-                                                                                                                                 'Account for '
-                                                                                                                                 'supplied '
-                                                                                                                                 'budget and '
-                                                                                                                                 'capacity;',
-                                                                                                                                 'do not '
-                                                                                                                                 'assume '
-                                                                                                                                 'demand, '
-                                                                                                                                 'access or '
-                                                                                                                                 'willingness '
-                                                                                                                                 'to agree. '
-                                                                                                                                 'Explain '
-                                                                                                                                 'feasibility '
-                                                                                                                                 'limits',
-                                                                                                                                 'and '
-                                                                                                                                 'assumptions '
-                                                                                                                                 'without '
-                                                                                                                                 'executing a '
-                                                                                                                                 'plan or '
-                                                                                                                                 'treating '
-                                                                                                                                 'scores as '
-                                                                                                                                 'forecasts. '
-                                                                                                                                 'Keep',
-                                                                                                                                 'the generic '
-                                                                                                                                 'objective '
-                                                                                                                                 'and result '
-                                                                                                                                 'contract '
+                                                                               'business': {'instructions': {'parts': [{'text': ['BUSINESS REFINEMENT: assess the chosen '
+                                                                                                                                 'resources, recipients, agreements and',
+                                                                                                                                 'alternative uses against the objective. '
+                                                                                                                                 'Account for supplied budget and capacity;',
+                                                                                                                                 'do not assume demand, access or willingness to '
+                                                                                                                                 'agree. Explain feasibility limits',
+                                                                                                                                 'and assumptions without executing a plan or '
+                                                                                                                                 'treating scores as forecasts. Keep',
+                                                                                                                                 'the generic objective and result contract '
                                                                                                                                  'unchanged.'],
                                                                                                                         'variables': []}]},
                                                                                             'questions': {'intro': [], 'items': []},
@@ -6142,351 +5962,587 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                          {'ref': 'questions_output'}]}},
  'milestone/create_genes.json': {'kind': 'create_genes',
                                  'process': 'milestone',
-                                 'description': 'Extract a small literal vocabulary for sparse creativity, or legacy search '
-                                                'material for an old order.',
+                                 'description': 'Generate short contextual inspiration fragments, preserving older '
+                                                'saved search semantics.',
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'ref': 'project_context'},
                                                             {'ref': 'creativity_exploration'},
-                                                            {'text': ['TASK: extract the vocabulary used by the creativity driver '
-                                                                      "from the operator's problem.",
-                                                                      'SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow '
-                                                                      'only the matching branch below.',
+                                                            {'text': ['TASK: extract the vocabulary used by the '
+                                                                      "creativity driver from the operator's problem.",
+                                                                      'SAVED MATERIAL SEMANTICS: '
+                                                                      '{{creativity_semantics}}. Follow only the '
+                                                                      'matching branch below.',
                                                                       'CREATIVITY CONTRACT: {{creativity_contract}}',
-                                                                      'Read the complete operator request, admitted context and '
-                                                                      'references in the supplied order.',
-                                                                      'For sparse_v2, return only ten subjects, ten verbs and ten '
-                                                                      'adjectives grounded in',
-                                                                      'the assignment. Keep them short, literal and independently '
-                                                                      'reusable. Include important',
-                                                                      'terms already supplied and useful adjacent vocabulary, but '
-                                                                      'do not compose a proposal,',
-                                                                      'invent facts, solve the problem, critique the work, choose '
-                                                                      'what a character should do,',
-                                                                      'or introduce a taxonomy, criteria, constraints, guidance, '
-                                                                      'interpretations or prose.',
-                                                                      'A subject names an entity or focus; a verb names an action '
-                                                                      'or relation; an adjective',
-                                                                      'names a qualifying property. Do not hide a composed '
-                                                                      'solution inside any list entry.',
-                                                                      'For legacy, formulate a concise objective faithful to the '
-                                                                      "operator's intent and scope.",
-                                                                      'Summarize relevant context and facts; distinguish hard '
-                                                                      'constraints from assumptions',
-                                                                      'and unknowns. Do not invent facts or relax constraints. '
-                                                                      'Identify what sequence, priority',
-                                                                      'or arrangement of selected units means. Derive as many '
-                                                                      'position-independent semantic',
-                                                                      'dimensions as the problem needs, each with genuine '
-                                                                      "alternatives that retain the unit's",
-                                                                      'meaning when moved on that order axis. Do not encode '
-                                                                      'position through ordinal IDs, fixed',
+                                                                      'Read the complete operator request, admitted '
+                                                                      'context and references in the supplied order.',
+                                                                      'Open the supplied reference paths in the '
+                                                                      'workspace and admitted roots; paths are not '
+                                                                      'their contents.',
+                                                                      'For fragments_v3, return exactly {{gene_count}} '
+                                                                      'distinct fragments, each containing 1-3 words.',
+                                                                      'Choose varied words or short phrases related to '
+                                                                      'the assignment and its context, including',
+                                                                      'useful adjacent ideas. These are reusable '
+                                                                      'inspiration, without grammatical categories.',
+                                                                      'Do not compose solutions, supply new '
+                                                                      'requirements or hide a complete proposal in a '
+                                                                      'fragment.',
+                                                                      'Return the fragments themselves without '
+                                                                      'attached negation; the driver assigns polarity.',
+                                                                      'For sparse_v2, return only ten subjects, ten '
+                                                                      'verbs and ten adjectives grounded in',
+                                                                      'the assignment. Keep them short, literal and '
+                                                                      'independently reusable. Include important',
+                                                                      'terms already supplied and useful adjacent '
+                                                                      'vocabulary, but do not compose a proposal,',
+                                                                      'invent facts, solve the problem, critique the '
+                                                                      'work, choose what a character should do,',
+                                                                      'or introduce a taxonomy, criteria, constraints, '
+                                                                      'guidance, interpretations or prose.',
+                                                                      'A subject names an entity or focus; a verb '
+                                                                      'names an action or relation; an adjective',
+                                                                      'names a qualifying property. Do not hide a '
+                                                                      'composed solution inside any list entry.',
+                                                                      'For legacy, formulate a concise objective '
+                                                                      "faithful to the operator's intent and scope.",
+                                                                      'Summarize relevant context and facts; '
+                                                                      'distinguish hard constraints from assumptions',
+                                                                      'and unknowns. Do not invent facts or relax '
+                                                                      'constraints. Identify what sequence, priority',
+                                                                      'or arrangement of selected units means. Derive '
+                                                                      'as many position-independent semantic',
+                                                                      'dimensions as the problem needs, each with '
+                                                                      "genuine alternatives that retain the unit's",
+                                                                      'meaning when moved on that order axis. Do not '
+                                                                      'encode position through ordinal IDs, fixed',
                                                                       'slots, hidden predecessor rules or manufactured '
                                                                       'dependencies. Put genuine dependencies',
-                                                                      'in constraints or composition_guidance. Arrange dimensions '
-                                                                      'in the sequence you recommend',
-                                                                      'while keeping each unit independent of that position. Code '
-                                                                      'combines exactly one variant',
-                                                                      'per dimension. Supply explicit assessment criteria, '
-                                                                      'including usefulness and meaningful',
-                                                                      'difference where relevant; novelty never replaces '
-                                                                      'faithfulness or feasibility.'],
+                                                                      'in constraints or composition_guidance. Arrange '
+                                                                      'dimensions in the sequence you recommend',
+                                                                      'while keeping each unit independent of that '
+                                                                      'position. Code combines exactly one variant',
+                                                                      'per dimension. Supply explicit assessment '
+                                                                      'criteria, including usefulness and meaningful',
+                                                                      'difference where relevant; novelty never '
+                                                                      'replaces faithfulness or feasibility.'],
                                                              'variables': [{'name': 'creativity_semantics',
                                                                             'required': False,
                                                                             'default': 'legacy',
-                                                                            'description': 'Service-owned saved interpretation: '
-                                                                                           'sparse_v2 for new tasks, legacy for '
-                                                                                           'unmarked orders.'},
+                                                                            'description': 'Service-owned saved '
+                                                                                           'interpretation: '
+                                                                                           'fragments_v3 for new '
+                                                                                           'tasks, sparse_v2 or legacy '
+                                                                                           'for earlier orders.'},
                                                                            {'name': 'creativity_contract',
                                                                             'required': False,
-                                                                            'default': 'separated_gene_pool_v1',
-                                                                            'description': 'Service-owned prompt-contract marker '
-                                                                                           'used to reject stale stored prompts '
-                                                                                           'before dispatch.'}]},
+                                                                            'default': 'ordered_fragments_v1',
+                                                                            'description': 'Service-owned '
+                                                                                           'prompt-contract marker '
+                                                                                           'used to reject stale '
+                                                                                           'stored prompts before '
+                                                                                           'dispatch.'},
+                                                                           {'name': 'gene_count',
+                                                                            'required': False,
+                                                                            'default': '10',
+                                                                            'description': 'Exact number of 1-3-word '
+                                                                                           'inspiration fragments '
+                                                                                           'requested by '
+                                                                                           'fragments_v3.'}]},
                                                             {'text': ['OPERATOR REQUEST:',
                                                                       '{{objective}}',
                                                                       'CONTEXT:',
                                                                       '{{context}}',
-                                                                      'ORDERED REFERENCE PATHS (JSON array; may be empty):',
+                                                                      'ORDERED REFERENCE PATHS (JSON array; may be '
+                                                                      'empty):',
                                                                       '{{references}}'],
                                                              'variables': [{'name': 'objective',
                                                                             'required': True,
-                                                                            'description': 'Complete original operator request.'},
+                                                                            'description': 'Complete original operator '
+                                                                                           'request.'},
                                                                            {'name': 'context',
                                                                             'required': True,
-                                                                            'description': 'Admitted context; may be empty.'},
+                                                                            'description': 'Admitted context; may be '
+                                                                                           'empty.'},
                                                                            {'name': 'references',
                                                                             'required': True,
-                                                                            'description': 'JSON array of admitted reference paths '
-                                                                                           'in operator order.'}]}]},
-                                 'questions': {'intro': ['QUESTIONS (mandatory perspective checks; answer each in output. They are '
-                                                         'not questions for the operator and add no requirements, constraints, '
-                                                         'criteria, or score dimensions.)'],
+                                                                            'description': 'JSON array of admitted '
+                                                                                           'reference paths in '
+                                                                                           'operator order.'}]}]},
+                                 'questions': {'intro': ['QUESTIONS (mandatory perspective checks; answer each in '
+                                                         'output. They are not questions for the operator and add no '
+                                                         'requirements, constraints, criteria, or score dimensions.)'],
                                                'items': [{'id': 'machinery_trust',
-                                                          'text': 'Did this search vocabulary turn something already established '
-                                                                  'by a trusted producer or source into a workaround or defensive '
-                                                                  'gene? In software this includes a field our own producer must '
-                                                                  'emit; in narrative work it includes settled canon. State what '
-                                                                  'you checked and any case found.'},
+                                                          'text': 'Did this search vocabulary turn something already '
+                                                                  'established by a trusted producer or source into a '
+                                                                  'workaround or defensive gene? In software this '
+                                                                  'includes a field our own producer must emit; in '
+                                                                  'narrative work it includes settled canon. State '
+                                                                  'what you checked and any case found.'},
                                                          {'id': 'environment_fit',
                                                           'text': 'What standard does the surrounding work actually '
-                                                                  'use—engineering, audience, genre, form, or stage—and does this '
-                                                                  'search vocabulary assume a higher or different standard the '
-                                                                  'request did not demand? State the evidence and any excess '
-                                                                  'found.'},
+                                                                  'use—engineering, audience, genre, form, or '
+                                                                  'stage—and does this search vocabulary assume a '
+                                                                  'higher or different standard the request did not '
+                                                                  'demand? State the evidence and any excess found.'},
                                                          {'id': 'human_scale',
-                                                          'text': 'Put the search vocabulary next to the request: are its units at '
-                                                                  'the grain and size the human meant, or has it exploded literal '
-                                                                  'details until the search is larger than the problem? State what '
-                                                                  'you checked.'}]},
+                                                          'text': 'Put the search vocabulary next to the request: are '
+                                                                  'its units at the grain and size the human meant, or '
+                                                                  'has it exploded literal details until the search is '
+                                                                  'larger than the problem? State what you checked.'}]},
                                  'output_contract': {'sections': [{'id': 'create_genes_result',
-                                                                   'text': ['OUTPUT CONTRACT: return exactly one JSON object and '
-                                                                            'nothing else.',
-                                                                            'For sparse_v2 its only top-level keys are gene_pool '
-                                                                            'and questions.',
+                                                                   'text': ['OUTPUT CONTRACT: return exactly one JSON '
+                                                                            'object and nothing else.',
+                                                                            'For fragments_v3 its only top-level keys '
+                                                                            'are gene_pool and questions.',
+                                                                            'gene_pool is a JSON list of exactly the '
+                                                                            'requested number of distinct non-blank '
+                                                                            'strings,',
+                                                                            'each containing 1-3 whitespace-separated '
+                                                                            'words. Example shape: '
+                                                                            '{"gene_pool":["shared warmth","flexible '
+                                                                            'shell"],"questions":[...]}',
+                                                                            'The example illustrates shape only; use '
+                                                                            'the exact requested count. Return no '
+                                                                            'categories, IDs,',
+                                                                            'search_material, explanations or '
+                                                                            'semantics marker. All objects are closed.',
+                                                                            'For sparse_v2 its only top-level keys are '
+                                                                            'gene_pool and questions.',
                                                                             'gene_pool is exactly '
                                                                             '{"subjects":[...],"verbs":[...],"adjectives":[...]}.',
-                                                                            'Each list contains exactly 10 distinct non-blank '
-                                                                            'strings. All objects are closed.',
-                                                                            'Do not return search_material, dimensions, variants, '
-                                                                            'IDs, explanations or a semantics marker.',
+                                                                            'Each list contains exactly 10 distinct '
+                                                                            'non-blank strings. All objects are '
+                                                                            'closed.',
+                                                                            'Do not return search_material, '
+                                                                            'dimensions, variants, IDs, explanations '
+                                                                            'or a semantics marker.',
                                                                             'For legacy its only top-level keys are '
                                                                             'search_material and questions.',
                                                                             'search_material has exactly objective, '
-                                                                            'context_summary, facts, constraints, assumptions,',
-                                                                            'unknowns, dimensions, composition_guidance, criteria '
-                                                                            'and order_semantics. objective,',
+                                                                            'context_summary, facts, constraints, '
+                                                                            'assumptions,',
+                                                                            'unknowns, dimensions, '
+                                                                            'composition_guidance, criteria and '
+                                                                            'order_semantics. objective,',
                                                                             'context_summary, composition_guidance and '
-                                                                            'order_semantics are non-blank strings. facts,',
-                                                                            'assumptions and unknowns are possibly empty lists of '
-                                                                            'non-blank strings. constraints and',
-                                                                            'criteria contain exactly {"id":"...","text":"..."} '
-                                                                            'records. constraints may be',
-                                                                            'empty; criteria must not be. dimensions is non-empty '
-                                                                            'and each dimension is exactly',
+                                                                            'order_semantics are non-blank strings. '
+                                                                            'facts,',
+                                                                            'assumptions and unknowns are possibly '
+                                                                            'empty lists of non-blank strings. '
+                                                                            'constraints and',
+                                                                            'criteria contain exactly '
+                                                                            '{"id":"...","text":"..."} records. '
+                                                                            'constraints may be',
+                                                                            'empty; criteria must not be. dimensions '
+                                                                            'is non-empty and each dimension is '
+                                                                            'exactly',
                                                                             '{"id":"...","meaning":"...","variants":[{"id":"...","text":"..."}]},',
-                                                                            'with at least one variant. Every id, text and meaning '
-                                                                            'is non-blank; IDs are unique within',
-                                                                            "their list and each dimension's variants. __order__ "
-                                                                            'is a forbidden dimension ID.'],
+                                                                            'with at least one variant. Every id, text '
+                                                                            'and meaning is non-blank; IDs are unique '
+                                                                            'within',
+                                                                            "their list and each dimension's variants. "
+                                                                            '__order__ is a forbidden dimension ID.'],
                                                                    'variables': []},
                                                                   {'ref': 'questions_output'}]}},
  'milestone/compose_candidates.json': {'kind': 'compose_candidates',
                                        'process': 'milestone',
-                                       'description': 'Turn exact candidate seeds into immutable proposals for a separate evaluator.',
+                                       'description': 'Turn exact candidate seeds into immutable proposals for a '
+                                                      'separate evaluator.',
                                        'instructions': {'parts': [{'ref': 'header'},
                                                                   {'ref': 'project_context'},
                                                                   {'ref': 'creativity_exploration'},
-                                                                  {'text': ['TASK: compose one concrete proposal from every supplied '
-                                                                            'candidate seed.',
-                                                                            'SAVED MATERIAL SEMANTICS: {{creativity_semantics}}.',
-                                                                            'CREATIVITY CONTRACT: {{creativity_contract}}',
-                                                                            'Composition and evaluation are separate. Build the proposal '
-                                                                            'here; do not score, rank,',
-                                                                            "accept, reject or repair the seed, predict an evaluator's "
-                                                                            'verdict, or add evaluation fields.',
-                                                                            'Preserve every selected element and its supplied order '
-                                                                            'exactly. Do not substitute a better',
-                                                                            'combination, omit an awkward element, change its meaning or '
-                                                                            'make any selected element',
-                                                                            'incidental. Use only the operator request, admitted '
-                                                                            'context, references, immutable search',
-                                                                            'material and exact seed. You may connect those supplied '
-                                                                            'elements into a coherent proposal,',
-                                                                            'but never invent a fact, capability, requirement, event or '
-                                                                            'technical or narrative detail',
-                                                                            'needed to make it work. When the supplied material does not '
-                                                                            'support a needed detail, expose',
-                                                                            'the gap plainly in the proposal instead of filling it. '
-                                                                            'Still return a proposal for every ID.',
-                                                                            'For sparse_v2, the seed is the exact ordered set of active '
-                                                                            'subject and verb-adjective',
-                                                                            'combinations. For legacy, interpret its exact selected '
-                                                                            'variants under the immutable',
-                                                                            'order_semantics and composition_guidance. The resulting '
-                                                                            'proposal becomes immutable input',
-                                                                            'to a different worker, so make the supplied composition '
-                                                                            'explicit enough to judge as written.'],
+                                                                  {'text': ['TASK: compose one concrete proposal from '
+                                                                            'every supplied candidate seed.',
+                                                                            'SAVED MATERIAL SEMANTICS: '
+                                                                            '{{creativity_semantics}}. Follow only the '
+                                                                            'matching branch below.',
+                                                                            'CREATIVITY CONTRACT: '
+                                                                            '{{creativity_contract}}',
+                                                                            'Composition and evaluation are separate. '
+                                                                            'Build the proposal here; do not score, '
+                                                                            'rank,',
+                                                                            'accept, reject or repair the seed, '
+                                                                            "predict an evaluator's verdict, or add "
+                                                                            'evaluation fields.',
+                                                                            'Read the complete operator request and '
+                                                                            'context in search_material. Open its '
+                                                                            'supplied reference',
+                                                                            'paths in the workspace and admitted '
+                                                                            'roots; the vocabulary generator did not '
+                                                                            'replace these sources.',
+                                                                            "For fragments_v3, fulfil the operator's "
+                                                                            'assignment using the supplied fragments '
+                                                                            'as inspiration',
+                                                                            'in their given order. You have creative '
+                                                                            'freedom to construct the requested '
+                                                                            'proposal within its',
+                                                                            'context: invent connections, designs, '
+                                                                            'anatomy, capabilities, events or other '
+                                                                            'details when the',
+                                                                            'assignment allows them. Respect '
+                                                                            'established facts and express '
+                                                                            'requirements; a proposal of new',
+                                                                            'fiction is a proposal, not an assertion '
+                                                                            'that it was already canon.',
+                                                                            "Each component's dimension is its "
+                                                                            'fragment. variant_id affirmed means '
+                                                                            'include that inspiration;',
+                                                                            'variant_id negated means exclude that '
+                                                                            "fragment's meaning. Negation does not "
+                                                                            'prescribe an',
+                                                                            'opposite: no red excludes red without '
+                                                                            'requiring blue. Omitted fragments are not '
+                                                                            'supplied and',
+                                                                            'impose no inclusion or exclusion. Apply '
+                                                                            "polarity at the fragment's supplied "
+                                                                            'position.',
+                                                                            'The order is the order of the ideas in '
+                                                                            'the proposed result, not merely a list of '
+                                                                            'seed words.',
+                                                                            'For house -> red -> clean, having a '
+                                                                            'house, painting it red, then cleaning it '
+                                                                            'respects the',
+                                                                            'order; cleaning a red house does not. '
+                                                                            'Require only what the assignment asks, '
+                                                                            'following this',
+                                                                            'order. Do not impose one sentence per '
+                                                                            'fragment, independent development, causal '
+                                                                            'importance,',
+                                                                            'a fixed structure, length or extra '
+                                                                            'detail. If a seed conflicts with an '
+                                                                            'explicit requirement,',
+                                                                            'do not relax that requirement or silently '
+                                                                            'reverse the seed; expose the conflict.',
+                                                                            'For sparse_v2 and legacy only: Preserve '
+                                                                            'every selected element and its supplied '
+                                                                            'order exactly. Do not substitute a better',
+                                                                            'combination, omit an awkward element, '
+                                                                            'change its meaning or make any selected '
+                                                                            'element',
+                                                                            'incidental. Use only the operator '
+                                                                            'request, admitted context, references, '
+                                                                            'immutable search',
+                                                                            'material and exact seed. You may connect '
+                                                                            'those supplied elements into a coherent '
+                                                                            'proposal,',
+                                                                            'but never invent a fact, capability, '
+                                                                            'requirement, event or technical or '
+                                                                            'narrative detail',
+                                                                            'needed to make it work. When the supplied '
+                                                                            'material does not support a needed '
+                                                                            'detail, expose',
+                                                                            'the gap plainly in the proposal instead '
+                                                                            'of filling it. Still return a proposal '
+                                                                            'for every ID.',
+                                                                            'For sparse_v2, the seed is the exact '
+                                                                            'ordered set of active subject and '
+                                                                            'verb-adjective',
+                                                                            'combinations. For legacy, interpret its '
+                                                                            'exact selected variants under the '
+                                                                            'immutable',
+                                                                            'order_semantics and composition_guidance. '
+                                                                            'For every semantics, the resulting '
+                                                                            'proposal becomes',
+                                                                            'immutable input to a different worker. '
+                                                                            'Include the detail needed by the '
+                                                                            "operator's assignment."],
                                                                    'variables': [{'name': 'creativity_semantics',
                                                                                   'required': False,
                                                                                   'default': 'legacy',
-                                                                                  'description': 'Service-owned saved interpretation: '
-                                                                                                 'sparse_v2 for new tasks, legacy for '
-                                                                                                 'unmarked orders.'},
+                                                                                  'description': 'Service-owned saved '
+                                                                                                 'interpretation: '
+                                                                                                 'fragments_v3 for new '
+                                                                                                 'tasks, sparse_v2 or '
+                                                                                                 'legacy for earlier '
+                                                                                                 'orders.'},
                                                                                  {'name': 'creativity_contract',
                                                                                   'required': False,
-                                                                                  'default': 'separated_gene_pool_v1',
-                                                                                  'description': 'Service-owned prompt-contract marker '
-                                                                                                 'used to reject stale stored prompts '
-                                                                                                 'before dispatch.'}]},
+                                                                                  'default': 'ordered_fragments_v1',
+                                                                                  'description': 'Service-owned '
+                                                                                                 'prompt-contract '
+                                                                                                 'marker used to '
+                                                                                                 'reject stale stored '
+                                                                                                 'prompts before '
+                                                                                                 'dispatch.'}]},
                                                                   {'text': ['IMMUTABLE SEARCH MATERIAL (JSON):',
                                                                             '{{search_material}}',
-                                                                            'EXACT CANDIDATE SEEDS (JSON; IDs identify candidates, not '
-                                                                            'rank):',
+                                                                            'EXACT CANDIDATE SEEDS (JSON; IDs identify '
+                                                                            'candidates, not rank):',
                                                                             '{{candidates}}'],
                                                                    'variables': [{'name': 'search_material',
                                                                                   'required': True,
-                                                                                  'description': 'Immutable task material, composition '
-                                                                                                 'meaning and explicit constraints as '
+                                                                                  'description': 'Immutable task '
+                                                                                                 'material, '
+                                                                                                 'composition meaning '
+                                                                                                 'and explicit '
+                                                                                                 'constraints as '
                                                                                                  'JSON.'},
                                                                                  {'name': 'candidates',
                                                                                   'required': True,
-                                                                                  'description': 'Candidate IDs and exact ordered chosen '
-                                                                                                 'components as JSON.'}]}]},
-                                       'questions': {'intro': ['QUESTIONS (mandatory perspective checks; answer each in output. They are '
-                                                               'not questions for the operator and add no requirements, constraints, '
-                                                               'criteria, or score dimensions.)'],
+                                                                                  'description': 'Candidate IDs and '
+                                                                                                 'exact ordered chosen '
+                                                                                                 'components as '
+                                                                                                 'JSON.'}]}]},
+                                       'questions': {'intro': ['QUESTIONS (mandatory perspective checks; answer each '
+                                                               'in output. They are not questions for the operator and '
+                                                               'add no requirements, constraints, criteria, or score '
+                                                               'dimensions.)'],
                                                      'items': [{'id': 'machinery_trust',
-                                                                'text': 'For each composition, did you add a workaround around behavior '
-                                                                        'or facts already established by a trusted producer or source '
-                                                                        'instead of using them? Identify candidate IDs, what you checked '
-                                                                        'and any case found; do not repair them.'},
+                                                                'text': 'For each composition, did you add a '
+                                                                        'workaround around behavior or facts already '
+                                                                        'established by a trusted producer or source '
+                                                                        'instead of using them? Identify candidate '
+                                                                        'IDs, what you checked and any case found; do '
+                                                                        'not repair them.'},
                                                                {'id': 'environment_fit',
-                                                                'text': 'What standard does the surrounding work actually '
-                                                                        'use—engineering, audience, genre, form, or stage—and does any '
-                                                                        'composition assume a higher or different standard the request '
-                                                                        'did not demand? Identify candidate IDs, evidence and any excess '
-                                                                        'found.'},
+                                                                'text': 'What standard does the surrounding work '
+                                                                        'actually use—engineering, audience, genre, '
+                                                                        'form, or stage—and does any composition '
+                                                                        'assume a higher or different standard the '
+                                                                        'request did not demand? Identify candidate '
+                                                                        'IDs, evidence and any excess found.'},
                                                                {'id': 'human_scale',
-                                                                'text': 'Put each composition next to the request: would the human '
-                                                                        'recognize the grain and size they meant, or has literalism made '
-                                                                        'it larger or narrower than the problem? Identify candidate IDs '
-                                                                        'and evidence.'}]},
+                                                                'text': 'Put each composition next to the request: '
+                                                                        'would the human recognize the grain and size '
+                                                                        'they meant, or has literalism made it larger '
+                                                                        'or narrower than the problem? Identify '
+                                                                        'candidate IDs and evidence.'}]},
                                        'output_contract': {'sections': [{'id': 'compose_candidates_result',
-                                                                         'text': ['OUTPUT CONTRACT: return exactly one JSON object and '
-                                                                                  'nothing else.',
-                                                                                  'The only top-level keys are compositions and '
-                                                                                  'questions.',
-                                                                                  'compositions is a list with exactly one record per '
-                                                                                  'supplied candidate ID, with no',
-                                                                                  'duplicates, omissions or extras. Reply order is '
-                                                                                  'immaterial. Each record is exactly',
+                                                                         'text': ['OUTPUT CONTRACT: return exactly one '
+                                                                                  'JSON object and nothing else.',
+                                                                                  'The only top-level keys are '
+                                                                                  'compositions and questions.',
+                                                                                  'compositions is a list with exactly '
+                                                                                  'one record per supplied candidate '
+                                                                                  'ID, with no',
+                                                                                  'duplicates, omissions or extras. '
+                                                                                  'Reply order is immaterial. Each '
+                                                                                  'record is exactly',
                                                                                   '{"candidate_id":"...","proposal":"..."}.',
-                                                                                  'All objects are closed. candidate_id and proposal are '
+                                                                                  'All objects are closed. '
+                                                                                  'candidate_id and proposal are '
                                                                                   'non-blank strings.',
-                                                                                  'Return no evaluation, score, validity, violations, '
-                                                                                  'assumptions or replacement seed.'],
+                                                                                  'Return no evaluation, score, '
+                                                                                  'validity, violations, assumptions '
+                                                                                  'or replacement seed.'],
                                                                          'variables': []},
                                                                         {'ref': 'questions_output'}]}},
  'milestone/evaluate_candidates.json': {'kind': 'evaluate_candidates',
                                         'process': 'milestone',
-                                        'description': 'Judge immutable candidate compositions without composing, repairing or rewriting '
-                                                       'them.',
+                                        'description': 'Judge immutable candidate compositions without composing, '
+                                                       'repairing or rewriting them.',
                                         'instructions': {'parts': [{'ref': 'header'},
                                                                    {'ref': 'project_context'},
                                                                    {'ref': 'creativity_exploration'},
-                                                                   {'text': ['TASK: evaluate every supplied immutable composition against '
-                                                                             "the operator's objective.",
-                                                                             'SAVED MATERIAL SEMANTICS: {{creativity_semantics}}.',
-                                                                             'CREATIVITY CONTRACT: {{creativity_contract}}',
-                                                                             'Composition has already happened in a separate call. Judge '
-                                                                             'only the supplied proposal.',
-                                                                             'Do not compose, rewrite, improve, complete, reinterpret, '
-                                                                             'reorder, substitute or return it.',
-                                                                             'Do not give a composition credit for an idea that is absent '
-                                                                             'from its proposal. Do not',
-                                                                             'invent missing facts, capabilities or evidence of '
-                                                                             'feasibility. If detail needed to judge',
-                                                                             'or use the proposal is absent, reject it instead of '
-                                                                             'supplying that detail yourself.',
-                                                                             'Check explicit supplied constraint IDs and the three '
-                                                                             'service rejection IDs:',
-                                                                             '__objective__ means the composition does not satisfy the '
-                                                                             "operator's objective;",
-                                                                             '__insufficient_detail__ means its unsupported or missing '
-                                                                             'detail prevents a grounded',
-                                                                             'assessment or usable answer; __seed__ means it does not '
-                                                                             'faithfully realize every element',
-                                                                             'and the exact order of its supplied candidate seed. These '
-                                                                             'are ordinary invalid results.',
-                                                                             'For sparse_v2, compare the immutable proposal with the '
-                                                                             'exact components in the same',
-                                                                             'composition record. Every active subject and verb-adjective '
-                                                                             'value must retain its meaning,',
-                                                                             'order and causal importance; no element may be incidental. '
-                                                                             'For legacy, assess the proposal',
-                                                                             'against its supplied candidate and the legacy search '
-                                                                             'material in the same way.',
-                                                                             'Set constraint_valid false when any supplied constraint or '
-                                                                             'service rejection applies, list',
-                                                                             'every applicable ID and explain the evidence in reason. '
-                                                                             'Every invalid evaluation scores 0.',
-                                                                             'For a valid composition, score the whole proposal '
-                                                                             'independently from 0 (least meets the',
-                                                                             'objective) to 1 (most meets it). Never rank or calibrate '
-                                                                             'against batch mates, historical',
-                                                                             "scores or prestige. Return every candidate's evaluation; do "
-                                                                             'not select survivors or offer',
-                                                                             'evolutionary advice. A score is not a probability or '
-                                                                             'promise of success.'],
+                                                                   {'text': ['TASK: evaluate every supplied immutable '
+                                                                             "composition against the operator's "
+                                                                             'objective.',
+                                                                             'SAVED MATERIAL SEMANTICS: '
+                                                                             '{{creativity_semantics}}. Follow only '
+                                                                             'the matching branch below.',
+                                                                             'CREATIVITY CONTRACT: '
+                                                                             '{{creativity_contract}}',
+                                                                             'Composition has already happened in a '
+                                                                             'separate call. Judge only the supplied '
+                                                                             'proposal.',
+                                                                             'Read the complete operator request and '
+                                                                             'context in search_material. Open its '
+                                                                             'supplied reference',
+                                                                             'paths in the workspace and admitted '
+                                                                             'roots; the vocabulary generator did not '
+                                                                             'replace these sources.',
+                                                                             'Do not compose, rewrite, improve, '
+                                                                             'complete, reinterpret, reorder, '
+                                                                             'substitute or return it.',
+                                                                             'Do not give a composition credit for an '
+                                                                             'idea that is absent from its proposal. '
+                                                                             'Do not',
+                                                                             'invent missing facts, capabilities or '
+                                                                             'evidence of feasibility on the '
+                                                                             "composer's behalf.",
+                                                                             'For fragments_v3, judge fulfilment of '
+                                                                             'the assignment and its context, plus the '
+                                                                             'supplied',
+                                                                             "fragments' order and polarity. Each "
+                                                                             "component's dimension is its inspiration "
+                                                                             'fragment:',
+                                                                             'variant_id affirmed includes that '
+                                                                             'inspiration; variant_id negated excludes '
+                                                                             'its meaning.',
+                                                                             'An exclusion does not prescribe an '
+                                                                             'opposite; omitted fragments impose no '
+                                                                             'requirement.',
+                                                                             'The order concerns the ideas in the '
+                                                                             'result, not mere keyword placement: '
+                                                                             'house -> red -> clean',
+                                                                             'permits having a house, painting it red, '
+                                                                             'then cleaning it; cleaning a red house '
+                                                                             'violates it.',
+                                                                             'Require only what the assignment asks, '
+                                                                             'following that order. Do not add a fixed '
+                                                                             'structure,',
+                                                                             'length, independent development, causal '
+                                                                             'importance or extra detail for each '
+                                                                             'fragment.',
+                                                                             'Creative inventions expressly present in '
+                                                                             'the proposal are allowed within the '
+                                                                             "assignment's",
+                                                                             'freedom. Do not reject an invented '
+                                                                             'design, anatomy, capability, event or '
+                                                                             'worldbuilding simply',
+                                                                             'because it was not already present in '
+                                                                             'the references or canon. Reject '
+                                                                             'contradictions with',
+                                                                             'the assignment or established facts, and '
+                                                                             'missing detail only when that detail is '
+                                                                             'necessary',
+                                                                             'to fulfil the assignment. Assess what is '
+                                                                             'written; never fill the missing detail '
+                                                                             'yourself.',
+                                                                             'For sparse_v2 and legacy only: If detail '
+                                                                             'needed to judge',
+                                                                             'or use the proposal is absent, reject it '
+                                                                             'instead of supplying that detail '
+                                                                             'yourself.',
+                                                                             'Check explicit supplied constraint IDs '
+                                                                             'and the three service rejection IDs:',
+                                                                             '__objective__ means the composition does '
+                                                                             "not satisfy the operator's objective;",
+                                                                             '__insufficient_detail__ means its '
+                                                                             'unsupported or missing detail prevents a '
+                                                                             'grounded',
+                                                                             'assessment or usable answer at the level '
+                                                                             'the assignment needs; __seed__ means it '
+                                                                             'violates',
+                                                                             "the supplied seed's order, meaning or "
+                                                                             'polarity under the active semantics. '
+                                                                             'These are ordinary invalid results.',
+                                                                             'For sparse_v2, compare the immutable '
+                                                                             'proposal with the exact components in '
+                                                                             'the same',
+                                                                             'composition record. Every active subject '
+                                                                             'and verb-adjective value must retain its '
+                                                                             'meaning,',
+                                                                             'order and causal importance; no element '
+                                                                             'may be incidental. For legacy, assess '
+                                                                             'the proposal',
+                                                                             'against its supplied candidate and the '
+                                                                             'legacy search material in the same way.',
+                                                                             'Set constraint_valid false when any '
+                                                                             'supplied constraint or service rejection '
+                                                                             'applies, list',
+                                                                             'every applicable ID and explain the '
+                                                                             'evidence in reason. Every invalid '
+                                                                             'evaluation scores 0.',
+                                                                             'For a valid composition, score the whole '
+                                                                             'proposal independently from 0 (least '
+                                                                             'meets the',
+                                                                             'objective) to 1 (most meets it). Never '
+                                                                             'rank or calibrate against batch mates, '
+                                                                             'historical',
+                                                                             'scores or prestige. Return every '
+                                                                             "candidate's evaluation; do not select "
+                                                                             'survivors or offer',
+                                                                             'evolutionary advice. A score is not a '
+                                                                             'probability or promise of success.'],
                                                                     'variables': [{'name': 'creativity_semantics',
                                                                                    'required': False,
                                                                                    'default': 'legacy',
-                                                                                   'description': 'Service-owned saved interpretation: '
-                                                                                                  'sparse_v2 for new tasks, legacy for '
-                                                                                                  'unmarked orders.'},
+                                                                                   'description': 'Service-owned saved '
+                                                                                                  'interpretation: '
+                                                                                                  'fragments_v3 for '
+                                                                                                  'new tasks, '
+                                                                                                  'sparse_v2 or legacy '
+                                                                                                  'for earlier '
+                                                                                                  'orders.'},
                                                                                   {'name': 'creativity_contract',
                                                                                    'required': False,
-                                                                                   'default': 'separated_gene_pool_v1',
-                                                                                   'description': 'Service-owned prompt-contract marker '
-                                                                                                  'used to reject stale stored prompts '
-                                                                                                  'before dispatch.'}]},
+                                                                                   'default': 'ordered_fragments_v1',
+                                                                                   'description': 'Service-owned '
+                                                                                                  'prompt-contract '
+                                                                                                  'marker used to '
+                                                                                                  'reject stale stored '
+                                                                                                  'prompts before '
+                                                                                                  'dispatch.'}]},
                                                                    {'text': ['IMMUTABLE SEARCH MATERIAL (JSON):',
                                                                              '{{search_material}}',
-                                                                             'IMMUTABLE COMPOSITIONS AND THEIR EXACT COMPONENTS (JSON):',
+                                                                             'IMMUTABLE COMPOSITIONS AND THEIR EXACT '
+                                                                             'COMPONENTS (JSON):',
                                                                              '{{compositions}}'],
                                                                     'variables': [{'name': 'search_material',
                                                                                    'required': True,
-                                                                                   'description': 'Immutable task material and explicit '
-                                                                                                  'constraints as JSON.'},
+                                                                                   'description': 'Immutable task '
+                                                                                                  'material and '
+                                                                                                  'explicit '
+                                                                                                  'constraints as '
+                                                                                                  'JSON.'},
                                                                                   {'name': 'compositions',
                                                                                    'required': True,
-                                                                                   'description': 'Immutable candidate_id, exact '
-                                                                                                  'components and proposal records '
-                                                                                                  'produced by the separate composition '
+                                                                                   'description': 'Immutable '
+                                                                                                  'candidate_id, exact '
+                                                                                                  'components and '
+                                                                                                  'proposal records '
+                                                                                                  'produced by the '
+                                                                                                  'separate '
+                                                                                                  'composition '
                                                                                                   'stage.'}]}]},
-                                        'questions': {'intro': ['QUESTIONS (mandatory perspective checks; answer each in output. They are '
-                                                                'not questions for the operator and add no requirements, constraints, '
-                                                                'criteria, or score dimensions.)'],
+                                        'questions': {'intro': ['QUESTIONS (mandatory perspective checks; answer each '
+                                                                'in output. They are not questions for the operator '
+                                                                'and add no requirements, constraints, criteria, or '
+                                                                'score dimensions.)'],
                                                       'items': [{'id': 'machinery_trust',
-                                                                 'text': 'For each composition, does it add a workaround around behavior '
-                                                                         'or facts already established by a trusted producer or source '
-                                                                         'instead of using them? Identify candidate IDs and evidence; do '
-                                                                         'not repair them.'},
+                                                                 'text': 'For each composition, does it add a '
+                                                                         'workaround around behavior or facts already '
+                                                                         'established by a trusted producer or source '
+                                                                         'instead of using them? Identify candidate '
+                                                                         'IDs and evidence; do not repair them.'},
                                                                 {'id': 'environment_fit',
-                                                                 'text': 'For each composition, what standard does the surrounding work '
-                                                                         'use—engineering, audience, genre, form, or stage—and does it '
-                                                                         'exceed or change that standard where the request did not order '
-                                                                         'it? Identify candidate IDs and evidence; do not improve them.'},
+                                                                 'text': 'For each composition, what standard does the '
+                                                                         'surrounding work use—engineering, audience, '
+                                                                         'genre, form, or stage—and does it exceed or '
+                                                                         'change that standard where the request did '
+                                                                         'not order it? Identify candidate IDs and '
+                                                                         'evidence; do not improve them.'},
                                                                 {'id': 'human_scale',
-                                                                 'text': 'Put each composition next to the request: would the human '
-                                                                         'recognize the grain and size they meant, or has literalism made '
-                                                                         'the answer larger or narrower than the problem? Identify '
-                                                                         'candidate IDs and evidence.'}]},
+                                                                 'text': 'Put each composition next to the request: '
+                                                                         'would the human recognize the grain and size '
+                                                                         'they meant, or has literalism made the '
+                                                                         'answer larger or narrower than the problem? '
+                                                                         'Identify candidate IDs and evidence.'}]},
                                         'output_contract': {'sections': [{'id': 'evaluate_candidates_result',
-                                                                          'text': ['OUTPUT CONTRACT: return exactly one JSON object and '
-                                                                                   'nothing else.',
-                                                                                   'The only top-level keys are evaluations and '
-                                                                                   'questions.',
-                                                                                   'evaluations is a list with exactly one record per '
-                                                                                   'supplied composition candidate_id,',
-                                                                                   'with no duplicates, omissions or extras. Reply order '
-                                                                                   'is immaterial. Each record is exactly',
+                                                                          'text': ['OUTPUT CONTRACT: return exactly '
+                                                                                   'one JSON object and nothing else.',
+                                                                                   'The only top-level keys are '
+                                                                                   'evaluations and questions.',
+                                                                                   'evaluations is a list with exactly '
+                                                                                   'one record per supplied '
+                                                                                   'composition candidate_id,',
+                                                                                   'with no duplicates, omissions or '
+                                                                                   'extras. Reply order is immaterial. '
+                                                                                   'Each record is exactly',
                                                                                    '{"candidate_id":"...","constraint_valid":true,"constraint_violations":[],',
                                                                                    '"reason":"...","assumptions":[],"score":0.5}.',
-                                                                                   'Do not return proposal or any replacement '
-                                                                                   'composition. All objects are closed.',
-                                                                                   'candidate_id and reason are non-blank strings. '
+                                                                                   'Do not return proposal or any '
+                                                                                   'replacement composition. All '
+                                                                                   'objects are closed.',
+                                                                                   'candidate_id and reason are '
+                                                                                   'non-blank strings. '
                                                                                    'constraint_valid is boolean.',
-                                                                                   'constraint_violations is a unique list containing '
-                                                                                   'only supplied constraint IDs and/or',
-                                                                                   '__objective__, __insufficient_detail__, __seed__. It '
-                                                                                   'is empty exactly when',
-                                                                                   'constraint_valid is true. assumptions is a possibly '
-                                                                                   'empty list of non-blank strings.',
-                                                                                   'score is a finite number in [0,1], never a boolean, '
-                                                                                   'and must be 0 when constraint_valid',
-                                                                                   'is false. Invalid evaluations are expected '
-                                                                                   'rejections, not contract failures.'],
+                                                                                   'constraint_violations is a unique '
+                                                                                   'list containing only supplied '
+                                                                                   'constraint IDs and/or',
+                                                                                   '__objective__, '
+                                                                                   '__insufficient_detail__, __seed__. '
+                                                                                   'It is empty exactly when',
+                                                                                   'constraint_valid is true. '
+                                                                                   'assumptions is a possibly empty '
+                                                                                   'list of non-blank strings.',
+                                                                                   'score is a finite number in [0,1], '
+                                                                                   'never a boolean, and must be 0 '
+                                                                                   'when constraint_valid',
+                                                                                   'is false. Invalid evaluations are '
+                                                                                   'expected rejections, not contract '
+                                                                                   'failures.'],
                                                                           'variables': []},
                                                                          {'ref': 'questions_output'}]}},
  'milestone/expand_genes.json': {'kind': 'expand_genes',

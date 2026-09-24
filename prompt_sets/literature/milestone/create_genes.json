@@ -13,6 +13,12 @@
           "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching branch below.",
           "CREATIVITY CONTRACT: {{creativity_contract}}",
           "Read the complete operator request, admitted context and references in the supplied order.",
+          "Open the supplied reference paths in the workspace and admitted roots; paths are not their contents.",
+          "For fragments_v3, return exactly {{gene_count}} distinct fragments, each containing 1-3 words.",
+          "Choose varied words or short phrases related to the assignment and its context, including",
+          "useful adjacent ideas. These are reusable inspiration, without grammatical categories.",
+          "Do not compose solutions, supply new requirements or hide a complete proposal in a fragment.",
+          "Return the fragments themselves without attached negation; the driver assigns polarity.",
           "For sparse_v2, return only ten subjects, ten verbs and ten adjectives grounded in",
           "the assignment. Keep them short, literal and independently reusable. Include important",
           "terms already supplied and useful adjacent vocabulary, but do not compose a proposal,",
@@ -33,18 +39,44 @@
           "difference where relevant; novelty never replaces faithfulness or feasibility."
         ],
         "variables": [
-          {"name": "creativity_semantics", "required": false, "default": "legacy", "description": "Service-owned saved interpretation: sparse_v2 for new tasks, legacy for unmarked orders."},
-          {"name": "creativity_contract", "required": false, "default": "separated_gene_pool_v1", "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."}
+          {
+            "name": "creativity_semantics",
+            "required": false,
+            "default": "legacy",
+            "description": "Service-owned saved interpretation: fragments_v3 for new tasks, sparse_v2 or legacy for earlier orders."
+          },
+          {
+            "name": "creativity_contract",
+            "required": false,
+            "default": "ordered_fragments_v1",
+            "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."
+          },
+          {
+            "name": "gene_count",
+            "required": false,
+            "default": "10",
+            "description": "Exact number of 1-3-word inspiration fragments requested by fragments_v3."
+          }
         ]
       },
       {
         "text": [
-          "LITERATURE REFINEMENT: for sparse_v2, extract only the ten subjects, ten verbs and",
-          "ten adjectives requested above. Prefer words evidenced by the assignment and restrained",
-          "adjacent vocabulary. Do not write the story, invent lore or scenes, interpret motives,",
-          "critique the manuscript, or decide what a character should do. For legacy, derive movable",
-          "narrative units only where they serve the objective, and preserve supplied continuity,",
-          "voice and stylistic constraints without turning judgment lenses into abstract dimensions."
+          "LITERATURE REFINEMENT: for legacy, derive movable narrative units such as actions, decisions,",
+          "disclosures, reversals or experiential beats when they serve the objective. Use",
+          "imagery, voice, rhythm, tension and agency as judgment lenses, not as abstract",
+          "dimensions or fixed slots. Preserve supplied continuity and stylistic constraints;",
+          "only operator or canon requirements, or dependencies grounded in supplied evidence,",
+          "are hard constraints. Put unresolved",
+          "risk or feasibility in assumptions, unknowns or criteria instead of manufacturing",
+          "a prohibition. order_semantics must name how relative placement changes the story,",
+          "causal execution or reader experience; never define it as merely the order in which",
+          "the proposal is explained. For sparse_v2, extract only the ten subjects, ten verbs",
+          "and ten adjectives requested by the generic prompt. Prefer words evidenced by the",
+          "assignment and restrained adjacent vocabulary. Do not write the story, invent lore or",
+          "scenes, interpret motives, critique the manuscript, or decide what a character should do.",
+          "For fragments_v3, return only the requested number of 1-3-word inspiration fragments",
+          "related to the assignment and its context. Literary imagery, action and association",
+          "may inform the vocabulary; do not pre-compose a story or impose new requirements."
         ],
         "variables": []
       },
@@ -80,6 +112,11 @@
         "id": "create_genes_result",
         "text": [
           "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+          "For fragments_v3 its only top-level keys are gene_pool and questions.",
+          "gene_pool is a JSON list of exactly the requested number of distinct non-blank strings,",
+          "each containing 1-3 whitespace-separated words. Example shape: {\"gene_pool\":[\"shared warmth\",\"flexible shell\"],\"questions\":[...]}",
+          "The example illustrates shape only; use the exact requested count. Return no categories, IDs,",
+          "search_material, explanations or semantics marker. All objects are closed.",
           "For sparse_v2 its only top-level keys are gene_pool and questions.",
           "gene_pool is exactly {\"subjects\":[...],\"verbs\":[...],\"adjectives\":[...]}.",
           "Each list contains exactly 10 distinct non-blank strings. All objects are closed.",
