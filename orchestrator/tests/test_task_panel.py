@@ -138,7 +138,7 @@ const postJSON = async (path, payload) => posts.push({path, payload});
         binding = {"project": "mine", "work_area": "main"}
         session = staffing.create_session(server.home, session_body(work_area=binding))["id"]
         configuration = creativity_configuration(
-            max_evaluated_candidates=12, mutation_rate=0.25,
+            max_evaluated_candidates=12, mutation_rate=0.25, session_mode="fresh",
         )
         names = (
             "esc", "taskExecutorEntry", "taskConfigurationApplicable", "taskConfigurationValue",
@@ -223,6 +223,10 @@ async function postJSON(path, payload) {
   assert.deepEqual(controls.filter(c => c.dataset.taskConfig.startsWith('rigor.'))
     .map(c => c.dataset.taskConfig).sort(), ['rigor.create_genes', 'rigor.default', 'rigor.evaluate_candidates']);
   assert.match(fields.task_configuration.innerHTML, /Candidates per generation/);
+  assert.match(fields.task_configuration.innerHTML, /Agent sessions/);
+  assert.match(fields.task_configuration.innerHTML, />Fresh per call<\/option>/);
+  assert.match(fields.task_configuration.innerHTML, />Keep agent sessions<\/option>/);
+  assert.equal(control('session_mode').value, 'persistent');
   assert.equal(control('order_mode').value, 'interchangeable');
   for (const [key, value] of Object.entries(defaults)) assert.equal(control(key).value, String(value));
   assert.equal(control('max_evaluated_candidates').value, '');
@@ -244,6 +248,8 @@ async function postJSON(path, payload) {
   onTaskConfigurationChange(control('evaluation_batch_size'));
   control('generation_limit').value = '10';
   onTaskConfigurationChange(control('generation_limit'));
+  control('session_mode').value = 'fresh';
+  onTaskConfigurationChange(control('session_mode'));
   assert.equal(control('max_evaluated_candidates').value, '');
   fields.t_executor.value = 'agent_call';
   onTaskExecutorChange();
@@ -252,8 +258,9 @@ async function postJSON(path, payload) {
   onTaskExecutorChange();
   assert.equal(fields.t_initial_genes_field.style.display, '');
   assert.equal(control('max_evaluated_candidates').value, '');
+  assert.equal(control('session_mode').value, 'fresh');
   const automatic = {...defaults, population_size: 8, generation_limit: 10,
-    evaluation_batch_size: 8};
+    evaluation_batch_size: 8, session_mode: 'fresh'};
   assert.deepEqual(currentTaskConfiguration().configuration, automatic);
   await submitTaskForm();
   assert.deepEqual(posts[1].configuration, automatic);
@@ -266,7 +273,7 @@ async function postJSON(path, payload) {
   const expected = {...configured, rigor: {default: 'low', evaluate_candidates: 'high'}};
   assert.deepEqual(currentTaskConfiguration().configuration, expected);
   for (const key of Object.keys(fixture.configuration)) {
-    if (schema[key].optional) continue;
+    if (schema[key].optional || !['integer', 'number'].includes(schema[key].type)) continue;
     const input = control(key), saved = input.value;
     input.value = '';
     await submitTaskForm();

@@ -490,6 +490,27 @@ clients send the object itself. The standalone panel intentionally sends an
 empty request context, while the API continues to accept and preserve a
 non-empty `request.context`.
 
+Creativity's **Agent sessions** setting selects `configuration.session_mode`:
+
+- `persistent` (**Keep agent sessions**) is the default for new tasks and continues each job's own provider
+  conversation across calls and operator Pause/Resume. Composition and evaluation
+  never share a conversation; parallel batches use separate worker slots, so one
+  conversation is never used by concurrent calls. Gene creation and legacy expansion
+  also have their own conversations.
+- `fresh` (**Fresh per call**) starts a new conversation for each call.
+  Existing orders keep their selected mode; orders saved without this field
+  remain fresh.
+
+Choose the mode when creating the task to compare both approaches. It does not
+change models, rigor, prompts, genetic search or acceptance rules. Each call still
+receives the current resolved prompt and exact inputs. A change of provider family
+starts a new conversation for that job/slot; model and effort changes within the
+same family use the current staffing in the continued conversation. Session
+references and Codex usage baselines are stored outside the repository beside
+the task checkpoint. Persistence can save repeated context work, but retained
+history can also influence later judgments; speed and output quality should be
+compared experimentally rather than assumed. It does not freeze repository files.
+
 An open Creativity task exposes **Staffing…** for its bound staffing session
 and **Rigors…** for task-default, gene-creation and composition/evaluation
 overrides. Both apply to subsequent physical calls, including the existing

@@ -3280,6 +3280,14 @@ def call_worker(runner, family, prompt, kind, workspace,
         exc.resolved_family = getattr(final, "resolved_family", family)
         exc.resolved_model = getattr(final, "resolved_model", model)
         exc.resolved_effort = getattr(final, "resolved_effort", effort)
+        for name in (
+            "session_ref", "session_token_usage", "session_cost_payload",
+            "token_usage_is_delta",
+        ):
+            if hasattr(final, name):
+                setattr(exc, name, getattr(final, name))
+        # These totals price the whole logical call, not the final session.
+        exc.session_accounting_is_aggregate = len(completed) > 1
         exc.completed_attempt_before_dispatch_failure = True
         exc.incident_error = first_error
 
@@ -3706,6 +3714,13 @@ def call_worker(runner, family, prompt, kind, workspace,
         error.resolved_family = getattr(result2, "resolved_family", family)
         error.resolved_model = getattr(result2, "resolved_model", model)
         error.resolved_effort = getattr(result2, "resolved_effort", effort)
+        for name in (
+            "session_ref", "session_token_usage", "session_cost_payload",
+            "token_usage_is_delta",
+        ):
+            if hasattr(result2, name):
+                setattr(error, name, getattr(result2, name))
+        error.session_accounting_is_aggregate = True
         error.physical_dispatches = [
             _physical_dispatch(
                 result, family, model, effort, error=first_error

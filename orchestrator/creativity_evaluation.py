@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 from . import (
     creativity_search, prompt_contracts, prompt_router, prompt_sets, runners,
-    staffing, tasks,
+    staffing, tasks, worker_conversations,
 )
 
 
@@ -153,7 +153,7 @@ def search_material_from_fragments(fragments, *, objective, context, references)
 def create_genes(
     group, runner, *, objective, context, references, home, session, workspace,
     configuration, execution_context, prompt_set="default", prompt_values=None,
-    creativity_semantics=None, resolve_rigor=None,
+    creativity_semantics=None, resolve_rigor=None, conversation_store=None,
 ):
     """Derive compact search material from the original operator request."""
     values = dict(prompt_values or {})
@@ -175,6 +175,7 @@ def create_genes(
             context={"job": "create_genes", "generation": 0, "batch": uuid.uuid4().hex},
             execution_context=execution_context, prompt_set=prompt_set,
             resolve_rigor=resolve_rigor,
+            conversation_store=conversation_store,
         )
     finally:
         group.ensure_quiescent()
@@ -201,6 +202,7 @@ def call_composition_batch(
     group, runner, *, home, session, workspace, configuration, search_material,
     candidates, generation, batch, execution_context, prompt_set="default",
     prompt_values=None, creativity_semantics=None, resolve_rigor=None,
+    conversation_store=None, conversation_slot=0,
 ):
     """Materialize candidate text once, before any reviewer sees it."""
     genomes = {candidate_id: dict(genome) for candidate_id, genome in candidates.items()}
@@ -230,6 +232,7 @@ def call_composition_batch(
         validation_context={"candidate_ids": list(genomes)}, context=context,
         execution_context=execution_context, prompt_set=prompt_set,
         resolve_rigor=resolve_rigor,
+        conversation_store=conversation_store, conversation_slot=conversation_slot,
     )
     if isinstance(result, runners.ControlledInterruptionResult):
         return None, result
@@ -254,7 +257,7 @@ def call_evaluation_batch(
     group, runner, *, home, session, workspace, configuration, search_material,
     candidates, generation, batch, execution_context, prompt_set="default",
     prompt_values=None, record_dispatch=None, creativity_semantics=None,
-    compositions=None, resolve_rigor=None,
+    compositions=None, resolve_rigor=None, conversation_store=None, conversation_slot=0,
 ):
     """Evaluate one owner-admitted batch, including the runner's one correction.
 
@@ -301,6 +304,7 @@ def call_evaluation_batch(
         context=context, execution_context=execution_context, prompt_set=prompt_set,
         record_dispatch=record_dispatch,
         resolve_rigor=resolve_rigor,
+        conversation_store=conversation_store, conversation_slot=conversation_slot,
     )
     if isinstance(result, runners.ControlledInterruptionResult):
         return None, result
@@ -326,9 +330,14 @@ def call_evaluation_batch(
 def _call_semantic_job(
     group, runner, *, job, home, session, workspace, configuration, values,
     validation_context, context, execution_context, prompt_set, record_dispatch=None,
-    resolve_rigor=None,
+    resolve_rigor=None, conversation_store=None, conversation_slot=0,
 ):
     """Share live routing, served validation and correction preparation."""
+    persistent = configuration.get("session_mode", "fresh") == "persistent"
+    if persistent and conversation_store is None:
+        raise ValueError("persistent Creativity calls require their task's conversation store")
+    if persistent:
+        context["conversation_slot"] = conversation_slot
     prepared_prompt = None
 
     def prepare_call(error):
@@ -380,18 +389,23 @@ def _call_semantic_job(
                 "model": model, "effort": effort,
             })
 
-    return group.call_worker(
-        runner, None, "", job, workspace,
+    options = dict(
         prepare_call=prepare_call, resolve_dispatch=resolve_dispatch,
         call_context=context, execution_context=execution_context,
         before_dispatch=before_dispatch,
     )
+    if persistent:
+        return worker_conversations.call_worker(
+            conversation_store, "conversation:%s:%d" % (job, conversation_slot),
+            group, runner, None, "", job, workspace, **options,
+        )
+    return group.call_worker(runner, None, "", job, workspace, **options)
 
 
 def expand_progress(
     group, runner, *, progress, search_material, explored, explored_account,
     home, session, workspace, configuration, execution_context,
-    prompt_set="default", prompt_values=None, resolve_rigor=None,
+    prompt_set="default", prompt_values=None, resolve_rigor=None, conversation_store=None,
 ):
     """Apply one due intervention; return (current material, runner result).
 
@@ -427,6 +441,7 @@ def expand_progress(
             validation_context={"dimensions": search_material["dimensions"]},
             context=context, execution_context=execution_context, prompt_set=prompt_set,
             resolve_rigor=resolve_rigor,
+            conversation_store=conversation_store,
         )
     finally:
         group.ensure_quiescent()
@@ -516,7 +531,7 @@ def evaluate_wave(
                 store.put(checkpoint_key, checkpoint)
             return state["regime_revision"]
 
-    def run_batch(ids, batch_id):
+    def run_batch(ids, batch_id, conversation_slot):
         with lock:
             state = store.get(checkpoint_key)["evaluation"]
             composed = _current_compositions(state)
@@ -526,6 +541,7 @@ def evaluate_wave(
                 group, runner,
                 candidates={key: candidates[key] for key in missing},
                 batch=batch_id, creativity_semantics=creativity_semantics,
+                conversation_slot=conversation_slot,
                 **call_options,
             )
             if composition is None:
@@ -544,6 +560,7 @@ def evaluate_wave(
             group, runner, candidates={key: candidates[key] for key in ids},
             compositions=[composed[key] for key in ids], batch=batch_id,
             record_dispatch=record_dispatch,
+            conversation_slot=conversation_slot,
             creativity_semantics=creativity_semantics, **call_options,
         )
         if accepted is not None:
@@ -564,6 +581,7 @@ def evaluate_wave(
                 futures = [pool.submit(
                     run_batch, pending[offset:offset + batch_size],
                     uuid.uuid4().hex,
+                    offset // batch_size,
                 ) for offset in range(0, len(pending), batch_size)]
                 for future in as_completed(futures):
                     result = future.result()

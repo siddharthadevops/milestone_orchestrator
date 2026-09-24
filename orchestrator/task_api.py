@@ -2873,6 +2873,7 @@ class DirectTaskHost:
                     prompt_set=order.get("prompt_set", prompt_sets.DEFAULT_SET_NAME),
                     prompt_values={"ecosystem_map": prompts.project_context_body(context)},
                     resolve_rigor=lambda: self.store.creativity_rigor(task_id),
+                    conversation_store=store,
                 )
             interruption = None
             if material is None:

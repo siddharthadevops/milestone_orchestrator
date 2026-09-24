@@ -169,6 +169,33 @@ class TaskContractsTest(unittest.TestCase):
                     budget,
                 )
 
+    def test_creativity_session_mode_is_persistent_by_default_and_strict(self):
+        schema = next(item for item in tasks.task_executor_catalogue()
+                      if item["id"] == "creativity")["configuration_schema"]
+        self.assertEqual(schema["session_mode"], {
+            "type": "choice", "label": "Agent sessions", "default": "persistent",
+            "choices": [
+                {"value": "fresh", "label": "Fresh per call"},
+                {"value": "persistent", "label": "Keep agent sessions"},
+            ],
+        })
+        source = creativity_configuration(rigor={"default": "low"})
+        before = copy.deepcopy(source)
+        self.assertEqual(tasks.resolve_creativity_configuration(source)["session_mode"], "persistent")
+        self.assertEqual(source, before)
+        for mode in ("fresh", "persistent"):
+            with self.subTest(mode=mode):
+                order = dict(task_order("creativity"), configuration=dict(source, session_mode=mode))
+                checked = tasks.validate_order(order)
+                self.assertEqual(checked["configuration"]["session_mode"], mode)
+                self.assertEqual(checked["configuration"]["rigor"], source["rigor"])
+        for mode in (None, True, False, 0, 1, 1.0, [], {}, "", "Fresh", "keep", "resume"):
+            with self.subTest(invalid=mode):
+                self.assert_request_error(
+                    tasks.INVALID_TASK_REQUEST, tasks.resolve_creativity_configuration,
+                    dict(source, session_mode=mode),
+                )
+
     def test_creativity_configuration_contract(self):
         base = creativity_configuration()
         schema = next(item for item in tasks.task_executor_catalogue()
@@ -211,7 +238,7 @@ class TaskContractsTest(unittest.TestCase):
             with self.subTest(configuration=source):
                 resolved = tasks.resolve_creativity_configuration(source)
                 self.assertEqual(
-                    resolved, dict(source, order_mode="interchangeable")
+                    resolved, dict(source, order_mode="interchangeable", session_mode="persistent")
                 )
                 self.assertIsNot(resolved, source)
                 for key in base:
@@ -243,12 +270,12 @@ class TaskContractsTest(unittest.TestCase):
                 source = dict(base, rigor={job: choice})
                 self.assertEqual(
                     tasks.resolve_creativity_configuration(source),
-                    dict(source, order_mode="interchangeable"),
+                    dict(source, order_mode="interchangeable", session_mode="persistent"),
                 )
         for choice in ("fixed", "interchangeable"):
             source = dict(base, order_mode=choice)
             self.assertEqual(
-                tasks.resolve_creativity_configuration(source), source
+                tasks.resolve_creativity_configuration(source), dict(source, session_mode="persistent")
             )
         invalid.extend(
             dict(base, order_mode=value)
@@ -268,7 +295,7 @@ class TaskContractsTest(unittest.TestCase):
         })
         schema = entry["configuration_schema"]
         base = creativity_configuration(mutation_rate=0.25)
-        self.assertEqual(set(schema), set(base) | {"order_mode", "rigor"})
+        self.assertEqual(set(schema), set(base) | {"order_mode", "session_mode", "rigor"})
         self.assertNotIn("expansion", entry["available_agent_configurations"])
         self.assertIn(
             "candidate composition the first brainstorm seat",
@@ -322,7 +349,7 @@ class TaskContractsTest(unittest.TestCase):
             order = dict(task_order("creativity"), configuration=configuration)
             self.assertEqual(
                 tasks.validate_order(order)["configuration"],
-                dict(configuration, order_mode="interchangeable"),
+                dict(configuration, order_mode="interchangeable", session_mode="persistent"),
             )
         for configuration in ({"population_size": 2}, dict(base, population_size=0), dict(base, mutation_rate=1.1),
                               dict(base, elite_count=2), dict(base, max_evaluated_candidates=1),

@@ -444,6 +444,15 @@ _TASK_EXECUTORS += (
             "staffing": True, "prompt_set": True, "strategy_profile": False,
         },
         "configuration_schema": {
+            "session_mode": {
+                "type": "choice",
+                "label": "Agent sessions",
+                "choices": [
+                    {"value": "fresh", "label": "Fresh per call"},
+                    {"value": "persistent", "label": "Keep agent sessions"},
+                ],
+                "default": "persistent",
+            },
             "order_mode": {
                 "type": "choice",
                 "choices": ["fixed", "interchangeable"],
@@ -1051,11 +1060,12 @@ def resolve_creativity_configuration(value):
 
     An omitted evaluation budget covers population_size * generation_limit.
     Omitted rigor remains inherited at call time, never frozen from a session.
+    Omitted session mode keeps worker conversations for newly admitted orders.
     """
     try:
         _exact_keys(
             value, (),
-            _CREATIVITY_COUNTS + _CREATIVITY_RATES + ("order_mode", "rigor"),
+            _CREATIVITY_COUNTS + _CREATIVITY_RATES + ("order_mode", "session_mode", "rigor"),
             "configuration",
         )
         schema = _TASK_EXECUTOR_BY_ID["creativity"]["configuration_schema"]
@@ -1063,8 +1073,14 @@ def resolve_creativity_configuration(value):
             **{name: schema[name]["default"] for name in _CREATIVITY_COUNTS + _CREATIVITY_RATES
                if "default" in schema[name]},
             "order_mode": schema["order_mode"]["default"],
+            "session_mode": schema["session_mode"]["default"],
             **value,
         }
+        session_modes = [choice["value"] for choice in schema["session_mode"]["choices"]]
+        if type(value["session_mode"]) is not str or value["session_mode"] not in session_modes:
+            raise ContractError(
+                "configuration.session_mode must be one of %s" % session_modes
+            )
         if value["order_mode"] not in schema["order_mode"]["choices"]:
             raise ContractError(
                 "configuration.order_mode must be one of %s"

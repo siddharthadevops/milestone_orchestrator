@@ -106,6 +106,19 @@ assert(!renderTaskPage(record('duel'), null).includes('onclick="openCreativityRi
         self.assertIn('Composition and evaluation', self.panel)
         self.assertIn('Changes apply to subsequent calls; running calls keep', self.panel)
 
+    def test_creativity_page_shows_the_stored_session_mode(self):
+        self.javascript(r"""
+for (const mode of ['fresh', 'persistent']) {
+  const task = record('creativity');
+  task.order.configuration = {session_mode: mode};
+  const html = renderTaskPage(task, null);
+  assert(html.includes('initial configuration'));
+  assert(html.includes('session_mode: ' + mode));
+}
+const legacy = record('creativity');
+assert(!renderTaskPage(legacy, null).includes('session_mode: persistent'));
+""")
+
     def test_creativity_staffing_reuses_its_bound_session_editor(self):
         self.javascript(r"""
 let lastTaskPage = record('creativity');
