@@ -11,7 +11,7 @@ import json
 import os
 from types import SimpleNamespace
 
-from . import prompt_contracts, prompt_router, prompt_sets, runners, staffing, tasks
+from . import kvstore, prompt_contracts, prompt_router, prompt_sets, runners, staffing, tasks
 
 
 CANDIDATES = ("a", "b")
@@ -60,13 +60,60 @@ def delivered_artifacts(directory, paths):
     return artifacts
 
 
+def _retain_conversation(store, key, previous, outcome):
+    """Keep each seat's provider reference, including rejected output.
+
+    Separate KV entries let parallel authors save their conversations without
+    overwriting the round checkpoint or each other's reference.
+    """
+    if getattr(outcome, "provider_dispatch_started", None) is False:
+        return
+    family = getattr(outcome, "resolved_family", None)
+    reference = getattr(outcome, "session_ref", None)
+    if not reference and previous and family == previous["family"]:
+        reference = previous["session_ref"]
+    if not isinstance(reference, str) or not reference.strip():
+        return
+    saved = {"family": family, "session_ref": reference}
+    if family == "codex":
+        same_session = previous and previous["family"] == family and (
+            previous["session_ref"] == reference
+        )
+        cumulative = runners.normalize_token_usage(
+            getattr(outcome, "session_token_usage", None)
+        )
+        delta = bool(getattr(outcome, "token_usage_is_delta", False))
+        usage = runners.normalize_token_usage(getattr(outcome, "token_usage", None))
+        if cumulative is None:
+            if not same_session:
+                cumulative = usage
+            elif delta and previous.get("token_usage") is not None and usage is not None:
+                cumulative = runners.add_token_usage(previous["token_usage"], usage)
+        cost = getattr(outcome, "session_cost_payload", None)
+        if cost is None and not same_session and not delta:
+            payloads = getattr(outcome, "cost_payloads", None) or []
+            cost = payloads[-1] if payloads else None
+        saved.update(token_usage=cumulative, cost_payload=cost)
+    store.put(key, saved)
+
+
 def call_candidate(
-    group, runner, *, job, candidate_id, round_number, home, session, workspace,
+    group, runner, *, store, job, candidate_id, round_number, home, session, workspace,
     configuration, values, execution_context, prompt_set=prompt_sets.DEFAULT_SET_NAME,
     families=(),
 ):
-    """Resolve this Duel charge and staff one independent physical call."""
+    """Resolve the current charge and continue this seat's own conversation."""
     context = {"job": job, "candidate_id": candidate_id, "round": round_number}
+    conversation_key = "conversation:%s:%s" % (job, candidate_id)
+    previous = store.get(conversation_key)
+    if previous is kvstore.ABSENT:
+        previous = None
+    seed_usage = getattr(runner, "seed_codex_session_usage", None)
+    if previous and previous["family"] == "codex" and callable(seed_usage):
+        seed_usage(
+            previous["session_ref"], previous.get("token_usage"),
+            cost_payload=previous.get("cost_payload"),
+        )
     prepared_prompt = None
 
     def prepare_call(_error):
@@ -104,12 +151,20 @@ def call_candidate(
             label="duel-%s-%s-%d" % (job, candidate_id, round_number),
         )
 
-    reply, result = group.call_worker(
-        runner, None, "", KINDS[job], workspace,
-        prepare_call=prepare_call, resolve_dispatch=resolve_dispatch,
-        before_dispatch=before_dispatch, call_context=context,
-        execution_context=execution_context, single_attempt=True,
-    )
+    try:
+        reply, result = group.call_worker(
+            runner, None, "", KINDS[job], workspace,
+            prepare_call=prepare_call, resolve_dispatch=resolve_dispatch,
+            before_dispatch=before_dispatch, call_context=context,
+            execution_context=execution_context, single_attempt=True,
+            start_session=previous is None,
+            session_ref=previous["session_ref"] if previous else None,
+            continuation_family=previous["family"] if previous else None,
+        )
+    except (runners.RunnerError, runners.WorkerProtocolError) as exc:
+        _retain_conversation(store, conversation_key, previous, exc)
+        raise
+    _retain_conversation(store, conversation_key, previous, result)
     if isinstance(result, runners.ControlledInterruptionResult):
         return None, result
     # The answers have done their job by making the agent seek context. They
@@ -175,7 +230,7 @@ def run_phase(group, runner, *, store, request, configuration, ecosystem_map, **
         if not _review_pending(checkpoint):
             return None
         reply, result = call_candidate(
-            group, runner, job="review_candidate", candidate_id="both",
+            group, runner, store=store, job="review_candidate", candidate_id="both",
             round_number=checkpoint["round"], configuration=configuration,
             values=_values(checkpoint, None, request, configuration, ecosystem_map),
             **options,
@@ -195,7 +250,7 @@ def run_phase(group, runner, *, store, request, configuration, ecosystem_map, **
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="duel") as pool:
         futures = {
             pool.submit(
-                call_candidate, group, runner, job="author_candidate", candidate_id=candidate["id"],
+                call_candidate, group, runner, store=store, job="author_candidate", candidate_id=candidate["id"],
                 round_number=checkpoint["round"], configuration=configuration,
                 values=_values(checkpoint, candidate, request, configuration, ecosystem_map),
                 **options,

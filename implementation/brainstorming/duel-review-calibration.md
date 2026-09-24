@@ -66,6 +66,12 @@ Ambos autores reciben exactamente el mismo documento y las ubicaciones de las do
 
 Mientras un autor siga trabajando, la revisión conjunta considera ambas versiones vigentes, incluida la del autor que haya finalizado; esa comparación no vuelve a activar al autor terminado. Si ambos terminan, no hay otra llamada de revisión.
 
+## Contexto entre rondas
+
+Cada autor y el revisor conservan una conversación separada, con su identificador persistido para continuar también tras una pausa o reinicio. Cada llamada recibe el prompt, el encargo y las referencias actuales, que prevalecen sobre instrucciones anteriores. Se reutilizan las fuentes y decisiones todavía válidas; se consultan de nuevo las fuentes nuevas, cambiadas o necesarias para resolver una duda, sin reconstruir todo el contexto en cada ronda.
+
+Los autores leen sus documentos, los del oponente y el informe compartido vigentes. El revisor vuelve a leer ambas entregas actuales: sus notas anteriores no son un suelo ni una trayectoria obligatoria. Revisa la calidad lograda bajo los criterios actuales, sin premiar automáticamente el esfuerzo, una modificación o el cumplimiento de su propia sugerencia.
+
 ## Alcance de los cambios
 
 El contrato del revisor devuelve `scores: {a, b}`, `report` y `questions`. Las respuestas a las preguntas de contexto se descartan; las notas y el informe se conservan. Cada candidato mantiene su nota y ambos apuntan al mismo `reports/round-NNN/review.md`, también mostrado como informe compartido en el panel.

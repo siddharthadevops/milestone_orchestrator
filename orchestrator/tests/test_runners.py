@@ -1890,6 +1890,7 @@ class TestCallWorker(unittest.TestCase):
                 "implement",
                 self.workspace,
                 single_attempt=True,
+                start_session=True,
             )
 
         error = caught.exception
@@ -1899,6 +1900,7 @@ class TestCallWorker(unittest.TestCase):
         self.assertEqual(error.raw_texts, ["one malformed reply"])
         self.assertEqual(len(error.physical_dispatches), 1)
         self.assertEqual(error.physical_dispatches[0]["family"], "codex")
+        self.assertEqual(error.session_ref, runner.session_calls[0][2])
 
     def test_before_dispatch_is_the_last_step_before_each_provider_call(self):
         order = []
@@ -3882,18 +3884,23 @@ class TestActiveProviderControl(unittest.TestCase):
         )
         runner = SubprocessRunner(
             {"codex": [fake, "exec",
-                       "--dangerously-bypass-approvals-and-sandbox"]},
+                       "--dangerously-bypass-approvals-and-sandbox",
+                       "--output-last-message", "{output_file}"]},
             {"codex": 5},
         )
 
-        with self.assertRaises(runners.ProviderResponseError) as caught:
-            runner.call(
-                "codex", "prompt", self.workspace,
-                active_control=runners.ActiveCallControl(),
-            )
-
-        self.assertEqual(caught.exception.token_usage["total_tokens"], 13)
-        self.assertFalse(caught.exception.token_usage_partial)
+        for persistent in (False, True):
+            with self.subTest(persistent=persistent):
+                method = runner.start_session if persistent else runner.call
+                with self.assertRaises(runners.ProviderResponseError) as caught:
+                    method(
+                        "codex", "prompt", self.workspace,
+                        active_control=runners.ActiveCallControl(),
+                    )
+                self.assertEqual(caught.exception.token_usage["total_tokens"], 13)
+                self.assertFalse(caught.exception.token_usage_partial)
+                if persistent:
+                    self.assertEqual(caught.exception.session_ref, "thread-failed")
 
     def test_codex_live_turn_sums_each_model_response_usage(self):
         fake = self._executable(

@@ -1929,6 +1929,8 @@ class SubprocessRunner(object):
                     error.session_token_usage = normalize_token_usage(
                         outcome.get("session_token_usage")
                     )
+                    if persist_session or session_ref is not None:
+                        error.session_ref = outcome.get("session_ref") or session_ref
                     error.duration_s = time.time() - started
                     if family == "codex":
                         error.token_usage_is_delta = True
@@ -3543,6 +3545,13 @@ def call_worker(runner, family, prompt, kind, workspace,
         error.resolved_family = getattr(result, "resolved_family", family)
         error.resolved_model = getattr(result, "resolved_model", model)
         error.resolved_effort = getattr(result, "resolved_effort", effort)
+        # A malformed answer does not erase the conversation that produced it.
+        for name in (
+            "session_ref", "session_token_usage", "session_cost_payload",
+            "token_usage_is_delta",
+        ):
+            if hasattr(result, name):
+                setattr(error, name, getattr(result, name))
         error.physical_dispatches = [
             _physical_dispatch(
                 result, family, model, effort, error=first_error

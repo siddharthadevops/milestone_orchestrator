@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+import uuid
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -50,6 +51,7 @@ class DuelTaskTest(unittest.TestCase):
         )["id"]
         prompt_sets.ensure_default(self.home)
         self.calls = []
+        self.session_calls = []
         self.lock = threading.Lock()
         self.finish_round = {}
         self.documents = {"a": ["draft.md"], "b": ["draft.md"]}
@@ -76,9 +78,34 @@ class DuelTaskTest(unittest.TestCase):
     def host(self, physical=None):
         return task_api.DirectTaskHost(
             self.home,
-            runner_factory=lambda *_args: SimpleNamespace(call=physical or self.physical),
+            runner_factory=lambda *_args: self.session_runner(physical or self.physical),
             poll_interval=0.001,
         )
+
+    def session_runner(self, physical):
+        def invoke(mode, family, session_ref, prompt, workspace, execution_context, kwargs):
+            call = self.call_info(prompt)
+            with self.lock:
+                self.session_calls.append(dict(
+                    call, mode=mode, family=family, session_ref=session_ref,
+                ))
+            result = physical(
+                family, prompt, workspace, execution_context=execution_context, **kwargs,
+            )
+            result.session_ref = session_ref
+            return result
+
+        def start(family, prompt, workspace, execution_context=None, **kwargs):
+            return invoke(
+                "start", family, str(uuid.uuid4()), prompt, workspace, execution_context, kwargs,
+            )
+
+        def resume(family, session_ref, prompt, workspace, execution_context=None, **kwargs):
+            return invoke(
+                "continue", family, session_ref, prompt, workspace, execution_context, kwargs,
+            )
+
+        return SimpleNamespace(call=physical, start_session=start, continue_session=resume)
 
     def checkpoint(self, record):
         return task_api.duel_checkpoint_store(self.home, record["id"]).get("checkpoint")
@@ -385,6 +412,186 @@ class DuelTaskTest(unittest.TestCase):
         self.assertNotIn(QUESTION_SENTINEL, json.dumps(native))
         self.assertNotIn(QUESTION_SENTINEL, json.dumps(self.checkpoint(record)))
 
+    def test_all_three_seats_keep_separate_conversations_even_with_the_same_family(self):
+        self.session = staffing.create_session(
+            self.home, session_body(document="matrix", families=["codex"]),
+        )["id"]
+        record, host = self.admit(max_rounds=3), self.host()
+        host.start(record, self.config)
+        self.completed(host, record)
+        references = set()
+        store = task_api.duel_checkpoint_store(self.home, record["id"])
+        for kind, identity, job in (
+            ("duel_author", "a", "author_candidate"),
+            ("duel_author", "b", "author_candidate"),
+            ("duel_review", "both", "review_candidate"),
+        ):
+            calls = [
+                call for call in self.session_calls
+                if (call["kind"], call["id"]) == (kind, identity)
+            ]
+            self.assertEqual([call["round"] for call in calls], [1, 2, 3])
+            self.assertEqual([call["mode"] for call in calls], ["start", "continue", "continue"])
+            self.assertEqual({call["family"] for call in calls}, {"codex"})
+            self.assertEqual(len({call["session_ref"] for call in calls}), 1)
+            reference = calls[0]["session_ref"]
+            references.add(reference)
+            saved = store.get("conversation:%s:%s" % (job, identity))
+            self.assertEqual(saved["family"], "codex")
+            self.assertEqual(saved["session_ref"], reference)
+        self.assertEqual(len(references), 3)
+
+    def test_new_runner_resumes_all_conversations_with_the_latest_prompts(self):
+        record = self.admit(max_rounds=2)
+
+        def pause_after_first_review(family, prompt, workspace, **kwargs):
+            result = self.physical(family, prompt, workspace, **kwargs)
+            call = self.call_info(prompt)
+            if call["kind"] == "duel_review" and call["round"] == 1:
+                host.pause(record["id"])
+            return result
+
+        host = self.host(pause_after_first_review)
+        host.start(record, self.config)
+        paused = self._paused(host, record["id"])
+        self.assertEqual(len(self.session_calls), 3)
+        original = {
+            (call["kind"], call["id"]): call["session_ref"]
+            for call in self.session_calls
+        }
+        marker = "Updated live instructions apply to this continuation."
+        for kind in ("duel_author", "duel_review"):
+            path = Path(prompt_sets.prompt_set_dir(self.home, "default")) / "duel" / (kind + ".json")
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["instructions"]["parts"].append({"text": [marker], "variables": []})
+            path.write_text(json.dumps(document), encoding="utf-8")
+        prompt_sets.load(self.home, "default")
+
+        resumed = self.host()
+        resumed.resume(record["id"], self.config, paused["revision"])
+        self.completed(resumed, record)
+        self.assertEqual(len(self.session_calls), 6)
+        for call in self.session_calls[3:]:
+            self.assertEqual(call["round"], 2)
+            self.assertEqual(call["mode"], "continue")
+            self.assertEqual(call["session_ref"], original[(call["kind"], call["id"])])
+        for call in self.calls:
+            if call["round"] == 2:
+                self.assertIn(marker, call["prompt"])
+            else:
+                self.assertNotIn(marker, call["prompt"])
+
+    def test_codex_accounting_keeps_turn_deltas_after_a_new_host_resumes(self):
+        self.session = staffing.create_session(
+            self.home, session_body(document="matrix", families=["codex"]),
+        )["id"]
+        record = self.admit(max_rounds=2)
+        test = self
+
+        class CumulativeRunner(runners.SubprocessRunner):
+            def __init__(self):
+                super().__init__(
+                    {"codex": ["codex", "exec", "--output-last-message", "{output_file}"]},
+                    {}, participant_process_factory=lambda *args: None,
+                )
+
+            def _call_prepared(self, family, prompt, workspace, _template, model, effort,
+                               _timeout, execution_context, _control, **kwargs):
+                result = test.physical(
+                    family, prompt, workspace, model=model, effort=effort,
+                    execution_context=execution_context,
+                )
+                call = test.call_info(prompt)
+                result.session_ref = kwargs.get("session_ref") or str(uuid.uuid4())
+                result.token_usage = runners.normalize_token_usage({
+                    "input_tokens": 10 * call["round"], "output_tokens": 2 * call["round"],
+                })
+                result.cost_payloads = [dict(result.token_usage)]
+                if call["kind"] == "duel_review" and call["round"] == 1:
+                    host.pause(record["id"])
+                return result
+
+        def new_host():
+            return task_api.DirectTaskHost(
+                self.home, runner_factory=lambda *_args: CumulativeRunner(), poll_interval=0.001,
+            )
+
+        host = new_host()
+        host.start(record, self.config)
+        paused = self._paused(host, record["id"])
+        host = new_host()
+        host.resume(record["id"], self.config, paused["revision"])
+        self.completed(host, record)
+        receipts = [
+            event["physical_dispatch"] for event in host.store.lifecycle(record["id"])["history"]
+            if "physical_dispatch" in event
+        ]
+        self.assertEqual(len(receipts), 6)
+        for receipt in receipts:
+            self.assertEqual(receipt["token_usage"]["total_tokens"], 12)
+            self.assertEqual(receipt["cost_payloads"][0]["input_tokens"], 10)
+            self.assertEqual(receipt["cost_payloads"][0]["output_tokens"], 2)
+
+    def test_changing_one_seats_family_starts_fresh_without_crossing_conversations(self):
+        record = self.admit(max_rounds=3)
+
+        def change_next_author_family(family, prompt, workspace, **kwargs):
+            result = self.physical(family, prompt, workspace, **kwargs)
+            call = self.call_info(prompt)
+            if call["kind"] == "duel_review" and call["round"] < 3:
+                document = resolver_doc()
+                document["assignment"]["brainstorm"]["1"] = 3 if call["round"] == 1 else 2
+                staffing.save(self.home, document)
+            return result
+
+        host = self.host(change_next_author_family)
+        host.start(record, self.config)
+        self.completed(host, record)
+        a = [call for call in self.session_calls if call["id"] == "a"]
+        self.assertEqual([call["family"] for call in a], ["codex", "claude", "codex"])
+        self.assertEqual([call["mode"] for call in a], ["start", "start", "start"])
+        self.assertEqual(len({call["session_ref"] for call in a}), 3)
+        for identity in ("b", "both"):
+            calls = [call for call in self.session_calls if call["id"] == identity]
+            self.assertEqual([call["mode"] for call in calls], ["start", "continue", "continue"])
+            self.assertEqual(len({call["session_ref"] for call in calls}), 1)
+            self.assertTrue({call["session_ref"] for call in a}.isdisjoint(
+                call["session_ref"] for call in calls
+            ))
+
+    def test_invalid_review_preserves_its_conversation_for_operator_resume(self):
+        record = self.admit()
+        invalid = threading.Event()
+
+        def malformed_once(family, prompt, workspace, **kwargs):
+            result = self.physical(family, prompt, workspace, **kwargs)
+            if self.call_info(prompt)["kind"] == "duel_review" and not invalid.is_set():
+                invalid.set()
+                result.text = "This review does not satisfy the output contract."
+            return result
+
+        host = self.host(malformed_once)
+        host.start(record, self.config)
+        paused = self._paused(host, record["id"])
+        self.assertEqual(self.call_counts()[("duel_review", "both")], 1)
+        first = next(call for call in self.session_calls if call["id"] == "both")
+        saved = task_api.duel_checkpoint_store(self.home, record["id"]).get(
+            "conversation:review_candidate:both",
+        )
+        self.assertEqual(saved["session_ref"], first["session_ref"])
+        self.assertEqual(self.checkpoint(record)["rounds"][0]["reviews"], {})
+
+        resumed = self.host()
+        resumed.resume(record["id"], self.config, paused["revision"])
+        self.completed(resumed, record)
+        reviews = [call for call in self.session_calls if call["id"] == "both"]
+        self.assertEqual([call["mode"] for call in reviews], ["start", "continue"])
+        self.assertEqual(reviews[1]["session_ref"], first["session_ref"])
+        self.assertEqual(self.call_counts(), Counter({
+            ("duel_author", "a"): 1, ("duel_author", "b"): 1,
+            ("duel_review", "both"): 2,
+        }))
+
     def test_review_findings_are_available_to_authors_in_the_next_round(self):
         record = self.admit(max_rounds=2)
         checked_authors = set()
@@ -564,7 +771,7 @@ class DuelTaskTest(unittest.TestCase):
                 self.assertFalse(thread.is_alive())
                 if action == "pause":
                     paused = self._paused(host, record["id"])
-                    host.runner_factory = lambda *_args: SimpleNamespace(call=self.physical)
+                    host.runner_factory = lambda *_args: self.session_runner(self.physical)
                     host.resume(record["id"], self.config, paused["revision"])
                     self.completed(host, record)
                 else:

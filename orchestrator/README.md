@@ -542,6 +542,20 @@ other. Both authors receive the same report and the locations of both versions
 in the next round. Reuse is encouraged; neither copying nor diversity is required.
 The reviewer's own context-search answers are discarded separately.
 
+Duel keeps three separate conversations: one for each author and one for the
+joint reviewer. Their conversation identifiers are persisted for subsequent
+rounds and task resumes. Staffing is still resolved for each call; changing a
+seat's provider family starts a new conversation for that seat only. Existing
+tasks without saved conversations start retaining them on their next calls.
+Each call still receives the current prompt, request,
+round and document references. Earlier source research and decisions can be
+reused while valid; new or changed sources and unresolved doubts warrant another
+look. The current instructions take precedence over earlier conversation turns.
+Authors read the current documents and shared report; the reviewer rereads both
+current deliveries and grades their achieved quality. Earlier scores establish
+no floor, and revisions or compliance with past suggestions earn no automatic
+increase.
+
 The reviewer assesses five generic quality dimensions supplied by the selected
 prompt set and calculates their equally weighted arithmetic mean for each candidate.
 The shared report contains every dimension score, its justification, and both sums

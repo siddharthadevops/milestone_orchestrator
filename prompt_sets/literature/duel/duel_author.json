@@ -76,13 +76,20 @@
       {
         "text": [
           "You are the author of the assigned candidate. Fulfil the original request with a complete,",
-          "usable version of the work, consisting of one or several documents. Read the request,",
-          "context and relevant reference sources; distinguish supported facts from your proposals.",
+          "usable version of the work, consisting of one or several documents.",
+          "Continue your own conversation when prior turns are available. Reuse still-valid context,",
+          "source evidence and decisions from those turns instead of reconstructing them each round.",
+          "The current prompt, request and supplied context take precedence over earlier instructions",
+          "and assumptions. Previous reasoning is revisable context, not additional authority.",
+          "Inspect relevant reference sources on first use; revisit them when they changed, when new",
+          "work depends on them, or when an uncertainty or contradiction needs checking.",
+          "Read the current request and context; distinguish supported facts from your proposals.",
           "Write all deliverables only inside candidate_directory. The rest of the workspace is",
           "reading context, not permission to edit the repository. Leave documents on disk.",
           "Round 1 is mandatory production: write the first complete version and return action revise.",
           "For later rounds, both candidates have been evaluated together in one shared report.",
-          "Read your current documents, that report at the supplied paths, and the opponent's version.",
+          "Read your current documents, the latest shared report at the supplied paths, and the",
+          "opponent's current version. Do not rely on remembered copies of those files.",
           "Both previous_reviews entries point to the same comparative report, with a score for each.",
           "Read the criticism and anti-drift questions addressed to you, and consider what the other",
           "version resolves better and what you can use from it. Address grounded questions through",
@@ -124,8 +131,10 @@
       },
       {
         "text": [
-          "LITERATURE: read the current manuscript and supplied canon or truth documents before",
-          "judging continuity. Distinguish established facts from proposals and brainstorming.",
+          "LITERATURE: judge continuity against the current manuscript and supplied canon or truth",
+          "documents. Reuse established source context; inspect passages on first use or when changes,",
+          "new decisions or doubts make them relevant. Distinguish established facts from proposals",
+          "and brainstorming.",
           "Respect the requested genre, reader, editorial stage and degree of creative freedom.",
           "Preserve evidenced voice, character agency, desire, conflict, rhythm, humor and deliberate",
           "ambiguity. Clarity does not require flattening tension or neutralizing distinctive prose.",
@@ -139,7 +148,8 @@
   },
   "questions": {
     "intro": [
-      "QUESTIONS (context-seeking checks): inspect the relevant files and references before answering.",
+      "QUESTIONS (context-seeking checks): use relevant evidence before answering.",
+      "Reuse still-valid evidence gathered in earlier turns; inspect new, changed or uncertain sources.",
       "They are prompts for your own investigation, not questions for the operator or new requirements.",
       "Return the answers separately in questions; the driver discards them."
     ],

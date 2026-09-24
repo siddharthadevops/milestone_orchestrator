@@ -6614,9 +6614,27 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                 'original request with a complete,',
                                                                 'usable version of the work, '
                                                                 'consisting of one or several '
-                                                                'documents. Read the request,',
-                                                                'context and relevant reference '
-                                                                'sources; distinguish supported '
+                                                                'documents.',
+                                                                'Continue your own conversation '
+                                                                'when prior turns are available. '
+                                                                'Reuse still-valid context,',
+                                                                'source evidence and decisions '
+                                                                'from those turns instead of '
+                                                                'reconstructing them each round.',
+                                                                'The current prompt, request and '
+                                                                'supplied context take precedence '
+                                                                'over earlier instructions',
+                                                                'and assumptions. Previous '
+                                                                'reasoning is revisable context, '
+                                                                'not additional authority.',
+                                                                'Inspect relevant reference '
+                                                                'sources on first use; revisit '
+                                                                'them when they changed, when new',
+                                                                'work depends on them, or when an '
+                                                                'uncertainty or contradiction '
+                                                                'needs checking.',
+                                                                'Read the current request and '
+                                                                'context; distinguish supported '
                                                                 'facts from your proposals.',
                                                                 'Write all deliverables only '
                                                                 'inside candidate_directory. The '
@@ -6630,9 +6648,12 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                 'For later rounds, both candidates '
                                                                 'have been evaluated together in '
                                                                 'one shared report.',
-                                                                'Read your current documents, that '
-                                                                'report at the supplied paths, and '
-                                                                "the opponent's version.",
+                                                                'Read your current documents, the '
+                                                                'latest shared report at the '
+                                                                'supplied paths, and the',
+                                                                "opponent's current version. Do "
+                                                                'not rely on remembered copies of '
+                                                                'those files.',
                                                                 'Both previous_reviews entries '
                                                                 'point to the same comparative '
                                                                 'report, with a score for each.',
@@ -6715,9 +6736,11 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                                      'their shared '
                                                                                      'report '
                                                                                      'path.'}]}]},
-                           'questions': {'intro': ['QUESTIONS (context-seeking checks): inspect '
-                                                   'the relevant files and references before '
-                                                   'answering.',
+                           'questions': {'intro': ['QUESTIONS (context-seeking checks): use '
+                                                   'relevant evidence before answering.',
+                                                   'Reuse still-valid evidence gathered in earlier '
+                                                   'turns; inspect new, changed or uncertain '
+                                                   'sources.',
                                                    'They are prompts for your own investigation, '
                                                    'not questions for the operator or new '
                                                    'requirements.',
@@ -6883,10 +6906,28 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                       {'text': ['You are an independent reviewer '
                                                                 'evaluating both candidates a and '
                                                                 'b in one review call.',
-                                                                'Read the actual documents listed '
-                                                                'for each candidate, the original '
-                                                                'request, admitted',
-                                                                'context and relevant references. '
+                                                                'Continue your own conversation '
+                                                                'when prior turns are available. '
+                                                                'Reuse still-valid context,',
+                                                                'source evidence and decisions '
+                                                                'from those turns instead of '
+                                                                'reconstructing them each round.',
+                                                                'The current prompt, request and '
+                                                                'supplied context take precedence '
+                                                                'over earlier instructions',
+                                                                'and assumptions. Previous '
+                                                                'reasoning is revisable context, '
+                                                                'not additional authority.',
+                                                                'Inspect relevant reference '
+                                                                'sources on first use; revisit '
+                                                                'them when they changed, when new',
+                                                                'work depends on them, or when an '
+                                                                'uncertainty or contradiction '
+                                                                'needs checking.',
+                                                                'Read the current request and '
+                                                                'context. Reread the actual '
+                                                                'current documents listed for',
+                                                                'both candidates on every review. '
                                                                 'Paths in artifacts are relative '
                                                                 "to that candidate's",
                                                                 'directory. Evaluate the current '
@@ -6895,6 +6936,21 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                 'This is a read-only review. Do '
                                                                 'not edit candidate documents, '
                                                                 'references or the repository.',
+                                                                'Prior reviews help track '
+                                                                'decisions and resolved issues; '
+                                                                'they do not establish a score '
+                                                                'floor',
+                                                                'or target trajectory. Judge the '
+                                                                'quality achieved in the current '
+                                                                'documents against the',
+                                                                'current criteria, without '
+                                                                'automatically rewarding '
+                                                                'revisions, effort or compliance '
+                                                                'with',
+                                                                'your earlier suggestions. Scores '
+                                                                'may rise, fall or remain '
+                                                                'unchanged as the evidence '
+                                                                'warrants.',
                                                                 'Return one shared comparative '
                                                                 'report as Markdown in the JSON '
                                                                 'reply; the driver saves',
@@ -7165,9 +7221,11 @@ DEFAULT_PROMPT_SET.update({'duel/duel_author.json': {'kind': 'duel_author',
                                                                 'readiness field or condition for '
                                                                 'ending the duel.'],
                                                        'variables': []}]},
-                           'questions': {'intro': ['QUESTIONS (context-seeking checks): inspect '
-                                                   'the relevant files and references before '
-                                                   'answering.',
+                           'questions': {'intro': ['QUESTIONS (context-seeking checks): use '
+                                                   'relevant evidence before answering.',
+                                                   'Reuse still-valid evidence gathered in earlier '
+                                                   'turns; inspect new, changed or uncertain '
+                                                   'sources.',
                                                    'They are prompts for your own investigation, '
                                                    'not questions for the operator or new '
                                                    'requirements.',
