@@ -143,8 +143,9 @@ class PlanReconciliationTests(unittest.TestCase):
             source=source,
         )
 
-    def _accepted_session_driver(self):
-        accepted_plan = [_slice(value) for value in (1, 3, 4)]
+    def _accepted_session_driver(self, accepted_plan=None):
+        if accepted_plan is None:
+            accepted_plan = [_slice(value) for value in (1, 3, 4)]
         accepted = self._accept(accepted_plan)
         config = driver.load_config(None)
         driver.merge_config(config, {
@@ -185,6 +186,15 @@ class PlanReconciliationTests(unittest.TestCase):
             if st.unit_key(candidate) == "slice_impl-02"
         )
         return subject, unit, accepted
+
+    def _later_documentation_round(self):
+        with open(
+            os.path.join(self.workspace, self.path), "a", encoding="utf-8"
+        ) as handle:
+            handle.write("\n## Agreed design\nThe later round clarifies the design.\n")
+        self._git("add", self.path)
+        self._git("commit", "-q", "-m", "later documentation round")
+        return self._git("rev-parse", "HEAD")
 
     def test_range_ignores_projection_as_before_authority(self):
         accepted = self._accept([_slice(value) for value in (1, 3, 4)])
@@ -466,7 +476,12 @@ class PlanReconciliationTests(unittest.TestCase):
             ))
 
     def test_rethink_session_freezes_even_when_b_deletes_its_owner(self):
-        subject, unit, accepted = self._accepted_session_driver()
+        subject, unit, plan_revision = self._accepted_session_driver()
+        accepted = self._later_documentation_round()
+        self.assertEqual(
+            subject.state["milestone"][canonical_plan.ANCHOR_KEY]["revision"],
+            plan_revision,
+        )
         unit["implementation_attempt_snapshot"] = {"tree": "stale"}
         unit["brainstorming_wait"] = {
             "session_id": "rethink-session",
@@ -504,6 +519,10 @@ class PlanReconciliationTests(unittest.TestCase):
             action, _note = subject.step()
 
         self.assertEqual(action.type, driver.A_RECONCILIATION)
+        self.assertEqual(
+            subject.state["milestone"][canonical_plan.ANCHOR_KEY]["revision"],
+            accepted,
+        )
         frozen = next(
             candidate for candidate in subject.state["units"]
             if st.unit_key(candidate) == "slice_impl-02"
@@ -540,8 +559,151 @@ class PlanReconciliationTests(unittest.TestCase):
         self.assertEqual(sealed["session_id"], "rethink-session")
         self.assertNotIn("target_path", sealed)
 
+    def test_multiround_rethink_adopts_final_commit_and_continues_fixing(self):
+        accepted_plan = copy.deepcopy(self.old_plan)
+        accepted_plan[1]["intent"] = "Deliver the agreed persistence design."
+        subject, unit, plan_revision = self._accepted_session_driver(
+            accepted_plan
+        )
+        accepted = self._later_documentation_round()
+        self.assertNotEqual(plan_revision, self.source_base)
+        self.assertNotEqual(accepted, plan_revision)
+        self.assertEqual(
+            canonical_plan.canonical_block_bytes(
+                gitops.show_file(self.workspace, plan_revision, self.path)
+            ),
+            canonical_plan.canonical_block_bytes(
+                gitops.show_file(self.workspace, accepted, self.path)
+            ),
+        )
+        unit["status"] = st.U_FIXING
+        unit["fix_queue"] = [{
+            "id": "claude-C1",
+            "severity": "P1",
+            "summary": "Apply the agreed persistence design.",
+            "contests": None,
+        }]
+        unit["fix_source"] = {
+            "type": "round", "origin_type": "round", "family": "claude",
+            "source_round_id": "review-1", "return_to": st.U_ROUNDS,
+        }
+        unit["fix_loop_rounds"] = 2
+        unit["brainstorming_wait"] = {
+            "session_id": "multiround-session",
+            "signal": {
+                "status": "need_rethink",
+                "problem": "The persistence design contradicts the finding.",
+            },
+            "origin": {
+                "unit": st.unit_key(unit), "kind": "fix_findings",
+                "family": "codex",
+                "plan_source": {
+                    "executor": "brainstorming", "job": "rethink",
+                    "unit": st.unit_key(unit),
+                    "session_id": "multiround-session",
+                },
+            },
+        }
+        queued = copy.deepcopy(unit)
+        st.save(subject.state_path, subject.state)
+        handoff = {
+            "session_id": "multiround-session",
+            "result": {"outcome": "success", "rounds_used": 5},
+            "source_base_revision": self.source_base,
+            "accepted_revision": accepted,
+        }
+
+        with mock.patch.object(
+            brainstorming_milestone, "terminal_handoff", return_value=handoff
+        ):
+            action, _note = subject.step()
+
+        self.assertEqual(action.type, driver.A_BRAINSTORM_WAIT)
+        continued = next(
+            candidate for candidate in subject.state["units"]
+            if st.unit_key(candidate) == st.unit_key(unit)
+        )
+        self.assertNotIn("brainstorming_wait", continued)
+        for key in ("status", "fix_queue", "fix_source", "fix_loop_rounds"):
+            self.assertEqual(continued[key], queued[key])
+        self.assertIsNone(subject.state["failure"])
+        self.assertEqual(driver.decide(subject.state).type, driver.A_FIX)
+        self.assertNotIn(
+            canonical_plan.RECONCILIATION_KEY, subject.state["milestone"]
+        )
+        self.assertEqual(
+            subject.state["milestone"][canonical_plan.ANCHOR_KEY],
+            {"path": self.path, "revision": accepted},
+        )
+        self.assertEqual(self._git("rev-parse", "HEAD"), accepted)
+        sealed = [
+            event for event in subject.state["events"]
+            if event.get("type") == "brainstorming_rethink_sealed"
+        ]
+        self.assertEqual(len(sealed), 1)
+        self.assertEqual(sealed[0]["accepted_revision"], accepted)
+        persisted = st.load(subject.state_path)
+        self.assertEqual(driver.decide(persisted).type, driver.A_FIX)
+        self.assertEqual(
+            persisted["milestone"][canonical_plan.ANCHOR_KEY]["revision"],
+            accepted,
+        )
+
+    def test_failed_rethink_keeps_prior_anchor_and_does_not_continue(self):
+        accepted_plan = copy.deepcopy(self.old_plan)
+        accepted_plan[1]["intent"] = "Deliver the proposed persistence design."
+        subject, unit, plan_revision = self._accepted_session_driver(
+            accepted_plan
+        )
+        accepted = self._later_documentation_round()
+        unit["status"] = st.U_FIXING
+        unit["fix_queue"] = [{"id": "claude-C1", "summary": "Still pending"}]
+        queued = copy.deepcopy(unit["fix_queue"])
+        unit["brainstorming_wait"] = {
+            "session_id": "failed-session",
+            "signal": {"status": "need_rethink", "problem": "Resolve design."},
+            "origin": {
+                "unit": st.unit_key(unit), "kind": "fix_findings",
+                "family": "codex",
+            },
+        }
+        st.save(subject.state_path, subject.state)
+        handoff = {
+            "session_id": "failed-session", "result": {"outcome": "failure"},
+            "source_base_revision": self.source_base,
+            "accepted_revision": accepted,
+        }
+
+        with mock.patch.object(
+            brainstorming_milestone, "terminal_handoff", return_value=handoff
+        ):
+            subject.step()
+
+        self.assertEqual(driver.decide(subject.state).type, driver.A_FAILED)
+        self.assertEqual(
+            subject.state["failure"]["type"], "brainstorming_no_agreement"
+        )
+        self.assertEqual(
+            subject.state["milestone"][canonical_plan.ANCHOR_KEY]["revision"],
+            plan_revision,
+        )
+        failed = next(
+            candidate for candidate in subject.state["units"]
+            if st.unit_key(candidate) == st.unit_key(unit)
+        )
+        self.assertEqual(failed["fix_queue"], queued)
+        self.assertFalse(any(
+            event.get("type") == "brainstorming_rethink_sealed"
+            for event in subject.state["events"]
+        ))
+
     def test_producer_session_freezes_before_recording_draft_or_wip(self):
-        subject, unit, accepted = self._accepted_session_driver()
+        subject, unit, plan_revision = self._accepted_session_driver()
+        accepted = self._later_documentation_round()
+        self.assertEqual(
+            subject.state["milestone"][canonical_plan.ANCHOR_KEY]["revision"],
+            plan_revision,
+        )
         source = {
             "executor": "brainstorming",
             "job": "implement@slice_impl",
@@ -604,6 +766,10 @@ class PlanReconciliationTests(unittest.TestCase):
         self.assertIn("brainstorming_wait", unit)
         self.assertIn("active_task", unit)
         self.assertNotIn("pending_wip", unit)
+        self.assertEqual(
+            subject.state["milestone"][canonical_plan.ANCHOR_KEY]["revision"],
+            accepted,
+        )
 
 
 if __name__ == "__main__":

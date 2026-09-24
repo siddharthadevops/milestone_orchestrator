@@ -6431,6 +6431,26 @@ class Driver(object):
         )
         return output, result, raw_path
 
+    def _observe_brainstorming_plan_range(
+        self, source_base_revision, accepted_revision, source
+    ):
+        """Consume the successful session's accepted repository revision.
+
+        Brainstorming already accepted the plan and its projection. Later
+        documentation-only turns can advance its final commit without moving
+        the plan anchor; adopt that commit before applying scheduling changes.
+        """
+        anchor = self.state["milestone"][canonical_plan.ANCHOR_KEY]
+        gitops.pin_canonical_plan_commit(
+            self.workspace, anchor["path"], accepted_revision
+        )
+        self.state["milestone"][canonical_plan.ANCHOR_KEY] = {
+            "path": anchor["path"], "revision": accepted_revision,
+        }
+        return self._observe_accepted_plan_range(
+            source_base_revision, accepted_revision, source
+        )
+
     def _observe_accepted_plan_range(
         self, source_base_revision, accepted_revision, source
     ):
@@ -8923,7 +8943,7 @@ class Driver(object):
             "source_base_revision" in native
             and "accepted_revision" in native
             and not self.state.get("reviewed_task")
-            and self._observe_accepted_plan_range(
+            and self._observe_brainstorming_plan_range(
                 native["source_base_revision"],
                 native["accepted_revision"],
                 copy.deepcopy(origin.get("plan_source") or {}),
@@ -9218,7 +9238,7 @@ class Driver(object):
             and "accepted_revision" in handoff
         ):
             if not self.state.get("reviewed_task"):
-                if self._observe_accepted_plan_range(
+                if self._observe_brainstorming_plan_range(
                     handoff["source_base_revision"],
                     handoff["accepted_revision"],
                     copy.deepcopy(origin.get("plan_source") or {}),
