@@ -174,7 +174,7 @@ class DuelPromptsTest(unittest.TestCase):
                 self.assertIn("no prescribed bands, intermediate anchors or target distribution", rendered)
                 self.assertNotRegex(rendered, r"\b0\.[0-9]+\b")
                 self.assertNotIn("0: unusable", rendered)
-                self.assertIn("Keep scoring independent of the criticism and anti-drift questions", rendered)
+                self.assertIn("Keep dimension scoring independent of the criticism and anti-drift questions", rendered)
                 bound = prompt_contracts.bind(reviewer)
                 reply = {
                     "scores": {"a": 0.8, "b": 0.8},

@@ -52,7 +52,9 @@ La única definición cualitativa de la escala es la literal del autor:
 
 > 1 es obra maestra. te borrarías antes que tocar un byte de ese trabajo entregado.
 
-El evaluador elige libremente las demás notas dentro del formato numérico 0–1. No se prescriben bandas, etiquetas para notas inferiores, distribuciones ni descuentos por defectos. No encontrar una mejora no demuestra que no exista una estructura o ejecución mejor.
+El evaluador puntúa cinco dimensiones genéricas definidas en el prompt set y calcula la media aritmética de sus cinco notas, con el mismo peso para todas. El informe común muestra cada nota, su justificación y la suma dividida entre cinco para cada candidato. `scores.a` y `scores.b` contienen esas medias; no hay ajuste global posterior ni cálculo añadido al driver. El evaluador elige libremente las notas dimensionales dentro del formato numérico 0–1, sin bandas, etiquetas para notas inferiores, distribuciones ni descuentos por defectos. No encontrar una mejora no demuestra que no exista una estructura o ejecución mejor.
+
+`default` valora arquitectura y organización; corrección y solidez; claridad y limpieza; modularidad y reutilización; mantenibilidad y evolución. `literature` valora estructura y ritmo; coherencia y credibilidad; voz y prosa; originalidad y riqueza de ideas; personajes, relaciones y efecto lector. Las dimensiones se interpretan según el alcance y la etapa del encargo, sin exigir trabajo ajeno a él. Este desglose va en el informe conservado, no en las respuestas de contexto que descarta el driver.
 
 La puntuación de cada trabajo es un juicio sobre la calidad del resultado frente al encargo. Se justifica por separado de las críticas y de las preguntas de Dante. La comparación permite reconocer soluciones mejores, pero no obliga a que las notas sean distintas ni convierte a la mejor de las dos versiones en una obra maestra.
 

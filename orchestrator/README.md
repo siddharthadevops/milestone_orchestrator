@@ -542,8 +542,12 @@ other. Both authors receive the same report and the locations of both versions
 in the next round. Reuse is encouraged; neither copying nor diversity is required.
 The reviewer's own context-search answers are discarded separately.
 
-Each score is an overall quality judgment independent of the criticisms and
-questions, not a count of findings or a relative ranking of the two versions.
+The reviewer assesses five generic quality dimensions supplied by the selected
+prompt set and calculates their equally weighted arithmetic mean for each candidate.
+The shared report contains every dimension score, its justification, and both sums
+and means; the returned scores are those means without a later overall adjustment.
+The driver stores them without calculating them. Dimension judgments are independent
+of the criticisms and questions, not a count of findings or a relative ranking.
 The only qualitative anchor is the literal maximum: "1 es obra maestra.
 te borrarías antes que tocar un byte de ese trabajo entregado." The reviewer
 chooses all lower scores without prescribed bands or score distributions.
