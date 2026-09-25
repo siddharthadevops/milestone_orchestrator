@@ -5786,11 +5786,6 @@ function creativityProgress(view, configuration, open, sparse = false) {
     html += `<div class="story-note">Search result prepared; awaiting task completion.</div>`;
   html += creativitySearchMaterial(view.search_material, sparse);
   html += creativityCandidateEvaluations(view.candidate_evaluations, sparse);
-  if (open) html += `<h4>${sparse ? "Best candidates from all accepted evaluations"
-    : "Best candidates from the last completed comparison"}</h4>` +
-    (view.best_candidates.length ? creativityProposals(view.best_candidates, view.search_material, sparse)
-      : `<div class="story-note">${sparse ? "No valid proposals available yet."
-        : "No candidates available from a completed comparison."}</div>`);
   return html + `</div>`;
 }
 function creativityResult(native, material = null, sparse = false) {

@@ -517,7 +517,16 @@ assert(render(pages.paused).includes('>Resume</button>'));
 assert(render(pages.prepared).includes('awaiting task completion'));
 assert(!render(pages.prepared).includes('<h3>Result</h3>'));
 assert(render(pages.prepared).includes('>Pause</button>'));
+for (const data of Object.values(pages)) {
+  if (data.task.result) continue;
+  const progressHTML = render(data);
+  assert(!progressHTML.includes('Best candidates from'));
+  assert(!progressHTML.includes('<h4>Proposal 1'));
+  assert(!progressHTML.includes('No candidates available from a completed comparison.'));
+  if (data.creativity) assert(progressHTML.includes('Evaluated candidates ('));
+}
 let html = render(pages.terminal);
+assert(html.includes('<h4>Proposal 1'));
 const repeated = pages.terminal.creativity.candidate_evaluations.find(
   (item, index, items) => items.slice(0, index).some(previous =>
     previous.candidate_id === item.candidate_id &&
@@ -640,17 +649,15 @@ function render(data) {
 }
 assert(render(pages.no_progress).includes('No saved progress available'));
 assert(render(pages.genes).includes('The generator has not returned search material yet'));
-assert(render(pages.batch).includes('Best candidates from all accepted evaluations'));
 const batchHTML = render(pages.batch);
+assert(batchHTML.includes('Evaluated candidates (1)'));
+assert(!batchHTML.includes('Best candidates from'));
+assert(!batchHTML.includes('<h4>Proposal 1'));
 if (allInvalid) {
   assert.equal(pages.batch.creativity.best_candidates.length, 0);
-  assert(batchHTML.includes('No valid proposals available yet.'));
-  assert(!batchHTML.includes('Proposal 1'));
-  assert(batchHTML.includes('Evaluated candidates (1)'));
   assert(batchHTML.includes('A useful proposal.')); // Invalid work remains inspectable evidence.
 } else {
   assert.equal(pages.batch.creativity.best_candidates.length, 1);
-  assert(batchHTML.includes('Proposal 1'));
 }
 assert(render(pages.paused).includes('>Resume</button>'));
 assert(render(pages.prepared).includes('awaiting task completion'));
@@ -671,6 +678,11 @@ assert(!materialHTML.includes('<Action') && !materialHTML.includes('<Focus'));
 for (const data of Object.values(pages)) {
   const html = render(data), view = data.creativity;
   assert(!html.includes('<img'));
+  assert(!html.includes('Best candidates from'));
+  if (!data.task.result) {
+    assert(!html.includes('<h4>Proposal 1'));
+    assert(!html.includes('No valid proposals available yet.'));
+  }
   for (const retired of ['reference:', 'patience window', 'Expansion interventions',
       'expansion interventions:', 'Reassessing candidates', 'Historical evaluator regime'])
     assert(!html.includes(retired), retired);
@@ -695,7 +707,8 @@ for (const data of Object.values(pages)) {
       previous = position;
     }
   }
-  const proposals = data.task.result ? data.task.result.native_result.proposals : view.best_candidates;
+  if (!data.task.result) continue;
+  const proposals = data.task.result.native_result.proposals;
   const ranked = creativityProposals(proposals, view.search_material, true);
   assert(html.includes(ranked));
   let previous = -1;
@@ -736,7 +749,7 @@ let taskPagePaintSeq = 0, pendingLanding = null;
 const lastTaskRows = [];
 selectedTask = pages.terminal.task.id;
 (async () => {
-  for (const text of [allInvalid ? 'No valid proposals available yet.' : 'Proposal 1',
+  for (const text of ['Evaluated candidates (1)',
       '>Resume</button>', 'awaiting task completion', '<h3>Result</h3>']) {
     await refreshTaskPage();
     assert(detail.innerHTML.includes(text), text);
