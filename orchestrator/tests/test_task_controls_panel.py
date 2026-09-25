@@ -665,7 +665,7 @@ assert(!render(pages.prepared).includes('<h3>Result</h3>'));
 assert(render(pages.terminal).includes('<h3>Result</h3>'));
 const material = pages.terminal.creativity.search_material;
 const materialHTML = creativitySearchMaterial(material, true);
-for (const value of [material.objective, material.context_summary, material.composition_guidance,
+for (const value of [material.context_summary, material.composition_guidance,
     material.order_semantics, ...material.facts, ...material.assumptions, ...material.unknowns,
     ...material.constraints.flatMap(item => [item.id, item.text]),
     ...material.criteria.flatMap(item => [item.id, item.text]),

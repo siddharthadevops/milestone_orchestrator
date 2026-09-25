@@ -5700,7 +5700,6 @@ function creativitySearchMaterial(material, sparse = false) {
   const dimensions = material.dimensions || [];
   return `<details class="card" data-task-detail-key="creativity-search" open>` +
     `<summary>Search genes (${dimensions.length})</summary>` +
-    `<div class="story-note"><b>Objective</b> · ${esc(material.objective)}</div>` +
     `<div class="story-note"><b>Order semantics</b> · ${esc(material.order_semantics)}</div>` +
     (sparse ? `<div class="story-note"><b>Context summary</b> · ${esc(material.context_summary)}</div>` +
       ["facts", "assumptions", "unknowns"].map(key => `<div class="story-note">` +
