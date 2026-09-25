@@ -1021,7 +1021,8 @@ def add_creativity_roles(document):
     This is a pure, one-off cutover helper, not a load-time migration. The
     former plan/brainstorm/review tuning becomes Creativity medium/high from
     its low/medium rows respectively. New low uses the weakest model with
-    medium effort (or the second effort rung for a differently named ladder).
+    medium effort (or the second effort rung for a differently named ladder),
+    except evaluation, which requires xhigh at every rigor.
     Existing roles, overrides, rules and ladders are not changed. A document
     already carrying any Creativity role is refused rather than retuned.
     """
@@ -1071,6 +1072,13 @@ def add_creativity_roles(document):
             for target, source in (("medium", "low"), ("high", "medium")):
                 added["tuning"][target][slot][role] = copy.deepcopy(
                     document["tuning"][source][slot][source_role])
+            if role == "creativity_evaluate_candidates":
+                if "xhigh" not in efforts:
+                    raise StaffingError(
+                        "%s: family slot %s needs xhigh effort for Creativity evaluation"
+                        % (ctx, slot))
+                for rigor in RIGORS:
+                    added["tuning"][rigor][slot][role][1] = efforts.index("xhigh") + 1
     return validate_document(added, ctx)
 
 

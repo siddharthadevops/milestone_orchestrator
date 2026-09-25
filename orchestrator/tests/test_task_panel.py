@@ -675,6 +675,7 @@ async function postJSON(path, payload) {
         for key in (
             "task-control-history", "creativity-search",
             "creativity-evaluations", "creativity-candidate:",
+            "creativity-evaluations-more",
             "physical-calls", "native-result",
         ):
             self.assertIn(f'data-task-detail-key="{key}', self.panel)

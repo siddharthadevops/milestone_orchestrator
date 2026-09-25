@@ -746,15 +746,77 @@ selectedTask = pages.terminal.task.id;
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """, ("refreshTaskPage", "paintTaskPage"))
 
+    def test_creativity_evaluations_show_best_ten_and_keep_all_remaining_evidence(self):
+        self.javascript(r"""
+const entries = [
+  ['invalid-high', 1, false], ['low', .1, true], ['tie-first', .8, true],
+  ['best', .99, true], ['mid<script>', .4, true], ['nine', .9, true],
+  ['tie-second', .8, true], ['seven', .7, true], ['six', .6, true],
+  ['five', .5, true], ['three', .3, true], ['two', .2, true],
+  ['zero', 0, true], ['invalid-low', 0, false], ['invalid-tie', 0, false],
+];
+const items = entries.map(([candidate_id, score, constraint_valid]) => ({
+  candidate_id, score, constraint_valid, regime_revision: 1, generation: 2,
+  constraint_violations: constraint_valid ? [] : ['<constraint>'],
+  current_regime: false, active_count: 2, omitted_count: 8,
+  regime: {material: 'literature', agent: 'codex', model: '<model>', effort: 'high'},
+  call_id: '<call>', prompt_path: '/tmp/<prompt>',
+  components: [{dimension: '<dimension>', variant: '<variant>&'}],
+  proposal: '<script>proposal</script>', reason: '<img src=x>',
+  assumptions: ['<assumption>'],
+}));
+const before = JSON.stringify(items);
+items.forEach(Object.freeze);
+Object.freeze(items);
+const candidateKeys = html => [...html.matchAll(
+  /data-task-detail-key="creativity-candidate:1:([^"]+)"/g,
+)].map(match => match[1]);
+const visible = ['best', 'nine', 'tie-first', 'tie-second', 'seven',
+  'six', 'five', 'mid<script>', 'three', 'two'].map(esc);
+const remaining = ['low', 'zero', 'invalid-high', 'invalid-low', 'invalid-tie'];
+for (const sparse of [false, true]) {
+  const html = creativityCandidateEvaluations(items, sparse);
+  const more = html.match(/<details\b[^>]*data-task-detail-key="creativity-evaluations-more"[^>]*>/);
+  assert(more, 'remaining candidates need a native More disclosure');
+  assert(!/\bopen(?:\s|=|>)/.test(more[0]), 'More must start collapsed');
+  assert.equal(html.split('data-task-detail-key="creativity-evaluations-more"').length - 1, 1);
+  assert(html.includes('<summary>More (5 remaining)</summary>'));
+  assert(html.includes('Evaluated candidates (15)'));
+  assert.deepEqual(candidateKeys(html.slice(0, more.index)), visible);
+  assert.deepEqual(candidateKeys(html.slice(more.index)), remaining);
+  assert.deepEqual(candidateKeys(html), [...visible, ...remaining]);
+  assert.equal(new Set(candidateKeys(html)).size, items.length);
+  for (const text of ['<script>proposal</script>', '<img src=x>', '<constraint>',
+      '<dimension>', '<variant>&', '<assumption>']) {
+    assert(html.includes(esc(text)), text);
+    assert(!html.includes(text), text + ' must be escaped');
+  }
+  if (sparse) for (const text of ['<model>', '<call>', '/tmp/<prompt>'])
+    assert(html.includes(esc(text)), text);
+  assert.equal(JSON.stringify(items), before, 'rendering must not reorder or mutate evidence');
+  for (const count of [0, 1, 9, 10]) {
+    const small = creativityCandidateEvaluations(items.slice(0, count), sparse);
+    assert(!small.includes('creativity-evaluations-more'));
+    assert(!small.includes('More ('));
+    assert.equal(candidateKeys(small).length, count);
+    assert(small.includes(`Evaluated candidates (${count})`));
+    if (!count) assert(small.includes('No candidate evaluations have completed yet.'));
+  }
+  assert(!creativityCandidateEvaluations(null, sparse).includes('creativity-evaluations-more'));
+}
+""")
+
     def test_task_repaint_preserves_reading_position_and_keyed_details(self):
         self.javascript(r"""
 const detailNode = (key, open) => ({
   dataset: {taskDetailKey: key}, open,
 });
+let moreMarkupOpen = false;
 const detail = {
   scrollTop: 640,
   nodes: [
     detailNode('creativity-search', false),
+    detailNode('creativity-evaluations-more', true),
     detailNode('creativity-candidate:1:survivor', true),
     detailNode('creativity-candidate:2:survivor', false),
     detailNode('physical-calls', true),
@@ -767,6 +829,7 @@ const detail = {
     this.html = value;
     this.nodes = [
       detailNode('creativity-search', true),
+      detailNode('creativity-evaluations-more', moreMarkupOpen),
       detailNode('creativity-candidate:1:survivor', false),
       detailNode('creativity-candidate:2:survivor', true),
       // Newly arrived content keeps its markup default.
@@ -794,6 +857,7 @@ paintTaskPage();
 assert.equal(detail.scrollTop, 640);
 assert.deepEqual(detail.nodes.map(node => [node.dataset.taskDetailKey, node.open]), [
   ['creativity-search', false],
+  ['creativity-evaluations-more', true],
   ['creativity-candidate:1:survivor', true],
   ['creativity-candidate:2:survivor', false],
   ['creativity-candidate:2:new', false],
@@ -819,7 +883,11 @@ assert.equal(detail.scrollTop, 0);
 // after the operator has navigated elsewhere.
 pendingLanding = null;
 detail.scrollTop = 300;
+detail.nodes.find(node => node.dataset.taskDetailKey === 'creativity-evaluations-more').open = false;
+moreMarkupOpen = true;
 paintTaskPage();
+assert.equal(detail.nodes.find(node =>
+  node.dataset.taskDetailKey === 'creativity-evaluations-more').open, false);
 assert.equal(frames.length, 1);
 selectedTask = 'another-task';
 detail.scrollTop = 27;

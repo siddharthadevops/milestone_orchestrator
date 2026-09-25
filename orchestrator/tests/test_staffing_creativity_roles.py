@@ -51,11 +51,15 @@ class CreativityRolesTest(unittest.TestCase):
         for role, source in zip(staffing.CREATIVITY_ROLES,
                                 ("plan", "brainstorm", "review")):
             for slot in original["families"]:
-                self.assertEqual(result["tuning"]["low"][slot][role], [1, 2])
-                self.assertEqual(result["tuning"]["medium"][slot][role],
-                                 original["tuning"]["low"][slot][source])
-                self.assertEqual(result["tuning"]["high"][slot][role],
-                                 original["tuning"]["medium"][slot][source])
+                evaluator = role == "creativity_evaluate_candidates"
+                self.assertEqual(result["tuning"]["low"][slot][role],
+                                 [1, 4 if evaluator else 2])
+                for target, prior in (("medium", "low"), ("high", "medium")):
+                    expected = list(original["tuning"][prior][slot][source])
+                    if evaluator:
+                        expected[1] = 4  # xhigh; the source model is unchanged.
+                    self.assertEqual(result["tuning"][target][slot][role],
+                                     expected)
         self.assertEqual(result["assignment"][staffing.CREATIVITY_ROLES[0]],
                          {"1": 2})
         self.assertEqual(result["assignment"][staffing.CREATIVITY_ROLES[1]],
@@ -73,16 +77,34 @@ class CreativityRolesTest(unittest.TestCase):
         result["tuning"]["low"]["1"]["plan"][0] = 99
         self.assertEqual(original, before)
 
-    def test_low_uses_operator_first_model_and_named_medium_effort(self):
+    def test_low_uses_first_model_and_named_efforts_without_changing_ladders(self):
         document = old_document()
         document["families"]["1"]["models"].reverse()
-        document["families"]["1"]["efforts"] = ["minimal", "low", "medium"]
-        document["families"]["2"]["efforts"] = ["quick", "balanced", "deep"]
+        document["families"]["1"]["efforts"] = [
+            "minimal", "low", "medium", "high", "xhigh"]
+        document["families"]["2"]["efforts"] = [
+            "quick", "balanced", "deep", "xhigh"]
         result = staffing.add_creativity_roles(document)
         for role in staffing.CREATIVITY_ROLES:
-            self.assertEqual(result["tuning"]["low"]["1"][role], [1, 3])
-            self.assertEqual(result["tuning"]["low"]["2"][role], [1, 2])
+            evaluator = role == "creativity_evaluate_candidates"
+            self.assertEqual(result["tuning"]["low"]["1"][role],
+                             [1, 5 if evaluator else 3])
+            self.assertEqual(result["tuning"]["low"]["2"][role],
+                             [1, 4 if evaluator else 2])
+        for rigor in staffing.RIGORS:
+            self.assertEqual(result["tuning"][rigor]["1"][
+                "creativity_evaluate_candidates"][1], 5)
+            self.assertEqual(result["tuning"][rigor]["2"][
+                "creativity_evaluate_candidates"][1], 4)
         self.assertEqual(result["families"], document["families"])
+
+    def test_cutover_refuses_a_family_without_xhigh_without_mutating_it(self):
+        document = old_document()
+        document["families"]["2"]["efforts"] = ["low", "medium", "high", "max"]
+        before = copy.deepcopy(document)
+        with self.assertRaisesRegex(staffing.StaffingError, "xhigh"):
+            staffing.add_creativity_roles(document)
+        self.assertEqual(document, before)
 
     def test_evaluator_without_codex_uses_review_first_assignment(self):
         document = old_document()
@@ -121,9 +143,11 @@ class CreativityRolesTest(unittest.TestCase):
                 model = ("gpt-6-sol" if name == "codex"
                          else "claude-opus-5-5")
                 for role in staffing.CREATIVITY_ROLES:
+                    expected_effort = ("xhigh" if role == "creativity_evaluate_candidates"
+                                       else "medium")
                     self.assertEqual(
                         staffing.base_staffing(document, "low", role),
-                        (name, first, "medium"))
+                        (name, first, expected_effort))
                 for rigor in ("medium", "high"):
                     with self.subTest(profile=profile["name"], family=name,
                                       rigor=rigor):
@@ -135,10 +159,15 @@ class CreativityRolesTest(unittest.TestCase):
                         self.assertEqual(staffing.base_staffing(
                             document, rigor, "creativity_compose_candidates"),
                             (name, model, "max" if rigor == "high" else "medium"))
-                        if name == "codex":
-                            self.assertEqual(staffing.base_staffing(
-                                document, rigor, "creativity_evaluate_candidates"),
-                                (name, model, "xhigh"))
+                        # The evaluator's existing model tier is preserved in
+                        # both family slots; only its effort is fixed to xhigh.
+                        source_rigor = "low" if rigor == "medium" else "medium"
+                        review_model_rank = document["tuning"][source_rigor][slot][
+                            "review"][0]
+                        review_model = family["models"][review_model_rank - 1]
+                        self.assertEqual(staffing.base_staffing(
+                            document, rigor, "creativity_evaluate_candidates"),
+                            (name, review_model, "xhigh"))
 
     def test_old_documents_are_not_automatically_rewritten_on_load_or_ensure(self):
         with tempfile.TemporaryDirectory(prefix="orch-creativity-roles-") as home:

@@ -5721,33 +5721,39 @@ function creativitySearchMaterial(material, sparse = false) {
         `${esc(variant.text)}</li>`).join("")}</ul></details>`).join("")) + `</details>`;
 }
 function creativityCandidateEvaluations(evaluations, sparse = false) {
-  const items = evaluations || [];
+  const items = [...(evaluations || [])].sort((left, right) =>
+    Number(right.constraint_valid) - Number(left.constraint_valid) || right.score - left.score);
+  const renderItem = item => {
+    const validity = item.constraint_valid ? "valid" : "constraint-invalid";
+    const violations = item.constraint_violations.length
+      ? item.constraint_violations.join(", ") : "None";
+    return `<details class="card" ` +
+      `data-task-detail-key="creativity-candidate:${esc(item.regime_revision)}:` +
+      `${esc(item.candidate_id)}">` +
+      `<summary>Generation ${esc(item.generation)}` +
+      ` · score ${esc(item.score)} · ${esc(validity)} · ${esc(item.candidate_id)}</summary>` +
+      (!item.current_regime ? `<div class="amend-hint">${sparse ? "Earlier" : "Historical"} evaluator regime ` +
+        `${esc(item.regime_revision)}${sparse ? " · assessment retained in ranking" : ""}</div>` : "") +
+      (sparse ? `<div class="story-note">${item.active_count} active · ${item.omitted_count} omitted</div>` +
+        `<div class="story-meta"><b>Evaluator</b> · ${esc([item.regime.material, item.regime.agent,
+          item.regime.model, item.regime.effort].join(" · "))}</div>` +
+        `<div class="story-meta"><b>Call</b> · ${esc(item.call_id)}</div>` +
+        `<div class="story-meta"><b>Prompt</b> · ${esc(item.prompt_path)}</div>` : "") +
+      `<ol>${item.components.map(component => `<li><b>${esc(component.dimension)}</b> · ` +
+        `${esc(component.variant)}</li>`).join("")}</ol>` +
+      `<div class="story-note"><b>Proposal</b> · ${esc(item.proposal)}</div>` +
+      `<div class="story-note"><b>Constraint violations</b> · ${esc(violations)}</div>` +
+      `<div class="story-note"><b>Reason</b> · ${esc(item.reason)}</div>` +
+      `<div class="story-note"><b>Assumptions</b> · ${esc(item.assumptions.length
+        ? item.assumptions.join("\n") : "None stated")}</div></details>`;
+  };
   return `<details class="card" data-task-detail-key="creativity-evaluations" open>` +
     `<summary>Evaluated candidates (${items.length})</summary>` +
-    (items.length ? items.map(item => {
-      const validity = item.constraint_valid ? "valid" : "constraint-invalid";
-      const violations = item.constraint_violations.length
-        ? item.constraint_violations.join(", ") : "None";
-      return `<details class="card" ` +
-        `data-task-detail-key="creativity-candidate:${esc(item.regime_revision)}:` +
-        `${esc(item.candidate_id)}">` +
-        `<summary>Generation ${esc(item.generation)}` +
-        ` · score ${esc(item.score)} · ${esc(validity)} · ${esc(item.candidate_id)}</summary>` +
-        (!item.current_regime ? `<div class="amend-hint">${sparse ? "Earlier" : "Historical"} evaluator regime ` +
-          `${esc(item.regime_revision)}${sparse ? " · assessment retained in ranking" : ""}</div>` : "") +
-        (sparse ? `<div class="story-note">${item.active_count} active · ${item.omitted_count} omitted</div>` +
-          `<div class="story-meta"><b>Evaluator</b> · ${esc([item.regime.material, item.regime.agent,
-            item.regime.model, item.regime.effort].join(" · "))}</div>` +
-          `<div class="story-meta"><b>Call</b> · ${esc(item.call_id)}</div>` +
-          `<div class="story-meta"><b>Prompt</b> · ${esc(item.prompt_path)}</div>` : "") +
-        `<ol>${item.components.map(component => `<li><b>${esc(component.dimension)}</b> · ` +
-          `${esc(component.variant)}</li>`).join("")}</ol>` +
-        `<div class="story-note"><b>Proposal</b> · ${esc(item.proposal)}</div>` +
-        `<div class="story-note"><b>Constraint violations</b> · ${esc(violations)}</div>` +
-        `<div class="story-note"><b>Reason</b> · ${esc(item.reason)}</div>` +
-        `<div class="story-note"><b>Assumptions</b> · ${esc(item.assumptions.length
-          ? item.assumptions.join("\n") : "None stated")}</div></details>`;
-    }).join("") : `<div class="story-note">No candidate evaluations have completed yet.</div>`) +
+    (items.length ? items.slice(0, 10).map(renderItem).join("")
+      : `<div class="story-note">No candidate evaluations have completed yet.</div>`) +
+    (items.length > 10 ? `<details class="card" data-task-detail-key="creativity-evaluations-more">` +
+      `<summary>More (${items.length - 10} remaining)</summary>` +
+      items.slice(10).map(renderItem).join("") + `</details>` : "") +
     `</details>`;
 }
 function creativityProgress(view, configuration, open, sparse = false) {
