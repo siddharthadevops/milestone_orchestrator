@@ -549,10 +549,11 @@ class CreativityTaskTest(unittest.TestCase):
             ],
         }
         document = resolver_doc()
-        document["assignment"]["plan"] = {"1": 3}
-        document["assignment"]["brainstorm"]["1"] = 3
-        document["tuning"]["high"]["3"]["plan"] = [3, 5]
-        document["tuning"]["medium"]["3"]["brainstorm"] = [2, 2]
+        document["assignment"]["creativity_create_genes"] = {"1": 3}
+        document["assignment"]["creativity_compose_candidates"]["1"] = 3
+        document["tuning"]["high"]["3"]["creativity_create_genes"] = [3, 5]
+        document["tuning"]["medium"]["3"]["creativity_create_genes"] = [2, 2]
+        document["tuning"]["medium"]["3"]["creativity_compose_candidates"] = [2, 2]
         staffing.save(self.home, document)
         configuration = {
             "order_mode": "interchangeable",
@@ -565,7 +566,7 @@ class CreativityTaskTest(unittest.TestCase):
         }
         expected_staffing = {
             "create_genes": ("claude", "claude-fable-5", "max"),
-            "compose_candidates": ("claude", "claude-sonnet-5", "low"),
+            "compose_candidates": ("claude", "claude-opus-5", "medium"),
             "evaluate_candidates": ("codex", "gpt-5.6-luna", "low"),
             "expand_genes": ("claude", "claude-opus-5", "medium"),
         }
@@ -961,8 +962,8 @@ class CreativityTaskTest(unittest.TestCase):
                 if sparse:
                     self.write_prompt("AFTER RESUME")
                     document = resolver_doc()
-                    document["assignment"]["review"]["1"] = 3
-                    document["tuning"]["medium"]["3"]["review"] = [3, 5]
+                    document["assignment"]["creativity_evaluate_candidates"]["1"] = 3
+                    document["tuning"]["medium"]["3"]["creativity_evaluate_candidates"] = [3, 5]
                     staffing.save(self.home, document)
                 fresh = self.host()
                 fresh.adopt_open_tasks(lambda _record: self.config)
@@ -1025,8 +1026,8 @@ class CreativityTaskTest(unittest.TestCase):
             result = self.physical(*args, **kwargs)
             if len(self.calls) == 1:
                 document = resolver_doc()
-                document["assignment"]["plan"]["1"] = 3
-                document["tuning"]["high"]["3"]["plan"] = [3, 5]
+                document["assignment"]["creativity_create_genes"]["1"] = 3
+                document["tuning"]["high"]["3"]["creativity_create_genes"] = [3, 5]
                 staffing.save(self.home, document)
                 staffing.edit_session(self.home, self.session, {"material": "business"})
                 self.write_prompt("SECOND PROMPT", "create_genes")
@@ -1055,8 +1056,9 @@ class CreativityTaskTest(unittest.TestCase):
             with self.subTest(regime_change=regime_change, cancel=cancel):
                 self.calls.clear()
                 document = resolver_doc()
-                document["tuning"]["high"]["2"]["plan"] = [3, 4]
-                document["tuning"]["medium"]["2"]["brainstorm"] = [2, 2]
+                document["tuning"]["high"]["2"]["creativity_create_genes"] = [3, 4]
+                document["tuning"]["medium"]["2"]["creativity_create_genes"] = [2, 2]
+                document["tuning"]["medium"]["2"]["creativity_compose_candidates"] = [2, 2]
                 staffing.save(self.home, document)
                 staffing.edit_session(self.home, self.session, {"rigor": "high", "material": "default"})
                 self.write_prompt("BEFORE RESUME")
@@ -1096,8 +1098,8 @@ class CreativityTaskTest(unittest.TestCase):
                 prior_calls = copy.deepcopy(self.calls)
                 self.write_prompt("AFTER RESUME")
                 if regime_change:
-                    document["assignment"]["review"]["1"] = 3
-                    document["tuning"]["low"]["3"]["review"] = [3, 5]
+                    document["assignment"]["creativity_evaluate_candidates"]["1"] = 3
+                    document["tuning"]["low"]["3"]["creativity_evaluate_candidates"] = [3, 5]
                     staffing.save(self.home, document)
                     staffing.edit_session(self.home, self.session, {"material": "business"})
 
@@ -1276,7 +1278,8 @@ class CreativityTaskTest(unittest.TestCase):
                 self.calls.clear()
                 document = resolver_doc()
                 if code == "distinct_families_unsatisfiable":
-                    document["roles"]["brainstorm"] = {"distinct_families": True}
+                    document["assignment"]["creativity_compose_candidates"] = {"1": 2, "2": 2}
+                    document["roles"]["creativity_compose_candidates"] = {"distinct_families": True}
                 else:
                     for slot in ("2", "3"):
                         document["families"][slot]["name"] = "unavailable-" + slot

@@ -233,7 +233,7 @@ class TaskContractsTest(unittest.TestCase):
         )
         for source in (base, large, dict(base, rigor={}), dict(base, rigor={
             "default": "medium", "create_genes": "low",
-            "evaluate_candidates": "high",
+            "compose_candidates": "medium", "evaluate_candidates": "high",
         })):
             with self.subTest(configuration=source):
                 resolved = tasks.resolve_creativity_configuration(source)
@@ -262,7 +262,7 @@ class TaskContractsTest(unittest.TestCase):
         invalid.extend(dict(base, rigor=value) for value in (
             None, [], "high", {"unknown": "low"}, {"model": "chosen"},
         ))
-        for job in ("default", "create_genes", "evaluate_candidates"):
+        for job in ("default", "create_genes", "compose_candidates", "evaluate_candidates"):
             invalid.extend(dict(base, rigor={job: value}) for value in (
                 None, True, 1, [], {}, "", "HIGH", "maximum",
             ))
@@ -298,7 +298,7 @@ class TaskContractsTest(unittest.TestCase):
         self.assertEqual(set(schema), set(base) | {"order_mode", "session_mode", "rigor"})
         self.assertNotIn("expansion", entry["available_agent_configurations"])
         self.assertIn(
-            "candidate composition the first brainstorm seat",
+            "dedicated Creativity staffing roles",
             entry["available_agent_configurations"],
         )
         self.assertEqual(schema["order_mode"], {
@@ -327,7 +327,7 @@ class TaskContractsTest(unittest.TestCase):
             expected["max_evaluated_candidates"] = expected["population_size"] * expected["generation_limit"]
             self.assertEqual(resolved["configuration"], expected)
         self.assertEqual(set(schema["rigor"]["properties"]), {
-            "default", "create_genes", "evaluate_candidates",
+            "default", "create_genes", "compose_candidates", "evaluate_candidates",
         })
         for definition in schema["rigor"]["properties"].values():
             self.assertTrue(definition["optional"])
@@ -603,23 +603,23 @@ class TaskContractsTest(unittest.TestCase):
         from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
 
         doc = resolver_doc()
-        doc["assignment"]["plan"] = {"1": 3}
+        doc["assignment"]["creativity_create_genes"] = {"1": 3}
         for rank, rigor in enumerate(("low", "medium", "high"), 1):
             for slot in doc["families"]:
                 doc["tuning"][rigor][slot] = {
                     role: [rank, rank] for role in staffing.ROLES
                 }
         bindings = {
-            "create_genes": {"role": "plan", "index": 1},
-            "compose_candidates": {"role": "brainstorm", "index": 1},
-            "evaluate_candidates": {"role": "review", "index": 1, "review_breadth": 1},
-            "expand_genes": {"role": "brainstorm", "index": 1},
+            "create_genes": {"role": "creativity_create_genes", "index": 1},
+            "compose_candidates": {"role": "creativity_compose_candidates", "index": 1},
+            "evaluate_candidates": {"role": "creativity_evaluate_candidates", "index": 1},
+            "expand_genes": {"role": "creativity_create_genes", "index": 1},
         }
         with tempfile.TemporaryDirectory() as home:
             staffing.save(home, doc)
             session = staffing.create_session(home, session_body(document="matrix"))["id"]
             for job, binding in bindings.items():
-                rigor_key = "evaluate_candidates" if job == "compose_candidates" else job
+                rigor_key = job
                 for choice, expected_rigor in (
                     (None, "medium"), ({}, "medium"), ({"default": "low"}, "low"),
                     ({rigor_key: "high"}, "high"),
@@ -637,7 +637,7 @@ class TaskContractsTest(unittest.TestCase):
                             expected["rigor"] = expected_rigor
                         self.assertEqual(request, expected)
                         resolved = staffing.resolve(home, session, **request)
-                        slot = "3" if job == "create_genes" else "2"
+                        slot = "3" if job in ("create_genes", "expand_genes") else "2"
                         family = doc["families"][slot]
                         rank = ("low", "medium", "high").index(expected_rigor)
                         self.assertEqual(resolved.answer, {
@@ -657,6 +657,57 @@ class TaskContractsTest(unittest.TestCase):
             self.assertEqual(staffing.resolve(home, single, **request).answer, {
                 "agent": "codex", "model": "gpt-5.6-sol", "effort": "high",
             })
+
+    def test_creativity_composer_rigor_is_independent_of_evaluation(self):
+        for rigor, expected in (
+            ({"evaluate_candidates": "high"}, None),
+            ({"default": "low", "evaluate_candidates": "high"}, "low"),
+            ({"default": "low", "compose_candidates": "medium",
+              "evaluate_candidates": "high"}, "medium"),
+        ):
+            with self.subTest(rigor=rigor):
+                request = tasks.creativity_job_staffing_request(
+                    "compose_candidates", {"rigor": rigor},
+                )
+                self.assertEqual(request.get("rigor"), expected)
+                self.assertEqual(request["role"], "creativity_compose_candidates")
+
+    def test_creativity_staffing_is_isolated_from_other_workflows(self):
+        from orchestrator.tests.test_staffing_sessions import resolver_doc, session_body
+
+        with tempfile.TemporaryDirectory() as home:
+            document = resolver_doc()
+            staffing.save(home, document)
+            session = staffing.create_session(home, session_body(document="matrix"))["id"]
+            jobs = ("create_genes", "compose_candidates", "evaluate_candidates")
+            before = {
+                job: staffing.resolve(home, session, **tasks.creativity_job_staffing_request(job, {}))
+                for job in jobs
+            }
+            for role in ("plan", "brainstorm", "review"):
+                document["assignment"][role] = {"1": 3}
+                document["tuning"]["medium"]["3"][role] = [3, 5]
+            staffing.save(home, document)
+            self.assertEqual({
+                job: staffing.resolve(home, session, **tasks.creativity_job_staffing_request(job, {}))
+                for job in jobs
+            }, before)
+            ordinary_before = {
+                role: staffing.resolve(home, session, role).answer
+                for role in ("plan", "brainstorm", "review")
+            }
+            for role in staffing.CREATIVITY_ROLES:
+                document["assignment"][role] = {"1": 3}
+                document["tuning"]["medium"]["3"][role] = [3, 5]
+            staffing.save(home, document)
+            self.assertEqual({
+                role: staffing.resolve(home, session, role).answer
+                for role in ("plan", "brainstorm", "review")
+            }, ordinary_before)
+            self.assertTrue(all(
+                staffing.resolve(home, session, **tasks.creativity_job_staffing_request(job, {})) != before[job]
+                for job in jobs
+            ))
 
     def test_catalogue_has_exact_builtins_and_self_description(self):
         catalogue = tasks.task_executor_catalogue()
@@ -765,6 +816,8 @@ class TaskContractsTest(unittest.TestCase):
                     "choices": [
                         "plan", "draft", "implement", "fix", "classify",
                         "review", "brainstorm", "consult", "sync",
+                        "creativity_create_genes", "creativity_compose_candidates",
+                        "creativity_evaluate_candidates",
                     ],
                     "default": "implement",
                 },

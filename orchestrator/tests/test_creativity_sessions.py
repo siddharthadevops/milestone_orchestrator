@@ -229,7 +229,7 @@ class CreativitySessionsTest(unittest.TestCase):
 
     def test_live_rigor_and_model_changes_keep_same_family_conversations(self):
         document = resolver_doc()
-        for role in ("brainstorm", "review"):
+        for role in ("creativity_compose_candidates", "creativity_evaluate_candidates"):
             document["tuning"]["high"]["2"][role] = [3, 4]
         staffing.save(self.home, document)
         record = self.admit_sessions(rigor={"default": "low"})
@@ -264,7 +264,7 @@ class CreativitySessionsTest(unittest.TestCase):
             if self.job(prompt) == "evaluate_candidates":
                 evaluations += 1
                 document = resolver_doc()
-                document["assignment"]["brainstorm"]["1"] = 3 if evaluations == 1 else 2
+                document["assignment"]["creativity_compose_candidates"]["1"] = 3 if evaluations == 1 else 2
                 staffing.save(self.home, document)
             return result
 
@@ -281,6 +281,48 @@ class CreativitySessionsTest(unittest.TestCase):
         self.assertTrue({call["session_ref"] for call in composed}.isdisjoint(
             call["session_ref"] for call in evaluated
         ))
+
+    def test_live_composer_rigor_changes_only_future_composition_calls(self):
+        document = resolver_doc()
+        document["tuning"]["medium"]["2"]["creativity_compose_candidates"] = [2, 2]
+        document["tuning"]["high"]["2"]["creativity_evaluate_candidates"] = [3, 4]
+        staffing.save(self.home, document)
+        record = self.admit_sessions(rigor={"default": "low", "evaluate_candidates": "high"})
+        original_order = copy.deepcopy(record["order"])
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def hold_first_composition(family, prompt, workspace, **kwargs):
+            result = self.physical(family, prompt, workspace, **kwargs)
+            if self.job(prompt) == "compose_candidates" and not entered.is_set():
+                entered.set()
+                self.assertTrue(release.wait(5))
+            return result
+
+        host = self.host(hold_first_composition)
+        host.start(record, self.config)
+        self.assertTrue(entered.wait(5), "composition did not start")
+        before = self.checkpoint(record)
+        with registry.locked(self.home):
+            host.store.set_creativity_rigor_locked(record["id"], {
+                "default": "low", "compose_candidates": "medium", "evaluate_candidates": "high",
+            })
+        self.assertEqual(self.checkpoint(record), before)
+        self.assertEqual(len(self.session_calls), 1)
+        release.set()
+        terminal = self.completed(host, record)
+        self.assertEqual(terminal["order"], original_order)
+        composed = self.calls_for("compose_candidates")
+        self.assertEqual([(call["model"], call["effort"]) for call in composed], [
+            ("gpt-5.6-luna", "low"), ("gpt-5.6-terra", "medium"),
+        ])
+        self.assertEqual([call["mode"] for call in composed], ["start", "continue"])
+        self.assertEqual(len({call["session_ref"] for call in composed}), 1)
+        evaluated = self.calls_for("evaluate_candidates")
+        self.assertEqual([(call["model"], call["effort"]) for call in evaluated], [
+            ("gpt-5.6-sol", "xhigh"), ("gpt-5.6-sol", "xhigh"),
+        ])
+        self.assertEqual(self.checkpoint(record)["evaluation"]["accepted_count"], 4)
 
     def test_exhausted_contract_correction_keeps_session_for_operator_resume(self):
         record = self.admit_sessions(generation_limit=1, max_evaluated_candidates=2)

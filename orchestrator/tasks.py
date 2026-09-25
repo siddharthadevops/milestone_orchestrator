@@ -394,11 +394,11 @@ _CREATIVITY_COUNTS = (
 )
 _CREATIVITY_RATES = ("mutation_rate",)
 _CREATIVITY_JOB_STAFFING = {
-    "create_genes": {"role": "plan", "index": 1},
-    "compose_candidates": {"role": "brainstorm", "index": 1},
-    "evaluate_candidates": {"role": "review", "index": 1, "review_breadth": 1},
+    "create_genes": {"role": "creativity_create_genes", "index": 1},
+    "compose_candidates": {"role": "creativity_compose_candidates", "index": 1},
+    "evaluate_candidates": {"role": "creativity_evaluate_candidates", "index": 1},
     # Stored legacy tasks still resolve expansion staffing.
-    "expand_genes": {"role": "brainstorm", "index": 1},
+    "expand_genes": {"role": "creativity_create_genes", "index": 1},
 }
 
 _TASK_EXECUTORS += (
@@ -436,9 +436,10 @@ _TASK_EXECUTORS += (
         "operating_mode": "Bounded evolutionary search with model evaluations.",
         "usage_examples": ["exploring a literary objective", "finding constrained business options"],
         "available_agent_configurations": (
-            "Gene creation uses the first plan seat, candidate composition the "
-            "first brainstorm seat, and evaluation the first review seat. Optional per-job "
-            "rigor overrides the task default, then the live staffing session."
+            "Gene creation, candidate composition and evaluation use their own "
+            "dedicated Creativity staffing roles. Each job's optional rigor "
+            "overrides the task default, then the live staffing session; "
+            "composition does not inherit the evaluation override."
         ),
         "execution_bindings": {
             "staffing": True, "prompt_set": True, "strategy_profile": False,
@@ -479,7 +480,7 @@ _TASK_EXECUTORS += (
                 "properties": {
                     name: {"type": "choice", "optional": True,
                            "choices": list(staffing.RIGORS)}
-                    for name in ("default", "create_genes", "evaluate_candidates")
+                    for name in ("default", "create_genes", "compose_candidates", "evaluate_candidates")
                 },
             },
         },
@@ -1125,14 +1126,10 @@ def resolve_creativity_configuration(value):
 
 
 def creativity_job_staffing_request(job, configuration):
-    """Bind a creativity job using admitted configuration and existing roles."""
+    """Bind each Creativity job to its dedicated role and independent rigor."""
     request = dict(_CREATIVITY_JOB_STAFFING[job])
     rigor = configuration.get("rigor", {})
-    # Composition is the first half of evaluation and deliberately adds no
-    # public tuning knob.  Reuse the evaluation override while keeping a
-    # distinct brainstorm seat and physical call.
-    rigor_key = "evaluate_candidates" if job == "compose_candidates" else job
-    choice = rigor.get(rigor_key, rigor.get("default"))
+    choice = rigor.get(job, rigor.get("default"))
     if choice is not None:
         request["rigor"] = choice
     return request

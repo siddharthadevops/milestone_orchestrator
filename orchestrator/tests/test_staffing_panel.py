@@ -17,6 +17,7 @@ actually do. The service harness is `test_staffing_api`'s, unchanged.
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -272,6 +273,52 @@ class StaffingDocumentCatalogue(PanelSourceMixin, StaffingApiTestCase):
         """Every model and effort ladder, in the document's own order."""
         return [(slot["models"], slot["efforts"])
                 for _key, slot in sorted(document["families"].items())]
+
+    def test_generic_document_editor_shows_and_preserves_creativity_roles(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node is required for executable panel checks")
+        document = house_doc("creativity-seats")
+        roles = ["creativity_create_genes", "creativity_compose_candidates",
+                 "creativity_evaluate_candidates"]
+        self.assertTrue(set(roles).issubset(document["assignment"]))
+        sources = []
+        for name in ("esc", "renderStaffingDocuments", "openStaffingDocumentEditor", "editStaffingDocument"):
+            sources.append(re.search(
+                r"function " + name + r"\([^\n]*\) \{.*?\n\}", self.panel, re.S,
+            ).group(0))
+        setup = "const fixture = " + json.dumps({"document": document, "roles": roles}) + ";\n"
+        checks = r"""
+const assert = require('node:assert/strict');
+const appAccess = {admin: true}, staffingDocuments = [fixture.document];
+const staffingDocumentsError = '', STAFFING_DOCUMENT_HINT = 'whole-document editor';
+const fields = {sd_error: {style: {}}, sd_new: {style: {}}, sd_catalogue: {},
+  staffingdocsdlg: {close: () => {}}};
+const document = {getElementById: id => fields[id]};
+const escJsSq = value => value;
+let editor, posted;
+const openSgEditor = value => { editor = value; };
+const openStaffingDocuments = () => {};
+const postJSON = async (path, body) => { posted = {path, body}; };
+(async () => {
+  renderStaffingDocuments();
+  for (const role of fixture.roles) assert(fields.sd_catalogue.innerHTML.includes(role));
+  editStaffingDocument(fixture.document.name);
+  assert.deepEqual(editor.value, fixture.document);
+  const edited = structuredClone(editor.value);
+  edited.tuning.low['1'].creativity_compose_candidates = [1, 2];
+  edited.tuning.low['1'].creativity_evaluate_candidates = [3, 4];
+  await editor.onSave(edited);
+  assert.deepEqual(posted, {path: '/api/staffing/documents', body: edited});
+  assert.deepEqual(posted.body.assignment, fixture.document.assignment);
+  for (const role of fixture.roles) assert(Object.hasOwn(posted.body.roles, role));
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        result = subprocess.run(
+            [node, "-e", setup + "\n".join(sources) + "\n" + checks],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_document_editor_uses_whole_api_and_preserves_ladder_order(self):
         # -- what the panel asks for ------------------------------------

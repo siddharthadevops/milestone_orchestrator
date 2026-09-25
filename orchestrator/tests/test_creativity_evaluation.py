@@ -67,8 +67,8 @@ class CreativityEvaluationFixture(unittest.TestCase):
         self.document = resolver_doc()
         for slot in ("2", "3"):
             for rigor, cell in (("low", [1, 1]), ("medium", [2, 2]), ("high", [3, 4])):
-                self.document["tuning"][rigor][slot]["review"] = cell
-                self.document["tuning"][rigor][slot]["brainstorm"] = cell
+                for role in staffing.CREATIVITY_ROLES:
+                    self.document["tuning"][rigor][slot][role] = cell
         staffing.save(self.home, self.document)
         self.session = staffing.create_session(
             self.home, session_body(document="matrix", rigor="low"),
@@ -393,7 +393,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         def physical(family, prompt, workspace, model=None, effort=None, **_kwargs):
             dispatched.append((family, model, effort, prompt, workspace))
             if len(dispatched) == 1:
-                self.document["assignment"]["brainstorm"]["1"] = 3
+                self.document["assignment"]["creativity_create_genes"]["1"] = 3
                 staffing.save(self.home, self.document)
                 staffing.edit_session(self.home, self.session, {"material": "business", "rigor": "high"})
                 self.write_prompt("SECOND PROMPT", "expand_genes")
@@ -418,7 +418,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         evaluation.creativity_search.begin_generation(progress, {}, self.configuration)
         self.progress_wave(progress, search_material=expanded)
         self.write_prompt("THIRD PROMPT", "expand_genes")
-        self.document["assignment"]["brainstorm"]["1"] = 2
+        self.document["assignment"]["creativity_create_genes"]["1"] = 2
         staffing.save(self.home, self.document)
         staffing.edit_session(self.home, self.session, {"material": "unlayered"})
         before = staffing.read_session(self.home, self.session)
@@ -486,12 +486,13 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         with self.assertRaises(staffing.StaffingConditionError) as caught:
             self.expand(progress, lambda *_a, **_kw: self.fail("unavailable dispatch"), session=session)
         self.assertEqual(caught.exception.code, "staffing_unavailable")
-        self.document["roles"]["brainstorm"] = {"distinct_families": True}
+        self.document["assignment"]["creativity_create_genes"] = {"1": 2, "2": 2}
+        self.document["roles"]["creativity_create_genes"] = {"distinct_families": True}
         staffing.save(self.home, self.document)
         with self.assertRaises(staffing.StaffingConditionError) as caught:
             self.expand(progress, lambda *_a, **_kw: self.fail("unsatisfiable dispatch"))
         self.assertEqual(caught.exception.code, "distinct_families_unsatisfiable")
-        self.document["roles"]["brainstorm"] = {}
+        self.document["roles"]["creativity_create_genes"] = {}
         staffing.save(self.home, self.document)
 
         def failed(*_args, **_kwargs):
@@ -562,7 +563,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
         def physical(family, prompt, workspace, model=None, effort=None, **_kwargs):
             dispatched.append((family, model, effort, prompt, workspace))
             if len(dispatched) == 1:
-                self.document["assignment"]["review"] = {"1": 3, "2": 2}
+                self.document["assignment"]["creativity_evaluate_candidates"] = {"1": 3}
                 staffing.save(self.home, self.document)
                 staffing.edit_session(self.home, self.session, {"material": "business", "rigor": "high"})
                 self.write_prompt("SECOND PROMPT")
@@ -592,7 +593,7 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
 
         # Complete saves between batches, with job rigor overriding task and session.
         path = self.write_prompt("THIRD PROMPT")
-        self.document["assignment"]["review"] = {"1": 2, "2": 3}
+        self.document["assignment"]["creativity_evaluate_candidates"] = {"1": 2}
         staffing.save(self.home, self.document)
         staffing.edit_session(self.home, self.session, {"material": "unlayered"})
         before = staffing.read_session(self.home, self.session)
@@ -1045,9 +1046,9 @@ class CreativityEvaluationTest(CreativityEvaluationFixture):
                     if component == "material":
                         staffing.edit_session(self.home, self.session, {"material": "business" if new else "default"})
                     elif component == "agent":
-                        document["assignment"]["review"] = {"1": 3, "2": 2} if new else {"1": 2, "2": 3}
+                        document["assignment"]["creativity_evaluate_candidates"] = {"1": 3} if new else {"1": 2}
                     else:
-                        document["tuning"]["low"]["2"]["review"] = (
+                        document["tuning"]["low"]["2"]["creativity_evaluate_candidates"] = (
                             [2, 1] if component == "model" else [1, 2]
                         ) if new else [1, 1]
                     staffing.save(self.home, document)

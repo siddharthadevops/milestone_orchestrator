@@ -57,8 +57,10 @@ a copy: a profile can say things a document has no way to hold ("the family
 opposite whoever is calling", "the caller's own effort", a family that
 differs from rigor to rigor), so those become explicit numbers, taken from
 the profile's ``medium`` configuration and from the same seams today's
-resolution uses, and the converted document staffs each seat the way that
-profile staffs it today. Nothing here reads a document to staff a call: the
+resolution uses, and the converted document staffs each original seat the
+way that profile staffs it today. Dedicated Creativity seats have their own
+explicit low/medium/high seeds instead of inheriting ordinary process roles.
+Nothing here reads a document to staff a call: the
 documents appear beside the profiles and wait for their consumers.
 
 A SESSION is the owner's live selection over that catalogue — the work
@@ -80,6 +82,7 @@ yet, because every consumer is cut over in its own later slice.
 """
 
 import collections
+import copy
 import json
 import os
 import secrets
@@ -93,10 +96,15 @@ RIGORS = ("low", "medium", "high")
 
 # The closed process-step vocabulary. Roles name the STEP, never the content:
 # no domain word enters this list, and no consumer may add one.
-ROLES = (
+_PROFILE_ROLES = (
     "plan", "draft", "implement", "fix", "classify", "review", "brainstorm",
     "consult", "sync",
 )
+CREATIVITY_ROLES = (
+    "creativity_create_genes", "creativity_compose_candidates",
+    "creativity_evaluate_candidates",
+)
+ROLES = _PROFILE_ROLES + CREATIVITY_ROLES
 
 # Typed rules. The goal defines exactly one type; a second one would be a
 # further typed entry in future work, never an expression language.
@@ -1007,16 +1015,103 @@ def _rank(ladder, value):
         return 1
 
 
+def add_creativity_roles(document):
+    """Explicitly extend an old, complete document with Creativity's seats.
+
+    This is a pure, one-off cutover helper, not a load-time migration. The
+    former plan/brainstorm/review tuning becomes Creativity medium/high from
+    its low/medium rows respectively. New low uses the weakest model with
+    medium effort (or the second effort rung for a differently named ladder).
+    Existing roles, overrides, rules and ladders are not changed. A document
+    already carrying any Creativity role is refused rather than retuned.
+    """
+    ctx = "add Creativity staffing roles"
+    _object(ctx, "staffing document", document)
+    _exact_keys(
+        ctx, "staffing document", document,
+        ("name", "families", "roles", "materials", "tuning", "assignment",
+         "overrides", "rules"))
+    families = _validate_families(ctx, document["families"])
+    for field in ("roles", "assignment"):
+        _object(ctx, field, document[field])
+        _exact_keys(ctx, field, document[field], _PROFILE_ROLES)
+    _object(ctx, "tuning", document["tuning"])
+    _exact_keys(ctx, "tuning", document["tuning"], RIGORS)
+    for rigor in RIGORS:
+        by_slot = _object(ctx, "tuning.%s" % rigor,
+                          document["tuning"][rigor])
+        _exact_keys(ctx, "tuning.%s" % rigor, by_slot, families)
+        for slot, by_role in by_slot.items():
+            label = "tuning.%s.%s" % (rigor, slot)
+            _object(ctx, label, by_role)
+            _exact_keys(ctx, label, by_role, _PROFILE_ROLES)
+    # Validate source seats before reading index 1; the full new document is
+    # validated below, including every untouched role and every source pair.
+    assignments = {
+        role: _validate_seats(ctx, "assignment.%s" % role,
+                              document["assignment"][role], families)
+        for role in _PROFILE_ROLES
+    }
+    evaluator_slot = next(
+        (int(slot) for slot, family in families.items()
+         if family["name"] == "codex"), assignments["review"]["1"])
+    source_roles = dict(zip(CREATIVITY_ROLES, ("plan", "brainstorm", "review")))
+    added = copy.deepcopy(document)
+    for role, source_role in source_roles.items():
+        added["roles"][role] = {}
+        added["assignment"][role] = {
+            "1": (evaluator_slot if role == "creativity_evaluate_candidates"
+                  else assignments[source_role]["1"]),
+        }
+        for slot, family in families.items():
+            efforts = family["efforts"]
+            medium = (efforts.index("medium") + 1 if "medium" in efforts
+                      else min(2, len(efforts)))
+            added["tuning"]["low"][slot][role] = [1, medium]
+            for target, source in (("medium", "low"), ("high", "medium")):
+                added["tuning"][target][slot][role] = copy.deepcopy(
+                    document["tuning"][source][slot][source_role])
+    return validate_document(added, ctx)
+
+
+def _seed_creativity_tuning(document):
+    """Seed dedicated Creativity tiers without changing other process roles.
+
+    The old profile seeds predate the operator's faster Creativity presets.
+    Only NEW Creativity cells adopt those presets; ordinary role conversion
+    continues to reproduce the source profile exactly.
+    """
+    for slot, family in document["families"].items():
+        name = family["name"]
+        if name not in FAMILY_MODELS:
+            continue
+        model = _rank(family["models"], FAMILY_MODELS[name][1])
+        efforts = {value: _rank(family["efforts"], value)
+                   for value in ("medium", "xhigh", "max")}
+        for rigor in ("medium", "high"):
+            by_role = document["tuning"][rigor][slot]
+            by_role["creativity_create_genes"] = [
+                model, efforts["max" if name == "codex" or rigor == "high"
+                               else "medium"]]
+            by_role["creativity_compose_candidates"] = [
+                model, efforts["max" if rigor == "high" else "medium"]]
+            if name == "codex":
+                by_role["creativity_evaluate_candidates"] = [
+                    model, efforts["xhigh"]]
+    return document
+
+
 def convert_profile(profile, config=None):
     """Convert one validated model profile into a staffing document.
 
-    Deterministic and total for a valid profile: it never fails and never
-    invents. Every configured family becomes a numbered slot in configured
+    Deterministic and total for a valid profile: original seats reproduce the
+    profile; dedicated Creativity seats use explicit independent defaults.
+    Every configured family becomes a numbered slot in configured
     order, carrying its whole vocabulary in amendment A1's capability order
     plus — appended after those known rungs — any model or effort the
     profile names that the vocabulary does not carry. Assignment comes from
-    the profile's `medium` configuration; each rigor's tuning comes from
-    that rigor's. A rigor x slot x role cell no seat staffs carries that
+    the profile's `medium` configuration; each original role's rigor tuning
+    comes from that rigor's. A rigor x slot x role cell no seat staffs carries that
     family's ordinary defaults today, which is what a call on that family
     resolves to when nothing is pinned. A seat whose act names a family the
     configuration has no slot for — a profile that cannot run today either —
@@ -1074,7 +1169,8 @@ def convert_profile(profile, config=None):
         for slot, (default_model, default_effort) in slot_defaults.items():
             unstaffed = [_rank(ladders[slot]["models"], default_model),
                          _rank(ladders[slot]["efforts"], default_effort)]
-            tuning[rigor][slot] = {role: list(unstaffed) for role in ROLES}
+            tuning[rigor][slot] = {
+                role: list(unstaffed) for role in _PROFILE_ROLES}
         # One cell per rigor x slot x role, so where two seats of one role
         # share a slot the LOWEST seat index writes it — the primary seat,
         # and a deterministic choice rather than whichever came last. In a
@@ -1101,12 +1197,12 @@ def convert_profile(profile, config=None):
                 _rank(ladders[slot]["efforts"], effort or default_effort),
             ]
 
-    assignment = {role: {} for role in ROLES}
+    assignment = {role: {} for role in _PROFILE_ROLES}
     for (role, index), (family, _model, _effort) in sorted(
             per_rigor["medium"].items()):
         assignment[role][str(index)] = int(slot_for(family))
 
-    return validate_document({
+    document = {
         "name": profile["name"],
         "families": {
             slot_of[family]: {
@@ -1120,14 +1216,16 @@ def convert_profile(profile, config=None):
         # distinct families.
         "roles": {
             role: ({"distinct_families": True} if role == "review" else {})
-            for role in ROLES
+            for role in _PROFILE_ROLES
         },
         "materials": {},
         "tuning": tuning,
         "assignment": assignment,
         "overrides": {},
         "rules": [],
-    })
+    }
+    return validate_document(_seed_creativity_tuning(
+        add_creativity_roles(document)))
 
 
 def default_document_seed(config=None):
@@ -1135,9 +1233,9 @@ def default_document_seed(config=None):
     store's own `default` seed.
 
     Expressed as that conversion rather than as a second literal so the two
-    cannot drift apart: the seed IS what an unconfigured run's
-    `default@medium` staffs today, and one definition of that cannot
-    disagree with itself.
+    cannot drift apart: original seats reproduce the profile and dedicated
+    Creativity seats receive the same independent presets as every converted
+    document.
     """
     return convert_profile(model_profiles.DEFAULT_SEED, config)
 

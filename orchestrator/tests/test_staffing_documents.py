@@ -31,7 +31,7 @@ FAMILIES = {
 
 
 def valid_doc(name="prose-first"):
-    """A complete document: nine roles, both slots, all three rigors."""
+    """A complete document: all roles, both slots, all three rigors."""
     assignment = {role: {"1": 1} for role in stf.ROLES}
     assignment["review"] = {"1": 1, "2": 2}
     assignment["brainstorm"] = {"1": 1, "2": 2, "3": 1}
@@ -117,7 +117,7 @@ class StaffingDocumentStoreTest(unittest.TestCase):
             # rigors are exactly low/medium/high
             "missing rigor": drop("tuning", "low"),
             "extra rigor": put({}, "tuning", "extreme"),
-            # roles are exactly the nine of the closed vocabulary
+            # roles are exactly the closed vocabulary
             "unknown role in roles": put({}, "roles", "refactor"),
             "missing role in roles": drop("roles", "sync"),
             "unknown role in assignment": put({"1": 1}, "assignment",
@@ -572,14 +572,16 @@ class StaffingConversionTest(unittest.TestCase):
                     # Nothing may pass as a None placeholder on either side.
                     self.assertTrue(all(today), today)
                     self.assertTrue(all(actual), actual)
-            # The document assigns exactly the seats the reference names —
-            # no invented seat, none quietly dropped.
+            # Original process seats still reproduce the profile. The three
+            # dedicated Creativity seats are additional, each at index 1.
             assigned = {
                 (role, int(index))
                 for role in stf.ROLES
                 for index in document["assignment"][role]
             }
-            self.assertEqual(assigned, set(expected))
+            self.assertEqual(
+                assigned, set(expected) | {
+                    (role, 1) for role in stf.CREATIVITY_ROLES})
             # End to end for the one derived command line: the consultation
             # is a COMMAND and not just a triple, so the document's seat is
             # compared as the line it produces. The reference is the same

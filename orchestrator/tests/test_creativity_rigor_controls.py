@@ -64,7 +64,9 @@ class CreativityRigorControlsTest(unittest.TestCase):
         lifecycle = self.store.lifecycle(record["id"])
 
         for override in (
-            {"default": "medium", "create_genes": "low", "evaluate_candidates": "high"},
+            {"default": "medium", "create_genes": "low", "compose_candidates": "medium",
+             "evaluate_candidates": "high"},
+            {"compose_candidates": "high"},
             {"evaluate_candidates": "low"},
             {},
         ):
@@ -98,7 +100,9 @@ class CreativityRigorControlsTest(unittest.TestCase):
                 lifecycle = self.store.lifecycle(record["id"])
                 self.assertEqual(lifecycle["status"], status)
                 for level in ("low", "medium", "high"):
-                    override = dict.fromkeys(("default", "create_genes", "evaluate_candidates"), level)
+                    override = dict.fromkeys(
+                        ("default", "create_genes", "compose_candidates", "evaluate_candidates"), level,
+                    )
                     code, response = self.request("POST", self.path(record), {"rigor": override})
                     self.assertEqual(code, 200, response)
                     self.assert_rigor(record, override)
@@ -113,11 +117,10 @@ class CreativityRigorControlsTest(unittest.TestCase):
             {}, [], None, "low", {"default": "low"},
             {"rigor": {}, "force": True},
             {"rigor": None}, {"rigor": []}, {"rigor": "low"},
-            {"rigor": {"compose_candidates": "low"}},
             {"rigor": {"expand_genes": "low"}},
             {"rigor": {"unknown": "low"}},
         ]
-        for key in ("default", "create_genes", "evaluate_candidates"):
+        for key in ("default", "create_genes", "compose_candidates", "evaluate_candidates"):
             invalid.extend({"rigor": {key: level}} for level in (
                 "max", "xhigh", "LOW", "", " low ", None, True, 1, [], {},
             ))

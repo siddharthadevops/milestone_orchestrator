@@ -103,7 +103,10 @@ assert(!renderTaskPage(record('duel'), null).includes('onclick="openCreativityRi
 """)
         self.assertLess(self.panel.index('<dialog id="creativityrigordlg">'),
                         self.panel.index('<script>'))
-        self.assertIn('Composition and evaluation', self.panel)
+        self.assertIn('<label>Compose candidates</label>', self.panel)
+        self.assertIn('<select id="cr_compose_candidates">', self.panel)
+        self.assertIn('<label>Evaluation</label>', self.panel)
+        self.assertNotIn('Composition and evaluation', self.panel)
         self.assertIn('Changes apply to subsequent calls; running calls keep', self.panel)
 
     def test_creativity_page_shows_the_stored_session_mode(self):
@@ -148,14 +151,14 @@ lastTaskPage.order.configuration = {rigor: {default: 'high'}};
 let openedCreativityRigorTask = null, creativityRigorSaving = false;
 const STANDALONE_RIGORS = ['low', 'medium', 'high'];
 const fields = Object.fromEntries(['cr_default', 'cr_create_genes',
-  'cr_evaluate_candidates', 'cr_error', 'cr_save'].map(id => [id, {value: ''}]));
+  'cr_compose_candidates', 'cr_evaluate_candidates', 'cr_error', 'cr_save'].map(id => [id, {value: ''}]));
 let shown = 0, closed = 0, refreshed = 0;
 fields.creativityrigordlg = {showModal: () => shown++, close: () => closed++};
 const document = {getElementById: id => fields[id]};
 const sent = [];
 const api = async path => {
   sent.push({method: 'GET', path});
-  return {ok: true, rigor: {default: 'low', evaluate_candidates: 'medium'}};
+  return {ok: true, rigor: {default: 'low', compose_candidates: 'high', evaluate_candidates: 'medium'}};
 };
 const postJSON = async (path, body) => {
   sent.push({method: 'POST', path, body});
@@ -168,16 +171,19 @@ const alert = message => { throw Error(message); };
   assert.equal(shown, 1);
   assert.equal(fields.cr_default.value, 'low');
   assert.equal(fields.cr_create_genes.value, '');
+  assert.equal(fields.cr_compose_candidates.value, 'high');
   assert.equal(fields.cr_evaluate_candidates.value, 'medium');
   assert.deepEqual(sent, [{method: 'GET', path: '/api/tasks/task-1/creativity-rigor'}]);
   fields.cr_default.value = '';
   fields.cr_create_genes.value = 'high';
+  fields.cr_compose_candidates.value = 'medium';
   fields.cr_evaluate_candidates.value = 'low';
   await saveCreativityRigor();
   assert.deepEqual(sent[1], {method: 'POST', path: '/api/tasks/task-1/creativity-rigor',
-    body: {rigor: {create_genes: 'high', evaluate_candidates: 'low'}}});
+    body: {rigor: {create_genes: 'high', compose_candidates: 'medium', evaluate_candidates: 'low'}}});
   assert.deepEqual(lastTaskPage.order.configuration, {rigor: {default: 'high'}});
   fields.cr_create_genes.value = '';
+  fields.cr_compose_candidates.value = '';
   fields.cr_evaluate_candidates.value = '';
   await saveCreativityRigor();
   assert.deepEqual(sent[2].body, {rigor: {}});
@@ -191,7 +197,7 @@ const alert = message => { throw Error(message); };
 let lastTaskPage = record('creativity');
 let openedCreativityRigorTask = 'task-1', creativityRigorSaving = false;
 const fields = Object.fromEntries(['cr_default', 'cr_create_genes',
-  'cr_evaluate_candidates', 'cr_error', 'cr_save'].map(id => [id, {value: ''}]));
+  'cr_compose_candidates', 'cr_evaluate_candidates', 'cr_error', 'cr_save'].map(id => [id, {value: ''}]));
 let closed = 0, refreshed = 0;
 fields.creativityrigordlg = {close: () => closed++};
 const document = {getElementById: id => fields[id]};

@@ -355,6 +355,8 @@ class OrderContextAndRoleTest(StandaloneCutoverTestCase):
                     "choices": [
                         "plan", "draft", "implement", "fix", "classify",
                         "review", "brainstorm", "consult", "sync",
+                        "creativity_create_genes", "creativity_compose_candidates",
+                        "creativity_evaluate_candidates",
                     ],
                     "default": "implement",
                 },

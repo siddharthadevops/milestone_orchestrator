@@ -221,7 +221,8 @@ async function postJSON(path, payload) {
   for (const key of ['patience_generations', 'minimum_improvement', 'max_stagnation_expansions',
                      'rigor.expand_genes']) assert.equal(control(key), undefined);
   assert.deepEqual(controls.filter(c => c.dataset.taskConfig.startsWith('rigor.'))
-    .map(c => c.dataset.taskConfig).sort(), ['rigor.create_genes', 'rigor.default', 'rigor.evaluate_candidates']);
+    .map(c => c.dataset.taskConfig).sort(),
+    ['rigor.compose_candidates', 'rigor.create_genes', 'rigor.default', 'rigor.evaluate_candidates']);
   assert.match(fields.task_configuration.innerHTML, /Candidates per generation/);
   assert.match(fields.task_configuration.innerHTML, /Agent sessions/);
   assert.match(fields.task_configuration.innerHTML, />Fresh per call<\/option>/);
@@ -268,9 +269,12 @@ async function postJSON(path, payload) {
   assert.equal(closed, 2);
   for (const [key, value] of Object.entries(fixture.configuration)) control(key).value = String(value);
   control('rigor.default').value = 'low';
+  control('rigor.create_genes').value = 'high';
+  control('rigor.compose_candidates').value = 'medium';
   control('rigor.evaluate_candidates').value = 'high';
   const configured = {...defaults, ...fixture.configuration};
-  const expected = {...configured, rigor: {default: 'low', evaluate_candidates: 'high'}};
+  const expected = {...configured, rigor: {default: 'low', create_genes: 'high',
+    compose_candidates: 'medium', evaluate_candidates: 'high'}};
   assert.deepEqual(currentTaskConfiguration().configuration, expected);
   for (const key of Object.keys(fixture.configuration)) {
     if (schema[key].optional || !['integer', 'number'].includes(schema[key].type)) continue;
@@ -292,7 +296,8 @@ async function postJSON(path, payload) {
     }});
   assert.equal(closed, 3);
   assert.equal(taskSubmitPending, false);
-  control('rigor.default').value = control('rigor.evaluate_candidates').value = '';
+  for (const job of ['default', 'create_genes', 'compose_candidates', 'evaluate_candidates'])
+    control('rigor.' + job).value = '';
   assert.deepEqual(currentTaskConfiguration().configuration, configured);
   refusal = 'invalid_task_request';
   await submitTaskForm();

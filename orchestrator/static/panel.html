@@ -1175,7 +1175,9 @@
     <select id="cr_default"></select></div>
   <div class="field"><label>Gene creation</label>
     <select id="cr_create_genes"></select></div>
-  <div class="field"><label>Composition and evaluation</label>
+  <div class="field"><label>Compose candidates</label>
+    <select id="cr_compose_candidates"></select></div>
+  <div class="field"><label>Evaluation</label>
     <select id="cr_evaluate_candidates"></select></div>
   <div class="hint">A job's rigor overrides the task default, then the
     staffing session. Choose inherit to remove an override.</div>
@@ -6055,7 +6057,7 @@ async function openCreativityRigor() {
   } catch (e) { alert(e.message); return; }
   if (selectedTask !== taskId || !lastTaskPage || lastTaskPage.result != null) return;
   openedCreativityRigorTask = taskId;
-  for (const name of ["default", "create_genes", "evaluate_candidates"]) {
+  for (const name of ["default", "create_genes", "compose_candidates", "evaluate_candidates"]) {
     const select = document.getElementById("cr_" + name);
     select.innerHTML = '<option value="">— inherit —</option>' +
       STANDALONE_RIGORS.map(rigor => `<option value="${rigor}">${rigor}</option>`).join("");
@@ -6070,7 +6072,7 @@ async function saveCreativityRigor() {
   const error = document.getElementById("cr_error");
   error.textContent = "";
   const rigor = {};
-  for (const name of ["default", "create_genes", "evaluate_candidates"]) {
+  for (const name of ["default", "create_genes", "compose_candidates", "evaluate_candidates"]) {
     const value = document.getElementById("cr_" + name).value;
     if (value) rigor[name] = value;
   }

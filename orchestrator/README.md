@@ -511,9 +511,41 @@ the task checkpoint. Persistence can save repeated context work, but retained
 history can also influence later judgments; speed and output quality should be
 compared experimentally rather than assumed. It does not freeze repository files.
 
+Creativity has three dedicated staffing roles: `creativity_create_genes`,
+`creativity_compose_candidates` and `creativity_evaluate_candidates`, each with
+one seat. They do not borrow the tuning of `plan`, `brainstorm` or `review`.
+Legacy gene expansion uses the gene-creation role. Evaluation remains a separate
+worker and uses Codex in both the `default` and `claude-lead` configurations.
+
+The Creativity scale is deliberately lighter than implementation staffing:
+
+| Configuration / rigor | Create genes | Compose candidates | Evaluate candidates |
+| --- | --- | --- | --- |
+| `default` / `low` | Luna medium | Luna medium | Luna medium |
+| `default` / `medium` | Sol max | Sol medium | Sol xhigh |
+| `default` / `high` | Sol max | Sol max | Sol xhigh |
+| `claude-lead` / `low` | Sonnet medium | Sonnet medium | Luna medium |
+| `claude-lead` / `medium` | Opus medium | Opus medium | Sol xhigh |
+| `claude-lead` / `high` | Opus max | Opus max | Sol xhigh |
+
+Here Luna/Sol are GPT-6 and Sonnet/Opus are Claude Sonnet 5/Opus 5.5. These
+are starting settings, not runtime model rules: the saved staffing documents
+remain authoritative and editable. Other roles retain their existing tuning.
+
+Existing installations require a coordinated staffing-schema cutover, not just
+a service restart. Stop the service and any milestone drivers using the old
+schema before changing the stored documents. Explicitly run the pure
+`staffing.add_creativity_roles(document)` transform on each retained old document,
+validate the resulting documents, and save them before starting the new code.
+Keep copies of the originals and resolve session references before retiring a
+document. The helper preserves existing role settings, adds the independent
+Creativity scale, and refuses already-converted documents. Loading or starting
+the service never rewrites operator configuration automatically; the new code
+rejects documents missing the new roles, and old code rejects the extra roles.
+
 An open Creativity task exposes **Staffing…** for its bound staffing session
-and **Rigors…** for task-default, gene-creation and composition/evaluation
-overrides. Both apply to subsequent physical calls, including the existing
+and **Rigors…** for independent task-default, gene-creation, composition and
+evaluation overrides. Both apply to subsequent physical calls, including the existing
 contract-correction call; an already dispatched call keeps its model and effort.
 Changing the session affects other work sharing that session. Job rigor overrides
 take precedence over the task default, then the session rigor. Rigor selects the
@@ -522,7 +554,7 @@ staffing document's tuning; it is not a direct effort selector.
 `GET /api/tasks/<id>/creativity-rigor` reads the effective override map.
 `POST` to the same route accepts `{"rigor": {...}}`, replacing that whole map;
 `{"rigor": {}}` clears overrides and inherits the live session. Accepted keys are
-`default`, `create_genes` and `evaluate_candidates`, with values `low`, `medium`
+`default`, `create_genes`, `compose_candidates` and `evaluate_candidates`, with values `low`, `medium`
 or `high`. These edits preserve the original order, candidates, accepted scores
 and checkpoint. They are allowed while running or paused, but not after completion
 or cancellation. A task without a bound session can still edit its rigor overrides.
