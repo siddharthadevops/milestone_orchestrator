@@ -41,6 +41,7 @@ class CreativityRolesTest(unittest.TestCase):
         original["assignment"]["brainstorm"] = {"1": 2, "2": 1, "3": 2}
         original["assignment"]["review"] = {"1": 2, "2": 1}
         original["tuning"]["low"]["2"]["plan"] = [3, 2]
+        original["tuning"]["medium"]["1"]["brainstorm"] = [9, 5]
         original["tuning"]["medium"]["1"]["review"] = [9, 9]
         original["overrides"]["prose"]["tuning"] = {
             "low": {"1": {"plan": [1, 3]}},
@@ -56,8 +57,9 @@ class CreativityRolesTest(unittest.TestCase):
                                  [1, 4 if evaluator else 2])
                 for target, prior in (("medium", "low"), ("high", "medium")):
                     expected = list(original["tuning"][prior][slot][source])
-                    if evaluator:
-                        expected[1] = 4  # xhigh; the source model is unchanged.
+                    # Copy the model tier only; production is always medium
+                    # and evaluation is always xhigh, at every rigor.
+                    expected[1] = 4 if evaluator else 2
                     self.assertEqual(result["tuning"][target][slot][role],
                                      expected)
         self.assertEqual(result["assignment"][staffing.CREATIVITY_ROLES[0]],
@@ -83,7 +85,7 @@ class CreativityRolesTest(unittest.TestCase):
         document["families"]["1"]["efforts"] = [
             "minimal", "low", "medium", "high", "xhigh"]
         document["families"]["2"]["efforts"] = [
-            "quick", "balanced", "deep", "xhigh"]
+            "quick", "medium", "deep", "xhigh"]
         result = staffing.add_creativity_roles(document)
         for role in staffing.CREATIVITY_ROLES:
             evaluator = role == "creativity_evaluate_candidates"
@@ -92,17 +94,29 @@ class CreativityRolesTest(unittest.TestCase):
             self.assertEqual(result["tuning"]["low"]["2"][role],
                              [1, 4 if evaluator else 2])
         for rigor in staffing.RIGORS:
-            self.assertEqual(result["tuning"][rigor]["1"][
-                "creativity_evaluate_candidates"][1], 5)
-            self.assertEqual(result["tuning"][rigor]["2"][
-                "creativity_evaluate_candidates"][1], 4)
+            for role in staffing.CREATIVITY_ROLES:
+                evaluator = role == "creativity_evaluate_candidates"
+                self.assertEqual(result["tuning"][rigor]["1"][role][1],
+                                 5 if evaluator else 3)
+                self.assertEqual(result["tuning"][rigor]["2"][role][1],
+                                 4 if evaluator else 2)
         self.assertEqual(result["families"], document["families"])
 
-    def test_cutover_refuses_a_family_without_xhigh_without_mutating_it(self):
+    def test_cutover_refuses_missing_required_efforts_without_mutating_input(self):
+        for required in ("medium", "xhigh"):
+            with self.subTest(missing=required):
+                document = old_document()
+                document["families"]["2"]["efforts"].remove(required)
+                before = copy.deepcopy(document)
+                with self.assertRaisesRegex(staffing.StaffingError, required):
+                    staffing.add_creativity_roles(document)
+                self.assertEqual(document, before)
+
+    def test_cutover_refuses_a_malformed_source_pair_without_mutating_input(self):
         document = old_document()
-        document["families"]["2"]["efforts"] = ["low", "medium", "high", "max"]
+        document["tuning"]["low"]["1"]["plan"] = []
         before = copy.deepcopy(document)
-        with self.assertRaisesRegex(staffing.StaffingError, "xhigh"):
+        with self.assertRaises(staffing.StaffingError):
             staffing.add_creativity_roles(document)
         self.assertEqual(document, before)
 
@@ -151,14 +165,12 @@ class CreativityRolesTest(unittest.TestCase):
                 for rigor in ("medium", "high"):
                     with self.subTest(profile=profile["name"], family=name,
                                       rigor=rigor):
-                        gen_effort = ("max" if name == "codex" or rigor == "high"
-                                      else "medium")
                         self.assertEqual(staffing.base_staffing(
                             document, rigor, "creativity_create_genes"),
-                            (name, model, gen_effort))
+                            (name, model, "medium"))
                         self.assertEqual(staffing.base_staffing(
                             document, rigor, "creativity_compose_candidates"),
-                            (name, model, "max" if rigor == "high" else "medium"))
+                            (name, model, "medium"))
                         # The evaluator's existing model tier is preserved in
                         # both family slots; only its effort is fixed to xhigh.
                         source_rigor = "low" if rigor == "medium" else "medium"

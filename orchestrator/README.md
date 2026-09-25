@@ -522,13 +522,15 @@ The Creativity scale is deliberately lighter than implementation staffing:
 | Configuration / rigor | Create genes | Compose candidates | Evaluate candidates |
 | --- | --- | --- | --- |
 | `default` / `low` | Luna medium | Luna medium | Luna xhigh |
-| `default` / `medium` | Sol max | Sol medium | Sol xhigh |
-| `default` / `high` | Sol max | Sol max | Sol xhigh |
+| `default` / `medium` | Sol medium | Sol medium | Sol xhigh |
+| `default` / `high` | Sol medium | Sol medium | Sol xhigh |
 | `claude-lead` / `low` | Sonnet medium | Sonnet medium | Luna xhigh |
 | `claude-lead` / `medium` | Opus medium | Opus medium | Sol xhigh |
-| `claude-lead` / `high` | Opus max | Opus max | Sol xhigh |
+| `claude-lead` / `high` | Opus medium | Opus medium | Sol xhigh |
 
-Evaluation uses xhigh at every rigor; creation and composition keep their independent tiers.
+Creation and composition use medium at every rigor; evaluation uses xhigh.
+Rigor changes the models, not the effort. The current medium and high presets
+coincide until different models are configured for those tiers.
 Here Luna/Sol are GPT-6 and Sonnet/Opus are Claude Sonnet 5/Opus 5.5. These
 are starting settings, not runtime model rules: the saved staffing documents
 remain authoritative and editable. Other roles retain their existing tuning.

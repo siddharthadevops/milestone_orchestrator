@@ -1019,10 +1019,10 @@ def add_creativity_roles(document):
     """Explicitly extend an old, complete document with Creativity's seats.
 
     This is a pure, one-off cutover helper, not a load-time migration. The
-    former plan/brainstorm/review tuning becomes Creativity medium/high from
-    its low/medium rows respectively. New low uses the weakest model with
-    medium effort (or the second effort rung for a differently named ladder),
-    except evaluation, which requires xhigh at every rigor.
+    former plan/brainstorm/review model ranks become Creativity medium/high
+    from their low/medium rows respectively. New low uses the weakest model.
+    At every rigor, creation and composition require medium effort and
+    evaluation requires xhigh; rigor selects models, not effort.
     Existing roles, overrides, rules and ladders are not changed. A document
     already carrying any Creativity role is refused rather than retuned.
     """
@@ -1066,19 +1066,19 @@ def add_creativity_roles(document):
         }
         for slot, family in families.items():
             efforts = family["efforts"]
-            medium = (efforts.index("medium") + 1 if "medium" in efforts
-                      else min(2, len(efforts)))
-            added["tuning"]["low"][slot][role] = [1, medium]
+            effort = "xhigh" if role == "creativity_evaluate_candidates" else "medium"
+            if effort not in efforts:
+                raise StaffingError(
+                    "%s: family slot %s needs %s effort for %s"
+                    % (ctx, slot, effort, role))
+            effort_rank = efforts.index(effort) + 1
+            added["tuning"]["low"][slot][role] = [1, effort_rank]
             for target, source in (("medium", "low"), ("high", "medium")):
-                added["tuning"][target][slot][role] = copy.deepcopy(
+                source_pair = _validate_pair(
+                    ctx, "tuning.%s.%s.%s" % (source, slot, source_role),
                     document["tuning"][source][slot][source_role])
-            if role == "creativity_evaluate_candidates":
-                if "xhigh" not in efforts:
-                    raise StaffingError(
-                        "%s: family slot %s needs xhigh effort for Creativity evaluation"
-                        % (ctx, slot))
-                for rigor in RIGORS:
-                    added["tuning"][rigor][slot][role][1] = efforts.index("xhigh") + 1
+                added["tuning"][target][slot][role] = [
+                    source_pair[0], effort_rank]
     return validate_document(added, ctx)
 
 
@@ -1095,14 +1095,13 @@ def _seed_creativity_tuning(document):
             continue
         model = _rank(family["models"], FAMILY_MODELS[name][1])
         efforts = {value: _rank(family["efforts"], value)
-                   for value in ("medium", "xhigh", "max")}
+                   for value in ("medium", "xhigh")}
         for rigor in ("medium", "high"):
             by_role = document["tuning"][rigor][slot]
             by_role["creativity_create_genes"] = [
-                model, efforts["max" if name == "codex" or rigor == "high"
-                               else "medium"]]
+                model, efforts["medium"]]
             by_role["creativity_compose_candidates"] = [
-                model, efforts["max" if rigor == "high" else "medium"]]
+                model, efforts["medium"]]
             if name == "codex":
                 by_role["creativity_evaluate_candidates"] = [
                     model, efforts["xhigh"]]
