@@ -331,10 +331,12 @@ class StandaloneTaskStore:
                 raise tasks.TaskRecordError("retained task completion is malformed") from exc
         return value
 
-    def _read_document(self, task_id):
+    def _read_document(self, task_id, *, allow_missing=False):
         key = task_key(task_id)
         current = self._store.read(key)
         if not current["exists?"]:
+            if allow_missing:
+                return current, None
             raise tasks.TaskRecordError("unknown task %r" % task_id)
         return current, self._validate_document(current["value"], key)
 
@@ -473,7 +475,10 @@ class StandaloneTaskStore:
         ]
 
     def record(self, task_id):
-        return tasks.task_record({"tasks": self._load()}, task_id)
+        if not isinstance(task_id, str) or not task_id:
+            raise tasks.TaskRecordError("task id must be a non-empty string")
+        _current, document = self._read_document(task_id)
+        return tasks.task_record({"tasks": [document["record"]]}, task_id)
 
     def creativity_rigor(self, task_id):
         """Read live job overrides, inheriting the original order until edited."""
@@ -504,18 +509,19 @@ class StandaloneTaskStore:
 
     def owner_chain(self, task_id):
         """Return the task and its durable parents, nearest first."""
-        records = self._load()
-        by_id = {record["id"]: record for record in records}
-        current = tasks.task_record({"tasks": records}, task_id)
+        current = self.record(task_id)
         chain = []
         seen = set()
         while current["id"] not in seen:
             chain.append(current)
             seen.add(current["id"])
             parent_id = (current.get("parent") or {}).get("task_id")
-            if not isinstance(parent_id, str) or parent_id not in by_id:
+            if not isinstance(parent_id, str) or parent_id in seen:
                 break
-            current = by_id[parent_id]
+            _current, parent = self._read_document(parent_id, allow_missing=True)
+            if parent is None:
+                break
+            current = tasks.task_record({"tasks": [parent["record"]]}, parent_id)
         return chain
 
     def owner_stop_reason(self, task_id):
@@ -1256,13 +1262,14 @@ class DirectTaskHost:
 
     def lifecycle(self, task_id):
         value = self.store.lifecycle(task_id)
-        family = self._family(task_id)
+        chain = self.store.owner_chain(task_id)
+        record = chain[0]
         supported = tasks.stored_task_executor(
-            self.store.record(task_id)["order"]["task_executor"]
+            record["order"]["task_executor"]
         ) in RECOVERABLE_EXECUTORS
-        value.update(root_task_id=family[0]["id"], can_pause=False,
+        value.update(root_task_id=chain[-1]["id"], can_pause=False,
                      can_resume=False, blocked_reason=None)
-        if not supported or self.store.record(task_id)["result"] is not None:
+        if not supported or record["result"] is not None:
             return value
         if self.store.owner_stop_reason(task_id) is not None:
             value["blocked_reason"] = "Cancellation is pending; this task cannot resume"
@@ -1270,6 +1277,9 @@ class DirectTaskHost:
         value["can_pause"] = value["status"] == "running"
         if value["status"] in ("paused", "pausing"):
             try:
+                # Descendants matter when certifying a pause, not when merely
+                # displaying running or completed tasks in the sidebar.
+                family = self._family(task_id)
                 if not self._discussions_quiescent(family):
                     raise TaskControlConflict("an owned discussion is still stopping or its quiescence is unknown")
                 self._ensure_workers_quiescent(family)
