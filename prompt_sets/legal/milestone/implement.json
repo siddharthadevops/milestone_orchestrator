@@ -1,0 +1,126 @@
+{
+  "kind": "implement",
+  "process": "milestone",
+  "description": "Legal researcher and drafter: delivers one coherent legal analysis or document unit against its reviewed work note.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "author_recovery"
+      },
+      {
+        "text": [
+          "TASK: research, draft or revise slice {{slice_id}} ({{slice_title}}) against its current reviewed legal work note.",
+          "BASELINE: the reviewed skeleton at {{skeleton_path}} defines the assignment within the MANDATE. The original mandate remains at {{goal_path}} for unsettled intent. An accepted plan cannot establish facts or override applicable law.",
+          "SLICE NOTE: {{slice_note_path}}. Read the case documents and relevant surrounding provisions before working. Deliver the requested legal act on disk: an analysis must reach the supported conclusion; a drafting assignment must supply usable draft text.",
+          "Distinguish facts, allegations, assumptions, law, interpretation, proposed terms and strategic preference. Ground decisive legal propositions in verified authorities and acknowledge the strongest material counterposition. Preserve names, amounts, dates, definitions and cross-references supported by the record; never invent evidence or citations.",
+          "Check the finished documents together for internal consistency, operative effect and unresolved blanks. Make the result usable for its stated recipient and stage. Record material uncertainty, conditions and decision-changing questions in the deliverable, rather than hiding them in the discarded question answers."
+        ],
+        "variables": [
+          {
+            "name": "slice_id",
+            "required": true
+          },
+          {
+            "name": "slice_title",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "slice_note_path",
+            "required": true
+          }
+        ]
+      },
+      {
+        "ref": "implementation_scope"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "legal_context"
+      },
+      {
+        "ref": "legal_research"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "ref": "implementation_rules"
+      },
+      {
+        "ref": "implementation_metering",
+        "mount": [
+          "executor:agent_call"
+        ]
+      },
+      {
+        "ref": "reuse_gate"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "source_integrity",
+        "text": "Did you invent facts, evidence, citations, obligations or extra instruments rather than using and verifying the case record and applicable authorities? Identify the sources checked and any unsupported addition removed."
+      },
+      {
+        "id": "environment_fit",
+        "text": "Can the intended recipient use this delivery at the requested stage, with an appropriately supported conclusion or operative draft? Explain any material limitation and any unauthorized assumption about filing, execution or approval."
+      },
+      {
+        "id": "human_scale",
+        "text": "Does the delivered work actually answer the requested legal decision or supply the requested text at a proportionate scope? Identify the operative conclusion or provision and any unrelated work removed."
+      },
+      {
+        "id": "legal_sources",
+        "text": "For this work, which decisive references did you contrast online with reliable primary or official sources? Explain how you checked identity, exact provision or holding, date and current or historically applicable version, legal weight and applicability. Identify any supplied reference that failed or remains unverified and the resulting limit; if none, say so; never imply that an inaccessible source was checked."
+      },
+      {
+        "id": "legal_position",
+        "text": "For this work, what is the strongest applicable authority or plausible legal interpretation against the proposed position? Explain the facts and reasoning that support or weaken it, distinguishing binding authority, persuasive material, party preference and your own judgment."
+      },
+      {
+        "id": "legal_missing_facts",
+        "text": "Which missing or disputed facts, jurisdiction, relevant date, procedural stage or deadline could change this work? State what the record establishes, what must be asked or verified and whether a conditional answer is possible. Do not manufacture facts or ask immaterial questions."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each with concise case-document or verified legal evidence; these are investigation checks, not a separate legal opinion. Put material limitations and decision-changing questions in the deliverable.)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_verbose"
+      },
+      {
+        "ref": "common_fields",
+        "defaults": {
+          "status_vocabulary": "\"ok\" | \"blocked\""
+        }
+      },
+      {
+        "ref": "implement_result"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

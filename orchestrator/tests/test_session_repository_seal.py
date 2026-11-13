@@ -104,10 +104,13 @@ class RepositorySealTest(unittest.TestCase):
             "max_rounds": max_rounds,
         }
 
-    def running(self, max_rounds=2, closure_policy="unanimity"):
+    def running(self, max_rounds=2, closure_policy="unanimity", pause_after_round=False):
+        request = self.request(max_rounds)
+        if pause_after_round:
+            request["pause_after_round"] = True
         created = self.store.create(
             "session",
-            self.request(max_rounds),
+            request,
             brainstorming.resolve_run_config(
                 self.participants, closure_policy, self.participants
             ),
@@ -219,6 +222,94 @@ class RepositorySealTest(unittest.TestCase):
             snapshot.state["recovery_baseline_revision"], self.base
         )
         self.assertIsNone(snapshot.state["accepted_target_revision"])
+
+    def test_round_pause_defers_repository_success_until_operator_resumes(self):
+        snapshot = self.running(max_rounds=1, pause_after_round=True)
+        for participant in self.participants:
+            snapshot = self.append(snapshot, participant["id"], self.base, True)
+        self.assertEqual(snapshot.state["status"], "running")
+        self.assertTrue(snapshot.state["paused_after_round"])
+        with self.assertRaises(brainstorming.IllegalTransition):
+            self.append(snapshot, "lead", self.base, True)
+        resumed = self.store.release_round_pause("session", snapshot.revision)
+        self.assertEqual(resumed.state["status"], "success")
+        self.assertNotIn("paused_after_round", resumed.state)
+        self.assertEqual(resumed.state["rounds_used"], 1)
+
+    def test_operator_floor_requires_fresh_repository_readiness(self):
+        snapshot = self.running(pause_after_round=True)
+        for participant in self.participants:
+            snapshot = self.append(snapshot, participant["id"], self.base, True)
+        snapshot = self.store.record_floor_intervention(
+            "session", snapshot.revision,
+            {
+                "after_completed_turns": len(self.participants),
+                "author_id": "entity_" + "a" * 32,
+                "author_name": "operator",
+                "plain": "Reconsider this condition before agreeing.",
+                "at": 1200.0,
+            },
+        )
+        self.assertFalse(brainstorming.repository_positions_ready(snapshot.state))
+        snapshot = self.store.release_round_pause("session", snapshot.revision)
+        self.assertEqual(snapshot.state["status"], "running")
+        for participant in self.participants:
+            snapshot = self.append(snapshot, participant["id"], self.base, True)
+        self.assertTrue(snapshot.state["paused_after_round"])
+        self.assertTrue(brainstorming.repository_positions_ready(snapshot.state))
+        sealed = self.store.release_round_pause("session", snapshot.revision)
+        self.assertEqual(sealed.state["status"], "success")
+        self.assertEqual(sealed.state["rounds_used"], 2)
+
+    def test_failed_resume_preparation_cannot_seal_a_ready_paused_repository(self):
+        snapshot = self.running(max_rounds=1, pause_after_round=True)
+        for participant in self.participants:
+            snapshot = self.append(snapshot, participant["id"], self.base, True)
+        before_accept = mock.Mock(side_effect=RuntimeError("child exited"))
+        with self.assertRaisesRegex(RuntimeError, "child exited"):
+            self.store.release_round_pause(
+                "session", snapshot.revision, before_accept=before_accept
+            )
+        before_accept.assert_called_once_with()
+        current = self.store.read("session")
+        self.assertEqual(current.revision, snapshot.revision)
+        self.assertEqual(current.state, snapshot.state)
+        accepted = mock.Mock()
+        sealed = self.store.release_round_pause(
+            "session", current.revision, before_accept=accepted
+        )
+        accepted.assert_called_once_with()
+        self.assertEqual(sealed.state["status"], "success")
+
+    def test_final_round_pause_waits_without_granting_additional_rounds(self):
+        snapshot = self.running(max_rounds=1, pause_after_round=True)
+        for participant in self.participants:
+            snapshot = self.append(snapshot, participant["id"], self.base, False)
+        self.assertEqual(snapshot.state["status"], "running")
+        self.assertTrue(snapshot.state["paused_after_round"])
+        waiting = self.store.release_round_pause("session", snapshot.revision)
+        self.assertEqual(waiting.state["status"], "waiting")
+        self.assertNotIn("paused_after_round", waiting.state)
+        self.assertEqual(brainstorming.effective_max_rounds(waiting.state), 1)
+
+    def test_final_round_operator_floor_prevents_stale_agreement(self):
+        snapshot = self.running(max_rounds=1, pause_after_round=True)
+        for participant in self.participants:
+            snapshot = self.append(snapshot, participant["id"], self.base, True)
+        snapshot = self.store.record_floor_intervention(
+            "session", snapshot.revision,
+            {
+                "after_completed_turns": len(self.participants),
+                "author_id": "entity_" + "a" * 32,
+                "author_name": "operator",
+                "plain": "The agreement needs to address this additional concern.",
+                "at": 1200.0,
+            },
+        )
+        waiting = self.store.release_round_pause("session", snapshot.revision)
+        self.assertEqual(waiting.state["status"], "waiting")
+        self.assertEqual(brainstorming.effective_max_rounds(waiting.state), 1)
+        self.assertEqual(waiting.state["transcript_events"], snapshot.state["transcript_events"])
 
     def test_repository_seal_waits_for_questioner_and_is_atomic(self):
         snapshot = self.running()

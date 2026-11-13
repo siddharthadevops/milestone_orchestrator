@@ -1,0 +1,200 @@
+{
+  "kind": "create_genes",
+  "process": "milestone",
+  "description": "Generate legal exploration fragments or legacy search material without inventing facts or authority.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "creativity_exploration"
+      },
+      {
+        "ref": "legal_research"
+      },
+      {
+        "text": [
+          "TASK: generate creative starting points for proposals that answer the operator's assignment.",
+          "SAVED MATERIAL SEMANTICS: {{creativity_semantics}}. Follow only the matching branch below.",
+          "CREATIVITY CONTRACT: {{creativity_contract}}",
+          "Read the complete operator request, admitted context and references in the supplied order.",
+          "Open the supplied reference paths in the workspace and admitted roots; paths are not their contents.",
+          "For fragments_v3, return exactly {{gene_count}} distinct fragments, each containing 1-3 words.",
+          "Use them as creative stimuli for proposals that answer the assignment. Use the context as a",
+          "starting point, not as text to summarize. Explore possibilities not yet formulated in it.",
+          "Seek direct, lateral and analogical associations: unexpected but useful connections that",
+          "make genuinely different answers possible.",
+          "Do not limit the repertoire to naming the assignment's themes, requirements or desired",
+          "outcomes. Add raw material from which to build something the assignment does not yet contain.",
+          "Build a semantically diverse repertoire; avoid spending fragments on synonyms or variations",
+          "of the same idea. Reusing a word from the assignment is allowed when it is a useful seed.",
+          "You may introduce new elements as creative stimuli, without presenting them as established",
+          "contextual facts. Mandatory requirements remain requirements, not optional ingredients.",
+          "Keep each fragment open: a seed for the composer to develop, not a complete answer or a",
+          "decision about the final proposal. Do not add grammatical categories or new requirements.",
+          "Return the fragments themselves without attached negation; the driver assigns polarity.",
+          "For sparse_v2, return only ten subjects, ten verbs and ten adjectives grounded in",
+          "the assignment. Keep them short, literal and independently reusable. Include important",
+          "terms already supplied and useful adjacent vocabulary, but do not compose a proposal,",
+          "invent facts, solve the problem, critique the work, decide what a party should do,",
+          "or introduce a taxonomy, criteria, constraints, guidance, interpretations or prose.",
+          "A subject names an entity or focus; a verb names an action or relation; an adjective",
+          "names a qualifying property. Do not hide a composed solution inside any list entry.",
+          "For legacy, formulate a concise objective faithful to the operator's intent and scope.",
+          "Summarize relevant context and facts; distinguish hard constraints from assumptions",
+          "and unknowns. Do not invent facts or relax constraints. Identify what sequence, priority",
+          "or arrangement of selected units means. Derive as many position-independent semantic",
+          "dimensions as the problem needs, each with genuine alternatives that retain the unit's",
+          "meaning when moved on that order axis. Do not encode position through ordinal IDs, fixed",
+          "slots, hidden predecessor rules or manufactured dependencies. Put genuine dependencies",
+          "in constraints or composition_guidance. Arrange dimensions in the sequence you recommend",
+          "while keeping each unit independent of that position. Code combines exactly one variant",
+          "per dimension. Supply explicit assessment criteria, including usefulness and meaningful",
+          "difference where relevant; novelty never replaces faithfulness or feasibility."
+        ],
+        "variables": [
+          {
+            "name": "creativity_semantics",
+            "required": false,
+            "default": "legacy",
+            "description": "Service-owned saved interpretation: fragments_v3 for new tasks, sparse_v2 or legacy for earlier orders."
+          },
+          {
+            "name": "creativity_contract",
+            "required": false,
+            "default": "ordered_fragments_v1",
+            "description": "Service-owned prompt-contract marker used to reject stale stored prompts before dispatch."
+          },
+          {
+            "name": "gene_count",
+            "required": false,
+            "default": "10",
+            "description": "Exact number of 1-3-word inspiration fragments requested by fragments_v3."
+          }
+        ]
+      },
+      {
+        "text": [
+          "OPERATOR REQUEST:",
+          "{{objective}}",
+          "CONTEXT:",
+          "{{context}}",
+          "ORDERED REFERENCE PATHS (JSON array; may be empty):",
+          "{{references}}"
+        ],
+        "variables": [
+          {
+            "name": "objective",
+            "required": true,
+            "description": "Complete original operator request."
+          },
+          {
+            "name": "context",
+            "required": true,
+            "description": "Admitted context; may be empty."
+          },
+          {
+            "name": "references",
+            "required": true,
+            "description": "JSON array of admitted reference paths in operator order."
+          }
+        ]
+      },
+      {
+        "text": [
+          "LEGAL FRAGMENT BOUNDARY",
+          "Fragments may suggest lawful avenues, questions, negotiation structures or alternative",
+          "analytical perspectives. They cannot establish an event, right, duty, deadline, precedent",
+          "or legal entitlement. Do not fabricate case names, statutory references or quotations.",
+          "At this stage do not draft the legal answer or force a jurisdiction the request does not give.",
+          "If a substantive rule is used to shape the pool, verify it under the legal research guidance;",
+          "the fragment format itself does not require a research memorandum or embedded citations."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "STAGE AND OUTPUT BOUNDARY",
+          "Use the online authority method for decisive legal claims permitted by this stage.",
+          "A vocabulary-only pool need not assert or validate legal rules. Keep material",
+          "source support and verification limits in the existing permitted text fields",
+          "(for example proposal or reason) whenever they bear on this output. Do not",
+          "add fields, files, a research annex or a different deliverable to satisfy a",
+          "general reporting instruction. If this stage supplies no such claim, say so",
+          "in its existing self-checks when available; do not invent a citation or gap."
+        ],
+        "variables": []
+      }
+    ]
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (mandatory perspective checks; answer each in output. They are not questions for the operator and add no requirements, constraints, criteria, or score dimensions.)",
+      "Examine the fragment pool only. Broaden its creative potential without drafting candidate proposals or choosing a final solution.",
+      "These legal checks inform the requested stage; they add no deliverable, score dimension or exhaustive issue checklist."
+    ],
+    "items": [
+      {
+        "id": "pool_legal_context",
+        "text": "What legal outcome, audience and stage does the supplied request actually seek, and which jurisdiction, relevant date, material facts or documents are known or missing? Do the fragments leave unknowns visible rather than deciding them?"
+      },
+      {
+        "id": "pool_legal_originality",
+        "text": "Which fragments offer meaningfully different lawful ways to examine the requested problem rather than synonyms or decorative legal terminology? How do they broaden options without asserting new legal rules or settled facts?"
+      },
+      {
+        "id": "pool_legal_sources",
+        "text": "Which supplied references or legal propositions needed online contrast in reliable, preferably official primary sources, and what did you verify about jurisdiction, date/version and authority? If the pool asserts no legal proposition needing verification, explain that boundary; never claim browsing you did not perform."
+      },
+      {
+        "id": "pool_legal_counterposition",
+        "text": "Which fragments allow examination of an adverse interpretation, opposing interest or alternative factual account relevant to this problem, without inventing a defense, an event or legal authority?"
+      },
+      {
+        "id": "pool_legal_seed_limits",
+        "text": "Could a fragment or its later polarity falsely imply that a mandatory rule, fact, burden or deadline becomes optional? Explain how inspiration remains subordinate to applicable law, established facts and the actual assignment."
+      },
+      {
+        "id": "pool_legal_contribution",
+        "text": "What useful room for the requested work does the pool open, and where might it encourage a different task, unnecessary complexity or unsupported confidence? Keep the answer at fragment-pool scope."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "create_genes_result",
+        "text": [
+          "OUTPUT CONTRACT: return exactly one JSON object and nothing else.",
+          "For fragments_v3 its only top-level keys are gene_pool and questions.",
+          "gene_pool is a JSON list of exactly the requested number of distinct non-blank strings,",
+          "each containing 1-3 whitespace-separated words. Example shape: {\"gene_pool\":[\"shared warmth\",\"flexible shell\"],\"questions\":[...]}",
+          "The example illustrates shape only; use the exact requested count. Return no categories, IDs,",
+          "search_material, explanations or semantics marker. All objects are closed.",
+          "For sparse_v2 its only top-level keys are gene_pool and questions.",
+          "gene_pool is exactly {\"subjects\":[...],\"verbs\":[...],\"adjectives\":[...]}.",
+          "Each list contains exactly 10 distinct non-blank strings. All objects are closed.",
+          "Do not return search_material, dimensions, variants, IDs, explanations or a semantics marker.",
+          "For legacy its only top-level keys are search_material and questions.",
+          "search_material has exactly objective, context_summary, facts, constraints, assumptions,",
+          "unknowns, dimensions, composition_guidance, criteria and order_semantics. objective,",
+          "context_summary, composition_guidance and order_semantics are non-blank strings. facts,",
+          "assumptions and unknowns are possibly empty lists of non-blank strings. constraints and",
+          "criteria contain exactly {\"id\":\"...\",\"text\":\"...\"} records. constraints may be",
+          "empty; criteria must not be. dimensions is non-empty and each dimension is exactly",
+          "{\"id\":\"...\",\"meaning\":\"...\",\"variants\":[{\"id\":\"...\",\"text\":\"...\"}]},",
+          "with at least one variant. Every id, text and meaning is non-blank; IDs are unique within",
+          "their list and each dimension's variants. __order__ is a forbidden dimension ID."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

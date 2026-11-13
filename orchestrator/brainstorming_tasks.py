@@ -364,6 +364,7 @@ def _creation_body(
                 },
             },
             "max_rounds": configuration["max_rounds"],
+            "pause_after_round": configuration.get("pause_after_round", False),
         },
         "participants": copy.deepcopy(participants),
         "closure_policy": configuration["closure_policy"],
@@ -524,6 +525,7 @@ def _resume_projection(
     projection,
     staffing_selection,
     authority_failure_reason=None,
+    resume_round_pause=False,
 ):
     if (
         projection["state"]["status"] in brainstorming.TERMINAL_STATUSES
@@ -544,9 +546,11 @@ def _resume_projection(
                 (lambda _record: staffing_selection.get("session"))
                 if staffing_selection is not None else None
             ),
+            resume_round_pause=resume_round_pause,
         )
     except lifecycle.PublicLifecycleError as exc:
-        if exc.code == lifecycle.STOP_INCOMPLETE:
+        if (exc.code == lifecycle.STOP_INCOMPLETE
+                or projection["state"].get("paused_after_round", False)):
             raise
         _fail_from_projection(
             state,
@@ -566,6 +570,7 @@ def _start_task_exclusive(
     launcher=None,
     session_id=None,
     pre_session_failure_reason=None,
+    resume_round_pause=False,
 ):
     """Launch, or resume, the one session owned by an open task."""
     record = _task_record(state, task_id)
@@ -628,6 +633,7 @@ def _start_task_exclusive(
             projection,
             staffing_selection,
             authority_failure_reason,
+            resume_round_pause=resume_round_pause,
         )
 
     # Both historical private-target sessions and current repository sessions
@@ -648,6 +654,7 @@ def _start_task_exclusive(
             projection,
             staffing_selection,
             authority_failure_reason,
+            resume_round_pause=resume_round_pause,
         )
 
     retained = _retained_owned_projection(home, caller, private_target)
@@ -745,6 +752,7 @@ def _start_task_exclusive(
                     caller,
                     projection,
                     staffing_selection,
+                    resume_round_pause=resume_round_pause,
                 )
         if created_work_area is not None and code != lifecycle.TARGET_IN_USE:
             shutil.rmtree(created_work_area, ignore_errors=True)
@@ -765,6 +773,7 @@ def start_task(
     launcher=None,
     session_id=None,
     pre_session_failure_reason=None,
+    resume_round_pause=False,
 ):
     """Launch or resume under the task's one lifecycle serialization lock."""
     record = _task_record(state, task_id)
@@ -788,6 +797,7 @@ def start_task(
             launcher=launcher,
             session_id=session_id,
             pre_session_failure_reason=pre_session_failure_reason,
+            resume_round_pause=resume_round_pause,
         )
 
 
@@ -799,6 +809,7 @@ def start_persisted_task(
     staffing_selection=None,
     launcher=None,
     session_id=None,
+    resume_round_pause=False,
 ):
     """Serialize a public restart with the owning durable task record."""
     with st.exclusive_mutation(state_path):
@@ -811,6 +822,7 @@ def start_persisted_task(
             staffing_selection=staffing_selection,
             launcher=launcher,
             session_id=session_id,
+            resume_round_pause=resume_round_pause,
         )
         record = tasks.task_record(state, task_id)
         if record["result"] is not None:

@@ -846,6 +846,15 @@ class TaskContractsTest(unittest.TestCase):
                     "choices": ["unanimity", "majority"],
                     "default": "unanimity",
                 },
+                "pause_after_round": {
+                    "type": "boolean",
+                    "default": False,
+                    "label": "Pause after every round",
+                    "description": (
+                        "Stops before closure so you can read the round, use Intervene "
+                        "to add your turn, then Resume session."
+                    ),
+                },
             },
         )
         self.assertEqual(
@@ -932,22 +941,25 @@ class TaskContractsTest(unittest.TestCase):
             )
         self.assertEqual(
             tasks.resolve_configuration("brainstorming"),
-            {"max_rounds": 20, "closure_policy": "unanimity"},
+            {"max_rounds": 20, "closure_policy": "unanimity", "pause_after_round": False},
         )
         self.assertEqual(
             tasks.resolve_configuration(
                 "brainstorming", {"max_rounds": 24}
             ),
-            {"max_rounds": 24, "closure_policy": "unanimity"},
+            {"max_rounds": 24, "closure_policy": "unanimity", "pause_after_round": False},
         )
         self.assertEqual(
             tasks.resolve_configuration(
                 "brainstorming", {"closure_policy": "majority"}
             ),
-            {"max_rounds": 20, "closure_policy": "majority"},
+            {"max_rounds": 20, "closure_policy": "majority", "pause_after_round": False},
         )
 
         invalid = [
+            ("brainstorming", {"pause_after_round": "true"}),
+            ("brainstorming", {"pause_after_round": 1}),
+            ("brainstorming", {"pause_after_round": None}),
             ("agent_call", {"max_rounds": 1}),
             ("agent_call", {"role": "reviewer"}),
             ("agent_call", {"role": None}),
@@ -1135,7 +1147,7 @@ class TaskContractsTest(unittest.TestCase):
         )
         self.assertEqual(
             brainstorming_order["configuration"],
-            {"max_rounds": 20, "closure_policy": "unanimity"},  # raised
+            {"max_rounds": 20, "closure_policy": "unanimity", "pause_after_round": False},  # raised
         )
         self.assertEqual(brainstorming_order["prompt_set"], "default")
         selected_prompt_set = tasks.validate_order({

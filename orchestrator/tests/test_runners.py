@@ -2766,7 +2766,7 @@ class TestApplyModelEffort(unittest.TestCase):
         self.assertIn("model_reasoning_effort=high", out)
         d = DEFAULT_CONFIG["model_defaults"]
         self.assertEqual(
-            d["codex"], {"model": "gpt-6-sol", "effort": "xhigh"}
+            d["codex"], {"model": "gpt-6.1-sol", "effort": "xhigh"}
         )
         self.assertEqual(d["claude"],
                          {"model": "claude-opus-5-5", "effort": "xhigh"})
@@ -4138,6 +4138,7 @@ class TestActiveProviderControl(unittest.TestCase):
                 with open("claude-provider-history", "a", encoding="utf-8") as handle:
                     handle.write("session\n")
             count = 0
+            prompt_ids = []
             session = "session-from-argv"
             if "--session-id" in sys.argv:
                 session = sys.argv[sys.argv.index("--session-id") + 1]
@@ -4151,6 +4152,11 @@ class TestActiveProviderControl(unittest.TestCase):
                 if message.get("type") != "user":
                     continue
                 count += 1
+                prompt_ids.append(message["uuid"])
+                print(json.dumps({
+                    "type": "system", "subtype": "session_state_changed",
+                    "state": "running", "session_id": session,
+                }), flush=True)
                 if count == 2:
                     print(json.dumps({
                         "type": "assistant", "session_id": session,
@@ -4168,10 +4174,16 @@ class TestActiveProviderControl(unittest.TestCase):
                     print(json.dumps({
                         "type": "result", "subtype": "success",
                         "is_error": False, "session_id": session,
+                        "user_message_uuid": prompt_ids[-1],
+                        "user_message_uuids": prompt_ids,
                         "result": json.dumps({
                             "status": "ok", "kind": "implement",
                             "files_changed": ["coherent.py"],
                         }),
+                    }), flush=True)
+                    print(json.dumps({
+                        "type": "system", "subtype": "session_state_changed",
+                        "state": "idle", "session_id": session,
                     }), flush=True)
             ''',
         )

@@ -1582,6 +1582,106 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         ) as handle:
             self.assertEqual(handle.read(), "2")
 
+    def test_round_pause_waits_for_operator_and_resumes_each_boundary_once(self):
+        self._target("decline-once.md")
+        payload = self._payload("decline-once.md", max_rounds=2)
+        payload["request"]["pause_after_round"] = True
+        created = lifecycle.create_session(
+            self.home, payload, access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        session_id = created["id"]
+        self._stop_sleeper_record(session_id)
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        closure_counter = pathlib.Path(self.workspace) / ".decline-closure-calls"
+
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, session_id, require_pid_claim=False
+        ), 0)
+        paused = store.read(session_id)
+        self.assertEqual(paused.state["status"], "running")
+        self.assertTrue(paused.state["paused_after_round"])
+        self.assertEqual(paused.state["rounds_used"], 1)
+        self.assertEqual(
+            [(turn["round"], turn["participant_id"])
+             for turn in paused.state["completed_turns"]],
+            [(1, "lead"), (1, "critic")],
+        )
+        self.assertFalse(closure_counter.exists())
+
+        # A resumed owner and a restarted lifecycle may observe the boundary,
+        # but neither may consume the operator's opportunity to intervene.
+        with mock.patch.object(lifecycle, "_launch_lifecycle_process") as launch:
+            automatic = lifecycle.start_session(
+                self.home, session_id, lambda _record: None,
+                resume_round_pause=False,
+            )
+        launch.assert_not_called()
+        self.assertEqual(automatic["process"], "stopped")
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, session_id, require_pid_claim=False
+        ), 0)
+        self.assertEqual(store.read(session_id).revision, paused.revision)
+
+        intervention = "Keep the final decision focused on the operator's scope."
+        code, accepted = self._request(
+            "POST", "/api/brainstorming/sessions/%s/floor" % session_id,
+            {"text": intervention, "author_name": "operator"},
+        )
+        self.assertEqual(code, 200, accepted)
+        self.assertEqual(accepted["intervention"]["after_completed_turns"], 2)
+        self.assertTrue(store.read(session_id).state["paused_after_round"])
+
+        def explicit_start():
+            with mock.patch.object(
+                lifecycle, "_launch_lifecycle_process",
+                side_effect=lambda home, sid, **_kwargs:
+                    self._sleeper_launcher(home, sid),
+            ) as launch:
+                code, resumed = self._request(
+                    "POST", "/api/brainstorming/sessions/%s/start" % session_id,
+                    {},
+                )
+            self.assertEqual(code, 200, resumed)
+            launch.assert_called_once()
+            self.assertEqual(resumed["session"]["process"], "running")
+            self.assertFalse(resumed["session"]["state"].get("paused_after_round"))
+            self._stop_sleeper_record(session_id)
+
+        explicit_start()
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, session_id, require_pid_claim=False
+        ), 0)
+        second_pause = store.read(session_id).state
+        self.assertTrue(second_pause["paused_after_round"])
+        self.assertEqual(second_pause["rounds_used"], 2)
+        self.assertIsNone(second_pause.get("result"))
+        self.assertEqual(
+            [(turn["round"], turn["participant_id"])
+             for turn in second_pause["completed_turns"]],
+            [(1, "lead"), (1, "critic"), (2, "lead"), (2, "critic")],
+        )
+        self.assertEqual(closure_counter.read_text(encoding="utf-8"), "1")
+        code, view = self._request(
+            "GET", "/api/brainstorming/sessions/%s/view" % session_id
+        )
+        self.assertEqual(code, 200, view)
+        self.assertTrue(view["view"]["pause_after_round"])
+        self.assertTrue(view["view"]["paused_after_round"])
+        self.assertEqual(view["view"]["transcript_markdown"].count(intervention), 1)
+
+        # Even the final configured round waits before its closure ballot.
+        # Resuming without another message closes without replaying its turns.
+        explicit_start()
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, session_id, require_pid_claim=False
+        ), 0)
+        finished = store.read(session_id).state
+        self.assertEqual(finished["status"], "success")
+        self.assertEqual(finished["rounds_used"], 2)
+        self.assertEqual(finished["completed_turns"], second_pause["completed_turns"])
+        self.assertEqual(closure_counter.read_text(encoding="utf-8"), "2")
+
     def test_continuation_survives_restart_without_repeating_boundary_work(self):
         self._target("decline-continuation.md")
         created = lifecycle.create_session(
@@ -2188,6 +2288,44 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertEqual(after, before)
         record = lifecycle._record_by_id(self.home, created["id"])
         self.assertIsNone(record["pid"])
+        released.assert_not_called()
+        aborted.assert_called_once_with()
+
+    def test_round_resume_pre_release_death_preserves_operator_pause(self):
+        self._target("round-resume.md")
+        payload = self._payload("round-resume.md")
+        payload["request"]["pause_after_round"] = True
+        created = lifecycle.create_session(
+            self.home, payload, access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        session_id = created["id"]
+        self._stop_sleeper_record(session_id)
+        self.assertEqual(lifecycle.run_lifecycle(
+            self.home, session_id, require_pid_claim=False
+        ), 0)
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        before = store.read(session_id)
+        self.assertTrue(before.state["paused_after_round"])
+        process = mock.Mock()
+        process.pid = 987654
+        process.poll.side_effect = [None, 7]
+        released = mock.Mock()
+        aborted = mock.Mock()
+        launch = lifecycle.GatedLaunch(process, released, aborted)
+
+        with mock.patch.object(
+            lifecycle, "_launch_lifecycle_process", return_value=launch
+        ):
+            code, response = self._request(
+                "POST", "/api/brainstorming/sessions/%s/start" % session_id, {}
+            )
+
+        self.assertEqual((code, response["error"]), (
+            503, lifecycle.UNAVAILABLE
+        ))
+        self.assertEqual(store.read(session_id), before)
+        self.assertIsNone(lifecycle._record_by_id(self.home, session_id)["pid"])
         released.assert_not_called()
         aborted.assert_called_once_with()
 

@@ -1,6 +1,7 @@
 """Focused proof for prospective sibling milestone verification cadence."""
 
 import copy
+import io
 import os
 import subprocess
 import tempfile
@@ -560,6 +561,113 @@ class MilestoneVerificationCadenceTest(unittest.TestCase):
             st.unit_key(subject._milestone_verification_unit(records[1])),
             "milestone_verification-2",
         )
+
+    def _failed_checkpoint_for_command_override(self, terminal=True):
+        old_command = "python3 tests/run_tests.py all --report .test-reports/all.json"
+        self.config["verification"] = [old_command]
+        subject, unit = self._live_checkpoint(total=5, completed=5)
+        reply = self._checkpoint_reply("failed")
+        reply["commands"] = [old_command]
+        reply["results"][0]["command"] = old_command
+        reply["failure_account"]["command"] = old_command
+        self._run_checkpoint(subject, unit, reply)
+        self.assertEqual(unit["fix_source"]["suite_repair"]["commands"], [old_command])
+        st.fail_run(subject.state, "operator changed the required suite", unit=unit,
+                    type_="worker_blocked")
+        if terminal:
+            subject._prepare_milestone_verification()
+        else:
+            subject._save()
+        return subject, unit, old_command
+
+    def _resume_with_commands(self, commands):
+        arguments = ["resume", "--state", self.path]
+        for command in commands:
+            arguments.extend(("--verification-command", command))
+        with mock.patch("sys.stdout", new=io.StringIO()), \
+                mock.patch("sys.stderr", new=io.StringIO()):
+            return drv.main(arguments)
+
+    def _saved_state_bytes(self):
+        with open(self.path, "rb") as handle:
+            return handle.read()
+
+    def test_resume_with_commands_preserves_failure_and_certifies_fresh_plan(self):
+        subject, old_unit, old_command = self._failed_checkpoint_for_command_override()
+        old_record = copy.deepcopy(self._verification_records(subject)[0])
+        old_source = copy.deepcopy(old_unit["fix_source"])
+        old_queue = copy.deepcopy(old_unit["fix_queue"])
+        old_events = copy.deepcopy(subject.state["events"])
+        commands = ["python3 tests/run_tests.py checkpoint", "python3.9 tests/run_tests.py fast"]
+
+        self.assertEqual(self._resume_with_commands(commands), 0)
+
+        saved = st.load(self.path)
+        self.assertEqual(saved["config"]["verification"], commands)
+        self.assertEqual(saved["events"][:len(old_events)], old_events)
+        changes = [event for event in saved["events"] if event["type"] == "verification_commands_changed"]
+        self.assertEqual(len(changes), 1)
+        self.assertEqual((changes[0]["unit"], changes[0]["previous_commands"], changes[0]["commands"]),
+                         (st.unit_key(old_unit), [old_command], commands))
+        subject = drv.Driver(self.path, runner=base.runners.MockRunner([]))
+        self.assertTrue(subject._prepare_milestone_verification())
+        records = self._verification_records(subject)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0], old_record)
+        retained = subject._milestone_verification_unit(records[0])
+        self.assertEqual(retained["status"], st.U_FAILED)
+        self.assertEqual(retained["fix_source"], old_source)
+        self.assertEqual(retained["fix_queue"], old_queue)
+        fresh = subject._milestone_verification_unit(records[1])
+        self.assertEqual(st.unit_key(fresh), "milestone_verification-2")
+        self.assertFalse(subject._prepare_milestone_verification())
+        subject._prepare_complete_verification(fresh)
+        reply = self._checkpoint_reply("passed")
+        reply["commands"] = commands
+        reply["results"] = [{"command": command, "exit_code": 0,
+                             "evidence": "The operator-selected check passed."} for command in commands]
+
+        self._run_checkpoint(subject, fresh, reply)
+
+        self.assertEqual(len(subject.runner.calls), 1)
+        prompt = subject.runner.calls[0][2]
+        for command in commands:
+            self.assertIn(command, prompt)
+        self.assertNotIn(old_command, prompt)
+        event = next(event for event in reversed(subject.state["events"])
+                     if event["type"] == "verification")
+        self.assertEqual((event["unit"], event["status"], event["commands"]),
+                         (st.unit_key(fresh), "passed", commands))
+        self.assertEqual(event["results"], reply["results"])
+        self.assertEqual(subject.state["events"][:len(old_events)], old_events)
+        self.assertEqual(self._verification_records(subject)[0], old_record)
+
+    def test_resume_command_override_refuses_nonterminal_verification(self):
+        self._failed_checkpoint_for_command_override(terminal=False)
+        before = self._saved_state_bytes()
+        self.assertEqual(self._resume_with_commands(["python3 tests/run_tests.py checkpoint"]), 2)
+        self.assertEqual(self._saved_state_bytes(), before)
+
+    def test_resume_command_override_refuses_ordinary_failure(self):
+        subject = self._fixture()
+        unit = st._new_unit(st.UNIT_SLICE_IMPL, 6)
+        unit["status"] = st.U_FIXING
+        subject.state["units"].append(unit)
+        st.fail_run(subject.state, "ordinary implementation blocked", unit=unit, type_="worker_blocked")
+        subject._save()
+        before = self._saved_state_bytes()
+        self.assertEqual(self._resume_with_commands(["python3 tests/run_tests.py checkpoint"]), 2)
+        self.assertEqual(self._saved_state_bytes(), before)
+
+    def test_resume_command_override_refuses_blank_and_concurrent_mutation(self):
+        self._failed_checkpoint_for_command_override()
+        before = self._saved_state_bytes()
+        self.assertEqual(self._resume_with_commands([" "]), 2)
+        self.assertEqual(self._saved_state_bytes(), before)
+        if st.fcntl is not None:
+            with st.exclusive_mutation(self.path):
+                self.assertEqual(self._resume_with_commands(["python3 tests/run_tests.py checkpoint"]), 2)
+            self.assertEqual(self._saved_state_bytes(), before)
 
     def test_each_terminal_failure_requires_resume_and_restart_never_duplicates(self):
         subject = self._fixture()

@@ -154,7 +154,7 @@ class CreativityRolesTest(unittest.TestCase):
                 name = family["name"]
                 first = ("gpt-6-luna" if name == "codex"
                          else "claude-sonnet-5")
-                model = ("gpt-6-sol" if name == "codex"
+                model = ("gpt-6.1-sol" if name == "codex"
                          else "claude-opus-5-5")
                 for role in staffing.CREATIVITY_ROLES:
                     expected_effort = ("xhigh" if role == "creativity_evaluate_candidates"

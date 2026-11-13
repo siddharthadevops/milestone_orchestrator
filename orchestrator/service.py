@@ -179,9 +179,8 @@ Process bookkeeping: drivers spawned by this service are kept as Popen
 handles and polled (reaped) on every API operation — an exited driver never
 lingers as a zombie that os.kill(pid, 0) would misreport as running — and
 their registry pid is cleared once the exit is observed. A pid recorded by a
-PREVIOUS service process (service restart) is only trusted while it is a
-live session leader, which a real driver always is (start_new_session) and
-an OS-recycled pid almost never is.
+PREVIOUS service process (service restart) is only trusted while it leads
+its process group and its command runs the driver for the recorded state.
 
 Trust model: binds 127.0.0.1 only, no auth — it spawns full-permission LLM
 CLIs on your machine, exactly like running the driver yourself. Do not bind
@@ -1011,18 +1010,36 @@ def driver_alive(entry):
 
     Our own children are polled directly (poll() reaps, so a zombie is NOT
     alive). A pid we did not spawn (previous service process) is trusted
-    only while it is a live session leader — drivers always are
-    (start_new_session=True), OS-recycled pids almost never; this also
-    guarantees stop_run's killpg(pid) can only reach the driver's own
-    group, never an innocent process's job group."""
+    only while it leads its process group and its command identifies the
+    driver for this exact state. An unrelated process can also be a group
+    leader after the OS recycles a recorded pid."""
     pid = entry.get("pid")
     if not pid:
         return False
     with _CHILDREN_LOCK:
         tracked = _CHILDREN.get(pid)
     if tracked is not None:
-        return tracked[1].poll() is None
-    return registry.session_leader_alive(pid)
+        return tracked[0] == entry.get("id") and tracked[1].poll() is None
+    if not registry.session_leader_alive(pid):
+        return False
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode:
+        return False
+    # ps joins argv without quoting, so preserve spaces in the state path.
+    _, marker, state_args = result.stdout.strip().partition(
+        " -m orchestrator.driver run --state "
+    )
+    state_path = entry.get("state_path")
+    return bool(marker and state_path and (
+        state_args == state_path
+        or state_args.startswith(state_path + " --model-profiles-home ")
+    ))
 
 
 def reap_exited_drivers(home):
@@ -4471,6 +4488,7 @@ def _start_brainstorming_session(
                         brainstorming_tasks.standalone_staffing(inherited)
                     ),
                     session_id=session_id,
+                    resume_round_pause=True,
                 )
             except brainstorming_lifecycle.PublicLifecycleError:
                 raise
@@ -4526,6 +4544,7 @@ def _start_brainstorming_session(
                 home,
                 staffing_selection=staffing_selection,
                 session_id=session_id,
+                resume_round_pause=True,
             )
     except st.ConcurrentStateMutation as exc:
         raise ApiError(409, WORK_AREA_BUSY) from exc

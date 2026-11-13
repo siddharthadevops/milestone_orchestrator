@@ -1,0 +1,266 @@
+{
+  "kind": "discussion_turn",
+  "process": "brainstorming",
+  "description": "Evidence-grounded legal discussion: develop or challenge the requested work, with verified authorities and material questions.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: take the next turn in the bounded legal Brainstorming conversation.",
+          "Read the full chat, actual target documents, supplied facts and relevant authorities.",
+          "Advance the requested decision or document; surface only unanswered material questions."
+        ],
+        "variables": [],
+        "mount": [
+          "job:producer"
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "legal_context"
+      },
+      {
+        "ref": "legal_research"
+      },
+      {
+        "ref": "operator_amendments_author",
+        "mount": [
+          "role:initial_position"
+        ]
+      },
+      {
+        "ref": "operator_amendments_review",
+        "mount": [
+          "role:contrary_position"
+        ]
+      },
+      {
+        "ref": "bs_prior_decisions"
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "bs_workarea"
+      },
+      {
+        "ref": "process_authority"
+      },
+      {
+        "ref": "bs_sources"
+      },
+      {
+        "ref": "rethink_charge",
+        "mount": [
+          "job:rethink"
+        ]
+      },
+      {
+        "text": [
+          "TURN",
+          "- participant_id: {{participant_id}}",
+          "- role: {{role}}",
+          "- round: {{round}}",
+          "- work area at {{target_authority}}; primary target: {{target_path}}, {{target_state}} on disk"
+        ],
+        "variables": [
+          {
+            "name": "participant_id",
+            "required": true
+          },
+          {
+            "name": "role",
+            "required": true
+          },
+          {
+            "name": "round",
+            "required": true
+          },
+          {
+            "name": "target_path",
+            "required": true
+          },
+          {
+            "name": "target_authority",
+            "required": true
+          },
+          {
+            "name": "target_state",
+            "required": true
+          }
+        ],
+        "mount": [
+          "job:producer"
+        ]
+      },
+      {
+        "text": [
+          "TURN",
+          "- participant_id: {{participant_id}}",
+          "- role: {{role}}",
+          "- round: {{round}}",
+          "- repository authority: {{repository_authority}}"
+        ],
+        "variables": [
+          {
+            "name": "participant_id",
+            "required": true
+          },
+          {
+            "name": "role",
+            "required": true
+          },
+          {
+            "name": "round",
+            "required": true
+          },
+          {
+            "name": "repository_authority",
+            "required": true
+          }
+        ],
+        "mount": [
+          "job:rethink"
+        ]
+      },
+      {
+        "one_of": "role_stance"
+      },
+      {
+        "ref": "two_register",
+        "mount": [
+          "role:initial_position",
+          "target:document"
+        ]
+      },
+      {
+        "ref": "altitude_doc",
+        "mount": [
+          "role:initial_position",
+          "target:document"
+        ]
+      },
+      {
+        "ref": "reuse_gate",
+        "mount": [
+          "role:initial_position"
+        ]
+      },
+      {
+        "ref": "implementation_rules",
+        "mount": [
+          "role:initial_position",
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "evidence",
+        "mount": [
+          "role:contrary_position"
+        ]
+      },
+      {
+        "ref": "altitude_review",
+        "mount": [
+          "role:contrary_position",
+          "target:document"
+        ]
+      }
+    ]
+  },
+  "variants": {
+    "role_stance": {
+      "initial_position": {
+        "text": [
+          "ROLE",
+          "You are the Initial Position. Develop the most defensible answer to the actual legal",
+          "request and apply the authorized work before reporting it. The client's desired outcome",
+          "does not prove the facts or the legal thesis. Verify decisive authorities online, apply",
+          "them to the supported facts and test the strongest adverse authority or interpretation.",
+          "Make a proportionate document or repository change within the boundary. Put sources,",
+          "material uncertainty and unanswered operator questions in the document or chat, not only",
+          "in internal questions answers. Explain what changed and why. Defend supported choices",
+          "against unsupported criticism, and change position when better facts or authority warrant.",
+          "If a fact prevents a final conclusion, ask for it and deliver only what can be supported",
+          "conditionally; do not invent an answer or report a settled outcome to close the discussion."
+        ],
+        "variables": [],
+        "questions": []
+      },
+      "contrary_position": {
+        "text": [
+          "ROLE",
+          "You are the Contrary Position. Remain read-only: leave all files, the index and HEAD",
+          "unchanged. Test the current legal position against the request, actual documents, facts,",
+          "applicable law and verified online sources. Seek adverse authority and the strongest",
+          "plausible competing interpretation; examine jurisdiction, dates, factual distinctions",
+          "and procedural availability where they can change the result. A prior agreement or a",
+          "source favorable to the client does not settle the question. Identify material gaps and",
+          "ask focused questions in chat. Offer a better alternative only when evidence supports",
+          "its legal and practical advantage for the same objective; explain costs and limits.",
+          "Do not manufacture disagreement, demand an exhaustive audit or concede a plausible but",
+          "unsupported legal claim. Consider Dante's questions and state what remains unresolved."
+        ],
+        "variables": [],
+        "questions": [
+          {
+            "id": "turn_better_alternative",
+            "text": "After checking the facts and authorities, is there a materially better legal interpretation, drafting choice or lawful route to the same objective? Put a supported alternative and its trade-off in chat, or explain briefly why none was supported."
+          }
+        ]
+      }
+    }
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (self-checks: answer concisely from actual work; retain material sources, limits and unanswered questions in the document or chat too)"
+    ],
+    "items": [
+      {
+        "id": "turn_environment_fit",
+        "text": "Which law, forum, territory, relevant dates, party capacity and matter stage govern this turn, and what material part remains unknown? Do not infer jurisdiction from language."
+      },
+      {
+        "id": "turn_human_scale",
+        "text": "Does this turn resolve the requested decision or document at the right depth? Compare it with the objective and identify any unnecessary clause, procedure or investigation removed without weakening a needed protection."
+      },
+      {
+        "id": "turn_legal_facts",
+        "text": "Which decisive facts are documented, disputed, inferred or missing? What unanswered question about proof, notice, timing or party capacity could change the result, and where did you put it for the operator or authors?"
+      },
+      {
+        "id": "turn_legal_sources",
+        "text": "Which decisive references did you actually contrast on the internet in reliable primary sources? Identify source, article/paragraph, applicable version/date, legal force and check date; what remains unverified and how does that limit this turn?"
+      },
+      {
+        "id": "turn_legal_position",
+        "text": "What adverse authority, exception or competing interpretation did you actively seek online? Explain the strongest objection, factual fit and why the current position survives, changes or stays uncertain; lack of a search result does not prove absence."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "discussion_turn_envelope",
+        "text": [
+          "OUTPUT CONTRACT",
+          "Return exactly one JSON object with kind \"discussion_turn\", one non-empty",
+          "\"markdown\" field, and the \"questions\" entries required below. You may add",
+          "ready: true when your position needs no further turns. Ready refers to",
+          "the current accepted revision; the session's closure protocol decides",
+          "how that judgment counts. Do not add source",
+          "content or control metadata beyond these fields."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

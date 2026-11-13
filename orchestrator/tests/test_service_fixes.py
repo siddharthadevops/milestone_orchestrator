@@ -7,8 +7,8 @@ Covers, against orchestrator/service.py + registry.py + driver.py:
   just the driver;
 - start_run's check-spawn-record is atomic under the registry lock (two
   concurrent starts spawn exactly one driver);
-- pid-reuse mitigations: a recorded pid that is not a live session leader
-  is never trusted and never signalled (innocent processes survive stop);
+- pid-reuse mitigations: unrelated processes, including session leaders,
+  are never trusted or signalled (innocent processes survive stop);
 - read_log_tail reads a bounded tail, not the whole file;
 - init_run's exclusive state creation (no exists() TOCTOU);
 - config merge semantics have a single source of truth (driver.merge_config);
@@ -576,12 +576,10 @@ class TestPidReuseMitigations(ServiceFixesTestCase):
             innocent.kill()
             innocent.wait()
 
-    def test_untracked_session_leader_pid_is_still_trusted(self):
-        # After a service restart the driver is no longer a tracked child,
-        # but it IS a session leader — it must still count as running.
-        ws = self.workspace("ws-restart")
+    def test_unrelated_session_leader_is_not_trusted_or_signalled(self):
+        ws = self.workspace("ws-reused-leader")
         entry = service.create_run(
-            self.home, {"workspace": ws, "goal": "restart", "autostart": False}
+            self.home, {"workspace": ws, "goal": "reuse", "autostart": False}
         )
         run_id = entry["id"]
         leader = subprocess.Popen(
@@ -591,15 +589,57 @@ class TestPidReuseMitigations(ServiceFixesTestCase):
         try:
             registry.update(self.home, run_id, pid=leader.pid)
             entry = self._entry(run_id)
-            self.assertTrue(service.driver_alive(entry))
-            with self.assertRaises(service.ApiError) as ctx:
-                service.delete_run(self.home, run_id)
-            self.assertEqual(ctx.exception.status, 409)
+            self.assertFalse(service.driver_alive(entry))
+            self.assertEqual(service.run_status(entry)["process"], "stopped")
+            self.assertFalse(service.stop_run(self.home, run_id)["stopped"])
+            self.assertIsNone(leader.poll(), "stop_run killed an unrelated leader")
         finally:
             leader.kill()
             leader.wait()  # fully reaped: no zombie ambiguity below
         self.assertFalse(service.driver_alive(self._entry(run_id)))
         service.delete_run(self.home, run_id)
+
+    def test_untracked_driver_is_bound_to_its_state_after_restart(self):
+        ws = self.workspace("ws restart with spaces")
+        worker = [sys.executable, "-c", "import time; time.sleep(600)"]
+        entry = service.create_run(self.home, {
+            "workspace": ws, "goal": "restart", "autostart": True,
+            "config": {"commands": {"codex": worker, "claude": worker}},
+        })
+        pid = entry["pid"]
+        # Simulate a service restart losing its Popen handle.
+        with service._CHILDREN_LOCK:
+            tracked = service._CHILDREN.pop(pid)
+        try:
+            self.assertTrue(service.driver_alive(entry))
+            self.assertEqual(service.run_status(entry)["process"], "running")
+            with self.assertRaises(service.ApiError) as ctx:
+                service.delete_run(self.home, entry["id"])
+            self.assertEqual(ctx.exception.status, 409)
+            other = dict(entry, state_path=entry["state_path"] + ".other")
+            self.assertFalse(service.driver_alive(other))
+        finally:
+            with service._CHILDREN_LOCK:
+                service._CHILDREN[pid] = tracked
+            service.stop_run(self.home, entry["id"])
+
+    def test_unreadable_untracked_process_is_not_trusted(self):
+        entry = {"pid": 10_000_001, "state_path": "/tmp/state.json"}
+        with mock.patch.object(registry, "session_leader_alive", return_value=True):
+            for error in (OSError("ps unavailable"),
+                          subprocess.TimeoutExpired("ps", 2)):
+                with self.subTest(error=type(error).__name__), mock.patch.object(
+                    service.subprocess, "run", side_effect=error
+                ):
+                    self.assertFalse(service.driver_alive(entry))
+
+    def test_tracked_driver_cannot_be_attributed_to_another_run(self):
+        pid = 10_000_002
+        self.fake_child_pids.add(pid)
+        with service._CHILDREN_LOCK:
+            service._CHILDREN[pid] = ("new-run", _FakeProc(pid))
+        self.assertTrue(service.driver_alive({"id": "new-run", "pid": pid}))
+        self.assertFalse(service.driver_alive({"id": "old-run", "pid": pid}))
 
 
 # ---------------------------------------------------------------------------

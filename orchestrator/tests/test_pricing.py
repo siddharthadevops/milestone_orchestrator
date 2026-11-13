@@ -71,6 +71,7 @@ class CodexAdapterTest(unittest.TestCase):
         standard_in = {"input_tokens": 100_000}
         standard_out = {"input_tokens": 0, "output_tokens": 100_000}
         for model, expect_in, expect_out in (
+            ("gpt-6.1-sol", 2.00, 10.00),
             ("gpt-6-astra", 10.00, 50.00),
             ("gpt-6-sol", 2.00, 10.00),
             ("gpt-6-luna", 0.10, 0.50),
@@ -96,6 +97,7 @@ class CodexAdapterTest(unittest.TestCase):
             "output_tokens": 100,
         }
         for model, input_rate, cached_rate, write_rate, output_rate in (
+            ("gpt-6.1-sol", 2.00, 0.10, 2.50, 10.00),
             ("gpt-6-sol", 2.00, 0.20, 2.50, 10.00),
             ("gpt-6-luna", 0.10, 0.01, 0.125, 0.50),
         ):
@@ -117,6 +119,7 @@ class CodexAdapterTest(unittest.TestCase):
             "output_tokens": 10_000,
         }
         for model, input_rate, cached_rate, write_rate, output_rate in (
+            ("gpt-6.1-sol", 2.00, 0.10, 2.50, 10.00),
             ("gpt-6-sol", 2.00, 0.20, 2.50, 10.00),
             ("gpt-6-luna", 0.10, 0.01, 0.125, 0.50),
         ):
@@ -124,6 +127,14 @@ class CodexAdapterTest(unittest.TestCase):
                 self.assertAlmostEqual(
                     pricing.codex_api_cost(model, at_boundary),
                     (272_000 * input_rate + 1000 * output_rate)
+                    / 1_000_000.0,
+                    places=12,
+                )
+                self.assertAlmostEqual(
+                    pricing.codex_api_cost(
+                        model, {"input_tokens": 272_001, "output_tokens": 1000}
+                    ),
+                    (272_001 * input_rate * 2 + 1000 * output_rate * 1.5)
                     / 1_000_000.0,
                     places=12,
                 )
@@ -139,7 +150,7 @@ class CodexAdapterTest(unittest.TestCase):
                 )
 
     def test_gpt_6_needs_total_input_to_choose_its_price_tier(self):
-        for model in ("gpt-6-sol", "gpt-6-luna"):
+        for model in ("gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"):
             with self.subTest(model=model):
                 self.assertIsNone(
                     pricing.codex_api_cost(
@@ -228,17 +239,19 @@ class CodexAdapterTest(unittest.TestCase):
         # snake_case would price every band at zero and call it KNOWN.
         camel = {
             "inputTokens": 19042, "cachedInputTokens": 11008,
-            "cacheWriteInputTokens": 0, "outputTokens": 5,
+            "cacheWriteInputTokens": 300, "outputTokens": 5,
         }
         snake = {
             "input_tokens": 19042, "cached_input_tokens": 11008,
-            "cache_write_input_tokens": 0, "output_tokens": 5,
+            "cache_write_input_tokens": 300, "output_tokens": 5,
         }
-        self.assertEqual(
-            pricing.codex_api_cost("gpt-5.6-sol", camel),
-            pricing.codex_api_cost("gpt-5.6-sol", snake),
-        )
-        self.assertGreater(pricing.codex_api_cost("gpt-5.6-sol", camel), 0)
+        for model in ("gpt-6.1-sol", "gpt-5.6-sol"):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    pricing.codex_api_cost(model, camel),
+                    pricing.codex_api_cost(model, snake),
+                )
+                self.assertGreater(pricing.codex_api_cost(model, camel), 0)
 
     def test_a_payload_naming_no_band_is_unknown_not_free(self):
         # The shape is unrecognized, not empty of charges.

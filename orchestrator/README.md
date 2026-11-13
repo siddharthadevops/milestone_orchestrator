@@ -62,8 +62,9 @@ Python 3.9+ standard library only. No dependencies.
 
 State lives at `<workspace>/.orchestrator/state.json`; raw worker outputs at
 `<workspace>/.orchestrator/raw/`. A failed run keeps its full explanation in
-`state.failure` and the event log; `status` prints it. Config is frozen into
-the state at `init`.
+`state.failure` and the event log; `status` prints it. Config is captured in
+the state at `init`; the explicit verification override below changes only
+the commands for subsequent verification.
 
 Disposable agent calls use Codex's `--ephemeral` (or an ephemeral app-server
 thread) and Claude's `--no-session-persistence`. The runner captures the reply
@@ -81,7 +82,13 @@ browser.
 
     ./panel.sh                # from the repo root -> http://127.0.0.1:8700
     ./panel.sh --port 9000 --open
-    ./panel-remote.sh         # ngrok + Google OAuth exact-email allowlist
+
+The shared ngrok launcher lives outside this repository in the sibling directory
+`../ngrok`: run `../ngrok/start.sh` manually to expose Orchestrator and Agent99, or
+`../ngrok/start.sh --check` to validate without starting the tunnels. That directory
+owns `ngrok.yml`, public domains and local destinations. It reads the Google OAuth
+policy from this repository's `orchestrator.access`, preserving one access allowlist.
+It runs in the foreground; Ctrl-C stops only ngrok. Start the applications separately.
 
 Remote access fails closed unless ngrok injects a known Google identity.
 The configured administrator sees every project and assigns either configured
@@ -182,6 +189,21 @@ ledgers retain **NOT VERIFIED**, and milestone closure still requires a passing
 full suite. The final checkpoint cannot defer failures.
 Resuming a milestone with a failed checkpoint creates a fresh verification
 attempt and retains the previous attempt's result in its history.
+If a terminal failed milestone verification selected the wrong suite, stop the
+run and supply the replacement plan explicitly when resuming:
+
+```sh
+python3 -m orchestrator.driver resume --state /path/to/state.json \
+  --verification-command 'CI=1 python3 tests/run_tests.py checkpoint --report .test-reports/checkpoint.json'
+```
+
+Repeat `--verification-command` for additional ordered commands, then use the
+panel's Start or the normal `run` command. The operation takes the driver state
+lock and records the configuration change and resume together. The next attempt
+uses exactly that plan; prior failed results and repair commands stay unchanged.
+This override requires a terminal failed milestone-verification task. It neither
+retargets an in-flight fixer nor turns existing test reports into passing evidence.
+An amendment can explain the scope, but does not itself replace retained commands.
 Documentation does not run the full suite, and split implementation parts
 (`a`...`z`) still count as one logical slice. Focused checks remain the
 implementer's and fixer's ordinary feedback while bytes change; there are no
@@ -244,9 +266,10 @@ driver's own process group and the driver forwards the stop to any
 in-flight worker CLI's process group (workers run in their own sessions),
 so no full-permission worker is orphaned mid-edit. A pid recorded by a
 previous service process (after a restart) is trusted only while it is a
-live session leader — which a real driver always is and an OS-recycled pid
-almost never is — so stale pids neither wedge start/delete nor let stop
-signal an innocent process group.
+live process-group leader whose command runs the driver for the recorded
+state file. Group leadership alone is insufficient: an OS-recycled pid can
+belong to an unrelated group leader. Stale pids neither wedge start/delete
+nor let stop signal that unrelated process group.
 
 Update/restart protocol: inspect every active milestone or Brainstorming
 worker immediately before stopping it. A call at or below two minutes may be
@@ -271,6 +294,16 @@ polling/follow surface, and `POST /api/brainstorming/sessions/<id>/stop` and
 discarding the session; Start resumes that same session after an ordinary
 stop. If the lifecycle does not stop within the existing shutdown window,
 Stop returns `brainstorming_stop_incomplete`.
+
+**Pause after every round** is an unchecked option in the Brainstorming task
+mechanism and standalone session forms (`configuration.pause_after_round`
+for tasks, `request.pause_after_round` for sessions). When enabled, each
+complete roster pass stops before closure. Use **Intervene** to append your
+turn, then **Resume session**, or resume without a message. The pause survives
+process restarts and owning tasks cannot resume it automatically. Repository
+discussions must consider any new intervention before accepting readiness;
+if no rounds remain, the existing **Continue** control grants more rounds.
+Omitting the option keeps automatic execution.
 
 When a complete round reaches the limit without agreement, the session enters
 non-terminal `waiting` and its process stops. Its task and any reviewed, deep,

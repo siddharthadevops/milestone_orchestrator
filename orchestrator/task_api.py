@@ -2664,6 +2664,7 @@ class DirectTaskHost:
                             brainstorming_tasks.lifecycle.start_session(
                                 self.home, session_id, lambda _record: True,
                                 resolve_staffing_session=lambda _record: st.staffing_session(subject.state),
+                                resume_round_pause=False,
                             )
                         except brainstorming_tasks.lifecycle.PublicLifecycleError as exc:
                             if exc.code != brainstorming_tasks.lifecycle.UNKNOWN_SESSION:

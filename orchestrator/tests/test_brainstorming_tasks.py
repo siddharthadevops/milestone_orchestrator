@@ -224,7 +224,7 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         selection = {"session": "staffing-session-1"}
         request = self.request(output_directory="out")
         order = self.order(
-            request, max_rounds=24, closure_policy="majority"
+            request, max_rounds=24, closure_policy="majority", pause_after_round=True
         )
         order["prompt_set"] = "operator"
         record = adapter.admit_task(
@@ -250,6 +250,7 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.assertEqual(created["id"], "bs-profile")
         body = create.call_args.args[1]
         self.assertEqual(body["request"]["max_rounds"], 24)
+        self.assertIs(body["request"]["pause_after_round"], True)
         self.assertEqual(body["closure_policy"], "majority")
         self.assertEqual(body["prompt_set"], "operator")
         self.assertEqual(
@@ -1306,6 +1307,34 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.assertIn(lifecycle.UNAVAILABLE, result["reason"])
         self.assertEqual(result["duration_s"], 4.0)
         self.assertEqual(result["token_usage"], usage(4))
+
+    def test_round_pause_resume_is_explicit_and_start_fault_keeps_task_open(self):
+        state = {}
+        record = adapter.admit_task(
+            state, self.order(pause_after_round=True), self.config, self.workspace
+        )
+        paused = self.projection(record["id"], status="running")
+        paused["state"]["result"] = None
+        paused["state"]["paused_after_round"] = True
+        with mock.patch.object(
+            adapter.lifecycle, "inspect_session", return_value=paused
+        ), mock.patch.object(
+            adapter.lifecycle, "start_session", return_value=paused
+        ) as start:
+            for explicit in (False, True):
+                adapter.start_task(
+                    state, record["id"], self.config, self.home,
+                    session_id="bs-paused", resume_round_pause=explicit,
+                )
+                self.assertIs(start.call_args.kwargs["resume_round_pause"], explicit)
+            for code in (lifecycle.UNAVAILABLE, lifecycle.CONTINUATION_CONFLICT):
+                start.side_effect = lifecycle.PublicLifecycleError(503, code)
+                with self.assertRaises(lifecycle.PublicLifecycleError):
+                    adapter.start_task(
+                        state, record["id"], self.config, self.home,
+                        session_id="bs-paused", resume_round_pause=True,
+                    )
+                self.assertIsNone(tasks.task_record(state, record["id"])["result"])
 
     def test_recovery_lock_failure_keeps_task_open_for_owned_session(self):
         state = {}

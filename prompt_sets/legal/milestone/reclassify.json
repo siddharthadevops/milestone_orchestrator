@@ -1,0 +1,150 @@
+{
+  "kind": "reclassify",
+  "process": "milestone",
+  "description": "Report-only assessment of how one unresolved legal finding could mislead dependent work and what that would cost.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: rate ONE finding's legal or documentary drift risk. REPORT ONLY — edit nothing and review nothing else."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "trusted_judgment_read_only"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "legal_context"
+      },
+      {
+        "ref": "legal_research"
+      },
+      {
+        "ref": "operator_amendments_review"
+      },
+      {
+        "text": [
+          "Rate the finding against {{artifact_path}} as it currently reads. Read the located passage, case evidence and necessary legal authority; do not accept a ledger summary as proof.",
+          "DRIFT RISK — likelihood that dependent work is silently misled:",
+          "  low    no plausible reading changes the next material legal or drafting decision",
+          "  medium nearby context lets a careful reader resolve it, although a hasty reader could miss it",
+          "  high   it could plausibly misdirect the next conclusion, clause, factual assertion, procedure or deadline",
+          "  xhigh  it confidently misstates a central fact, applicable authority, deadline or constraint that dependent work will probably repeat",
+          "A visible unresolved question may be easier to catch than a confident misstatement. Do not treat that visibility as eliminating an urgent legal consequence.",
+          "DRIFT DAMAGE — supported cost if dependent work relies on the error:",
+          "  low    a small local correction before use",
+          "  medium bounded rework within this unit, with no supported loss of position",
+          "  high   changes to dependent documents or reviewed work, or supported material exposure",
+          "  xhigh  effectively irreversible consequences, such as a missed nonrecoverable deadline or consequential external reliance",
+          "Use the documented circumstances; do not assume that any error causes a lost claim or that a draft can safely wait. Distinguish these workflow ratings from a definitive legal merits assessment.",
+          "WHO BUILDS ON IT: {{builders}} — assess what those actual recipients would infer.",
+          "If verified authority, procedural urgency or a wider legal effect makes the current severity misleading, state the evidence in `reason`. Do not inflate a rating to force a preferred strategy or deflate it to preserve consensus."
+        ],
+        "variables": [
+          {
+            "name": "artifact_path",
+            "required": true,
+            "description": "Workspace-relative path of the case or legal artifact being rated."
+          },
+          {
+            "name": "builders",
+            "required": true,
+            "description": "The next writers or editors who depend on the artifact, including their legal role."
+          }
+        ]
+      },
+      {
+        "text": [
+          "FINDING (severity {{finding_severity}}, id {{finding_id}}):",
+          "{{finding_summary}}",
+          "In plain words: {{finding_plain}}",
+          "Smallest supported legal or documentary failure scenario: {{finding_example}}"
+        ],
+        "variables": [
+          {
+            "name": "finding_severity",
+            "required": true
+          },
+          {
+            "name": "finding_id",
+            "required": true
+          },
+          {
+            "name": "finding_summary",
+            "required": true,
+            "description": "The finding's summary and validity account, verbatim from the legal ledger."
+          },
+          {
+            "name": "finding_plain",
+            "required": true,
+            "description": "The finding's stored plain-language sentence."
+          },
+          {
+            "name": "finding_example",
+            "required": true,
+            "description": "The finding's smallest stored legal or documentary failure scenario."
+          }
+        ]
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "Does your rating use the actual jurisdiction, stage, recipients and supported legal consequence rather than an imagined worst case or desired strategy? State the evidence that matters."
+      },
+      {
+        "id": "human_scale",
+        "text": "Is the rating proportionate to the likelihood of dependent work being misled and its supported correction cost? Distinguish a visible open question from a confident error without overlooking urgent deadlines."
+      },
+      {
+        "id": "legal_sources",
+        "text": "For this finding and its rating, which decisive references did you contrast online with reliable primary or official sources? Explain how you checked identity, exact provision or holding, date and current or historically applicable version, legal weight and applicability. Identify any supplied reference that failed or remains unverified and the resulting limit; if none, say so; never imply that an inaccessible source was checked."
+      },
+      {
+        "id": "legal_position",
+        "text": "For this finding and its rating, what is the strongest applicable authority or plausible legal interpretation against the proposed position? Explain the facts and reasoning that support or weaken it, distinguishing binding authority, persuasive material, party preference and your own judgment."
+      },
+      {
+        "id": "legal_missing_facts",
+        "text": "Which missing or disputed facts, jurisdiction, relevant date, procedural stage or deadline could change this finding and its rating? State what the record establishes, what must be asked or verified and whether a conditional answer is possible. Do not manufacture facts or ask immaterial questions."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each with concise case-document or verified legal evidence; these are investigation checks, not a separate legal opinion. Put material limitations and decision-changing questions in the deliverable.)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "reclassify_result",
+        "text": [
+          "OUTPUT CONTRACT (mandatory)",
+          "Respond with EXACTLY ONE JSON object and nothing else — no prose outside it,",
+          "no markdown fences:",
+          "{\"status\": \"ok\",",
+          " \"kind\": \"reclassify\",",
+          " \"drift_risk\": \"low\" | \"medium\" | \"high\" | \"xhigh\",",
+          " \"drift_damage\": \"low\" | \"medium\" | \"high\" | \"xhigh\",",
+          " \"reason\": \"<one sentence: the concrete basis for BOTH ratings>\",",
+          " \"questions\": [{\"id\": \"<id>\", \"answer\": \"<the answer, backed by an explanation>\"}, ...]}",
+          "  (one entry per QUESTIONS id above; each answer must be non-empty; substance and length are not machine-judged)"
+        ],
+        "variables": []
+      }
+    ]
+  }
+}

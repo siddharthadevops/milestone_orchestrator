@@ -776,6 +776,12 @@
     </select></div>
   <div class="field"><label>Maximum rounds *</label>
     <input id="b_rounds" type="number" min="1" step="1" value="20"></div>
+  <div class="field">
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+      <input type="checkbox" id="b_pause_after_round" style="width:auto">
+      Pause after every round</label>
+    <div class="hint">Wait after each completed round so you can add an
+      intervention, then resume the session when ready.</div></div>
   <div class="field"><label>Reference documents (optional)</label>
     <div id="b_refs_list"></div>
     <div class="pathrow">
@@ -1814,6 +1820,7 @@ function renderSessionDetail(view) {
   const terminal = BS_TERMINAL.has(view.status);
   const running = view.process === "running";
   const waiting = view.status === "waiting";
+  const roundPaused = view.paused_after_round && !running && !terminal;
   const listed = lastSessions.find(s => s.id === view.id);
   const displayStatus = waiting ? "waiting"
     : !terminal && !running ? "stopped" : view.status;
@@ -1835,6 +1842,9 @@ function renderSessionDetail(view) {
         : ""}
       <div class="amend-hint mono">closure: ${esc(view.closure_policy)} · ${
         view.same_family_fallback ? "same-family fallback" : "cross-family"}</div>
+      ${view.pause_after_round
+        ? `<div class="amend-hint">Pauses after every completed round for operator intervention.</div>`
+        : ""}
       <div class="amend-hint mono">rounds: ${view.round.completed} used · ${view.round.maximum} maximum · ${view.round.remaining} remaining</div></div>`;
     html += `<div class="card"><h3>Participants</h3>` +
       view.participants.map(p =>
@@ -1906,7 +1916,7 @@ function renderSessionDetail(view) {
       : ((!terminal && !waiting) || view.recoverable
           ? `<button class="btn primary" ${sessionStarting ? "disabled" : ""}
               onclick="startSelectedSession()">${sessionStarting ? "Starting…"
-                : view.recoverable ? "Resume session" : "Start session"}</button>`
+                : view.recoverable || roundPaused ? "Resume session" : "Start session"}</button>`
           : "")}
     ${!terminal
       ? `<button class="btn" onclick="openFloorDialog()">Intervene&#8230;</button>`
@@ -1917,6 +1927,10 @@ function renderSessionDetail(view) {
     <button class="btn" style="margin-left:auto"
       onclick="openSessionInfo()">Info&#8230;</button>
   </div>`;
+  if (roundPaused)
+    html += `<div class="card"><h3>Paused after round ${view.round.completed}</h3>
+      <div class="amend-hint">Use Intervene to add your message, then Resume session
+        when ready. You can also resume without adding a message.</div></div>`;
   if (waiting) {
     const controlBusy = sessionAddingRounds || sessionContinuing;
     html += `<div class="card"><h3>Waiting for more rounds</h3>
@@ -2837,6 +2851,7 @@ function spinEl() {
 }
 const MODEL_LABELS = Object.freeze({
   "gpt-6-astra": "astra",
+  "gpt-6.1-sol": "sol",
   "gpt-6-sol": "sol",
   "gpt-6-luna": "luna",
   "gpt-5.6-sol": "sol",
@@ -6502,7 +6517,9 @@ function snapshotTaskExecutorConfiguration(id) {
   if (!id) return;
   const values = {};
   document.querySelectorAll("#task_configuration [data-task-config]")
-    .forEach(control => { values[control.dataset.taskConfig] = control.value; });
+    .forEach(control => {
+      values[control.dataset.taskConfig] = taskConfigurationControlValue(control);
+    });
   taskExecutorDrafts[id] = values;
 }
 function onTaskExecutorChange() {
@@ -6559,6 +6576,9 @@ function taskConfigurationOption(choice) {
     ? {value: choice.value, label: choice.label ?? choice.value}
     : {value: choice, label: choice};
 }
+function taskConfigurationControlValue(control) {
+  return control.type === "checkbox" ? String(control.checked) : control.value;
+}
 function taskConfigurationLabel(name, definition) {
   if (definition.label) return definition.label;
   if (name === "population_size") return "Candidates per generation";
@@ -6602,6 +6622,12 @@ function renderTaskConfigurationSchema(schema, draft, prefix = "") {
           `<option value="${esc(choice.value)}"${choice.value === value ? " selected" : ""}>${esc(choice.label)}</option>`
         ).join("")}</select>`;
     }
+    if (definition.type === "boolean" && !definition.optional)
+      return `<label>${esc(taskConfigurationLabel(name, definition))}</label><div>
+        <input type="checkbox" style="width:auto" data-task-config="${esc(path)}"
+          aria-label="${esc(taskConfigurationLabel(name, definition))}"
+          data-task-config-type="boolean"${value === true || value === "true" ? " checked" : ""} ${change}>
+        ${definition.description ? `<div class="hint">${esc(definition.description)}</div>` : ""}</div>`;
     if (definition.type === "boolean")
       return `<label>${esc(taskConfigurationLabel(name, definition))}</label><select data-task-config="${esc(path)}"
         data-task-config-type="boolean" ${optional} ${change}>
@@ -6719,11 +6745,11 @@ function currentTaskConfiguration() {
   const controls = Array.from(document.querySelectorAll(
     "#task_configuration [data-task-config]"));
   const raw = Object.fromEntries(controls.map(control =>
-    [control.dataset.taskConfig, control.value.trim()]));
+    [control.dataset.taskConfig, taskConfigurationControlValue(control).trim()]));
   for (const control of controls) {
     if (!control.checkValidity())
       throw new Error("executor configuration is incomplete");
-    const value = control.value.trim();
+    const value = taskConfigurationControlValue(control).trim();
     if (control.dataset.taskConfigOptional === "true" && value === "")
       continue;
     const exclusive = control.dataset.taskConfigExclusiveMinimum;
@@ -6944,6 +6970,7 @@ function openBrainstormingForm(preselect) {
   // Every session starts from the default posture, never from whatever
   // the previous launch happened to tick.
   document.getElementById("b_deliver_chat").checked = false;
+  document.getElementById("b_pause_after_round").checked = false;
   document.getElementById("b_ref_input").value = "";
   renderBsRoster();
   renderBsRefs();
@@ -7117,6 +7144,8 @@ async function submitBrainstorming() {
   // so an unchecked box launches exactly like every session before it.
   if (document.getElementById("b_deliver_chat").checked)
     requestDoc.deliver_chat = true;
+  if (document.getElementById("b_pause_after_round").checked)
+    requestDoc.pause_after_round = true;
   const payload = {
     request: requestDoc,
     participants,

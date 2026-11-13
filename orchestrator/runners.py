@@ -1038,18 +1038,17 @@ def _extract_contract_output(text, validate, kind=None):
 # ---------------------------------------------------------------------------
 # Subprocess runner
 
-# Families whose CLI can spawn background, multi-turn "workflow"
-# orchestration. That model is fundamentally incompatible with the
-# orchestrator's one-shot contract: the worker fires an async workflow and
-# returns an interim "I'll continue next turn" message — but a `-p` call
-# has no next turn, so the process exits without the required JSON and the
-# call fails as contract-violating. We force the feature OFF in the worker
-# environment (claude reads CLAUDE_CODE_DISABLE_WORKFLOWS), so a claude
-# worker CANNOT defer and must produce its result in the single call.
-# Central and unbypassable: it does not depend on any config command,
-# survives every stop/start/resume/relaunch, and applies to every claude
-# call regardless of model or effort.
-WORKFLOW_DISABLED_ENV = {"claude": {"CLAUDE_CODE_DISABLE_WORKFLOWS": "1"}}
+# Bounded worker calls do not admit independent background workflows.
+# Ordinary subagents can still continue across Claude turns, so the live
+# transport follows structured activity signals through their completion.
+# Apply these controls centrally, including resumed workers and overrides.
+WORKFLOW_DISABLED_ENV = {"claude": {
+    "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",
+    # A result ends a turn, not necessarily its background work. Require
+    # the CLI's activity signals before closing the live transport.
+    "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS": "1",
+    "CLAUDE_CODE_BG_TASKS_REPORT_RUNNING": "1",
+}}
 _AMBIENT_EXECUTION = object()
 
 
@@ -2290,30 +2289,96 @@ class SubprocessRunner(object):
         read_event,
         no_event,
     ):
-        def user_message(text):
-            content = [{"type": "text", "text": text}]
-            return {"type": "user",
-                    "message": {"role": "user", "content": content}}
+        pending_prompts = set()
+        sent_prompts = set()
+        initial_prompt = None
+        prompt_answered = False
+        state = None
+        running_seen = False
+        live_tasks = []
+        completed = None
+        token_usage = None
+        usage_partial = False
+        cost_payload = None
+        seen_results = set()
 
-        if not send(user_message(prompt)):
+        def send_prompt(text):
+            nonlocal initial_prompt, state, completed
+            message_id = str(uuid.uuid4())
+            content = [{"type": "text", "text": text}]
+            pending_prompts.add(message_id)
+            sent_prompts.add(message_id)
+            if initial_prompt is None:
+                initial_prompt = message_id
+            state, completed = None, None
+            if send({"type": "user", "uuid": message_id,
+                     "origin": {"kind": "coordinator"},
+                     "message": {"role": "user", "content": content}}):
+                return True
+            pending_prompts.discard(message_id)
+            return False
+
+        if not send_prompt(prompt):
             raise RunnerError("claude stream closed before the initial prompt")
 
         def steer(text):
             record_steer(text)
-            return send(user_message(text))
+            return send_prompt(text)
+
+        def outcome(event=None, *, error=None):
+            text = ""
+            if event is not None:
+                structured = event.get("structured_output")
+                text = (json.dumps(structured, ensure_ascii=False)
+                        if structured is not None else event.get("result") or "")
+            return {
+                "text": text,
+                "session_ref": observed_session,
+                "complete": event is not None,
+                "ok": event is not None and error is None,
+                "error": error,
+                "token_usage": token_usage,
+                "token_usage_partial": usage_partial or token_usage is None or event is None,
+                # Claude usage is per turn, but its priced totals are
+                # cumulative. Adding snapshots would bill earlier turns
+                # repeatedly. Keep the latest non-zeroed provider snapshot.
+                "cost_payloads": [cost_payload] if cost_payload is not None else [],
+            }
 
         active_control._bind(
             steer, lambda _reason: (_kill_group(proc) or True)
         )
         observed_session = session_ref
         while True:
-            event = read_event()
+            try:
+                event = read_event()
+            except RunnerError as exc:
+                exc.token_usage = token_usage
+                exc.token_usage_partial = True
+                exc.cost_payloads = [cost_payload] if cost_payload is not None else []
+                exc.session_ref = observed_session
+                raise
             if event is no_event:
                 continue
             if event is None:
                 break
             if isinstance(event.get("session_id"), str):
                 observed_session = event["session_id"]
+            if event.get("type") == "system":
+                if event.get("subtype") == "session_state_changed":
+                    next_state = event.get("state")
+                    if next_state == "running":
+                        if state != "running":
+                            completed = None
+                        running_seen = True
+                    # An idle replay at startup cannot finish our new prompt.
+                    if next_state != "idle" or running_seen:
+                        state = next_state
+                elif event.get("subtype") == "background_tasks_changed":
+                    live_tasks = [task for task in event.get("tasks", [])
+                                  if not task.get("ambient", False)]
+                    if live_tasks:
+                        completed = None
             if event.get("type") == "assistant":
                 message = event.get("message") or {}
                 content = message.get("content") or []
@@ -2324,28 +2389,46 @@ class SubprocessRunner(object):
                             continue
                         active_control.observe_model_message(block.get("text"))
             if event.get("type") == "result":
-                return {
-                    "text": event.get("result") or "",
-                    "session_ref": observed_session,
-                    "complete": True,
-                    "ok": not bool(event.get("is_error")),
-                    "error": event.get("subtype"),
-                    "token_usage": normalize_token_usage(
-                        event.get("usage"), "claude"
-                    ),
-                    # The whole result event: it carries total_cost_usd,
-                    # which is the priced figure itself.
-                    "cost_payloads": [event],
-                }
-        return {
-            "text": "",
-            "session_ref": observed_session,
-            "complete": False,
-            "ok": False,
-            "error": None,
-            "token_usage": None,
-            "cost_payloads": [],
-        }
+                result_id = event.get("uuid") or json.dumps(event, sort_keys=True)
+                if result_id in seen_results:
+                    continue
+                seen_results.add(result_id)
+                usage = normalize_token_usage(event.get("usage"), "claude")
+                token_usage = add_token_usage(token_usage, usage)
+                usage_partial = usage_partial or usage is None
+                # A fatal/startup result can contain zeroed accounting. It
+                # must not erase costs already observed in this invocation.
+                if (cost_payload is None or event.get("total_cost_usd", 0)
+                        >= cost_payload.get("total_cost_usd", 0)):
+                    cost_payload = event
+                if event.get("is_error") or str(event.get("subtype", "")).startswith("error_"):
+                    errors = event.get("errors") or []
+                    detail = "; ".join(str(item) for item in errors)
+                    return outcome(event, error=(detail or event.get("result")
+                                                 or event.get("subtype")
+                                                 or "unknown provider error"))
+                answered = set(event.get("user_message_uuids") or [])
+                if isinstance(event.get("user_message_uuid"), str):
+                    answered.add(event["user_message_uuid"])
+                prompt_answered = prompt_answered or initial_prompt in answered
+                matches_prompt = bool(sent_prompts.intersection(answered))
+                pending_prompts.difference_update(answered)
+                origin = event.get("origin") or {}
+                followup = (prompt_answered and not answered
+                            and origin.get("kind") in (
+                                "task-notification", "auto-continuation",
+                            ))
+                has_output = (event.get("structured_output") is not None
+                              or bool((event.get("result") or "").strip()))
+                if ((matches_prompt or (followup and has_output))
+                        and not live_tasks and not event.get("queued_turn_count", 0)):
+                    completed = event
+                # A result produced while reviewers are still running is an
+                # interim turn. Draining tasks must never promote it later.
+            if (completed is not None and state == "idle" and running_seen
+                    and not live_tasks and not pending_prompts):
+                return outcome(completed)
+        return outcome(error="stream ended before an answered prompt, final result and idle session without pending tasks")
 
     def _call_template(
         self,

@@ -96,7 +96,7 @@ DEFAULT_CONFIG = {
     # incompatible with the one-shot call contract.
     "model_defaults": {
         "claude": {"model": "claude-opus-5-5", "effort": "xhigh"},
-        "codex": {"model": "gpt-6-sol", "effort": "xhigh"},
+        "codex": {"model": "gpt-6.1-sol", "effort": "xhigh"},
     },
     # How each family is PAID FOR, which is what separates the two costs the
     # panel shows. "subscription": the call spends a seat, so its real cost is
@@ -15390,13 +15390,50 @@ def cmd_status(args):
 
 def cmd_resume(args):
     path = _state_path(args)
-    state = st.load(path)
     try:
-        restored = st.resume_run(state)
-    except ValueError as exc:
+        with st.exclusive_mutation(path):
+            state = st.load(path)
+            commands = getattr(args, "verification_commands", None)
+            if commands is not None:
+                if not commands or any(
+                    not isinstance(command, str) or not command.strip()
+                    for command in commands
+                ):
+                    raise ValueError("verification commands must be non-empty strings")
+                failed_key = (state.get("failure") or {}).get("unit")
+                failed = next((unit for unit in state["units"]
+                               if st.unit_key(unit) == failed_key), None)
+                if (
+                    failed is None
+                    or failed["kind"] != st.UNIT_MILESTONE_VERIFICATION
+                    or failed["status"] != st.U_FAILED
+                    or not failed.get("reviewed_task_id")
+                ):
+                    raise ValueError(
+                        "verification commands can change only when resuming "
+                        "a terminal failed milestone verification"
+                    )
+                record = tasks.task_record(state, failed["reviewed_task_id"])
+                if (
+                    (record.get("result") or {}).get("status") != "failure"
+                    or record["order"]["configuration"].get("task_kind")
+                    != tasks.REVIEWED_COMPLETE_VERIFICATION
+                ):
+                    raise ValueError("the failed verification must have a terminal result")
+            restored = st.resume_run(state)
+            if commands is not None:
+                # The existing resume path admits a fresh verification task.
+                # Never relabel the old task's result or its repair commands.
+                previous = copy.deepcopy(state["config"].get("verification"))
+                state["config"]["verification"] = list(commands)
+                st.append_event(
+                    state, "verification_commands_changed", unit=failed_key,
+                    previous_commands=previous, commands=list(commands),
+                )
+            st.save(path, state)
+    except (ValueError, st.ConcurrentStateMutation) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    st.save(path, state)
     for unit, status in restored.items():
         print("resumed %s -> %s" % (unit, status))
     print("run resumed; relaunch with `run` (or the panel's Start)")
@@ -15524,6 +15561,13 @@ def main(argv=None):
         p.add_argument("--workspace", default=None)
         if name == "status":
             p.add_argument("--json", action="store_true")
+        if name == "resume":
+            p.add_argument(
+                "--verification-command", action="append",
+                dest="verification_commands", metavar="COMMAND",
+                help="replace the next verification plan after a terminal "
+                     "milestone verification failure; repeat for ordered commands",
+            )
         if name == "run":
             p.add_argument("--max-steps", type=int, default=1000)
         if name in ("status", "step", "run", "serve"):

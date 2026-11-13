@@ -119,6 +119,15 @@ def claude_api_cost(model, provider_output):
 # published rate summaries. Update by hand when OpenAI moves them — git dates
 # the change, so the table carries no date of its own.
 CODEX_RATES = {
+    "gpt-6.1-sol": {
+        "input": 2.00, "cached_input": 0.10, "cache_write": 2.50,
+        "output": 10.00,
+        "long_context": {
+            "input_tokens_over": 272_000,
+            "input_multiplier": 2.0,
+            "output_multiplier": 1.5,
+        },
+    },
     "gpt-6-astra": {
         "input": 10.00, "cached_input": 1.00, "cache_write": 12.50,
         "output": 50.00,

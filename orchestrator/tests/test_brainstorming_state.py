@@ -295,10 +295,13 @@ class BrainstormingStateTestCase(unittest.TestCase):
                 {"markdown": "Racing answer."},
             )
 
-    def _running_initialized(self, session_id):
+    def _running_initialized(self, session_id, pause_after_round=False):
+        session_request = request(self.workspace)
+        if pause_after_round:
+            session_request["pause_after_round"] = True
         created = self.store.create(
             session_id,
-            request(self.workspace),
+            session_request,
             run_config(),
             cross_family_participants(),
         )
@@ -309,6 +312,97 @@ class BrainstormingStateTestCase(unittest.TestCase):
         return self.store.initialize_coordination(
             session_id, running.revision, target
         )
+
+    def test_pause_option_requires_a_boolean(self):
+        for value in (True, False):
+            checked = bs.validate_request(
+                dict(request(self.workspace), pause_after_round=value)
+            )
+            self.assertIs(checked["pause_after_round"], value)
+        for value in (None, 0, 1, "true"):
+            with self.subTest(value=value), self.assertRaises(bs.ContractError):
+                bs.validate_request(
+                    dict(request(self.workspace), pause_after_round=value)
+                )
+
+    def test_round_pause_is_durable_and_released_once_after_operator_floor(self):
+        session_id = "paused-round"
+        snapshot = self._running_initialized(session_id, pause_after_round=True)
+        target = bs.make_target_revision(True, b"accepted target", 0o644)
+        snapshot = self.store.record_completed_turn(
+            session_id, snapshot.revision, "editor", "First turn.", target
+        )
+        self.assertNotIn("paused_after_round", snapshot.state)
+        with self.assertRaises(bs.ContractError):
+            bs.validate_session_state(dict(snapshot.state, paused_after_round=True))
+        snapshot = self.store.record_completed_turn(
+            session_id, snapshot.revision, "critic", "Second turn.", target
+        )
+        paused = bs.SessionStore(self.root).read(session_id)
+        self.assertTrue(paused.state["paused_after_round"])
+        self.assertEqual(paused.state["status"], "running")
+        with self.assertRaises(bs.IllegalTransition):
+            self.store.record_completed_turn(
+                session_id, paused.revision, "editor", "Too soon.", target
+            )
+        with self.assertRaises(bs.IllegalTransition):
+            bs._closure_ballot_at_current_boundary(paused.state, {})
+        snapshot = self.store.record_floor_intervention(
+            session_id, paused.revision, self._floor_fact(after=2)
+        )
+        self.assertTrue(snapshot.state["paused_after_round"])
+        with self.assertRaises(bs.RevisionConflict):
+            self.store.release_round_pause(session_id, paused.revision)
+        resumed = self.store.release_round_pause(session_id, snapshot.revision)
+        self.assertNotIn("paused_after_round", resumed.state)
+        self.assertEqual(resumed.state["rounds_used"], 1)
+        self.assertEqual(resumed.state["transcript_events"], snapshot.state["transcript_events"])
+        self.assertEqual(
+            self.store.release_round_pause(session_id, resumed.revision).revision,
+            resumed.revision,
+        )
+        for participant in cross_family_participants():
+            resumed = self.store.record_completed_turn(
+                session_id, resumed.revision, participant["id"], "Next round.", target
+            )
+        self.assertTrue(resumed.state["paused_after_round"])
+        self.assertEqual(resumed.state["rounds_used"], 2)
+
+    def test_paused_round_can_be_cancelled_and_default_stays_automatic(self):
+        target = bs.make_target_revision(True, b"accepted target", 0o644)
+        for pause in (False, True):
+            session_id = "cancel-round-%s" % pause
+            snapshot = self._running_initialized(session_id, pause_after_round=pause)
+            for participant in cross_family_participants():
+                snapshot = self.store.record_completed_turn(
+                    session_id, snapshot.revision, participant["id"], "Turn.", target
+                )
+            self.assertEqual(snapshot.state.get("paused_after_round", False), pause)
+            terminal = self.store.transition(
+                session_id, snapshot.revision, "failure",
+                failure_result(snapshot.state["transcript_ref"], rounds_used=1),
+                closing_summary(),
+            )
+            self.assertEqual(terminal.state["status"], "failure")
+            self.assertNotIn("paused_after_round", terminal.state)
+
+    def test_failed_resume_preparation_preserves_the_paused_revision(self):
+        session_id = "failed-round-resume"
+        snapshot = self._running_initialized(session_id, pause_after_round=True)
+        target = bs.make_target_revision(True, b"accepted target", 0o644)
+        for participant in cross_family_participants():
+            snapshot = self.store.record_completed_turn(
+                session_id, snapshot.revision, participant["id"], "Turn.", target
+            )
+        before_accept = mock.Mock(side_effect=RuntimeError("child exited"))
+        with self.assertRaisesRegex(RuntimeError, "child exited"):
+            self.store.release_round_pause(
+                session_id, snapshot.revision, before_accept=before_accept
+            )
+        before_accept.assert_called_once_with()
+        current = self.store.read(session_id)
+        self.assertEqual(current.revision, snapshot.revision)
+        self.assertEqual(current.state, snapshot.state)
 
     def _waiting_session(self, session_id):
         snapshot = self._running_initialized(session_id)

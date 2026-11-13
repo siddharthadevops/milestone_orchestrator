@@ -1400,7 +1400,7 @@ def _validate_request(request, *, legacy_charge):
                 "max_rounds",
             )
         ),
-        ("deliver_chat",),
+        ("deliver_chat", "pause_after_round"),
         "request",
     )
     for key in (
@@ -1413,6 +1413,11 @@ def _validate_request(request, *, legacy_charge):
         raise ContractError("request.max_rounds must be a positive integer")
     if "deliver_chat" in request and type(request["deliver_chat"]) is not bool:
         raise ContractError("request.deliver_chat must be a boolean")
+    if (
+        "pause_after_round" in request
+        and type(request["pause_after_round"]) is not bool
+    ):
+        raise ContractError("request.pause_after_round must be a boolean")
     if target_free_repository and request.get("deliver_chat", False):
         raise ContractError(
             "target-free repository requests cannot deliver chat beside a target"
@@ -1811,7 +1816,19 @@ def repository_positions_ready(state, coordination=None):
         item["id"]: item["role"]
         for item in state["run_config"]["participants"]
     }
-    for turn in coordination["completed_turns"]:
+    ready_after = 0
+    if state["request"].get("pause_after_round", False):
+        # Agreement predating new operator input cannot close an opted-in
+        # discussion before the participants have considered that input.
+        ready_after = max(
+            (
+                event["fact"]["after_completed_turns"]
+                for event in state["transcript_events"]
+                if event["kind"] == "floor_intervention"
+            ),
+            default=0,
+        )
+    for turn in coordination["completed_turns"][ready_after:]:
         participant_id = turn["participant_id"]
         if (
             roles.get(participant_id) in voting_roles
@@ -2333,6 +2350,7 @@ def _validate_closure_lifecycle(
             status in ("running", "waiting")
             and full_pass
             and repository_positions_ready(state, coordination)
+            and not state.get("paused_after_round", False)
         ):
             raise ContractError(
                 "common repository readiness must become success atomically"
@@ -2341,6 +2359,7 @@ def _validate_closure_lifecycle(
             status == "running"
             and full_pass
             and coordination["rounds_used"] == effective_max_rounds(state)
+            and not state.get("paused_after_round", False)
         ):
             raise ContractError(
                 "an exhausted repository discussion must wait"
@@ -2497,6 +2516,7 @@ def validate_session_state(state):
             "failure_origin",
             "effective_max_rounds",
             "continued_after_rounds",
+            "paused_after_round",
         ) + _COORDINATION_FIELDS,
         "state",
     )
@@ -2514,6 +2534,18 @@ def validate_session_state(state):
     coordination = _validate_coordination(
         state, request, run_config, status
     )
+    if "paused_after_round" in state and (
+        state["paused_after_round"] is not True
+        or not request.get("pause_after_round", False)
+        or status != "running"
+        or coordination is None
+        or coordination["rounds_used"] <= 0
+        or len(coordination["completed_turns"])
+        != coordination["rounds_used"] * len(run_config["participants"])
+    ):
+        raise ContractError(
+            "state.paused_after_round requires an opted-in running full round"
+        )
     continued_after_rounds = state.get("continued_after_rounds")
     if continued_after_rounds is not None and (
         type(continued_after_rounds) is not int
@@ -2679,6 +2711,8 @@ def transition_session(
 
     successor = copy.deepcopy(current)
     successor["status"] = new_status
+    if new_status != "running":
+        successor.pop("paused_after_round", None)
     if recovering:
         for field in ("result", "closing_summary", "failure_origin"):
             successor.pop(field, None)
@@ -2800,6 +2834,7 @@ def assert_participant_session_successor(
         "transcript_events",
         "transcript_format_version",
         "continued_after_rounds",
+        "paused_after_round",
     ):
         if not _same_json_value(old.get(field), new.get(field)):
             raise HistoryRewriteError(
@@ -2911,6 +2946,8 @@ def completed_turn_successor(
     current = validate_session_state(state)
     if current["status"] != "running":
         raise IllegalTransition("completed turns require a running session")
+    if current.get("paused_after_round", False):
+        raise IllegalTransition("the completed round is awaiting operator resume")
     if coordination_projection(current) is None:
         raise HistoryRewriteError("accepted coordination is not initialized")
     participant_id = _text(participant_id, "participant_id")
@@ -2955,6 +2992,8 @@ def completed_turn_successor(
     successor["accepted_target_revision"] = target_revision
     if (turn_index + 1) % len(participants) == 0:
         successor["rounds_used"] += 1
+        if successor["request"].get("pause_after_round", False):
+            successor["paused_after_round"] = True
     return validate_session_state(successor)
 
 
@@ -3011,6 +3050,56 @@ def _repository_closing_summary(outcome, reason):
     }
 
 
+def _finalize_repository_round(state):
+    """Apply readiness and exhaustion once the operator has had the floor."""
+    successor = copy.deepcopy(state)
+    if repository_positions_ready(successor, coordination_projection(successor)):
+        reason = (
+            "The configured voting threshold is ready on the current Git "
+            "revision."
+        )
+        result = {
+            "outcome": "success",
+            "transcript_ref": successor["transcript_ref"],
+            "rounds_used": successor["rounds_used"],
+        }
+        if not target_free_repository_session(successor):
+            result["target_ref"] = successor["request"]["target_path"]
+        summary = _repository_closing_summary("success", reason)
+        successor["status"] = "success"
+        successor["result"] = result
+        successor["closing_summary"] = summary
+        successor["history"].append(
+            {
+                "status": "success",
+                "result": copy.deepcopy(result),
+                "closing_summary": copy.deepcopy(summary),
+            }
+        )
+    elif successor["rounds_used"] == effective_max_rounds(successor):
+        successor["status"] = "waiting"
+        successor["history"].append({"status": "waiting"})
+    return successor
+
+
+def release_round_pause_successor(state):
+    """Release one accepted round without consuming another discussion turn."""
+    current = validate_session_state(state)
+    if not current.get("paused_after_round", False):
+        return current
+    successor = copy.deepcopy(current)
+    successor.pop("paused_after_round")
+    if repository_session(successor):
+        successor = _finalize_repository_round(successor)
+    return validate_session_state(successor)
+
+
+def assert_release_round_pause_successor(old_state, new_state):
+    expected = release_round_pause_successor(old_state)
+    if not _same_json_value(expected, validate_session_state(new_state)):
+        raise HistoryRewriteError("round pause release changed unrelated state")
+
+
 def repository_completed_turn_successor(
     state, participant_id, markdown, revision, ready
 ):
@@ -3020,6 +3109,8 @@ def repository_completed_turn_successor(
         raise IllegalTransition(
             "repository turns require a running repository session"
         )
+    if current.get("paused_after_round", False):
+        raise IllegalTransition("the completed round is awaiting operator resume")
     if coordination_projection(current) is None:
         raise HistoryRewriteError("repository coordination is not initialized")
     participant_id = _text(participant_id, "participant_id")
@@ -3055,43 +3146,10 @@ def repository_completed_turn_successor(
     full_pass = (turn_index + 1) % len(participants) == 0
     if full_pass:
         successor["rounds_used"] += 1
-
-    outcome = None
-    if full_pass and repository_positions_ready(
-        successor, coordination_projection(successor)
-    ):
-        outcome = "success"
-        reason = (
-            "The configured voting threshold is ready on the current Git "
-            "revision."
-        )
-    elif full_pass and successor["rounds_used"] == effective_max_rounds(successor):
-        successor["status"] = "waiting"
-        successor["history"].append({"status": "waiting"})
-        return validate_session_state(successor)
-
-    if outcome is None:
-        return validate_session_state(successor)
-
-    result = {
-        "outcome": outcome,
-        "transcript_ref": successor["transcript_ref"],
-        "rounds_used": successor["rounds_used"],
-        **({"reason": reason} if outcome == "failure" else {}),
-    }
-    if not target_free_repository_session(successor):
-        result["target_ref"] = successor["request"]["target_path"]
-    summary = _repository_closing_summary(outcome, reason)
-    successor["status"] = outcome
-    successor["result"] = result
-    successor["closing_summary"] = summary
-    successor["history"].append(
-        {
-            "status": outcome,
-            "result": copy.deepcopy(result),
-            "closing_summary": copy.deepcopy(summary),
-        }
-    )
+        if successor["request"].get("pause_after_round", False):
+            successor["paused_after_round"] = True
+        else:
+            successor = _finalize_repository_round(successor)
     return validate_session_state(successor)
 
 
@@ -3113,6 +3171,8 @@ def _closure_ballot_at_current_boundary(state, fact):
         raise IllegalTransition(
             "closure ballots require accepted running discussion"
         )
+    if state.get("paused_after_round", False):
+        raise IllegalTransition("the completed round is awaiting operator resume")
     checked_fact = validate_closure_ballot(fact, state["run_config"])
     maximum = effective_max_rounds(state)
     if "maximum" in checked_fact and checked_fact["maximum"] != maximum:
@@ -5016,6 +5076,8 @@ class SessionStore:
                 ):
                     return (False, public), False
                 assertion(validate_session_state(public["value"]), candidate)
+                if before_accept is not None:
+                    before_accept()
                 envelope = {
                     "revision": raw["revision"] + 1,
                     "value": candidate,
@@ -5549,6 +5611,26 @@ class SessionStore:
                 )
             except RevisionConflict:
                 continue
+
+    def release_round_pause(
+        self, session_id, expected_revision, before_accept=None
+    ):
+        """Resume an exact paused round, finalizing repository agreement if due."""
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = release_round_pause_successor(current.state)
+        if _same_json_value(candidate, current.state):
+            return current
+        return self._cas_coordination(
+            session_id,
+            expected_revision,
+            candidate,
+            assert_release_round_pause_successor,
+            before_accept=before_accept,
+        )
 
     def continue_waiting(
         self, session_id, expected_revision, before_accept=None

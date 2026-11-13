@@ -89,6 +89,15 @@ _BRAINSTORMING_CONFIGURATION_SCHEMA = {
         "choices": list(brainstorming.CLOSURE_POLICIES),
         "default": "unanimity",
     },
+    "pause_after_round": {
+        "type": "boolean",
+        "default": False,
+        "label": "Pause after every round",
+        "description": (
+            "Stops before closure so you can read the round, use Intervene "
+            "to add your turn, then Resume session."
+        ),
+    },
 }
 
 _REVIEWED_AGENT_CONFIGURATION_BY_KIND = {
@@ -704,6 +713,11 @@ def _resolve_configuration(
             # `minimum` is a floor, not a refusal: a planner or caller who
             # wrote less gets the floor, visibly, in the resolved value.
             value = max(value, definition["minimum"])
+        elif definition["type"] == "boolean":
+            if type(value) is not bool:
+                raise ContractError(
+                    "configuration.%s must be a boolean" % name
+                )
         elif definition["type"] == "choice":
             if value not in definition["choices"]:
                 raise ContractError(

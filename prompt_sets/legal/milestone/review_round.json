@@ -1,0 +1,191 @@
+{
+  "kind": "review_round",
+  "process": "milestone",
+  "description": "Report-only full legal review of the assigned plan, analysis or draft against the authorized task, case evidence and applicable authorities.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "one_of": "target_frame"
+      },
+      {
+        "ref": "contract_correction"
+      },
+      {
+        "ref": "implementation_scope",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "trusted_judgment_read_only"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "legal_context"
+      },
+      {
+        "ref": "legal_research"
+      },
+      {
+        "ref": "operator_amendments_review"
+      },
+      {
+        "ref": "verification_boundary"
+      },
+      {
+        "ref": "evidence"
+      },
+      {
+        "ref": "judgment_rubric"
+      },
+      {
+        "ref": "severity_battery"
+      },
+      {
+        "ref": "reuse_gate_review"
+      },
+      {
+        "ref": "doc_review_duty",
+        "mount": [
+          "target:document"
+        ]
+      },
+      {
+        "ref": "impl_review_duty",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "scope_authority",
+        "mount": [
+          "target:implementation"
+        ]
+      },
+      {
+        "ref": "altitude_review",
+        "mount": [
+          "target:document"
+        ]
+      },
+      {
+        "ref": "deferred_debt"
+      },
+      {
+        "ref": "adjudicated_rejections"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "Do your findings distinguish applicable legal requirements and factual defects from a preferred drafting style or strategy? Identify the relevant jurisdiction and stage, and any unsupported stronger standard removed."
+      },
+      {
+        "id": "human_scale",
+        "text": "Would the requester recognize the legal decision and priorities reflected by your findings? Explain whether comparing the artifact with the actual assignment made you keep, narrow or withdraw a finding."
+      },
+      {
+        "id": "legal_sources",
+        "text": "For this work, which decisive references did you contrast online with reliable primary or official sources? Explain how you checked identity, exact provision or holding, date and current or historically applicable version, legal weight and applicability. Identify any supplied reference that failed or remains unverified and the resulting limit; if none, say so; never imply that an inaccessible source was checked."
+      },
+      {
+        "id": "legal_position",
+        "text": "For this work, what is the strongest applicable authority or plausible legal interpretation against the proposed position? Explain the facts and reasoning that support or weaken it, distinguishing binding authority, persuasive material, party preference and your own judgment."
+      },
+      {
+        "id": "legal_missing_facts",
+        "text": "Which missing or disputed facts, jurisdiction, relevant date, procedural stage or deadline could change this work? State what the record establishes, what must be asked or verified and whether a conditional answer is possible. Do not manufacture facts or ask immaterial questions."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each with concise case-document or verified legal evidence; these are investigation checks, not a separate legal opinion. Put material limitations and decision-changing questions in the deliverable.)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_compact"
+      },
+      {
+        "ref": "review_contract"
+      },
+      {
+        "ref": "review_blocked"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  },
+  "variants": {
+    "target_frame": {
+      "slice_unit": {
+        "text": [
+          "TASK: {{task}} REPORT ONLY.",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} defines the assignment within the MANDATE. The original mandate remains at {{goal_path}} for unsettled intent; neither is authority for facts or law.",
+          "TARGET: {{target}}. Read the whole assigned legal artifact and the case documents, surrounding provisions and primary authorities needed to judge its meaning and effect.",
+          "STANDARD: {{reference_path}} — the reviewed legal work brief. A conflict in the brief itself with the mandate, verified evidence or applicable law is a finding too; an accepted baseline does not cure it."
+        ],
+        "variables": [
+          {
+            "name": "task",
+            "required": true,
+            "description": "For example, a full critique of the current legal analysis or draft."
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "target",
+            "required": true,
+            "description": "The case or legal artifact under review, including surrounding text needed for context."
+          },
+          {
+            "name": "reference_path",
+            "required": true,
+            "description": "The reviewed legal brief or skeleton the target must satisfy."
+          }
+        ]
+      },
+      "skeleton_unit": {
+        "text": [
+          "TASK: {{task}} REPORT ONLY.",
+          "BASELINE: the operator's mandate at {{goal_path}} defines the assignment, never the governing law or truth of a factual allegation.",
+          "TARGET: the skeleton at {{skeleton_path}}. Judge its fit to the actual case documents, jurisdiction, dates, represented interest, stage and requested outcome. Those sources are contextual evidence, not an unrestricted review target.",
+          "COVERAGE",
+          "- Every requested outcome belongs to a coherent unit, every unit serves the mandate, and dependencies that must be judged together stay together.",
+          "- Check that material factual gaps, deadlines, authority verification and contrary legal positions can be resolved by the plan without automatically adding a unit for every legal lens."
+        ],
+        "variables": [
+          {
+            "name": "task",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          }
+        ]
+      }
+    }
+  }
+}

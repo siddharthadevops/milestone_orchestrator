@@ -1,0 +1,144 @@
+{
+  "kind": "draft_slice_note",
+  "process": "milestone",
+  "description": "Legal work-note author: grounds one reviewed assignment in the case facts, applicable authorities, and intended legal deliverable.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "ref": "author_recovery"
+      },
+      {
+        "text": [
+          "TASK: draft the legal work note for slice {{slice_id}} ({{slice_title}}).",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} defines this assignment within the MANDATE. The original mandate remains at {{goal_path}}; consult it when intent is unsettled. Neither document proves a factual allegation or changes applicable law.",
+          "Read the exact case documents in scope and enough surrounding material to understand the parties, facts, stage, jurisdiction, deadlines and intended use."
+        ],
+        "variables": [
+          {
+            "name": "slice_id",
+            "required": true
+          },
+          {
+            "name": "slice_title",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          }
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "legal_context"
+      },
+      {
+        "ref": "legal_research"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "text": [
+          "Write {{slice_note_path}} as a concise legal work brief. Name the documents, issues and deliverable in scope; the client or represented interest, recipient and purpose; established facts and disputed allegations; applicable jurisdiction and relevant dates; non-goals, dependencies, material uncertainty, and acceptance evidence.",
+          "State what must be researched, reasoned or drafted without prescribing a desired legal conclusion. Identify a fact or authority that could change the answer and how the work can proceed conditionally while it remains unknown."
+        ],
+        "variables": [
+          {
+            "name": "slice_note_path",
+            "required": true,
+            "description": "Workspace-relative path where the legal work note must be written."
+          }
+        ]
+      },
+      {
+        "ref": "two_register"
+      },
+      {
+        "text": [
+          "LEGAL BASIS (structured gate; mandatory in this run)",
+          "Add the following concise rows for THIS unit, using located documentary evidence and verified legal sources rather than copying the plan. Mark a genuinely irrelevant row with a brief reason. Keep the brief focused on the requested decision.",
+          "  - jurisdiction_and_date: governing law, forum or authority, material dates and research cutoff, with the basis for applying them to this unit",
+          "  - facts_and_evidence: exact documents and facts relied on, their provenance, disputed allegations and material missing facts; do not treat an allegation as proved",
+          "  - objective_and_position: the party or interest served, their capacity, the decision or document needed, its recipient and current procedural or transactional stage",
+          "  - urgency_and_deadlines: any deadline relevant to this unit, its source, triggering event and unresolved time-computation issue; do not infer that silence means no deadline",
+          "  - authorities_and_counterposition: propositions requiring online verification of primary authorities, temporal validity and applicability, and the strongest plausible contrary reading or authority",
+          "  - proportionate_delivery: the smallest coherent research or drafting intervention, non-goals, dependencies and risks, plus case-specific evidence that the unit answers the request"
+        ],
+        "variables": []
+      },
+      {
+        "ref": "altitude_doc"
+      },
+      {
+        "ref": "reuse_gate"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (answer each with concise case-document or verified legal evidence; these are investigation checks, not a separate legal opinion. Put material limitations and decision-changing questions in the deliverable.)"
+    ],
+    "items": [
+      {
+        "id": "legal_basis_completeness",
+        "text": "Does the Legal Basis identify the decisive inputs and gaps for this assignment, with evidence or an explicit unknown for each relevant row? Name any missing basis that changes the work, rather than merely counting rows."
+      },
+      {
+        "id": "source_integrity",
+        "text": "Does this brief require an unnecessary new document, procedure, investigation or legal assumption instead of using the available case record and suitable existing instruments? Identify any extra work and its supported purpose."
+      },
+      {
+        "id": "environment_fit",
+        "text": "Does this unit match its recipient, intended legal use and procedural or transactional stage? Explain any demand that exceeds the authorized work, distinguishing mandatory legal requirements from preferred practice."
+      },
+      {
+        "id": "human_scale",
+        "text": "Compare the brief with the slice intent: is its research and drafting work the smallest coherent answer to that decision, or has it become an unrestricted legal audit?"
+      },
+      {
+        "id": "legal_sources",
+        "text": "For this work, which decisive references did you contrast online with reliable primary or official sources? Explain how you checked identity, exact provision or holding, date and current or historically applicable version, legal weight and applicability. Identify any supplied reference that failed or remains unverified and the resulting limit; if none, say so; never imply that an inaccessible source was checked."
+      },
+      {
+        "id": "legal_position",
+        "text": "For this work, what is the strongest applicable authority or plausible legal interpretation against the proposed position? Explain the facts and reasoning that support or weaken it, distinguishing binding authority, persuasive material, party preference and your own judgment."
+      },
+      {
+        "id": "legal_missing_facts",
+        "text": "Which missing or disputed facts, jurisdiction, relevant date, procedural stage or deadline could change this work? State what the record establishes, what must be asked or verified and whether a conditional answer is possible. Do not manufacture facts or ask immaterial questions."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_verbose"
+      },
+      {
+        "ref": "common_fields",
+        "defaults": {
+          "status_vocabulary": "\"ok\" | \"blocked\""
+        }
+      },
+      {
+        "ref": "draft_slice_note_result"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

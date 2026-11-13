@@ -27,6 +27,7 @@ class TaskPanelTests(unittest.TestCase):
         names = (
             "esc", "taskExecutorEntry", "taskConfigurationApplicable",
             "taskConfigurationValue", "taskConfigurationOption", "taskConfigurationLabel",
+            "taskConfigurationControlValue",
             "renderTaskConfigurationSchema", "taskUsesExecutionBinding",
             "setTaskConfigurationValue", "currentTaskConfiguration", "submitTaskForm",
             "duelCandidates", "duelProgress", "duelResult",
@@ -143,6 +144,7 @@ const postJSON = async (path, payload) => posts.push({path, payload});
         names = (
             "esc", "taskExecutorEntry", "taskConfigurationApplicable", "taskConfigurationValue",
             "taskConfigurationOption", "taskConfigurationLabel", "renderTaskConfigurationSchema", "taskUsesExecutionBinding",
+            "taskConfigurationControlValue",
             "setTaskConfigurationValue", "currentTaskConfiguration", "submitTaskForm",
             "snapshotTaskExecutorConfiguration", "onTaskConfigurationChange",
             "taskConfigurationLayers", "renderTaskExecutorEditor", "onTaskExecutorChange",

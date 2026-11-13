@@ -2830,6 +2830,8 @@ def view_session(
                 "same_family_fallback"
             ],
             "closure_policy": state["run_config"]["closure_policy"],
+            "pause_after_round": state["request"].get("pause_after_round", False),
+            "paused_after_round": state.get("paused_after_round", False),
             "closure_ballots": [
                 copy.deepcopy(event["fact"])
                 for event in state["transcript_events"]
@@ -3214,6 +3216,7 @@ def start_session(
     resolve_staffing_session=None,
     recover_revision=None,
     before_recovery=None,
+    resume_round_pause=True,
 ):
     """Resume a stopped session, optionally reopening an exact operational failure.
 
@@ -3262,6 +3265,8 @@ def start_session(
                 (snapshot.state["status"] in brainstorming.TERMINAL_STATUSES
                  and not recovering)
                 or snapshot.state["status"] == "waiting"
+                or (snapshot.state.get("paused_after_round", False)
+                    and not resume_round_pause)
                 or _process_alive(current)
             ):
                 return _projection(home, current)
@@ -3295,9 +3300,25 @@ def start_session(
                 store.recover_operational_failure(
                     session_id, recover_revision, before_accept=before_recovery
                 )
+            elif snapshot.state.get("paused_after_round", False):
+                def release_paused_round():
+                    if brainstorming.repository_session(snapshot.state):
+                        try:
+                            session_repository.require_accepted_repository(snapshot.state)
+                        except session_repository.SessionRepositoryError as exc:
+                            raise PublicLifecycleError(409, CONTINUATION_CONFLICT) from exc
+                    # As with Continue, the registry lock excludes the child
+                    # until the exact session revision has been accepted.
+                    _release_started(launch)
+
+                store.release_round_pause(
+                    session_id, snapshot.revision,
+                    before_accept=release_paused_round,
+                )
             resumed = copy.deepcopy(current)
         _track_child(home, session_id, launch.process)
-        _release_started(launch)
+        if not snapshot.state.get("paused_after_round", False):
+            _release_started(launch)
         return _projection(home, resumed)
     except PublicLifecycleError:
         if launch is not None:
@@ -3903,6 +3924,13 @@ def _wait_for_external_response(
         return
 
 
+def _lifecycle_at_rest(state):
+    return (
+        state["status"] in (*brainstorming.TERMINAL_STATUSES, "waiting")
+        or state.get("paused_after_round", False)
+    )
+
+
 def run_lifecycle(
     home,
     session_id,
@@ -3968,7 +3996,7 @@ def run_lifecycle(
             store, participant_execution, turn_preparer=turn_preparer
         )
         resumed = coordinator.reconcile_external_intervention(session_id)
-        if resumed.state["status"] in (*brainstorming.TERMINAL_STATUSES, "waiting"):
+        if _lifecycle_at_rest(resumed.state):
             return 0
         while True:
             try:
@@ -3976,7 +4004,7 @@ def run_lifecycle(
                 break
             except coordination.OperationalRetryPending as pending:
                 _wait_operational_retry(pending)
-        if prepared.state["status"] in (*brainstorming.TERMINAL_STATUSES, "waiting"):
+        if _lifecycle_at_rest(prepared.state):
             return 0
         execution_context = record["execution_context"]
 
@@ -3985,9 +4013,7 @@ def run_lifecycle(
                 snapshot = store.read(session_id)
                 if snapshot is None:
                     return 2
-                if snapshot.state["status"] in (
-                    *brainstorming.TERMINAL_STATUSES, "waiting"
-                ):
+                if _lifecycle_at_rest(snapshot.state):
                     return 0
                 try:
                     snapshot = coordinator.run_next_turn(
@@ -4005,9 +4031,7 @@ def run_lifecycle(
                     continue
                 except brainstorming.RevisionConflict:
                     continue
-                if snapshot.state["status"] in (
-                    *brainstorming.TERMINAL_STATUSES, "waiting"
-                ):
+                if _lifecycle_at_rest(snapshot.state):
                     return 0
 
         discussion_due_after_closure = False
@@ -4015,9 +4039,7 @@ def run_lifecycle(
             snapshot = store.read(session_id)
             if snapshot is None:
                 return 2
-            if snapshot.state["status"] in (
-                *brainstorming.TERMINAL_STATUSES, "waiting"
-            ):
+            if _lifecycle_at_rest(snapshot.state):
                 return 0
             pending_attempt = store.read_turn_attempt(session_id)
             projection = brainstorming.coordination_projection(snapshot.state)
@@ -4066,9 +4088,7 @@ def run_lifecycle(
                     continue
                 except brainstorming.RevisionConflict:
                     continue
-                if snapshot.state["status"] in (
-                    *brainstorming.TERMINAL_STATUSES, "waiting"
-                ):
+                if _lifecycle_at_rest(snapshot.state):
                     return 0
                 discussion_due_after_closure = True
                 continue
@@ -4096,14 +4116,12 @@ def run_lifecycle(
                     snapshot = store.read(session_id)
                     if (
                         snapshot is not None
-                        and snapshot.state["status"]
-                        in (*brainstorming.TERMINAL_STATUSES, "waiting")
+                        and _lifecycle_at_rest(snapshot.state)
                     ):
                         return 0
                 if (
                     snapshot is not None
-                    and snapshot.state["status"]
-                    in (*brainstorming.TERMINAL_STATUSES, "waiting")
+                    and _lifecycle_at_rest(snapshot.state)
                 ):
                     return 0
     except LifecycleStop:
