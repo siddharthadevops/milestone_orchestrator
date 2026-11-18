@@ -54,12 +54,12 @@ from orchestrator.tests.test_driver_mock import (
 # a family rather than repeating a literal.
 
 PLAN = ("claude", "claude-opus-5-5", "max")
-DRAFT = ("codex", "gpt-6.1-sol", "xhigh")
+DRAFT = ("codex", "gpt-6.2-sol", "xhigh")
 IMPLEMENT = ("claude", "claude-opus-5-5", "max")
-FIX = ("codex", "gpt-6.1-sol", "xhigh")
-CLASSIFY = ("codex", "gpt-6.1-sol", "xhigh")
+FIX = ("codex", "gpt-6.2-sol", "xhigh")
+CLASSIFY = ("codex", "gpt-6.2-sol", "xhigh")
 # The two `review` seats the converted `default` assigns, in index order.
-REVIEW_1 = ("codex", "gpt-6.1-sol", "xhigh")
+REVIEW_1 = ("codex", "gpt-6.2-sol", "xhigh")
 REVIEW_2 = ("claude", "claude-opus-5-5", "xhigh")
 
 SLICE_PLAN = {

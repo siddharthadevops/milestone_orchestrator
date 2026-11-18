@@ -2766,7 +2766,7 @@ class TestApplyModelEffort(unittest.TestCase):
         self.assertIn("model_reasoning_effort=high", out)
         d = DEFAULT_CONFIG["model_defaults"]
         self.assertEqual(
-            d["codex"], {"model": "gpt-6.1-sol", "effort": "xhigh"}
+            d["codex"], {"model": "gpt-6.2-sol", "effort": "xhigh"}
         )
         self.assertEqual(d["claude"],
                          {"model": "claude-opus-5-5", "effort": "xhigh"})

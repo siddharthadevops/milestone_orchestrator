@@ -424,7 +424,7 @@ const receipt = {
   physical_dispatch: {
     call_context: {job: 'evaluate_candidates', generation: 3,
       batch: '6b63c56a-d4ba-48fb-ac2b-fbefa28e1255'},
-    family: 'codex', model: 'gpt-6-astra', effort: 'xhigh',
+    family: 'codex', model: 'gpt-6.2-astra', effort: 'xhigh',
     prompt_set_fallback: null, completed: true, duration_s: 42, error: null,
   },
   attempt: {cost: {api_usd: 0.75, real_usd: 0.25}, cost_partial: false,
@@ -449,7 +449,7 @@ for (const detail of [receipt.call_id, receipt.physical_dispatch.call_context.ba
   assert(html.includes(detail), 'details retain ' + detail);
   assert(!summary.includes(detail), 'summary hides ' + detail);
 }
-assert(!visible(summary).includes('gpt-6-astra'));
+assert(!visible(summary).includes('gpt-6.2-astra'));
 const duel = structuredClone(receipt);
 duel.physical_dispatch.call_context = {job: 'author_candidate', candidate_id: 'a', round: 2};
 Object.assign(duel.physical_dispatch, {family: 'claude', model: 'claude-opus-5-5', effort: 'high'});

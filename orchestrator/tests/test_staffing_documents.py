@@ -395,10 +395,10 @@ def stored_default_shaped(name="stored-default"):
         "examples": ["any ordinary work"],
         "configurations": {
             "low": {
-                "skeletoner": {"agent": "codex", "model": "gpt-6.1-sol",
+                "skeletoner": {"agent": "codex", "model": "gpt-6.2-sol",
                                "effort": "high"},
                 "drafter": {"agent": "codex", "effort": "medium"},
-                "implementer": {"agent": "codex", "model": "gpt-6.1-sol",
+                "implementer": {"agent": "codex", "model": "gpt-6.2-sol",
                                 "effort": "high"},
                 "fixer": {"agent": "codex", "effort": "medium"},
                 "review_codex": {"effort": "medium"},
@@ -409,10 +409,10 @@ def stored_default_shaped(name="stored-default"):
                 "reclassifier": {"agent": "codex", "effort": "medium"},
             },
             "medium": {
-                "skeletoner": {"agent": "codex", "model": "gpt-6.1-sol",
+                "skeletoner": {"agent": "codex", "model": "gpt-6.2-sol",
                                "effort": "max"},
                 "drafter": {"agent": "codex", "effort": "xhigh"},
-                "implementer": {"agent": "codex", "model": "gpt-6.1-sol",
+                "implementer": {"agent": "codex", "model": "gpt-6.2-sol",
                                 "effort": "max"},
                 "fixer": "codex",
                 # The counterpart model — pinned here and nowhere else.
@@ -422,10 +422,10 @@ def stored_default_shaped(name="stored-default"):
                 "reclassifier": {"agent": "codex", "effort": "xhigh"},
             },
             "high": {
-                "skeletoner": {"agent": "codex", "model": "gpt-6.1-sol",
+                "skeletoner": {"agent": "codex", "model": "gpt-6.2-sol",
                                "effort": "max"},
                 "drafter": {"agent": "codex", "effort": "max"},
-                "implementer": {"agent": "codex", "model": "gpt-6.1-sol",
+                "implementer": {"agent": "codex", "model": "gpt-6.2-sol",
                                 "effort": "max"},
                 "fixer": {"agent": "codex", "effort": "max"},
                 "review_codex": {"effort": "max"},
@@ -670,7 +670,7 @@ class StaffingConversionTest(unittest.TestCase):
         with: the ladders below are the converted document's own.
         """
         expected_models = {
-            "codex": ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"],
+            "codex": ["gpt-6-luna", "gpt-6.2-sol", "gpt-6.2-astra"],
             "claude": ["claude-sonnet-5", "claude-opus-5-5"],
         }
         expected_efforts = ["low", "medium", "high", "xhigh", "max"]

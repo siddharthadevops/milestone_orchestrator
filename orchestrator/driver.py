@@ -96,7 +96,7 @@ DEFAULT_CONFIG = {
     # incompatible with the one-shot call contract.
     "model_defaults": {
         "claude": {"model": "claude-opus-5-5", "effort": "xhigh"},
-        "codex": {"model": "gpt-6.1-sol", "effort": "xhigh"},
+        "codex": {"model": "gpt-6.2-sol", "effort": "xhigh"},
     },
     # How each family is PAID FOR, which is what separates the two costs the
     # panel shows. "subscription": the call spends a seat, so its real cost is
