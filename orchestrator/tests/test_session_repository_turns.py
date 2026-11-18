@@ -189,6 +189,122 @@ class SessionRepositoryTurnsTest(unittest.TestCase):
         self.assertFalse(empty["committed"])
         self.assertEqual(gitops.head_full_sha(self.workspace), after)
 
+    def _unanchored_skeleton_session(self, status=state.U_ROUNDS):
+        document = state.load(self.state_path)
+        document["milestone"].pop(canonical_plan.ANCHOR_KEY, None)
+        document["milestone"]["slices"] = []
+        state.save(self.state_path, document)
+        subject = driver.Driver(
+            self.state_path, runner=runners.MockRunner([]),
+            model_profiles_home=self.home,
+        )
+        unit = state.current_unit(subject.state)
+        subject._ensure_initial_skeleton_task(unit)
+        unit["status"] = status
+        self.initial_skeleton_session = "initial-skeleton-session"
+        unit["brainstorming_wait"] = {
+            "session_id": self.initial_skeleton_session,
+            "signal": {"status": "need_rethink", "problem": "Resolve the draft."},
+            "origin": {
+                "unit": state.unit_key(unit),
+                "kind": "fix_findings" if status == state.U_FIXING else "review_round",
+            },
+        }
+        charge = self.charge()
+        charge["repository"] = subject._session_repository_context(unit)
+        return self.session_state(charge), charge
+
+    def test_initial_skeleton_rethink_commits_and_resumes_without_anchor(self):
+        target = Path(self.workspace, self.target_path)
+        for status in (state.U_ROUNDS, state.U_FIXING):
+            with self.subTest(status=status):
+                session, charge = self._unanchored_skeleton_session(status)
+                before = gitops.head_full_sha(self.workspace)
+                turn = session_calls.prepare_turn(
+                    self.home, session, {"id": "lead", "role": "initial_position"},
+                    1, before,
+                    session_id=self.initial_skeleton_session,
+                )
+                target.write_text("resolved %s\n" % status, encoding="utf-8")
+                outcome = turn.complete()
+                self.assertTrue(outcome["accept_reply"])
+                self.assertTrue(outcome["committed"])
+                self.assertNotEqual(outcome["revision"], before)
+                self.assertIsNone(outcome["anchor"])
+                milestone = state.load(self.state_path)["milestone"]
+                self.assertNotIn(canonical_plan.ANCHOR_KEY, milestone)
+                self.assertEqual(milestone["slices"], [])
+                session["accepted_target_revision"] = outcome["revision"]
+                session_repository.require_accepted_repository(
+                    session, session_id=self.initial_skeleton_session
+                )
+                stale = dict(session, accepted_target_revision=before)
+                with self.assertRaises(session_repository.SessionRepositoryError):
+                    session_repository.require_accepted_repository(
+                        stale, session_id=self.initial_skeleton_session
+                    )
+                contrary = session_repository.begin_attempt(
+                    session, charge, "contrary_position",
+                    session_id=self.initial_skeleton_session,
+                )
+                target.write_text("forbidden\n", encoding="utf-8")
+                rejected = session_repository.complete_attempt(contrary, "critic", 1)
+                self.assertFalse(rejected["accept_reply"])
+                self.assertFalse(rejected["committed"])
+                self.assertEqual(target.read_text(), "resolved %s\n" % status)
+                self.assertEqual(gitops.head_full_sha(self.workspace), outcome["revision"])
+                self.assertTrue(gitops.repository_clean(self.workspace))
+
+    def test_unanchored_skeleton_exception_excludes_production_and_other_units(self):
+        session, charge = self._unanchored_skeleton_session()
+        session["accepted_target_revision"] = gitops.head_full_sha(self.workspace)
+        with self.assertRaises(session_repository.SessionRepositoryError):
+            session_repository.begin_attempt(
+                session, charge, "initial_position", session_id="detached-session"
+            )
+        with self.assertRaises(session_repository.SessionRepositoryError):
+            session_repository.require_accepted_repository(
+                session, session_id="detached-session"
+            )
+        for job in ("draft_slice_note@slice_doc", "implement@slice_impl"):
+            with self.subTest(job=job), self.assertRaises(
+                session_repository.SessionRepositoryError
+            ):
+                session_repository.begin_attempt(
+                    session, dict(charge, job=job), "initial_position",
+                    session_id=self.initial_skeleton_session,
+                )
+        for kind in (state.UNIT_SLICE_DOC, state.UNIT_SLICE_IMPL):
+            with self.subTest(kind=kind):
+                document = state.load(self.state_path)
+                for previous in document["units"]:
+                    previous["status"] = state.U_SEALED
+                document["milestone"]["slices"] = copy.deepcopy(PLAN["slices"])
+                document["units"].append(state._new_unit(kind, 1))
+                state.save(self.state_path, document)
+                before = git(self.workspace, "status", "--porcelain")
+                with self.assertRaises(session_repository.SessionRepositoryError):
+                    session_repository.begin_attempt(
+                        session, charge, "initial_position",
+                        session_id=self.initial_skeleton_session,
+                    )
+                self.assertEqual(git(self.workspace, "status", "--porcelain"), before)
+
+    def test_initial_skeleton_rethink_cannot_commit_after_session_replacement(self):
+        session, charge = self._unanchored_skeleton_session()
+        attempt = session_repository.begin_attempt(
+            session, charge, "initial_position",
+            session_id=self.initial_skeleton_session,
+        )
+        before = gitops.head_full_sha(self.workspace)
+        Path(self.workspace, self.target_path).write_text("stale edit\n", encoding="utf-8")
+        document = state.load(self.state_path)
+        state.current_unit(document)["brainstorming_wait"]["session_id"] = "replacement"
+        state.save(self.state_path, document)
+        with self.assertRaises(session_repository.SessionRepositoryError):
+            session_repository.complete_attempt(attempt, "lead", 1)
+        self.assertEqual(gitops.head_full_sha(self.workspace), before)
+
     def test_standalone_reviewed_turns_commit_without_plan_authority(self):
         document = state.load(self.state_path)
         document["reviewed_task"] = {

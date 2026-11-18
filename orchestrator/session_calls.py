@@ -281,7 +281,7 @@ def prepare_turn(
     home, state, participant, round_number, target_revision,
     correction=None, staffing_session=None,
     prompt_set=prompt_sets.DEFAULT_SET_NAME,
-    project_context=None,
+    project_context=None, session_id=None,
 ):
     """Prepare one routed seat attempt from durable session identity."""
     charge = charge_from_state(state)
@@ -443,7 +443,9 @@ def prepare_turn(
             repository_backed and _milestone_skeleton_charge(charge)
         ),
     )
-    attempt = session_repository.begin_attempt(state, charge, role)
+    attempt = session_repository.begin_attempt(
+        state, charge, role, session_id=session_id
+    )
     return prepared._replace(
         complete=lambda: session_repository.complete_attempt(
             attempt, participant["id"], round_number

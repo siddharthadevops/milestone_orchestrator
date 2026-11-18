@@ -318,6 +318,18 @@ def _relative_path(path):
     return normalized.replace(os.sep, "/")
 
 
+def initial_skeleton_task_pending(state, unit):
+    """Whether the reviewed skeleton still owns the first plan decision."""
+    return bool(
+        not state.get("reviewed_task")
+        and unit is not None
+        and unit.get("kind") == st.UNIT_SKELETON
+        and state["milestone"].get(st.SKELETON_COMPOSITION_KEY)
+        == st.SKELETON_COMPOSITION_VERSION
+        and state["milestone"].get(ANCHOR_KEY) is None
+    )
+
+
 def _anchor(state):
     milestone = state.get("milestone")
     if not isinstance(milestone, dict):

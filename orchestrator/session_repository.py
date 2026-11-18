@@ -6,7 +6,7 @@ import collections
 import copy
 import os
 
-from . import canonical_plan, gitops
+from . import canonical_plan, gitops, tasks
 from . import state as st
 
 
@@ -155,7 +155,33 @@ def context_from_state(state):
     return context_from_charge(charge)
 
 
-def require_accepted_repository(session_state):
+def _initial_skeleton_owner(state, session_id):
+    if state["milestone"].get(canonical_plan.ANCHOR_KEY) is not None:
+        return None
+    unit = st.current_unit(state)
+    if (
+        not session_id
+        or not canonical_plan.initial_skeleton_task_pending(state, unit)
+        or (unit.get("brainstorming_wait") or {}).get("session_id") != session_id
+    ):
+        return None
+    task_id = unit.get("reviewed_task_id")
+    if (
+        task_id is not None
+        and tasks.task_record(state, task_id)["result"] is None
+    ):
+        return task_id
+    return None
+
+
+def _is_document_rethink(charge):
+    return (
+        charge.get("job") == "rethink"
+        and charge.get("artifact_type") == "document"
+    )
+
+
+def require_accepted_repository(session_state, *, session_id=None):
     """Prove a stopped worker left the accepted repository ready to resume."""
     context = context_from_state(session_state)
     if context is None:
@@ -185,7 +211,14 @@ def require_accepted_repository(session_state):
                         "standalone reviewed repository context lost its task"
                     )
             else:
-                canonical_plan.guarded_dispatch(milestone_state, lambda: None)
+                charge = session_state["request"]["context"]["source_payload"][
+                    "session_charge"
+                ]
+                if not (
+                    _is_document_rethink(charge)
+                    and _initial_skeleton_owner(milestone_state, session_id)
+                ):
+                    canonical_plan.guarded_dispatch(milestone_state, lambda: None)
         if (
             gitops.head_full_sha(workspace) != revision
             or not gitops.repository_clean(workspace)
@@ -230,20 +263,22 @@ def sealed_range(session_state):
     }
 
 
-def begin_attempt(session_state, charge, role):
+def _unanchored_attempt(context, workspace, role, **ownership):
+    snapshot = {
+        "workspace": workspace,
+        "anchor": None,
+        "repository": canonical_plan._repository_snapshot(workspace),
+        **ownership,
+    }
+    return RepositoryAttempt(context, snapshot, role)
+
+
+def begin_attempt(session_state, charge, role, *, session_id=None):
     """Capture one proportional boundary immediately before seat dispatch."""
     context = context_from_charge(charge)
     workspace = session_state["request"]["workspace_path"]
     if context.get("mode") == "standalone_task":
-        return RepositoryAttempt(
-            context,
-            {
-                "workspace": workspace,
-                "anchor": None,
-                "repository": canonical_plan._repository_snapshot(workspace),
-            },
-            role,
-        )
+        return _unanchored_attempt(context, workspace, role)
     milestone_state = st.load(context["state_path"])
     if milestone_state.get("workspace") != workspace:
         raise SessionRepositoryError(
@@ -254,16 +289,29 @@ def begin_attempt(session_state, charge, role):
             raise SessionRepositoryError(
                 "standalone reviewed repository context has no reviewed task"
             )
-        return RepositoryAttempt(
-            context,
-            {
-                "workspace": workspace,
-                "anchor": None,
-                "repository": canonical_plan._repository_snapshot(workspace),
-            },
-            role,
-        )
+        return _unanchored_attempt(context, workspace, role)
     try:
+        if (
+            _is_document_rethink(charge)
+            and milestone_state["milestone"].get(canonical_plan.ANCHOR_KEY) is None
+        ):
+            # The child can start before the driver saves its attachment.
+            # Read it under the same lock that protects the launch step.
+            with st.exclusive_mutation(context["state_path"], wait=True):
+                milestone_state = st.load(context["state_path"])
+                owner = _initial_skeleton_owner(milestone_state, session_id)
+                if owner is None:
+                    raise SessionRepositoryError(
+                        "the initial skeleton has no attached rethink for this session"
+                    )
+                if not gitops.repository_clean(workspace):
+                    raise SessionRepositoryError(
+                        "the skeleton rethink has uncommitted changes before dispatch"
+                    )
+                return _unanchored_attempt(
+                    context, workspace, role,
+                    initial_skeleton_task_id=owner, session_id=session_id,
+                )
         snapshot = canonical_plan.begin_author_call(
             milestone_state, context["skeleton_path"]
         )
@@ -274,7 +322,7 @@ def begin_attempt(session_state, charge, role):
     return RepositoryAttempt(context, snapshot, role)
 
 
-def _complete_standalone_attempt(attempt, participant_id, round_number):
+def _complete_unanchored_attempt(attempt, participant_id, round_number):
     """Commit an author turn or enforce one read-only repository turn."""
     workspace = attempt.snapshot["workspace"]
     repository = attempt.snapshot["repository"]
@@ -321,7 +369,7 @@ def complete_attempt(attempt, participant_id, round_number):
     context = attempt.context
     try:
         if context.get("mode") == "standalone_task":
-            return _complete_standalone_attempt(
+            return _complete_unanchored_attempt(
                 attempt, participant_id, round_number
             )
         with st.exclusive_mutation(context["state_path"], wait=True):
@@ -331,7 +379,7 @@ def complete_attempt(attempt, participant_id, round_number):
                     raise SessionRepositoryError(
                         "standalone reviewed repository context lost its task"
                     )
-                return _complete_standalone_attempt(
+                return _complete_unanchored_attempt(
                     attempt, participant_id, round_number
                 )
             current_anchor = milestone_state["milestone"].get(
@@ -340,6 +388,17 @@ def complete_attempt(attempt, participant_id, round_number):
             if current_anchor != attempt.snapshot["anchor"]:
                 raise SessionRepositoryError(
                     "canonical-plan authority changed during a seat attempt"
+                )
+            if "initial_skeleton_task_id" in attempt.snapshot:
+                owner = _initial_skeleton_owner(
+                    milestone_state, attempt.snapshot["session_id"]
+                )
+                if owner != attempt.snapshot["initial_skeleton_task_id"]:
+                    raise SessionRepositoryError(
+                        "reviewed skeleton session changed during a seat attempt"
+                    )
+                return _complete_unanchored_attempt(
+                    attempt, participant_id, round_number
                 )
             message = "Brainstorming round %s — %s" % (
                 round_number, participant_id

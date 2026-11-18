@@ -2203,7 +2203,9 @@ class BrainstormingCoordinator:
                     in brainstorming.RECOVERABLE_FAILURE_TYPES
                 ):
                     current = self._require_running(self.store.read(session_id))
-                    session_repository.require_accepted_repository(current.state)
+                    session_repository.require_accepted_repository(
+                        current.state, session_id=session_id
+                    )
                     self.store.finish_turn_attempt(
                         session_id, attempt["token"]
                     )

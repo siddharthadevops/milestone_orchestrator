@@ -3258,7 +3258,9 @@ def start_session(
                 ):
                     raise PublicLifecycleError(409, CONTINUATION_CONFLICT)
                 try:
-                    session_repository.require_accepted_repository(snapshot.state)
+                    session_repository.require_accepted_repository(
+                        snapshot.state, session_id=session_id
+                    )
                 except session_repository.SessionRepositoryError as exc:
                     raise PublicLifecycleError(409, CONTINUATION_CONFLICT) from exc
             if (
@@ -3304,7 +3306,9 @@ def start_session(
                 def release_paused_round():
                     if brainstorming.repository_session(snapshot.state):
                         try:
-                            session_repository.require_accepted_repository(snapshot.state)
+                            session_repository.require_accepted_repository(
+                                snapshot.state, session_id=session_id
+                            )
                         except session_repository.SessionRepositoryError as exc:
                             raise PublicLifecycleError(409, CONTINUATION_CONFLICT) from exc
                     # As with Continue, the registry lock excludes the child
@@ -3990,6 +3994,7 @@ def run_lifecycle(
                        ),
                        prompt_set=prompt_set,
                        project_context=prompt_project_context,
+                       session_id=session_id,
                    )
         )
         coordinator = coordination.BrainstormingCoordinator(

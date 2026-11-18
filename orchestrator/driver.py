@@ -4217,15 +4217,7 @@ class Driver(object):
         }
 
     def _initial_skeleton_task_pending(self, unit):
-        """Whether first-plan authority belongs to the reviewed skeleton."""
-        return bool(
-            not self.state.get("reviewed_task")
-            and unit is not None
-            and unit.get("kind") == st.UNIT_SKELETON
-            and self.state["milestone"].get(st.SKELETON_COMPOSITION_KEY)
-            == st.SKELETON_COMPOSITION_VERSION
-            and self.state["milestone"].get(canonical_plan.ANCHOR_KEY) is None
-        )
+        return canonical_plan.initial_skeleton_task_pending(self.state, unit)
 
     def _ensure_initial_skeleton_task(self, unit):
         """Admit and associate the outer task before skeleton dispatch."""
@@ -9237,7 +9229,12 @@ class Driver(object):
             "source_base_revision" in handoff
             and "accepted_revision" in handoff
         ):
-            if not self.state.get("reviewed_task"):
+            # The first skeleton is still a candidate. Record the session's
+            # Git range below and let the review gate establish the first plan.
+            if (
+                not self.state.get("reviewed_task")
+                and not self._initial_skeleton_task_pending(unit)
+            ):
                 if self._observe_brainstorming_plan_range(
                     handoff["source_base_revision"],
                     handoff["accepted_revision"],

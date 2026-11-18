@@ -5,10 +5,13 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import canonical_plan, contracts, driver as drv, errclass
+from orchestrator import brainstorming_milestone, canonical_plan, contracts
+from orchestrator import driver as drv, errclass
 from orchestrator import gitops, ledgers, registry, runners, service
+from orchestrator import session_repository
 from orchestrator import state as st, tasks
 from orchestrator.tests import test_driver_mock as base
+from orchestrator.tests.test_worker_tasks import _created
 
 
 class MilestoneSkeletonCompositionTest(base.DriverTestCase):
@@ -216,6 +219,94 @@ class MilestoneSkeletonCompositionTest(base.DriverTestCase):
                     for _sha, message in base.git_subjects(workspace)
                 )
             )
+
+    def test_initial_skeleton_rethink_resumes_without_anchoring_before_gate(self):
+        with tempfile.TemporaryDirectory(prefix="skeleton-rethink-") as workspace:
+            path, subject, runner, final = self._fixture(workspace)
+            session_id = "initial-skeleton-rethink"
+            runner.script.insert(2, base.step(
+                contracts.KIND_FIX_FINDINGS,
+                {"status": "need_rethink", "problem": "Resolve the first-plan conflict."},
+                family="codex",
+            ))
+            # Brainstorming changes the plan; the fresh fixer completes its
+            # ordinary review work without undoing that accepted plan change.
+            rethought = final
+            final += "\nThe reviewed first-plan decision is explicit.\n"
+            runner.script[3]["side_effect"] = base.write_file(
+                "docs/skeleton.md", final
+            )
+            with mock.patch.object(
+                brainstorming_milestone, "create_session",
+                side_effect=lambda *_args, **_kwargs: _created(session_id, path, workspace),
+            ) as create:
+                self._until(subject, lambda: len(runner.calls) == 3)
+                self.assertIsNone(subject.state.get("failure"))
+                create.assert_called_once()
+                unit = subject._find_unit(st.UNIT_SKELETON, None)
+                task_id = unit["reviewed_task_id"]
+                self.assertEqual(unit["brainstorming_wait"]["session_id"], session_id)
+
+            charge = create.call_args.args[5]
+            source = charge["repository"]["pre_session_commit"]
+            self.assertEqual(source, gitops.head_full_sha(workspace))
+            self.assertNotIn(canonical_plan.ANCHOR_KEY, subject.state["milestone"])
+            attempt = session_repository.begin_attempt(
+                {"request": {"workspace_path": workspace}}, charge,
+                "initial_position", session_id=session_id,
+            )
+            base.write_file("docs/skeleton.md", rethought)(workspace)
+            accepted = session_repository.complete_attempt(attempt, "lead", 1)["revision"]
+            self.assertNotEqual(accepted, source)
+            handoff = {
+                "session_id": session_id,
+                "result": {"outcome": "success"},
+                "source_base_revision": source,
+                "accepted_revision": accepted,
+            }
+            # Reopen the real driver to consume the durable session attachment.
+            subject = drv.Driver(path, runner=runner)
+            with mock.patch.object(
+                brainstorming_milestone, "terminal_handoff", return_value=handoff
+            ) as terminal:
+                action, _note = subject.step()
+            self.assertEqual(action.type, drv.A_BRAINSTORM_WAIT)
+            terminal.assert_called_once()
+            self.assertIsNone(subject.state.get("failure"))
+            unit = subject._find_unit(st.UNIT_SKELETON, None)
+            self.assertNotIn("brainstorming_wait", unit)
+            self.assertNotIn(canonical_plan.ANCHOR_KEY, subject.state["milestone"])
+            self.assertEqual(subject.state["milestone"]["slices"], [])
+            self.assertIsNone(tasks.task_record(subject.state, task_id)["result"])
+            self.assertEqual(
+                [(event["source_base_revision"], event["accepted_revision"])
+                 for event in subject.state["events"]
+                 if event["type"] == "brainstorming_rethink_sealed"],
+                [(source, accepted)],
+            )
+
+            self._until(subject, lambda: unit["status"] == st.U_PRE_SEAL_VERIFY)
+            self.assertNotIn(canonical_plan.ANCHOR_KEY, subject.state["milestone"])
+            self.assertEqual(subject.state["milestone"]["slices"], [])
+            self._until(subject, lambda: unit["status"] == st.U_SEALED)
+            record = tasks.task_record(subject.state, task_id)
+            gate = gitops.commit_full_sha(
+                workspace, record["result"]["native_result"]["gate_commit"]
+            )
+            self.assertNotEqual(gate, accepted)
+            self.assertEqual(
+                subject.state["milestone"][canonical_plan.ANCHOR_KEY]["revision"], gate
+            )
+            self.assertEqual(
+                [event["accepted_revision"] for event in subject.state["events"]
+                 if event["type"] == "canonical_plan_established"],
+                [gate],
+            )
+            self.assertEqual(
+                subject.state["milestone"]["slices"][0]["title"],
+                "Reviewed final plan",
+            )
+            self.assertEqual(runner.script, [])
 
     def test_classification_charge_belongs_to_the_outer_task(self):
         with tempfile.TemporaryDirectory(
